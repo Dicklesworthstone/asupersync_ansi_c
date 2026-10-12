@@ -63,6 +63,33 @@ static asx_broadcast_slot g_slots[ASX_MAX_BROADCASTS];
 static uint32_t g_slot_count = 0;
 static uint32_t g_permit_serial = 0;
 
+/* Physical credits survive a refused obligation registration. Without
+ * them a copied, already-spent untracked permit could publish again. */
+typedef struct {
+    uint32_t serial; /* zero marks a free credit */
+    uint32_t slot;
+    uint16_t generation;
+    asx_task_id holder;
+} bc_credit;
+
+static bc_credit g_credits[ASX_MAX_OBLIGATIONS];
+static uint32_t g_credit_live;
+
+static asx_status broadcast_credit(const asx_broadcast_permit *permit, uint32_t *out) {
+    uint32_t i;
+    if (permit->serial == 0u || permit->serial > g_permit_serial) return ASX_E_PERMISSION_DENIED;
+    for (i = 0; i < ASX_MAX_OBLIGATIONS; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: ASX_MAX_OBLIGATIONS physical broadcast credits");
+        if (g_credits[i].serial != permit->serial) continue;
+        if (g_credits[i].slot != permit->slot || g_credits[i].generation != permit->generation) {
+            return ASX_E_PERMISSION_DENIED;
+        }
+        *out = i;
+        return ASX_OK;
+    }
+    return ASX_E_OBLIGATION_ALREADY_RESOLVED;
+}
+
 static uint16_t next_gen(uint16_t g) {
     g++;
     if (g == 0) g = 1;
@@ -214,6 +241,8 @@ void asx_broadcast_reset(void) {
         broadcast_waiters_init(&g_slots[i]);
     }
     g_slot_count = 0;
+    memset(g_credits, 0, sizeof(g_credits));
+    g_credit_live = 0u;
 }
 
 /* ------------------------------------------------------------------ */
@@ -347,13 +376,27 @@ void asx_broadcast_receiver_drop(asx_broadcast_receiver *receiver) {
 /* Send                                                                */
 /* ------------------------------------------------------------------ */
 
-/* A broadcast permit holds no channel resource: when its holder task
- * completes with it unsent, the runtime aborts its obligation with Cancel,
+/* A broadcast permit holds an identity credit, but no ring space. When
+ * its holder completes, the runtime aborts its tracked obligation with Cancel,
  * as the Rust permit's drop does (broadcast.rs:624-630). */
 static int broadcast_permit_drop(uint64_t a, uint64_t b) {
-    (void)a;
-    (void)b;
+    if (a < ASX_MAX_OBLIGATIONS && g_credits[(uint32_t)a].serial == (uint32_t)b) {
+        g_credits[(uint32_t)a].serial = 0u;
+        g_credit_live--;
+    }
     return 0;
+}
+
+void asx_broadcast_task_finished_internal(asx_task_id task) {
+    uint32_t i;
+    if (g_credit_live == 0u) return;
+    for (i = 0; i < ASX_MAX_OBLIGATIONS; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: ASX_MAX_OBLIGATIONS physical broadcast credits");
+        if (g_credits[i].serial != 0u && asx_wait_same_task(g_credits[i].holder, task)) {
+            g_credits[i].serial = 0u;
+            g_credit_live--;
+        }
+    }
 }
 
 asx_status asx_broadcast_reserve(const asx_broadcast_sender *sender, asx_cx *cx,
@@ -361,6 +404,8 @@ asx_status asx_broadcast_reserve(const asx_broadcast_sender *sender, asx_cx *cx,
     asx_broadcast_slot *s;
     asx_status st;
     asx_obligation_id ob = ASX_INVALID_ID;
+    uint32_t credit;
+    uint32_t serial;
 
     if (out_permit == NULL) return ASX_E_INVALID_ARGUMENT;
     s = broadcast_sender_slot(sender, &st);
@@ -370,11 +415,23 @@ asx_status asx_broadcast_reserve(const asx_broadcast_sender *sender, asx_cx *cx,
     if (cx != NULL && asx_cx_checkpoint(cx) != ASX_OK) return ASX_E_CANCELLED;
     if (s->receiver_count == 0u) return ASX_E_DISCONNECTED;
     if (g_permit_serial == UINT32_MAX) return ASX_E_RESOURCE_EXHAUSTED;
+    for (credit = 0; credit < ASX_MAX_OBLIGATIONS; credit++) {
+        ASX_CHECKPOINT_WAIVER("bounded: ASX_MAX_OBLIGATIONS physical broadcast credits");
+        if (g_credits[credit].serial == 0u) break;
+    }
+    if (credit == ASX_MAX_OBLIGATIONS) return ASX_E_RESOURCE_EXHAUSTED;
+    /* Claim before registration can synchronously notify a trace observer. */
+    serial = ++g_permit_serial;
+    g_credits[credit].serial = serial;
+    g_credits[credit].slot = sender->slot;
+    g_credits[credit].generation = s->generation;
+    g_credits[credit].holder = cx != NULL ? cx->task_id : ASX_INVALID_ID;
+    g_credit_live++;
     if (cx != NULL && cx->task_id != ASX_INVALID_ID &&
         asx_obligation_register(cx->region_id, ASX_OBLIGATION_KIND_SEND_PERMIT, cx->task_id, &ob) ==
             ASX_OK) {
-        asx_obligation_set_drop_internal(ob, broadcast_permit_drop, (uint64_t)sender->slot,
-                                         (uint64_t)s->generation, g_permit_serial + 1u);
+        asx_obligation_set_drop_internal(ob, broadcast_permit_drop, (uint64_t)credit,
+                                         (uint64_t)serial, serial);
     } else {
         ob = ASX_INVALID_ID; /* untracked, as a refused Rust registration */
     }
@@ -383,7 +440,7 @@ asx_status asx_broadcast_reserve(const asx_broadcast_sender *sender, asx_cx *cx,
     out_permit->generation = s->generation;
     out_permit->consumed = 0;
     out_permit->obligation = ob;
-    out_permit->serial = ++g_permit_serial;
+    out_permit->serial = serial;
     return ASX_OK;
 }
 
@@ -392,28 +449,31 @@ asx_status asx_broadcast_permit_send(asx_broadcast_permit *permit, uint64_t valu
     asx_broadcast_slot *s;
     asx_status st;
     uint32_t ring_idx;
+    uint32_t credit;
 
     if (out_receivers != NULL) *out_receivers = 0u;
     if (permit == NULL) return ASX_E_INVALID_ARGUMENT;
     if (permit->consumed) return ASX_E_INVALID_STATE;
+    st = broadcast_credit(permit, &credit);
+    if (st != ASX_OK) return st;
     if (permit->obligation != ASX_INVALID_ID) {
         st = asx_obligation_check_token_internal(permit->obligation, broadcast_permit_drop,
-                                                 (uint64_t)permit->slot,
-                                                 (uint64_t)permit->generation, permit->serial);
-        /* Broadcast holds no physical reservation to reject a spent copy.
-         * Its tracked credit must still be Reserved before publication. */
+                                                 (uint64_t)credit, (uint64_t)permit->serial,
+                                                 permit->serial);
+        /* A live tracked registration must also authenticate the credit. */
         if (st != ASX_OK) return st;
     }
     permit->consumed = 1;
+    g_credits[credit].serial = 0u;
+    g_credit_live--;
 
     s = broadcast_slot(permit->slot, permit->generation, &st);
     if (s == NULL || s->sender_count == 0u) {
         /* No sender left to have borrowed: the permit is dropped unsent. */
         if (permit->obligation != ASX_INVALID_ID) {
             st = asx_obligation_resolve_token_internal(permit->obligation, broadcast_permit_drop,
-                                                       (uint64_t)permit->slot,
-                                                       (uint64_t)permit->generation, permit->serial,
-                                                       ASX_OBLIGATION_ABORTED,
+                                                       (uint64_t)credit, (uint64_t)permit->serial,
+                                                       permit->serial, ASX_OBLIGATION_ABORTED,
                                                        ASX_OBLIGATION_ABORT_CANCEL);
             (void)st; /* only an already-resolved obligation refuses */
             permit->obligation = ASX_INVALID_ID;
@@ -424,9 +484,8 @@ asx_status asx_broadcast_permit_send(asx_broadcast_permit *permit, uint64_t valu
     /* The send commits first, even with no receiver left (:715-719). */
     if (permit->obligation != ASX_INVALID_ID) {
         st = asx_obligation_resolve_token_internal(permit->obligation, broadcast_permit_drop,
-                                                   (uint64_t)permit->slot,
-                                                   (uint64_t)permit->generation, permit->serial,
-                                                   ASX_OBLIGATION_COMMITTED,
+                                                   (uint64_t)credit, (uint64_t)permit->serial,
+                                                   permit->serial, ASX_OBLIGATION_COMMITTED,
                                                    ASX_OBLIGATION_ABORT_EXPLICIT);
         (void)st; /* only an already-resolved obligation refuses */
         permit->obligation = ASX_INVALID_ID;
@@ -448,19 +507,23 @@ asx_status asx_broadcast_permit_send(asx_broadcast_permit *permit, uint64_t valu
 
 void asx_broadcast_permit_abort(asx_broadcast_permit *permit) {
     asx_status st;
+    uint32_t credit;
     if (permit == NULL || permit->consumed) return;
+    st = broadcast_credit(permit, &credit);
+    if (st != ASX_OK) return;
     if (permit->obligation != ASX_INVALID_ID) {
         st = asx_obligation_check_token_internal(permit->obligation, broadcast_permit_drop,
-                                                 (uint64_t)permit->slot,
-                                                 (uint64_t)permit->generation, permit->serial);
+                                                 (uint64_t)credit, (uint64_t)permit->serial,
+                                                 permit->serial);
         if (st != ASX_OK) return;
     }
     permit->consumed = 1;
+    g_credits[credit].serial = 0u;
+    g_credit_live--;
     if (permit->obligation != ASX_INVALID_ID) {
         st = asx_obligation_resolve_token_internal(permit->obligation, broadcast_permit_drop,
-                                                   (uint64_t)permit->slot,
-                                                   (uint64_t)permit->generation, permit->serial,
-                                                   ASX_OBLIGATION_ABORTED,
+                                                   (uint64_t)credit, (uint64_t)permit->serial,
+                                                   permit->serial, ASX_OBLIGATION_ABORTED,
                                                    ASX_OBLIGATION_ABORT_CANCEL);
         (void)st; /* only an already-resolved obligation refuses */
         permit->obligation = ASX_INVALID_ID;

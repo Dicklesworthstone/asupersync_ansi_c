@@ -14,6 +14,9 @@
 #include "../../../src/runtime/runtime_internal.h"
 #include "test_harness.h"
 #include <asx/asx.h>
+#include <asx/core/broadcast.h>
+#include <asx/core/channel.h>
+#include <asx/core/oneshot.h>
 #include <asx/runtime/rt.h>
 #include <asx/runtime/runtime.h>
 #include <string.h>
@@ -1030,6 +1033,188 @@ TEST(a_permit_registration_past_the_limit_is_refused_at_the_drain) {
     ASSERT_EQ(g_ob_kinds[1], ASX_TRACE_OBLIGATION_LEAK);
 }
 
+/* bd-6ncn: a permit that outlives its reserving poll must still settle
+ * physically when its deferred obligation registration was refused. A
+ * real checked lease fills the quota; no ledger or channel state is forged. */
+typedef struct {
+    asx_region_id region;
+    int kind;   /* 0: MPSC, 1: oneshot, 2: broadcast */
+    int action; /* 0: send, 1: abort, 2: receiver disconnected, 3: holder ends */
+    uint32_t polls;
+    asx_channel_id channel;
+    asx_send_permit mpsc;
+    asx_oneshot_sender sender;
+    asx_oneshot_receiver receiver;
+    asx_oneshot_permit oneshot;
+    asx_broadcast_sender broadcast_sender;
+    asx_broadcast_receiver broadcast_receiver;
+    asx_broadcast_permit broadcast;
+    asx_obligation_id registration;
+    asx_obligation_id lease;
+} quota_channel;
+
+static void quota_channel_step(quota_channel *p, asx_task_id self) {
+    asx_obligation_state state;
+    uint64_t value = 0u;
+    uint32_t count = 99u;
+
+    if (p->polls == 1u) {
+        asx_cx cx;
+        ASSERT_EQ(asx_cx_init(&cx, p->region, self, ASX_CAP_NONE), ASX_OK);
+        if (p->kind == 0) {
+            ASSERT_EQ(asx_channel_reserve(p->channel, &cx, &p->mpsc), ASX_OK);
+            p->registration = p->mpsc.obligation;
+        } else if (p->kind == 1) {
+            ASSERT_EQ(asx_oneshot_reserve(&p->sender, &cx, &p->oneshot), ASX_OK);
+            p->registration = p->oneshot.obligation;
+        } else {
+            ASSERT_EQ(asx_broadcast_reserve(&p->broadcast_sender, &cx, &p->broadcast), ASX_OK);
+            p->registration = p->broadcast.obligation;
+        }
+        ASSERT_NE(p->registration, ASX_INVALID_ID);
+        ASSERT_EQ(asx_obligation_get_state(p->registration, &state), ASX_OK);
+        ASSERT_EQ(state, ASX_OBLIGATION_RESERVED);
+        ASSERT_EQ(asx_obligation_reserve_ex(p->region, ASX_OBLIGATION_KIND_LEASE, self, &p->lease),
+                  ASX_OK);
+        return;
+    }
+
+    ASSERT_EQ(p->polls, 2u);
+    ASSERT_NE(asx_obligation_get_state(p->registration, &state), ASX_OK);
+    ASSERT_EQ(asx_obligation_get_state(p->lease, &state), ASX_OK);
+    ASSERT_EQ(state, ASX_OBLIGATION_RESERVED);
+    if (p->kind == 0) {
+        asx_send_permit copy = p->mpsc;
+        ASSERT_EQ(asx_channel_reserved_count(p->channel, &count), ASX_OK);
+        ASSERT_EQ(count, 1u);
+        if (p->action == 1) {
+            asx_send_permit_abort(&p->mpsc);
+        } else {
+            if (p->action == 2) ASSERT_EQ(asx_channel_close_receiver(p->channel), ASX_OK);
+            ASSERT_EQ(asx_send_permit_send(&p->mpsc, 77u),
+                      p->action == 2 ? ASX_E_DISCONNECTED : ASX_OK);
+        }
+        ASSERT_EQ(p->mpsc.consumed, 1);
+        ASSERT_NE(asx_send_permit_send(&copy, 99u), ASX_OK);
+        ASSERT_EQ(asx_channel_reserved_count(p->channel, &count), ASX_OK);
+        ASSERT_EQ(count, 0u);
+        ASSERT_EQ(asx_channel_queue_len(p->channel, &count), ASX_OK);
+        ASSERT_EQ(count, p->action == 0 ? 1u : 0u);
+        if (p->action == 0) {
+            ASSERT_EQ(asx_channel_try_recv(p->channel, &value), ASX_OK);
+            ASSERT_EQ(value, 77u);
+        }
+        if (p->action != 2) {
+            ASSERT_EQ(asx_channel_try_recv(p->channel, &value), ASX_E_WOULD_BLOCK);
+            ASSERT_EQ(asx_channel_try_reserve(p->channel, &p->mpsc), ASX_OK);
+            asx_send_permit_abort(&p->mpsc);
+            ASSERT_EQ(asx_channel_reserved_count(p->channel, &count), ASX_OK);
+            ASSERT_EQ(count, 0u);
+        }
+    } else if (p->kind == 1) {
+        asx_oneshot_permit copy = p->oneshot;
+        if (p->action == 1) {
+            asx_oneshot_permit_abort(&p->oneshot);
+        } else {
+            if (p->action == 2) asx_oneshot_receiver_drop(&p->receiver);
+            ASSERT_EQ(asx_oneshot_permit_send(&p->oneshot, 77u),
+                      p->action == 2 ? ASX_E_DISCONNECTED : ASX_OK);
+        }
+        ASSERT_EQ(p->oneshot.live, 0);
+        ASSERT_NE(asx_oneshot_permit_send(&copy, 99u), ASX_OK);
+        if (p->action != 2) {
+            ASSERT_EQ(asx_oneshot_try_recv(&p->receiver, &value),
+                      p->action == 0 ? ASX_OK : ASX_E_DISCONNECTED);
+            ASSERT_EQ(value, p->action == 0 ? 77u : 0u);
+        }
+    } else {
+        asx_broadcast_permit copy = p->broadcast;
+        if (p->action == 3) {
+            /* Holder completion below drops the refused physical credit. */
+        } else if (p->action == 1) {
+            asx_broadcast_permit_abort(&p->broadcast);
+        } else {
+            if (p->action == 2) asx_broadcast_receiver_drop(&p->broadcast_receiver);
+            ASSERT_EQ(asx_broadcast_permit_send(&p->broadcast, 77u, &count), ASX_OK);
+            ASSERT_EQ(count, p->action == 0 ? 1u : 0u);
+        }
+        if (p->action != 3) {
+            ASSERT_EQ(p->broadcast.consumed, 1);
+            ASSERT_NE(asx_broadcast_permit_send(&copy, 99u, &count), ASX_OK);
+        }
+        ASSERT_EQ(asx_broadcast_total_sent(&p->broadcast_sender), p->action == 0 ? 1u : 0u);
+        if (p->action == 0) {
+            ASSERT_EQ(asx_broadcast_try_recv(&p->broadcast_receiver, &value), ASX_OK);
+            ASSERT_EQ(value, 77u);
+        }
+        if (p->action != 2) {
+            ASSERT_EQ(asx_broadcast_try_recv(&p->broadcast_receiver, &value), ASX_E_WOULD_BLOCK);
+        }
+    }
+    ASSERT_EQ(asx_obligation_commit(p->lease), ASX_OK);
+}
+
+static asx_status poll_quota_channel(void *data, asx_task_id self) {
+    quota_channel *p = (quota_channel *)data;
+    p->polls++;
+    quota_channel_step(p, self);
+    if (test_current_failed) return ASX_E_INVALID_STATE;
+    return p->polls == 1u ? ASX_E_PENDING : ASX_OK;
+}
+
+static void check_quota_channel(int kind) {
+    int action;
+    for (action = 0; action < (kind == 2 ? 4 : 3); action++) {
+        quota_channel p;
+        asx_task_id task;
+        asx_outcome outcome;
+        asx_budget run;
+        asx_obligation_state state;
+        asx_status status;
+
+        ASSERT_EQ(setup(), ASX_OK);
+        ASSERT_EQ(asx_scheduler_use_lab_dispatch(1u), ASX_OK);
+        memset(&p, 0, sizeof(p));
+        p.kind = kind;
+        p.action = action;
+        ASSERT_EQ(oblig_region(&p.region), ASX_OK);
+        if (kind == 0) {
+            ASSERT_EQ(asx_channel_create(p.region, 1u, &p.channel), ASX_OK);
+        } else if (kind == 1) {
+            ASSERT_EQ(asx_oneshot_create(&p.sender, &p.receiver), ASX_OK);
+        } else {
+            ASSERT_EQ(asx_broadcast_create(1u, &p.broadcast_sender, &p.broadcast_receiver), ASX_OK);
+        }
+        ASSERT_EQ(asx_task_spawn(p.region, poll_quota_channel, &p, &task), ASX_OK);
+        run = asx_budget_from_polls(10u);
+        status = asx_scheduler_run(p.region, &run);
+        if (test_current_failed) return;
+        ASSERT_EQ(status, ASX_OK);
+        ASSERT_EQ(p.polls, 2u);
+        ASSERT_EQ(asx_task_join(task, &outcome), ASX_OK);
+        ASSERT_EQ(outcome.severity, ASX_OUTCOME_OK);
+        if (action == 3) {
+            uint32_t count = 99u;
+            ASSERT_EQ(asx_broadcast_permit_send(&p.broadcast, 99u, &count),
+                      ASX_E_OBLIGATION_ALREADY_RESOLVED);
+            ASSERT_EQ(count, 0u);
+            ASSERT_EQ(asx_broadcast_total_sent(&p.broadcast_sender), 0u);
+        }
+        ASSERT_EQ(asx_obligation_get_state(p.lease, &state), ASX_OK);
+        ASSERT_EQ(state, ASX_OBLIGATION_COMMITTED);
+        ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)0u);
+        run = asx_budget_from_polls(10u);
+        ASSERT_EQ(asx_region_drain(p.region, &run), ASX_OK);
+        ASSERT_EQ(asx_quiescence_check(p.region), ASX_OK);
+    }
+}
+
+TEST(mpsc_quota_refused_permit_settles_on_a_later_poll) { check_quota_channel(0); }
+
+TEST(oneshot_quota_refused_permit_settles_on_a_later_poll) { check_quota_channel(1); }
+
+TEST(broadcast_quota_refused_permit_settles_on_a_later_poll) { check_quota_channel(2); }
+
 TEST(spawn_limit_is_checked_at_the_next_step_admission) {
     asx_region_id r;
     asx_region_limits limits;
@@ -1189,6 +1374,9 @@ int main(void) {
     RUN_TEST(a_timer_wakes_the_waker_it_was_armed_with);
     RUN_TEST(a_permit_registration_is_admitted_when_the_poll_returns);
     RUN_TEST(a_permit_registration_past_the_limit_is_refused_at_the_drain);
+    RUN_TEST(mpsc_quota_refused_permit_settles_on_a_later_poll);
+    RUN_TEST(oneshot_quota_refused_permit_settles_on_a_later_poll);
+    RUN_TEST(broadcast_quota_refused_permit_settles_on_a_later_poll);
     RUN_TEST(spawn_limit_is_checked_at_the_next_step_admission);
     RUN_TEST(spawn_into_a_region_closed_before_admission_is_refused);
     RUN_TEST(deferred_cleanup_admission_preserves_finalizing_quota_exception);

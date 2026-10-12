@@ -735,4 +735,7 @@ void asx_runtime_object_reset_internal(void);
  * (YIELD_INTERVAL, gen_server.rs:2100). */
 #define ACTOR_YIELD_INTERVAL 8u
 
+/* Drop broadcast credits even when their ledger registration was refused. */
+void asx_broadcast_task_finished_internal(asx_task_id task);
+
 #endif /* ASX_RUNTIME_INTERNAL_H */

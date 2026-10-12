@@ -503,6 +503,126 @@ TEST(total_sent_increments) {
     ASSERT_EQ(asx_broadcast_total_sent(&tx), 2u);
 }
 
+TEST(untracked_permit_copies_cannot_publish_after_send_or_abort) {
+    asx_broadcast_sender tx;
+    asx_broadcast_receiver rx;
+    asx_broadcast_permit permit;
+    asx_broadcast_permit copy;
+    uint64_t value = 0u;
+    uint32_t reached = 99u;
+
+    setup();
+    ASSERT_EQ(asx_broadcast_create(2u, &tx, &rx), ASX_OK);
+    ASSERT_EQ(asx_broadcast_reserve(&tx, NULL, &permit), ASX_OK);
+    ASSERT_EQ(permit.obligation, ASX_INVALID_ID);
+    copy = permit;
+    ASSERT_EQ(asx_broadcast_permit_send(&permit, 7u, &reached), ASX_OK);
+    ASSERT_EQ(reached, 1u);
+    ASSERT_EQ(asx_broadcast_permit_send(&copy, 99u, &reached), ASX_E_OBLIGATION_ALREADY_RESOLVED);
+    ASSERT_EQ(reached, 0u);
+    ASSERT_EQ(asx_broadcast_reserve(&tx, NULL, &permit), ASX_OK);
+    copy = permit;
+    asx_broadcast_permit_abort(&permit);
+    ASSERT_EQ(asx_broadcast_permit_send(&copy, 99u, &reached), ASX_E_OBLIGATION_ALREADY_RESOLVED);
+    ASSERT_EQ(reached, 0u);
+    ASSERT_EQ(asx_broadcast_total_sent(&tx), 1u);
+    ASSERT_EQ(asx_broadcast_try_recv(&rx, &value), ASX_OK);
+    ASSERT_EQ(value, 7u);
+    ASSERT_EQ(asx_broadcast_try_recv(&rx, &value), ASX_E_WOULD_BLOCK);
+}
+
+TEST(physical_permit_exhaustion_is_failure_atomic_and_reusable) {
+    static asx_broadcast_permit permits[ASX_MAX_OBLIGATIONS];
+    asx_broadcast_sender tx;
+    asx_broadcast_receiver rx;
+    asx_broadcast_permit refused;
+    asx_broadcast_permit before;
+    asx_broadcast_permit copy;
+    uint32_t i;
+    uint32_t reached = 99u;
+    uint64_t value = 0u;
+
+    setup();
+    ASSERT_EQ(asx_broadcast_create(2u, &tx, &rx), ASX_OK);
+    for (i = 0; i < ASX_MAX_OBLIGATIONS; i++) {
+        ASSERT_EQ(asx_broadcast_reserve(&tx, NULL, &permits[i]), ASX_OK);
+    }
+    memset(&refused, 0x53, sizeof(refused));
+    memcpy(&before, &refused, sizeof(before));
+    ASSERT_EQ(asx_broadcast_reserve(&tx, NULL, &refused), ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(memcmp(&before, &refused, sizeof(refused)), 0);
+    ASSERT_EQ(asx_broadcast_total_sent(&tx), 0u);
+    copy = permits[0];
+    ASSERT_EQ(asx_broadcast_permit_send(&permits[0], 7u, &reached), ASX_OK);
+    ASSERT_EQ(reached, 1u);
+    ASSERT_EQ(asx_broadcast_reserve(&tx, NULL, &refused), ASX_OK);
+    ASSERT_NE(refused.serial, copy.serial);
+    ASSERT_EQ(asx_broadcast_permit_send(&copy, 99u, &reached), ASX_E_OBLIGATION_ALREADY_RESOLVED);
+    ASSERT_EQ(reached, 0u);
+    for (i = 1; i < ASX_MAX_OBLIGATIONS; i++) asx_broadcast_permit_abort(&permits[i]);
+    asx_broadcast_permit_abort(&refused);
+    ASSERT_EQ(asx_broadcast_reserve(&tx, NULL, &refused), ASX_OK);
+    asx_broadcast_permit_abort(&refused);
+    ASSERT_EQ(asx_broadcast_total_sent(&tx), 1u);
+    ASSERT_EQ(asx_broadcast_try_recv(&rx, &value), ASX_OK);
+    ASSERT_EQ(value, 7u);
+    ASSERT_EQ(asx_broadcast_try_recv(&rx, &value), ASX_E_WOULD_BLOCK);
+}
+
+typedef struct {
+    asx_broadcast_sender sender;
+    asx_broadcast_permit permit;
+    asx_status status;
+    int observed;
+} reserve_observer;
+
+static void reserve_without_events_from_observer(void *data, const asx_trace_event *event,
+                                                 const asx_trace_payload *payload) {
+    reserve_observer *observer = (reserve_observer *)data;
+    (void)payload;
+    if (event->kind != ASX_TRACE_OBLIGATION_RESERVE || observer->observed) return;
+    observer->observed = 1;
+    /* A NULL-Cx reserve emits no event, respecting the observer contract. */
+    observer->status = asx_broadcast_reserve(&observer->sender, NULL, &observer->permit);
+}
+
+TEST(registration_observer_cannot_reuse_the_credit_being_registered) {
+    reserve_observer observer;
+    asx_broadcast_receiver receiver;
+    asx_broadcast_permit outer;
+    asx_region_id region;
+    asx_task_id holder;
+    asx_cx cx;
+    uint32_t reached = 99u;
+    uint64_t value = 0u;
+    asx_status status;
+
+    asx_runtime_reset();
+    memset(&observer, 0, sizeof(observer));
+    observer.status = ASX_E_PENDING;
+    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(region, broadcast_holder_poll, NULL, &holder), ASX_OK);
+    ASSERT_EQ(asx_cx_init(&cx, region, holder, ASX_CAP_NONE), ASX_OK);
+    ASSERT_EQ(asx_broadcast_create(2u, &observer.sender, &receiver), ASX_OK);
+    asx_trace_set_observer(reserve_without_events_from_observer, &observer);
+    status = asx_broadcast_reserve(&observer.sender, &cx, &outer);
+    asx_trace_set_observer(NULL, NULL);
+    ASSERT_EQ(status, ASX_OK);
+    ASSERT_EQ(observer.observed, 1);
+    ASSERT_EQ(observer.status, ASX_OK);
+    ASSERT_NE(outer.serial, observer.permit.serial);
+    ASSERT_EQ(asx_broadcast_permit_send(&observer.permit, 7u, &reached), ASX_OK);
+    ASSERT_EQ(reached, 1u);
+    ASSERT_EQ(asx_broadcast_permit_send(&outer, 8u, &reached), ASX_OK);
+    ASSERT_EQ(reached, 1u);
+    ASSERT_EQ(asx_broadcast_try_recv(&receiver, &value), ASX_OK);
+    ASSERT_EQ(value, 7u);
+    ASSERT_EQ(asx_broadcast_try_recv(&receiver, &value), ASX_OK);
+    ASSERT_EQ(value, 8u);
+    ASSERT_EQ(asx_broadcast_try_recv(&receiver, &value), ASX_E_WOULD_BLOCK);
+    ASSERT_EQ(asx_obligation_leak_count(), 0u);
+}
+
 /* ------------------------------------------------------------------ */
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
@@ -538,6 +658,9 @@ int main(void) {
     RUN_TEST(permit_after_the_receivers_or_the_last_sender_left);
     RUN_TEST(tracked_permit_authenticates_each_reservation_and_moves);
     RUN_TEST(tracked_permit_drops_with_its_holder_without_publication);
+    RUN_TEST(untracked_permit_copies_cannot_publish_after_send_or_abort);
+    RUN_TEST(physical_permit_exhaustion_is_failure_atomic_and_reusable);
+    RUN_TEST(registration_observer_cannot_reuse_the_credit_being_registered);
 
     RUN_TEST(send_null_fails);
     RUN_TEST(recv_null_fails);

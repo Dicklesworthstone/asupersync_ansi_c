@@ -227,8 +227,23 @@ from that same pinned producer, SHA-256
 bringing the canonical corpus to 167. Ten historical scratch captures differ
 from fresh captures in scheduling ordinals after the Rust producer's context
 lifetime repair; the old captures remain preserved and are not claimed to be
-byte-identical. Original `bd-aioq` remains in progress until the final committed
-source and its full campaign evidence receive independent acceptance.
+byte-identical. Original `bd-aioq` is independently closed at `0ec0aa46`:
+fresh GCC and Clang each pass the original 8,000 inputs, all 43 minimized
+cases, the named witnesses and the real reseed probe. Root reexecution and
+the complete strict compiler/gate/sanitizer/profile matrix also pass there.
+
+The next original task, `bd-6ncn`, exposed a further physical-token gap during
+native late-quota coverage: after the registration was refused, a spent
+broadcast permit copy could publish again. The repair maintains bounded
+physical credits independent of the ledger, authenticates the serial and
+channel binding before settlement, and drops task-associated credits on
+completion. Three native copy/exhaustion/observer cases extend broadcast 29 to 32; three
+lab cases extend 29 to 32 and execute ten actual send/abort/disconnect/holder
+subscenarios. The repaired draft passes both programs and all 167 canonical
+fixtures. Final committed-source and independent acceptance remain pending;
+original `bd-6ncn` stays in progress. The old MPSC test's mistaken empty status
+and the draft's state-bearing full-handle comparison were corrected from the
+documented API and genuine scheduler observations, with failures retained.
 
 Current original-task execution checklist (verification still in progress):
 
@@ -248,8 +263,15 @@ Current original-task execution checklist (verification still in progress):
 - [x] Re-run the original all-body 8,000-input campaign and preserve its one remaining dispatch-order divergence.
 - [x] Fix the minimized Err-close/race/actor cancellation ordering at its runtime source, then verify all 8,000 original inputs and all 43 minimized inputs again.
 - [x] Capture the named race regression from pinned Rust, preserve its unchanged fixture bytes, and retain both genuine native before/after failures.
-- [ ] Run final committed-source gates, sanitizers, the 167-fixture corpus, all profile/codec builds and final E2E source bindings after the race repair.
-- [ ] Obtain independent exact-source acceptance before closing original `bd-9kll.3.19` or `bd-aioq`.
+- [x] Run final `0ec0aa46` strict compiler/gates, ASan/UBSan, 167-fixture corpus, eight profile and two codec builds, and five final E2E source bindings after the race repair.
+- [x] Independently close original `bd-9kll.3.19` at `0ec0aa46`: 62 native cases, five actual worker/joiner E2E lanes and all nine real negative controls; normal-return/raw-balance and finite-fairness limits remain explicit.
+- [x] Independently close original `bd-aioq` at `0ec0aa46`, preserving its original full campaign and named-fixture criteria.
+- [x] Reproduce the original quota-refused semaphore/reply bugs against fresh pre-fix source; retain the real reply hang as an ERROR rather than relabel it FAIL.
+- [x] Add real later-poll MPSC/oneshot/broadcast send, abort and disconnect cases with a checked lease filling the quota; also exercise broadcast holder completion.
+- [x] Reproduce and repair spent broadcast copy publication with independent physical credits; add real capacity exhaustion, unchanged-output and slot-reuse checks.
+- [ ] Run final broadcast repair through strict compilers, full suites, sanitizers, 167 captures, profiles/codecs and original 8,000/43 comparisons.
+- [ ] Obtain independent original `bd-6ncn` and `bd-o9oc` acceptance, then close only those bugs whose original criteria are met.
+- [ ] Publish all accepted increments on main, preserve concurrent work and synchronize the required legacy mirror.
 
 K4, typed outcomes/factories, serialized asynchronous finalization, independent
 runtime storage, native replay, physical-device validation and P2 remain open.

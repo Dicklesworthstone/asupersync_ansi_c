@@ -135,7 +135,10 @@ ASX_API void asx_broadcast_receiver_drop(asx_broadcast_receiver *receiver);
  * still holding it (the permit's drop, :624). A NULL cx skips the
  * cancellation check and the obligation.
  * Returns ASX_E_INVALID_STATE for a dropped sender and
- * ASX_E_RESOURCE_EXHAUSTED when the process-wide permit serial is exhausted. */
+ * ASX_E_RESOURCE_EXHAUSTED when the process-wide permit serial is exhausted
+ * or all ASX_MAX_OBLIGATIONS physical broadcast credits are outstanding.
+ * Physical credits also authenticate permits whose registration was refused;
+ * a credit reserved with a task is dropped when that task completes. */
 ASX_API ASX_MUST_USE asx_status asx_broadcast_reserve(const asx_broadcast_sender *sender,
                                                       asx_cx *cx, asx_broadcast_permit *out_permit);
 
