@@ -361,6 +361,7 @@ static uint32_t parallel_select_worker(asx_lane_class lane, asx_task_id tid) {
     uint32_t owner = parallel_seed_task_owner(slot_idx);
     uint32_t selected;
 
+    if (worker_count > ASX_MAX_WORKERS) { worker_count = ASX_MAX_WORKERS; }
     if ((int)lane < 0 || (int)lane >= (int)ASX_MAX_LANES) { return owner; }
     if (worker_count <= 1u) { return 0u; }
 

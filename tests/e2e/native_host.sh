@@ -1,17 +1,21 @@
 #!/usr/bin/env bash
-# native_host.sh — e2e lane for deterministic native host surfaces
+# native_host.sh — e2e lane for non-lab native host surfaces
 #
 # SPDX-License-Identifier: MIT
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+export ASX_E2E_PROFILE=CORE
+export ASX_E2E_CODEC=json
+export ASX_E2E_DETERMINISTIC=0
 export ASX_E2E_POLICY_ID="${ASX_E2E_POLICY_ID:-NATIVE-HOST-SURFACES}"
 source "$SCRIPT_DIR/harness.sh"
 
 e2e_init "native-host" "E2E-NATIVE-HOST"
 
 E2E_BIN="${E2E_ARTIFACT_DIR}/e2e_native_host"
+E2E_BUILD_DIR="${E2E_BUILD_DIR}/native-host"
 E2E_LIB="${E2E_BUILD_DIR}/lib/libasx.a"
 E2E_RUNTIME_RESET_EXTRA=(
     "${E2E_PROJECT_ROOT}/src/channel/oneshot.c"
@@ -29,7 +33,8 @@ E2E_RUNTIME_RESET_EXTRA=(
 # Plain make: the caller decides where the suite runs (rch offloads the whole
 # suite), and a nested rch exec inside an offloaded run fails closed. The
 # build-config stamp already rebuilds objects whose flags changed.
-if ! "${MAKE:-make}" -C "$E2E_PROJECT_ROOT" build; then
+if ! "${MAKE:-make}" -C "$E2E_PROJECT_ROOT" build PROFILE=CORE CODEC=JSON \
+    DETERMINISTIC=0 BUILD_DIR="$E2E_BUILD_DIR"; then
     e2e_scenario "native_host.lib_build" "make build failed" "fail"
     e2e_finish
     exit $?

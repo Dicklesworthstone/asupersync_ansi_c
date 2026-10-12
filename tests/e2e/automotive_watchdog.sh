@@ -17,6 +17,18 @@ source "$SCRIPT_DIR/harness.sh"
 e2e_init "automotive-watchdog" "E2E-VERT-AUTO"
 
 E2E_BIN="${E2E_ARTIFACT_DIR}/e2e_automotive_watchdog"
+E2E_BUILD_DIR="${E2E_BUILD_DIR}/automotive-watchdog"
+
+# Build the same profile and mode as this family's caller, independently of
+# whichever library the preceding family left in the shared build directory.
+if ! "${MAKE:-make}" -C "$E2E_PROJECT_ROOT" build PROFILE="$E2E_PROFILE" \
+    CODEC="$(printf '%s' "$E2E_CODEC" | tr '[:lower:]' '[:upper:]')" \
+    DETERMINISTIC="$E2E_DETERMINISTIC" BUILD_DIR="$E2E_BUILD_DIR"; then
+    e2e_scenario "automotive_watchdog.lib_build" "make build failed" "fail"
+    e2e_finish
+    exit $?
+fi
+e2e_scenario "automotive_watchdog.lib_build" "" "pass"
 
 if ! e2e_build "${SCRIPT_DIR}/e2e_automotive_watchdog.c" "$E2E_BIN"; then
     e2e_scenario "automotive_watchdog.build" "compilation failed" "fail"

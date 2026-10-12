@@ -495,6 +495,36 @@ fingerprints, object layout, refusal ordering or the 49 controls.
 - [x] Share the immutable library-side table through the existing exported getter, now colocated with hook/config preparation. App/lab layout folding accepts a base stamp; public macros still supply their independently computed application base, while library creation passes its own base. No runtime cache or ambient selector is introduced; tests/fixtures/thresholds are unchanged.
 - [ ] Measure identical-toolchain before/after size and execute matching/mismatch, strict full-suite and canonical controls before landing; keep broad P2 open.
 
+### Discovered integration/build regressions, `bd-kpr4` and `bd-6e4j`
+
+The first hosted publication's E2E lane is genuinely 24/26, not green:
+`native_host` is 8/10 and `automotive_watchdog` 6/8. CI `38277425775`, job
+`114908587195`, and its raw artifact are retained locally under
+`/data/tmp/asx-e08-e2e-artifact-20261012`. The checks expose previously silent
+caller/library mode mismatches. These remain original positive scenarios;
+repair their library wiring, keeping every C body, assertion and compiler
+warning policy unchanged.
+
+- [x] Claim `bd-kpr4` with the actual failure and complete positive acceptance criteria.
+- [x] Give native-host its intended CORE/JSON/determinism0 library and truthful family metadata in an isolated build directory.
+- [x] Build automotive-watchdog's declared profile/codec/determinism in an isolated directory before compiling its caller. Original eight checks stay required; one actual library-build check is added, so the expected family denominator is nine.
+- [ ] Re-execute both original failures and corrected families, then all 26 canonical families with manifests and raw stderr.
+- [ ] Obtain independent exact-source acceptance and close only the concrete E2E wiring bug.
+
+Independent strict GCC15 release BROWSER MINIMAL R3 compilation also finds
+an existing `parallel_select_worker` array-bounds warning. The same actual
+single-TU compile fails at accepted `2030ceb0`; `parallel.c` and its resource
+configuration were unchanged by the footprint refactor. No compile failure
+is credited as profile execution.
+
+- [x] Claim `bd-6e4j`, retain both actual old/new compile failures, and preserve strict `-Werror`.
+- [x] Clamp dispatch's active worker count to the compiled capacity, as its existing owner/shard helpers do. Valid initialized configurations already meet this bound, preserving their scheduling behavior.
+- [ ] Fresh strict GCC release minimal-browser full build, 49 mismatch/live-task controls and all 167 canonical scenarios must execute successfully.
+- [ ] Run existing strict core/unit/invariant gates and obtain independent exact-source acceptance before closing the concrete build bug.
+
+The two newly observed bugs make the current unfinished count 116; completing
+them would restore 114. Broad P2 and the other original milestones stay open.
+
 ## Assessment at the audited revision
 
 The important change since October 8 is that the oracle now runs real code. The C interpreter
