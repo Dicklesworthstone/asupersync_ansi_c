@@ -3116,6 +3116,62 @@ pub fn run_scenario_with(scenario: &Value, raw: Option<&mut Vec<String>>) -> Run
             .state
             .create_child_region(parent_id, budget(r.get("budget"))?)
             .map_err(|e| format!("create region {name}: {e:?}"))?;
+        // Async finalizers (DSL "Region finalizers"): registered in array
+        // order right after the region exists and before any task, so the
+        // last declared runs first. A finalizer is an ordinary task program
+        // run by a future that takes no Cx: the lab installs the polled
+        // task's, which the future reads on its first poll and where it
+        // records the finalizer's task under its declared name (the
+        // runtime creates that task, so no spawn pairs it with a name).
+        for f in r
+            .get("finalizers")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let fname = str_field(f, "name")?.to_string();
+            let program = f
+                .get("program")
+                .and_then(Value::as_array)
+                .cloned()
+                .ok_or("finalizer without program")?;
+            let ctx = Arc::new(TaskCtx {
+                shared: shared.clone(),
+                me: fname.clone(),
+                region: name.clone(),
+                tokens: Arc::default(),
+            });
+            {
+                let mut s = lock(&shared);
+                s.task_regions.insert(fname.clone(), name.clone());
+                s.obligation_tokens
+                    .insert(fname.clone(), Arc::downgrade(&ctx.tokens));
+            }
+            let future = async move {
+                let Some(cx) = Cx::current() else {
+                    harness_error(&ctx.shared, format!("finalizer {}: no Cx", ctx.me));
+                    return;
+                };
+                {
+                    let mut s = lock(&ctx.shared);
+                    let task = cx.task_id();
+                    s.self_ids.entry(ctx.me.clone()).or_insert(task);
+                    s.task_ids.insert(ctx.me.clone(), task);
+                    s.task_names.insert(task, ctx.me.clone());
+                }
+                // The finalizer's task is masked for its whole run, so its
+                // outcome is its body's: a finalizer future returns `()`.
+                let body = run_program(cx, Arc::clone(&ctx), program, Vec::new()).await;
+                lock(&ctx.shared)
+                    .raw_outcomes
+                    .insert(ctx.me.clone(), Ok(body));
+            };
+            if !lab.state.register_async_finalizer(id, future) {
+                return Err(format!(
+                    "finalizer {fname:?} was refused by region {name:?} (closing or closed)"
+                ));
+            }
+        }
         let mut s = lock(&shared);
         s.region_ids.insert(name.clone(), id);
         s.region_names.insert(id, name.clone());
