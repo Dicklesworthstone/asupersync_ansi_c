@@ -699,6 +699,18 @@ ASX_API ASX_MUST_USE asx_status asx_task_mask(asx_task_id self);
  * Thread-safety: not thread-safe; single-threaded mode only. */
 ASX_API ASX_MUST_USE asx_status asx_task_unmask(asx_task_id self);
 
+/* Run body(user_data, self) once within a synchronous cancellation mask
+ * (Rust Cx::masked). The mask is released whenever body returns, including
+ * an error or ASX_E_PENDING. Nested calls release only their own level.
+ * The returned status is body's status, unless releasing the mask fails.
+ *
+ * A NULL body or a failed mask admission invokes no callback. A callback
+ * must balance any additional raw asx_task_mask/asx_task_unmask calls and
+ * must return normally; this API does not retain a mask across polls.
+ * Thread-safety: not thread-safe; single-threaded mode only. */
+ASX_API ASX_MUST_USE asx_status asx_task_masked(asx_task_id self, asx_task_poll_fn body,
+                                                void *user_data);
+
 /* Query a task's current mask depth.
  *
  * Returns ASX_OK, ASX_E_INVALID_ARGUMENT if out_depth is NULL, or a

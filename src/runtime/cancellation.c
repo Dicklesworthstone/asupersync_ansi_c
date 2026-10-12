@@ -736,7 +736,9 @@ asx_status asx_task_mask(asx_task_id self) {
     asx_status st = asx_task_slot_lookup(self, &t);
     if (st != ASX_OK) return st;
     if (asx_task_is_terminal(t->state)) return ASX_E_INVALID_STATE;
+#ifndef ASX_MUTANT_MASK_ACCEPTS_EXCESS_DEPTH
     if (t->mask_depth >= ASX_MAX_MASK_DEPTH) return ASX_E_INVALID_STATE;
+#endif
     t->mask_depth++;
     return ASX_OK;
 }
@@ -748,6 +750,21 @@ asx_status asx_task_unmask(asx_task_id self) {
     if (t->mask_depth == 0u) return ASX_E_INVALID_STATE;
     t->mask_depth--;
     return ASX_OK;
+}
+
+asx_status asx_task_masked(asx_task_id self, asx_task_poll_fn body, void *user_data) {
+    asx_status st;
+    asx_status body_status;
+
+    if (body == NULL) return ASX_E_INVALID_ARGUMENT;
+    st = asx_task_mask(self);
+    if (st != ASX_OK) return st;
+    body_status = body(user_data, self);
+#ifndef ASX_MUTANT_MASKED_SKIP_UNMASK
+    st = asx_task_unmask(self);
+    if (st != ASX_OK) return st;
+#endif
+    return body_status;
 }
 
 asx_status asx_task_mask_depth(asx_task_id id, uint32_t *out_depth) {

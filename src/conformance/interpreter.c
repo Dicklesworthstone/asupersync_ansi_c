@@ -2275,6 +2275,38 @@ static void race_refused_wrapper(it_task *t, asx_task_id self, uint32_t idx, it_
 
 /* Steps that never suspend; the only ones allowed inside `masked`. */
 static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32_t idx,
+                             const char *label);
+
+typedef struct {
+    it_task *task;
+    uint32_t steps;
+    uint32_t index;
+    const char *label;
+    step_result result;
+} it_masked_run;
+
+static asx_status exec_masked_steps(void *data, asx_task_id self) {
+    it_masked_run *run = (it_masked_run *)data;
+    uint32_t n = asx_json_count(g_in, run->steps);
+    uint32_t j;
+
+    for (j = 0; j < n && run->result == STEP_NEXT; j++) {
+        uint32_t inner = asx_json_item(g_in, run->steps, j);
+        char inner_label[512];
+        const char *inner_op = it_str(inner, "op");
+        int len = snprintf(inner_label, sizeof(inner_label), "%s/%u/%s", run->label,
+                           (unsigned)(j + 1u), inner_op != NULL ? inner_op : "");
+        if (len < 0 || (size_t)len >= sizeof(inner_label)) {
+            it_fail_task(run->task, run->index, "masked nesting too deep for its label");
+            run->result = STEP_END;
+            break;
+        }
+        run->result = exec_sync(run->task, self, inner, run->index, inner_label);
+    }
+    return ASX_OK;
+}
+
+static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32_t idx,
                              const char *label) {
     const char *op = it_str(step, "op");
     asx_status st;
@@ -2789,29 +2821,17 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
         /* Cx::masked (cx.rs:3315). A masked step inside masked nests; each
          * inner observation's op is its path, e.g. masked/2/masked/1/checkpoint
          * (DSL §3.2). */
-        uint32_t steps = asx_json_get(g_in, step, "steps");
-        uint32_t n = asx_json_count(g_in, steps);
-        uint32_t j;
-        step_result r = STEP_NEXT;
-        if (asx_task_mask(self) != ASX_OK) {
-            it_fail_task(t, idx, "asx_task_mask failed");
+        it_masked_run run;
+        run.task = t;
+        run.steps = asx_json_get(g_in, step, "steps");
+        run.index = idx;
+        run.label = label;
+        run.result = STEP_NEXT;
+        if (asx_task_masked(self, exec_masked_steps, &run) != ASX_OK) {
+            it_fail_task(t, idx, "asx_task_masked failed");
             return STEP_END;
         }
-        for (j = 0; j < n && r == STEP_NEXT; j++) {
-            uint32_t inner = asx_json_item(g_in, steps, j);
-            char inner_label[512];
-            const char *inner_op = it_str(inner, "op");
-            int len = snprintf(inner_label, sizeof(inner_label), "%s/%u/%s", label,
-                               (unsigned)(j + 1u), inner_op != NULL ? inner_op : "");
-            if (len < 0 || (size_t)len >= sizeof(inner_label)) {
-                it_fail_task(t, idx, "masked nesting too deep for its label");
-                r = STEP_END;
-                break;
-            }
-            r = exec_sync(t, self, inner, idx, inner_label);
-        }
-        if (asx_task_unmask(self) != ASX_OK) it_fail_task(t, idx, "asx_task_unmask failed");
-        return r;
+        return run.result;
     }
     {
         char what[160];

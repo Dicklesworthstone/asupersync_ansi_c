@@ -6,6 +6,7 @@
  *
  * Output:
  *   SCENARIO <id> <pass|fail> [diagnostic]
+ *   DETAIL <JSON object> for actual mask-worker and joiner observations
  *   DIGEST <hex>
  *
  * SPDX-License-Identifier: MIT
@@ -441,6 +442,266 @@ static void scenario_scope_finish_wake_retry(void) {
     SCENARIO_END();
 }
 
+/* These native scheduler witnesses assume bounded polling and explicit release
+ * of raw masks. They do not retain a Rust-style guard across an await. */
+typedef struct {
+    const char *scenario;
+    asx_task_id worker;
+    uint32_t worker_polls;
+    uint32_t joiner_polls;
+    uint32_t leaf_calls;
+    uint32_t outer_calls;
+    uint32_t leaf_depth;
+    uint32_t masked_checkpoints;
+    uint32_t observed_at;
+    uint32_t worker_polls_at_join;
+    int mode;
+    int released;
+    int joined;
+    const char *error;
+    asx_outcome joined_outcome;
+} mask_e2e_context;
+
+static void emit_mask_detail(const mask_e2e_context *ctx, const char *actor, const char *stage,
+                             uint32_t polls, uint32_t depth, int phase, int masked, int cancelled,
+                             asx_status status, int outcome) {
+    printf("DETAIL {\"test\":\"%s\",\"actor\":\"%s\",\"stage\":\"%s\","
+           "\"poll\":%u,\"worker_polls\":%u,\"joiner_polls\":%u,\"mask_depth\":%u,"
+           "\"cancel_phase\":%d,\"checkpoint_masked\":%d,\"checkpoint_cancelled\":%d,"
+           "\"observed_status\":%d,\"callback_calls\":%u,\"terminal_outcome\":",
+           ctx->scenario, actor, stage, polls, ctx->worker_polls, ctx->joiner_polls, depth, phase,
+           masked, cancelled, (int)status, ctx->leaf_calls);
+    if (outcome < 0)
+        printf("null");
+    else
+        printf("%d", outcome);
+    printf("}\n");
+}
+
+static asx_status mask_worker_checkpoint(mask_e2e_context *ctx, asx_task_id self, const char *stage,
+                                         uint32_t expected_depth, int expected_masked,
+                                         int expected_cancelled) {
+    uint32_t depth = UINT32_MAX;
+    asx_checkpoint_result checkpoint;
+    asx_status st = asx_task_mask_depth(self, &depth);
+    memset(&checkpoint, 0, sizeof(checkpoint));
+    if (st == ASX_OK) st = asx_checkpoint(self, &checkpoint);
+    emit_mask_detail(ctx, "worker", stage, ctx->worker_polls, depth,
+                     st == ASX_OK ? (int)checkpoint.phase : -1, checkpoint.masked,
+                     checkpoint.cancelled, st, -1);
+    if (st != ASX_OK || depth != expected_depth || checkpoint.masked != expected_masked ||
+        checkpoint.cancelled != expected_cancelled ||
+        (expected_masked && checkpoint.phase != ASX_CANCEL_PHASE_REQUESTED) ||
+        (expected_cancelled && checkpoint.phase != ASX_CANCEL_PHASE_CANCELLING)) {
+        if (ctx->error == NULL) ctx->error = stage;
+        return ASX_E_INVALID_STATE;
+    }
+    if (checkpoint.masked) ctx->masked_checkpoints++;
+    if (checkpoint.cancelled && ctx->observed_at == 0u) ctx->observed_at = ctx->worker_polls;
+    return ASX_OK;
+}
+
+static asx_status poll_mask_leaf(void *data, asx_task_id self) {
+    mask_e2e_context *ctx = (mask_e2e_context *)data;
+    asx_status st;
+    ctx->leaf_calls++;
+    st = mask_worker_checkpoint(ctx, self, "leaf_first", ctx->leaf_depth, 1, 0);
+    if (st != ASX_OK) return st;
+    st = mask_worker_checkpoint(ctx, self, "leaf_repeated", ctx->leaf_depth, 1, 0);
+    if (st != ASX_OK) return st;
+    /* A genuine early error return must still release this guard. */
+    return ASX_E_INVALID_ARGUMENT;
+}
+
+static asx_status poll_mask_outer(void *data, asx_task_id self) {
+    mask_e2e_context *ctx = (mask_e2e_context *)data;
+    uint32_t depth = ctx->mode == 1 ? 2u : 1u;
+    asx_status st;
+    ctx->outer_calls++;
+    st = mask_worker_checkpoint(ctx, self, "outer_enter", depth, 1, 0);
+    if (st != ASX_OK) return st;
+    st = asx_task_masked(self, poll_mask_leaf, ctx);
+    if (st != ASX_E_INVALID_ARGUMENT) {
+        if (ctx->error == NULL) ctx->error = "nested_error_status";
+        return ASX_E_INVALID_STATE;
+    }
+    st = mask_worker_checkpoint(ctx, self, "inner_restored", depth, 1, 0);
+    if (st != ASX_OK) return st;
+    return ASX_E_INVALID_ARGUMENT;
+}
+
+static asx_status poll_mask_worker(void *data, asx_task_id self) {
+    mask_e2e_context *ctx = (mask_e2e_context *)data;
+    uint32_t depth;
+    uint32_t i;
+    asx_status st;
+    ctx->worker_polls++;
+    if (ctx->worker_polls == 1u) {
+        depth = ctx->mode == 2 ? ASX_MAX_MASK_DEPTH - 1u : ctx->mode == 1 ? 1u : 0u;
+        for (i = 0u; i < depth; i++) {
+            st = asx_task_mask(self);
+            if (st != ASX_OK) {
+                ctx->error = "initial_raw_mask";
+                return st;
+            }
+        }
+        st = mask_worker_checkpoint(ctx, self, "before_cancel", depth, 0, 0);
+        return st == ASX_OK ? ASX_E_PENDING : st;
+    }
+    if (ctx->worker_polls == 2u) {
+        if (ctx->mode == 2) {
+            uint32_t calls;
+            uint32_t refused_depth = UINT32_MAX;
+            uint64_t digest;
+            asx_cancel_phase refused_phase;
+            st = asx_task_masked(self, poll_mask_leaf, ctx);
+            if (st != ASX_E_INVALID_ARGUMENT) {
+                ctx->error = "depth64_error_status";
+                return ASX_E_INVALID_STATE;
+            }
+            st = mask_worker_checkpoint(ctx, self, "depth63_restored", ASX_MAX_MASK_DEPTH - 1u, 1,
+                                        0);
+            if (st != ASX_OK) return st;
+            st = asx_task_mask(self);
+            if (st != ASX_OK) {
+                ctx->error = "raw_depth64";
+                return st;
+            }
+            calls = ctx->leaf_calls;
+            digest = asx_trace_digest();
+            st = asx_task_masked(self, poll_mask_leaf, ctx);
+            if (asx_task_mask_depth(self, &refused_depth) != ASX_OK ||
+                asx_task_get_cancel_phase(self, &refused_phase) != ASX_OK) {
+                ctx->error = "depth65_observation";
+                return ASX_E_INVALID_STATE;
+            }
+            emit_mask_detail(ctx, "worker", "depth65_refused", ctx->worker_polls, refused_depth,
+                             (int)refused_phase, -1, -1, st, -1);
+            if (st != ASX_E_INVALID_STATE || ctx->leaf_calls != calls ||
+                asx_trace_digest() != digest) {
+                ctx->error = "depth65_must_not_run_callback";
+                return ASX_E_INVALID_STATE;
+            }
+            st = mask_worker_checkpoint(ctx, self, "depth64_unchanged", ASX_MAX_MASK_DEPTH, 1, 0);
+            if (st != ASX_OK) return st;
+            for (i = 0u; i < ASX_MAX_MASK_DEPTH; i++) {
+                st = asx_task_unmask(self);
+                if (st != ASX_OK) {
+                    ctx->error = "release_depth64";
+                    return st;
+                }
+            }
+        } else {
+            st = asx_task_masked(self, poll_mask_outer, ctx);
+            if (st != ASX_E_INVALID_ARGUMENT) {
+                if (ctx->error == NULL) ctx->error = "outer_error_status";
+                return ASX_E_INVALID_STATE;
+            }
+        }
+    }
+    depth = ctx->mode == 1 && !ctx->released ? 1u : 0u;
+    st = mask_worker_checkpoint(ctx, self, depth == 0u ? "unmasked_checkpoint" : "raw_mask_leaked",
+                                depth, depth != 0u, depth == 0u);
+    if (st != ASX_OK) return st;
+    /* One more real cleanup poll after acknowledgement, while the joiner
+     * remains parked. Completion wakes the joiner through the runtime. */
+    return ctx->observed_at != 0u && ctx->worker_polls > ctx->observed_at ? ASX_OK : ASX_E_PENDING;
+}
+
+static asx_status poll_mask_joiner(void *data, asx_task_id self) {
+    mask_e2e_context *ctx = (mask_e2e_context *)data;
+    uint32_t depth = UINT32_MAX;
+    asx_cancel_phase phase;
+    asx_status st;
+    ctx->joiner_polls++;
+    st = asx_task_mask_depth(ctx->worker, &depth);
+    if (st == ASX_OK) st = asx_task_get_cancel_phase(ctx->worker, &phase);
+    if (st != ASX_OK) {
+        ctx->error = "joiner_target_observation";
+        return st;
+    }
+    st = asx_task_join_poll(self, ctx->worker, &ctx->joined_outcome);
+    emit_mask_detail(ctx, "joiner", st == ASX_E_PENDING ? "join_waiting" : "join_result",
+                     ctx->joiner_polls, depth, (int)phase, -1, -1, st,
+                     st == ASX_OK ? (int)ctx->joined_outcome.severity : -1);
+    if (st == ASX_E_PENDING) return st;
+    if (st != ASX_OK) {
+        ctx->error = "joiner_failed";
+        return st;
+    }
+    ctx->joined = 1;
+    ctx->worker_polls_at_join = ctx->worker_polls;
+    return ASX_OK;
+}
+
+static void scenario_nested_guarded_mask(int mode) {
+    SCENARIO_BEGIN(mode == 1   ? "nested.raw_mask_release_required"
+                   : mode == 2 ? "nested.mask_guard_depth_limit"
+                               : "nested.mask_guard_restores");
+    mask_e2e_context ctx;
+    asx_region_id root, child;
+    asx_task_id joiner;
+    asx_outcome outcome;
+    asx_budget budget;
+    uint32_t depth;
+    asx_cancel_phase phase;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.scenario = _scenario_id;
+    ctx.mode = mode;
+    ctx.leaf_depth = mode == 2 ? ASX_MAX_MASK_DEPTH : mode == 1 ? 3u : 2u;
+    asx_runtime_reset();
+    SCENARIO_CHECK(asx_region_open(&root) == ASX_OK, "open_mask_root");
+    SCENARIO_CHECK(asx_region_open_child(root, &child) == ASX_OK, "open_mask_child");
+    /* The joiner polls before its child worker, genuinely parks, then is
+     * woken by completion rather than by a test-injected notification. */
+    SCENARIO_CHECK(asx_task_spawn(root, poll_mask_joiner, &ctx, &joiner) == ASX_OK,
+                   "spawn_mask_joiner");
+    SCENARIO_CHECK(asx_task_spawn(child, poll_mask_worker, &ctx, &ctx.worker) == ASX_OK,
+                   "spawn_mask_worker");
+    budget = asx_budget_from_polls(2u);
+    SCENARIO_CHECK(asx_scheduler_run(root, &budget) == ASX_E_POLL_BUDGET_EXHAUSTED,
+                   "initial_bounded_polls");
+    SCENARIO_CHECK(ctx.worker_polls == 1u && ctx.joiner_polls == 1u && !ctx.joined &&
+                       ctx.error == NULL,
+                   "real_joiner_waits_before_cancel");
+    SCENARIO_CHECK(asx_task_cancel(ctx.worker, ASX_CANCEL_USER) == ASX_OK, "cancel_real_worker");
+    if (mode == 1) {
+        budget = asx_budget_from_polls(4u);
+        SCENARIO_CHECK(asx_scheduler_run(root, &budget) == ASX_E_POLL_BUDGET_EXHAUSTED,
+                       "leaked_mask_stays_bounded_pending");
+        SCENARIO_CHECK(ctx.worker_polls == 5u && ctx.joiner_polls == 1u && !ctx.joined &&
+                           ctx.observed_at == 0u && ctx.masked_checkpoints == 8u &&
+                           ctx.error == NULL,
+                       "leaked_mask_defers_cancel_and_join");
+        SCENARIO_CHECK(asx_task_mask_depth(ctx.worker, &depth) == ASX_OK && depth == 1u &&
+                           asx_task_get_cancel_phase(ctx.worker, &phase) == ASX_OK &&
+                           phase == ASX_CANCEL_PHASE_REQUESTED,
+                       "raw_mask_remains_requested");
+        SCENARIO_CHECK(asx_task_get_outcome(ctx.worker, &outcome) == ASX_E_TASK_NOT_COMPLETED,
+                       "masked_worker_not_completed");
+        SCENARIO_CHECK(asx_task_unmask(ctx.worker) == ASX_OK, "explicit_release_raw_mask");
+        ctx.released = 1;
+    }
+    budget = asx_budget_from_polls(8u);
+    SCENARIO_CHECK(asx_scheduler_run(root, &budget) == ASX_OK, "masked_worker_then_joiner_drain");
+    SCENARIO_CHECK(ctx.error == NULL, ctx.error == NULL ? "mask_observation" : ctx.error);
+    SCENARIO_CHECK(ctx.leaf_calls == 1u && ctx.outer_calls == (mode == 2 ? 0u : 1u),
+                   "guard_callbacks_run_exactly_once");
+    SCENARIO_CHECK(ctx.observed_at == (mode == 1 ? 6u : 2u) &&
+                       ctx.worker_polls == ctx.observed_at + 1u && ctx.joiner_polls == 2u &&
+                       ctx.joined && ctx.worker_polls_at_join == ctx.worker_polls,
+                   "join_only_after_unmasked_cleanup_completion");
+    SCENARIO_CHECK(ctx.joined_outcome.severity == ASX_OUTCOME_CANCELLED,
+                   "join_observes_cancelled_terminal_outcome");
+    SCENARIO_CHECK(asx_task_get_outcome(ctx.worker, &outcome) != ASX_OK, "worker_join_consumed");
+    SCENARIO_CHECK(asx_task_join(joiner, &outcome) == ASX_OK && outcome.severity == ASX_OUTCOME_OK,
+                   "joiner_finishes_normally");
+    budget = asx_budget_from_polls(8u);
+    SCENARIO_CHECK(asx_region_drain(root, &budget) == ASX_OK, "mask_subtree_closes");
+    SCENARIO_CHECK(asx_quiescence_check(root) == ASX_OK, "mask_subtree_quiescent");
+    SCENARIO_END();
+}
+
 int main(void) {
     scenario_nested_lifecycle_full();
     scenario_nested_inside_out_pending();
@@ -449,6 +710,9 @@ int main(void) {
     scenario_nested_body_exception(ASX_OUTCOME_ERR);
     scenario_nested_body_exception(ASX_OUTCOME_PANICKED);
     scenario_scope_finish_wake_retry();
+    scenario_nested_guarded_mask(0);
+    scenario_nested_guarded_mask(1);
+    scenario_nested_guarded_mask(2);
 
     printf("DIGEST %016llx\n", (unsigned long long)asx_trace_digest());
     fprintf(stderr, "[e2e] nested_regions: %d passed, %d failed\n", g_pass, g_fail);

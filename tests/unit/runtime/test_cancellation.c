@@ -981,6 +981,178 @@ TEST(unmasked_task_is_force_completed_by_cleanup_budget) {
     ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
 }
 
+typedef struct {
+    uint32_t calls;
+    uint32_t depth;
+    asx_status result;
+    asx_checkpoint_result checkpoint;
+} masked_callback_state;
+
+static asx_status masked_callback(void *data, asx_task_id self) {
+    masked_callback_state *state = (masked_callback_state *)data;
+    asx_status st;
+    state->calls++;
+    st = asx_task_mask_depth(self, &state->depth);
+    if (st != ASX_OK) return st;
+    st = asx_checkpoint(self, &state->checkpoint);
+    if (st != ASX_OK) return st;
+    return state->result;
+}
+
+TEST(masked_callback_restores_on_success_error_and_pending_returns) {
+    const asx_status returns[] = {ASX_OK, ASX_E_INVALID_ARGUMENT, ASX_E_CANCELLED, ASX_E_PENDING};
+    asx_region_id rid;
+    asx_task_id tid;
+    uint32_t i;
+    uint32_t depth;
+    masked_callback_state state;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
+    for (i = 0; i < sizeof(returns) / sizeof(returns[0]); i++) {
+        memset(&state, 0, sizeof(state));
+        state.result = returns[i];
+        ASSERT_EQ(asx_task_masked(tid, masked_callback, &state), returns[i]);
+        ASSERT_EQ(state.calls, 1u);
+        ASSERT_EQ(state.depth, 1u);
+        ASSERT_EQ(asx_task_mask_depth(tid, &depth), ASX_OK);
+        ASSERT_EQ(depth, 0u);
+    }
+}
+
+typedef struct {
+    masked_callback_state inner;
+    uint32_t before;
+    uint32_t after;
+    asx_status inner_result;
+} nested_masked_callback_state;
+
+static asx_status nested_masked_callback(void *data, asx_task_id self) {
+    nested_masked_callback_state *state = (nested_masked_callback_state *)data;
+    asx_status st = asx_task_mask_depth(self, &state->before);
+    if (st != ASX_OK) return st;
+    state->inner_result = asx_task_masked(self, masked_callback, &state->inner);
+    st = asx_task_mask_depth(self, &state->after);
+    if (st != ASX_OK) return st;
+    return state->inner_result;
+}
+
+TEST(masked_callback_nested_error_restores_each_level_and_delivers_cancel) {
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_checkpoint_result checkpoint;
+    nested_masked_callback_state state;
+    uint32_t depth;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
+    ASSERT_EQ(asx_task_cancel(tid, ASX_CANCEL_USER), ASX_OK);
+    memset(&state, 0, sizeof(state));
+    state.inner.result = ASX_E_INVALID_ARGUMENT;
+    ASSERT_EQ(asx_task_masked(tid, nested_masked_callback, &state), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(state.before, 1u);
+    ASSERT_EQ(state.inner.depth, 2u);
+    ASSERT_EQ(state.after, 1u);
+    ASSERT_EQ(state.inner.calls, 1u);
+    ASSERT_TRUE(state.inner.checkpoint.masked);
+    ASSERT_TRUE(!state.inner.checkpoint.cancelled);
+    ASSERT_EQ(asx_task_mask_depth(tid, &depth), ASX_OK);
+    ASSERT_EQ(depth, 0u);
+    ASSERT_EQ(asx_checkpoint(tid, &checkpoint), ASX_OK);
+    ASSERT_TRUE(checkpoint.cancelled);
+    ASSERT_TRUE(!checkpoint.masked);
+}
+
+TEST(masked_callback_preserves_an_existing_raw_mask) {
+    asx_region_id rid;
+    asx_task_id tid;
+    masked_callback_state state;
+    uint32_t depth;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
+    ASSERT_EQ(asx_task_mask(tid), ASX_OK);
+    memset(&state, 0, sizeof(state));
+    state.result = ASX_E_CANCELLED;
+    ASSERT_EQ(asx_task_masked(tid, masked_callback, &state), ASX_E_CANCELLED);
+    ASSERT_EQ(state.depth, 2u);
+    ASSERT_EQ(asx_task_mask_depth(tid, &depth), ASX_OK);
+    ASSERT_EQ(depth, 1u);
+    ASSERT_EQ(asx_task_unmask(tid), ASX_OK);
+}
+
+TEST(masked_callback_refuses_excess_depth_without_running_body) {
+    asx_region_id rid;
+    asx_task_id tid;
+    masked_callback_state state;
+    uint32_t depth;
+    uint32_t i;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
+    for (i = 0; i < ASX_MAX_MASK_DEPTH - 1u; i++) ASSERT_EQ(asx_task_mask(tid), ASX_OK);
+    memset(&state, 0, sizeof(state));
+    ASSERT_EQ(asx_task_masked(tid, masked_callback, &state), ASX_OK);
+    ASSERT_EQ(state.calls, 1u);
+    ASSERT_EQ(state.depth, ASX_MAX_MASK_DEPTH);
+    ASSERT_EQ(asx_task_mask(tid), ASX_OK);
+    state.calls = 0u;
+    ASSERT_EQ(asx_task_masked(tid, masked_callback, &state), ASX_E_INVALID_STATE);
+    ASSERT_EQ(state.calls, 0u);
+    ASSERT_EQ(asx_task_mask_depth(tid, &depth), ASX_OK);
+    ASSERT_EQ(depth, ASX_MAX_MASK_DEPTH);
+    for (i = 0; i < ASX_MAX_MASK_DEPTH; i++) ASSERT_EQ(asx_task_unmask(tid), ASX_OK);
+}
+
+TEST(masked_callback_rejects_null_terminal_and_stale_admission) {
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_budget budget;
+    masked_callback_state state;
+    uint32_t depth;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &tid), ASX_OK);
+    memset(&state, 0, sizeof(state));
+    ASSERT_EQ(asx_task_masked(tid, NULL, &state), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_task_mask_depth(tid, &depth), ASX_OK);
+    ASSERT_EQ(depth, 0u);
+    budget = asx_budget_from_polls(4u);
+    ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
+    ASSERT_EQ(asx_task_masked(tid, masked_callback, &state), ASX_E_INVALID_STATE);
+    ASSERT_EQ(state.calls, 0u);
+    asx_runtime_reset();
+    ASSERT_NE(asx_task_masked(tid, masked_callback, &state), ASX_OK);
+    ASSERT_EQ(state.calls, 0u);
+    ASSERT_NE(asx_task_masked(ASX_INVALID_ID, masked_callback, &state), ASX_OK);
+    ASSERT_EQ(state.calls, 0u);
+}
+
+static asx_status masked_callback_unbalances_its_raw_mask(void *data, asx_task_id self) {
+    (void)data;
+    if (asx_task_unmask(self) != ASX_OK) return ASX_E_INVALID_STATE;
+    return ASX_OK;
+}
+
+TEST(masked_callback_reports_a_failed_restoration) {
+    asx_region_id rid;
+    asx_task_id tid;
+    uint32_t depth;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
+    ASSERT_EQ(asx_task_masked(tid, masked_callback_unbalances_its_raw_mask, NULL),
+              ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_task_mask_depth(tid, &depth), ASX_OK);
+    ASSERT_EQ(depth, 0u);
+}
+
 TEST(mask_depth_is_bounded) {
     asx_region_id rid;
     asx_task_id tid;
@@ -1944,6 +2116,12 @@ int main(void) {
     RUN_TEST(mask_depth_is_a_nesting_depth_not_a_consumed_deferral_budget);
     RUN_TEST(masked_task_is_not_force_completed);
     RUN_TEST(unmasked_task_is_force_completed_by_cleanup_budget);
+    RUN_TEST(masked_callback_restores_on_success_error_and_pending_returns);
+    RUN_TEST(masked_callback_nested_error_restores_each_level_and_delivers_cancel);
+    RUN_TEST(masked_callback_preserves_an_existing_raw_mask);
+    RUN_TEST(masked_callback_refuses_excess_depth_without_running_body);
+    RUN_TEST(masked_callback_rejects_null_terminal_and_stale_admission);
+    RUN_TEST(masked_callback_reports_a_failed_restoration);
     RUN_TEST(mask_depth_is_bounded);
     RUN_TEST(mask_refuses_a_completed_task_and_a_handle_from_a_reset_runtime);
     RUN_TEST(nested_masked_work_drains_after_the_outer_mask_while_a_joiner_waits);

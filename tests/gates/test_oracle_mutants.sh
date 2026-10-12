@@ -12,6 +12,7 @@
 #   - OBLIGATION_DROP_COMMITS   a dropped token commits, not leaks     -> obligation-*
 #   - OK_BODY_CANCELS          an Ok body cancels its normal children -> region-body-ok-*
 #   - EXCEPTIONAL_BODY_NO_CANCEL Err/Panicked close without FailFast    -> region-body-(err|panic)-*
+#   - MASKED_SKIP_UNMASK       callback masking fails to restore       -> cancel-masked-*
 # A mutant the corpus does not catch means the fixtures stopped exercising
 # that rule: the gate fails.
 # The raw-ID authorization bypass is tested through actual polling tasks:
@@ -80,6 +81,34 @@ run_mutant SCHED_REVERSE_ORDER 'lab-'
 run_mutant OBLIGATION_DROP_COMMITS 'obligation-'
 run_mutant OK_BODY_CANCELS 'region-body-ok-'
 run_mutant EXCEPTIONAL_BODY_NO_CANCEL 'region-body-(err|panic)-'
+run_mutant MASKED_SKIP_UNMASK 'cancel-masked-'
+
+# The scenario parser cannot reach depth 64; the actual public boundary
+# test must catch acceptance of depth 65, without a compile/empty-run pass.
+MASK_DIR="$MUTANT_BUILD_ROOT/MASK_ACCEPTS_EXCESS_DEPTH"
+MASK_TEST="$MASK_DIR/tests/unit/runtime/test_cancellation"
+mkdir -p "$MASK_DIR"
+if make -C "$REPO_ROOT" -j"$JOBS" --no-print-directory BUILD_DIR="$MASK_DIR" \
+    CFLAGS="${CFLAGS:-} -DASX_MUTANT_MASK_ACCEPTS_EXCESS_DEPTH" "$MASK_TEST" \
+    >"$MASK_DIR/build.log" 2>&1; then
+    mask_out="$(cd "$REPO_ROOT" && "$MASK_TEST" 2>&1)"
+    mask_rc=$?
+    printf '%s\n' "$mask_out" >"$MASK_DIR/run.log"
+    if [ "$mask_rc" -ne 0 ] &&
+        grep -q '^  FAIL: masked_callback_refuses_excess_depth_without_running_body$' <<<"$mask_out" &&
+        grep -Eq '^[0-9]+/[0-9]+ tests passed$' <<<"$mask_out"; then
+        echo "  PASS: MASK_ACCEPTS_EXCESS_DEPTH caught by real mask-depth admission"
+        log_case "MASK_ACCEPTS_EXCESS_DEPTH" "nonzero:excess_depth" "exit$mask_rc" "pass" "$MASK_DIR/run.log"
+    else
+        echo "  FAIL: MASK_ACCEPTS_EXCESS_DEPTH not caught (exit$mask_rc; log $MASK_DIR/run.log)"
+        log_case "MASK_ACCEPTS_EXCESS_DEPTH" "nonzero:excess_depth" "exit$mask_rc" "fail" "$MASK_DIR/run.log"
+        failures=$((failures + 1))
+    fi
+else
+    echo "  FAIL: MASK_ACCEPTS_EXCESS_DEPTH does not build (log $MASK_DIR/build.log)"
+    log_case "MASK_ACCEPTS_EXCESS_DEPTH" "build" "build-failed" "fail" "$MASK_DIR/build.log"
+    failures=$((failures + 1))
+fi
 
 # A compile failure or empty run cannot count as catching the missing guard.
 AUTH_DIR="$MUTANT_BUILD_ROOT/OBLIGATION_AUTH_BYPASS"
