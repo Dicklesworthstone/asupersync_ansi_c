@@ -471,8 +471,29 @@ runtime-owned storage or change canonical scenario semantics.
 - [x] Preserve the review's actual minimal-browser example compile failures, cross-profile factory link failure and Ghost0 `info` misreport; no successful runtime credit from those failed trials.
 - [x] Fix Ghost0 information output and add an actual compile-flag comparison. Select trace/replay and adapter examples only when their public API contract is available; supported examples retain all assertions and strict flags.
 - [x] Bind cross-profile test factory availability to both library and caller public contracts. Hidden APIs are N/A, not fabricated comparisons; every available factory, canary and host-work assertion stays required.
-- [ ] Freeze and independently execute the final CLI/browser follow-up, including all 49 minimal-browser controls and supported examples. No native browser/WASM or Windows execution follows from host profile simulation.
-- [ ] Obtain independent exact-revision review, close only fully completed original RB8, synchronize Beads and publish.
+- [x] Freeze `2030ceb0`; root fresh GCC/Clang release R3 and genuine i386 each execute all 49 mismatch builds and 167 canonical comparisons. Minimal-browser Clang executes 49 applicable controls and all 10 supported examples. Full local 164-unit/core/format/lint/integrity/11-gate/docs checks pass at this exact source.
+- [x] PinkOwl independently accepts every original criterion at clean `2030ceb0`: fresh CORE/Ghost0, live POSIX and minimal-browser each execute 49 controls, matching consumers 144/144/130, examples 13/13/10; app suites 69/68, actual doctor probes, 167 canonical comparisons and all 11 custom-layout gate scripts pass. Genuine old Ghost0 output fails both new field assertions; three hidden API compile controls reject. Native browser/WASM and Windows execution are not claimed.
+- [x] PinkOwl closes only original RB8 at `2026-10-12T16:24:56.597187013Z`, binding original acceptance to `2030ceb0`; independent evidence is on hz3 at `/tmp/asx-rb8-pink-2030-proof-20261012`. The tracker now has 114 unfinished items.
+- [ ] Publish/synchronize the accepted source and tracker to both remote branches and the primary checkout, preserving pre-existing artifacts.
+- [ ] Observe the publication's own hosted CI and performance outcomes; older successful CI does not certify this source.
+
+The live POSIX doctor is observed reading OS entropy successfully; its entropy
+hook still has a PID/time fallback if all OS sources fail. Unavailable-source
+failure and full SEC5 acceptance remain unproved. Original K18 runtime storage,
+K4 finalization, physical-device and performance milestones remain unfinished.
+
+Follow-on footprint work belongs to existing `bd-9kll.14.2`, not another
+certificate or a new closure. Strict GCC release R3 `size` measures 17,365
+additional bytes of text across hooks/builder/rt/lab/replay/app objects versus
+the old `e8b0fe63` library, including repeated build-identity tables. Raw
+before/after data is `/tmp/asx-rb8-root-library-size-before-after-20261012.log`
+on hz3. This is an archive-object measurement, not a linked footprint or SLO
+pass. Share library-side calculation without changing application-side
+fingerprints, object layout, refusal ordering or the 49 controls.
+
+- [x] Measure and retain the actual object-size cost; no footprint/performance-green claim.
+- [ ] Share the library-side calculation and retain independent application stamps.
+- [ ] Measure identical-toolchain before/after size and execute matching/mismatch, strict full-suite and canonical controls before landing; keep broad P2 open.
 
 ## Assessment at the audited revision
 
