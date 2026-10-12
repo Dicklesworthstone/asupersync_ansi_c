@@ -1926,7 +1926,6 @@ asx_status asx_obligation_check_access_internal(asx_obligation_id id) {
     asx_task_slot *caller;
     asx_task_slot *holder;
     asx_region_slot *region;
-    asx_task_id current = asx_task_current();
     asx_status st = asx_obligation_slot_lookup(id, &o);
     if (st != ASX_OK) return st;
     if (o->state != ASX_OBLIGATION_RESERVED) return ASX_E_OBLIGATION_ALREADY_RESOLVED;
@@ -1934,6 +1933,7 @@ asx_status asx_obligation_check_access_internal(asx_obligation_id id) {
     /* Isolated authorization negative control, never a release define. */
     return ASX_OK;
 #endif
+    asx_task_id current = asx_task_current();
     /* A bound primitive's credit is private to its owned permit: even its
      * holder must release/send that permit rather than settle by raw ID. */
     if (o->drop_fn != NULL) return ASX_E_PERMISSION_DENIED;
