@@ -891,6 +891,60 @@ TEST(tracked_permit_moves_to_another_task_and_forgets_once) {
     check_sync_foreign_settlement(SYNC_ACCESS_MOVE_FORGET);
 }
 
+static asx_status poll_binding_holder(void *data, asx_task_id self) {
+    (void)data;
+    return asx_task_park(self) == ASX_OK ? ASX_E_PENDING : ASX_E_INVALID_STATE;
+}
+
+TEST(equal_count_permits_reject_another_reservations_credit) {
+    asx_region_id region;
+    asx_task_id holder;
+    asx_cx cx;
+    asx_semaphore_handle sem;
+    asx_semaphore_waiter waiter;
+    asx_semaphore_permit first = {0}, second = {0}, mixed;
+    asx_obligation_info info;
+    uint64_t digest;
+    asx_runtime_reset();
+    setup();
+    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(region, poll_binding_holder, NULL, &holder), ASX_OK);
+    ASSERT_EQ(asx_cx_init(&cx, region, holder, ASX_CAP_NONE), ASX_OK);
+    ASSERT_EQ(asx_semaphore_create(2u, &sem), ASX_OK);
+    ASSERT_EQ(asx_semaphore_acquire_begin(sem, &waiter), ASX_OK);
+    ASSERT_EQ(asx_semaphore_poll_acquire(&waiter, &first, &cx), ASX_OK);
+    ASSERT_EQ(asx_semaphore_acquire_begin(sem, &waiter), ASX_OK);
+    ASSERT_EQ(asx_semaphore_poll_acquire(&waiter, &second, &cx), ASX_OK);
+    ASSERT_TRUE(first.obligation != ASX_INVALID_ID);
+    ASSERT_TRUE(second.obligation != ASX_INVALID_ID);
+    ASSERT_EQ(asx_semaphore_available(sem), 0u);
+    mixed = first;
+    mixed.obligation = second.obligation;
+    digest = asx_trace_digest();
+    ASSERT_EQ(asx_semaphore_release(mixed), ASX_E_PERMISSION_DENIED);
+    ASSERT_EQ(asx_semaphore_forget(mixed), ASX_E_PERMISSION_DENIED);
+    ASSERT_EQ(asx_semaphore_available(sem), 0u);
+    ASSERT_EQ(asx_trace_digest(), digest);
+    ASSERT_EQ(asx_obligation_get_info(first.obligation, &info), ASX_OK);
+    ASSERT_EQ(info.state, ASX_OBLIGATION_RESERVED);
+    ASSERT_EQ(info.holder, holder);
+    ASSERT_EQ(asx_obligation_get_info(second.obligation, &info), ASX_OK);
+    ASSERT_EQ(info.state, ASX_OBLIGATION_RESERVED);
+    ASSERT_EQ(info.holder, holder);
+    ASSERT_TRUE(first.serial != second.serial);
+    ASSERT_EQ(asx_semaphore_release(first), ASX_OK);
+    ASSERT_EQ(asx_semaphore_available(sem), 1u);
+    ASSERT_EQ(asx_semaphore_release(first), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_semaphore_release(second), ASX_OK);
+    ASSERT_EQ(asx_semaphore_available(sem), 2u);
+    ASSERT_EQ(asx_obligation_get_info(first.obligation, &info), ASX_OK);
+    ASSERT_EQ(info.state, ASX_OBLIGATION_COMMITTED);
+    ASSERT_EQ(asx_obligation_get_info(second.obligation, &info), ASX_OK);
+    ASSERT_EQ(info.state, ASX_OBLIGATION_COMMITTED);
+    ASSERT_EQ(asx_obligation_leak_count(), 0u);
+    ASSERT_EQ(asx_semaphore_close(sem), ASX_OK);
+}
+
 TEST(mutex_poisoned_release_rejects_foreign_credit_before_mutation) {
     check_sync_foreign_settlement(SYNC_ACCESS_POISON_FOREIGN_CREDIT);
 }
@@ -1286,6 +1340,7 @@ int main(void) {
     RUN_TEST(tracked_permit_raw_drop_requires_holder_and_owner_can_release);
     RUN_TEST(tracked_permit_moves_to_another_task_and_releases_once);
     RUN_TEST(tracked_permit_moves_to_another_task_and_forgets_once);
+    RUN_TEST(equal_count_permits_reject_another_reservations_credit);
     RUN_TEST(mutex_poisoned_release_rejects_foreign_credit_before_mutation);
 
     /* Barrier */

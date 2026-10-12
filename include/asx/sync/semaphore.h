@@ -49,8 +49,8 @@ typedef struct {
  * sync/semaphore.rs:1081), and the permit value is spent. Nothing leaks.
  * `count` is the number of permits it holds (an
  * acquire of n takes n at once); release returns them all. `serial`
- * names a mutex guard's hold of the lock (0 for a semaphore's permit):
- * only the current holder's guard unlocks. */
+ * distinguishes individual acquisitions, including equal-count tracked
+ * permits; only the current mutex guard's serial unlocks its lock. */
 typedef struct {
     uint32_t sem_slot;
     uint16_t generation;

@@ -199,14 +199,14 @@ static void sem_dispatch_parked(sem_slot *s) {
     }
 }
 
-/* The serial of a permit just handed out: a mutex's new holder (never 0),
- * else 0. */
+/* Every acquisition has a distinct binding, including equal-count
+ * semaphore permits. A mutex also records its current guard's serial. */
 static uint32_t sem_hold_serial(sem_slot *s) {
-    if (!s->is_mutex) return 0u;
+    /* Zero is reserved for a permit that has not been handed out. */
     s->last_serial++;
     if (s->last_serial == 0u) s->last_serial = 1u;
-    s->holder_serial = s->last_serial;
-    return s->holder_serial;
+    if (s->is_mutex) s->holder_serial = s->last_serial;
+    return s->last_serial;
 }
 
 /* A permit already released, forgotten or dropped. A mutex guard no

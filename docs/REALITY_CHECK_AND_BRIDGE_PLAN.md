@@ -93,8 +93,15 @@ both histories.
 
 The authenticity gate rebuilds the selected runner and checks exact rejection
 exits. Gate JSONL fields are escaped and validated. A separate observed analyzer
-capture-write defect is tracked as `bd-6oht`: saving diagnostics must succeed
-independently of an analyzer's exit status.
+capture-write defect (`bd-6oht`) is fixed: the writer's status is checked
+independently of the analyzer's exit. Both real file-size-limit controls reject
+the false-pass behavior; all ten controls and the JSON validator pass.
+
+Final ordinary-semaphore binding review found that equal-count permits shared
+serial0, allowing a mixed receipt to settle the wrong credit. `bd-jupz` gives
+each acquisition a serial while preserving mutex holder checks. A direct
+two-permit public-API test fails before the change and passes after it, checking
+credit phases, capacity, trace identity and normal exactly-once release.
 
 Formal rule14 remains Partial because holderless credits can still be created
 and settled without a Running holder, which belongs to original K4. The broader
