@@ -9,14 +9,14 @@
 ![C99](https://img.shields.io/badge/C-C99-00599C)
 ![No external deps](https://img.shields.io/badge/dependencies-none-brightgreen)
 ![Deterministic replay](https://img.shields.io/badge/replay-deterministic-orange)
-![Public API declarations](https://img.shields.io/badge/public%20API-2%2C014%20declarations-blue)
+![Public API declarations](https://img.shields.io/badge/public%20API-2%2C017%20declarations-blue)
 ![C test programs](https://img.shields.io/badge/tests-226%20programs-brightgreen)
 ![9 profiles](https://img.shields.io/badge/profiles-9%20deployment%20targets-blue)
 [![License: MIT+Rider](https://img.shields.io/badge/License-MIT%2BOpenAI%2FAnthropic%20Rider-blue.svg)](./LICENSE)
 
 </div>
 
-Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->2,014<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->226<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
+Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->2,017<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->226<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
 
 <div align="center">
 <h3>Quick Source Build</h3>
@@ -41,7 +41,7 @@ make test
 The port targets asupersync commit `5e60b1c4c` (2026-10).
 
 - **Compared with the Rust runtime, and matching:**
-  - `make conformance` runs <!-- fact:rust_fixtures -->153<!-- /fact --> scenarios captured from asupersync's `LabRuntime` (`fixtures/rust_reference_v2`) through the C runtime. Each must match the capture's trace class, final snapshot, step observations and lab dispatch order. Checked obligation handoff is included: same-region quota reuse, cross-region ownership changes, chained transfers, refusals and destination-body token drop.
+  - `make conformance` runs <!-- fact:rust_fixtures -->160<!-- /fact --> scenarios captured from asupersync's `LabRuntime` (`fixtures/rust_reference_v2`) through the C runtime. Each must match the capture's trace class, final snapshot, step observations and lab dispatch order. Checked obligation handoff is included: same-region quota reuse, cross-region ownership changes, chained transfers, refusals and destination-body token drop.
   - CI also generates 200 scenarios on every push and compares the two runtimes live (`make fuzz-differential`, seed 9).
   - It checks that the two trace canonicalizers agree on 100,000 random traces (`make canon-differential`).
   - It compares the kernel constants and defaults no scenario observes, such as cancel-kind tables, budgets, the timer limit, supervision defaults and lab batch sizes, with Rust's (`make check-rust-constants`). `twin_run` reads Rust's values from the pinned crate into `schemas/rust_kernel_constants.json`. Each value matches, or is a recorded difference that names its bead.
@@ -59,7 +59,7 @@ The port targets asupersync commit `5e60b1c4c` (2026-10).
 
 | Feature | What It Gives You |
 |---|---|
-| **<!-- fact:api_declarations -->2,014<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> header families** | Async runtime API: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
+| **<!-- fact:api_declarations -->2,017<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> header families** | Async runtime API: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
 | **No external dependencies** | Pure C runtime core; ships into constrained and audited environments unchanged |
 | **Deterministic replay and trace hashing** | Deterministic builds replay a scenario exactly from its seed and input; trace digests let you diff behavior across builds, profiles, and codec modes |
 | **Structured cancellation with witness protocol** | 11 cancel kinds with severity lattice, witness phase tracking, and cleanup budgets (advisory as in Rust; an opt-in hard bound) |
@@ -1312,6 +1312,27 @@ asx_status no_spawn_cx(const asx_cx *parent_cx, asx_cx *child_cx) {
 
 Scopes bind a capability context to a region for spawning child tasks. The `ASX_CAP_SPAWN` capability is required to build a scope: `asx_scope_init()` refuses a context without it (`ASX_E_PERMISSION_DENIED`), and `asx_scope_spawn()` returns `ASX_E_INVALID_STATE` for a scope lacking it, so no task creates children through a scope unless its parent granted that capability. The plain `asx_task_spawn()` checks no capability. Observing cancellation is not a capability, as in Rust (`Cx::checkpoint` and `Cx::is_cancel_requested` need none): `asx_cx_checkpoint()` and `asx_cx_is_cancelled()` work on any Cx with a task, so narrowing a child's context cannot leave its channel and sync waits blind to a cancel. Today the context's own operations check their bits (budget read/consume, clock read, entropy) and `src/net/net.c` checks `ASX_CAP_CHANNEL`; `ASX_CAP_TIMER`, `ASX_CAP_OBLIGATION`, `ASX_CAP_TRACE` and `ASX_CAP_CANCEL_REQUEST` are carried and narrowed but not yet checked by the timer, obligation, trace or cancel APIs.
 
+`asx_scope_finish(scope, body, cancel_reason)` closes the scope's existing
+region according to the body's outcome, then waits using the scope's budget.
+An `OK` body lets children finish normally; `CANCELLED` uses the supplied
+reason; `ERR` and `PANICKED` request `FAIL_FAST` for the root, with `PARENT`
+reasons for descendants. `asx_region_close_with_outcome` exposes the request
+and `asx_region_wait_closed` exposes the host-driven wait separately. Waiting
+drives existing scheduler, finalizer and leak-audit paths without adding a
+cancellation request. `asx_scope_drain` and `asx_region_drain` remain explicit
+cancel-and-close operations.
+
+Finish returns the closure operation's status and retains the first body
+outcome in `scope->body_outcome`. Retries require the same severity, use the
+scope's remaining budget and do not request cancellation again; a cancelled
+retry may omit the original reason. Supply a reason only for a cancelled
+body. That outcome selects the close path and is not joined into
+`asx_region_get_close_outcome`, which aggregates completed child-task outcomes.
+These C outcomes carry severity only. The scope wraps a region supplied by
+the caller; it does not yet provide Rust's child-region factory, typed body
+result or serialized, masked async-finalizer barrier (`bd-9kll.3.4`,
+`bd-9kll.3.14`).
+
 An `asx_cx` is a plain struct the caller owns; its budget, clock and entropy pointers borrow caller-owned storage, so creating or narrowing one allocates nothing. The design mirrors Rust's ownership-based authority model, adapted for C's manual lifetime management.
 
 ## Quiescence: When Is a Region Truly Done?
@@ -2354,7 +2375,7 @@ It has not been benchmarked against live builds here, and the two differ in more
 
 ### Can I embed this as a library without the CLI?
 
-Yes. The C API is first-class: <!-- fact:api_declarations -->2,014<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact -->
+Yes. The C API is first-class: <!-- fact:api_declarations -->2,017<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact -->
 public header families in the current `include/asx/` tree, and one umbrella
 `#include <asx/asx.h>`. The repository is library-first: `make install`
 installs only `libasx.a` and the headers. The `asx` CLI (`version`, `info`,

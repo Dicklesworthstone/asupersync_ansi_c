@@ -45,6 +45,7 @@
 /* Private channel destruction boundary; importing runtime_internal.h
  * would collide with this interpreter's independent scenario arenas. */
 void asx_send_permit_drop_internal(asx_send_permit *permit);
+void asx_region_advance_internal(asx_region_id region);
 
 /* ------------------------------------------------------------------ */
 /* Bounds                                                              */
@@ -3626,6 +3627,40 @@ static void apply_driver_op(uint32_t op) {
     asx_cancel_kind kind;
     if (name == NULL) {
         it_fail("script entry without op", NULL);
+        return;
+    }
+    if (strcmp(name, "finish_region") == 0) {
+        it_region *r = region_by_name(it_str(op, "region"));
+        const char *body_name = it_str(op, "body");
+        asx_outcome body;
+        asx_cancel_reason reason;
+        const asx_cancel_reason *cancel = NULL;
+        if (r == NULL || body_name == NULL) {
+            it_fail("finish_region needs a known region and body outcome", NULL);
+            return;
+        }
+        if (strcmp(body_name, "ok") == 0) {
+            body = asx_outcome_make(ASX_OUTCOME_OK);
+        } else if (strcmp(body_name, "err") == 0) {
+            body = asx_outcome_make(ASX_OUTCOME_ERR);
+        } else if (strcmp(body_name, "panicked") == 0) {
+            body = asx_outcome_make(ASX_OUTCOME_PANICKED);
+        } else if (strcmp(body_name, "cancelled") == 0 &&
+                   cancel_kind_parse(it_str(op, "kind"), &kind)) {
+            body = asx_outcome_make(ASX_OUTCOME_CANCELLED);
+            reason = make_reason(kind, r->id, ASX_INVALID_ID, it_str(op, "message"));
+            cancel = &reason;
+        } else {
+            it_fail("finish_region has an invalid body outcome or cancel kind", r->name);
+            return;
+        }
+        if (asx_region_close_with_outcome(r->id, &body, cancel) != ASX_OK) {
+            it_fail("asx_region_close_with_outcome failed", r->name);
+            return;
+        }
+        /* Scope advances once after the body branch. Subsequent lab steps
+         * complete live work; a successful body never drains/cancels it. */
+        asx_region_advance_internal(r->id);
         return;
     }
     if (strcmp(name, "cancel_region") == 0 || strcmp(name, "close_region") == 0) {

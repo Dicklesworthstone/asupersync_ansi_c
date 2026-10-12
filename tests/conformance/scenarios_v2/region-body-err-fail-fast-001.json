@@ -1,0 +1,16 @@
+{
+  "schema": "asx.scenario.v2",
+  "id": "region-body-err-fail-fast-001",
+  "description": "An error body requests native Scope FailFast while its child sleeps; the child observes it at its checkpoint.",
+  "unit": "region_lifecycle",
+  "rules": ["rule.region.close_begin", "rule.region.close_cancel_children", "rule.region.close_complete"],
+  "seed": 42,
+  "lab": {"max_steps": 200},
+  "regions": [{"name": "r.main", "parent": "root", "budget": null}],
+  "channels": [], "sync": [],
+  "tasks": [{"name": "t.child", "region": "r.main", "budget": null,
+    "program": [{"op": "sleep", "ns": 100}, {"op": "checkpoint"},
+                {"op": "trace", "message": "must not run after failing body"}]}],
+  "script": [{"at_ns": 0, "op": {"op": "finish_region", "region": "r.main", "body": "err"}}],
+  "expect": {"kind": "ok"}
+}

@@ -1127,6 +1127,65 @@ asx_status asx_region_close(asx_region_id id) {
     return ASX_OK;
 }
 
+asx_status asx_region_close_with_outcome(asx_region_id id, const asx_outcome *body,
+                                         const asx_cancel_reason *reason) {
+    asx_region_slot *r;
+#if !defined(ASX_MUTANT_EXCEPTIONAL_BODY_NO_CANCEL) || defined(ASX_MUTANT_OK_BODY_CANCELS)
+    asx_cancel_reason failure;
+#endif
+    asx_status st;
+
+    if (body == NULL || (int)body->severity < (int)ASX_OUTCOME_OK ||
+        (int)body->severity > (int)ASX_OUTCOME_PANICKED) {
+        return ASX_E_INVALID_ARGUMENT;
+    }
+    if (body->severity == ASX_OUTCOME_CANCELLED) {
+        if (reason == NULL || (int)reason->kind < (int)ASX_CANCEL_USER ||
+            (int)reason->kind > (int)ASX_CANCEL_SHUTDOWN) {
+            return ASX_E_INVALID_ARGUMENT;
+        }
+    } else if (reason != NULL) {
+        return ASX_E_INVALID_ARGUMENT;
+    }
+    st = asx_region_slot_lookup(id, &r);
+    if (st != ASX_OK) return st;
+    if (r->poisoned) return ASX_E_REGION_POISONED;
+    /* Exceptional bodies still emit cancellation receipts for a Closed region. */
+
+    switch (body->severity) {
+    case ASX_OUTCOME_OK:
+#ifdef ASX_MUTANT_OK_BODY_CANCELS
+        failure = asx_cancel_reason_default(ASX_CANCEL_FAIL_FAST, NULL);
+        failure.origin_region = id;
+        return asx_region_cancel(id, &failure, NULL);
+#else
+        if (r->state != ASX_REGION_OPEN) return ASX_OK;
+        (void)asx_ghost_check_region_transition(id, r->state, ASX_REGION_CLOSING);
+        st = asx_region_transition_check(r->state, ASX_REGION_CLOSING);
+        if (st != ASX_OK) return st;
+        r->state = ASX_REGION_CLOSING;
+        (void)asx_event_emit(ASX_EVENT_REGION_CLOSE, id, 0u, ASX_OK);
+        /* Scope's Ok branch calls RegionRecord::begin_close directly.
+         * Unlike RuntimeState::cancel_request, that native branch emits
+         * no RegionCloseBegin trace event (scope.rs:879-881). */
+        return ASX_OK;
+#endif
+    case ASX_OUTCOME_CANCELLED: return asx_region_cancel(id, reason, NULL);
+    case ASX_OUTCOME_ERR:
+    case ASX_OUTCOME_PANICKED:
+#ifdef ASX_MUTANT_EXCEPTIONAL_BODY_NO_CANCEL
+        return r->state == ASX_REGION_OPEN ? asx_region_close(id) : ASX_OK;
+#else
+        /* Rust CancelReason::fail_fast().with_region(id), including its
+         * Cx-free constructor's default attribution and testing timestamp. */
+        failure = asx_cancel_reason_default(ASX_CANCEL_FAIL_FAST, NULL);
+        failure.origin_region = id;
+        return asx_region_cancel(id, &failure, NULL);
+#endif
+    }
+    return ASX_E_INVALID_ARGUMENT;
+}
+
 asx_status asx_region_register_finalizer(asx_region_id id, asx_cleanup_fn fn, void *user_data,
                                          asx_cleanup_handle *out_handle) {
     asx_region_slot *r;

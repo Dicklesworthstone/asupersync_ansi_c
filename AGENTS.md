@@ -173,7 +173,8 @@ make conformance
 make fixture-integrity
 make test-gates
 
-# Cross-profile digest comparison (recorded digests; runtime not executed yet)
+# Execute every v2 fixture across the eight supported host profiles;
+# auxiliary legacy checks also compare recorded fixture digests.
 make profile-parity
 
 # Differential fuzzing smoke

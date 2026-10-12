@@ -10,6 +10,8 @@
 #   - CANCEL_NO_STRENGTHEN      a cancel reason is never strengthened  -> cancel-*
 #   - SCHED_REVERSE_ORDER       the lab's tie-break pick is mirrored   -> lab-*
 #   - OBLIGATION_DROP_COMMITS   a dropped token commits, not leaks     -> obligation-*
+#   - OK_BODY_CANCELS          an Ok body cancels its normal children -> region-body-ok-*
+#   - EXCEPTIONAL_BODY_NO_CANCEL Err/Panicked close without FailFast    -> region-body-(err|panic)-*
 # A mutant the corpus does not catch means the fixtures stopped exercising
 # that rule: the gate fails.
 # The raw-ID authorization bypass is tested through actual polling tasks:
@@ -76,6 +78,8 @@ run_mutant BUDGET_PRIORITY_MIN 'budget-'
 run_mutant CANCEL_NO_STRENGTHEN 'cancel-'
 run_mutant SCHED_REVERSE_ORDER 'lab-'
 run_mutant OBLIGATION_DROP_COMMITS 'obligation-'
+run_mutant OK_BODY_CANCELS 'region-body-ok-'
+run_mutant EXCEPTIONAL_BODY_NO_CANCEL 'region-body-(err|panic)-'
 
 # A compile failure or empty run cannot count as catching the missing guard.
 AUTH_DIR="$MUTANT_BUILD_ROOT/OBLIGATION_AUTH_BYPASS"

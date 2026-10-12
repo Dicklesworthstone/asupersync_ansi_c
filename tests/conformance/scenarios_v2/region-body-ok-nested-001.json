@@ -1,0 +1,20 @@
+{
+  "schema": "asx.scenario.v2",
+  "id": "region-body-ok-nested-001",
+  "description": "An Ok parent waits for two nested scopes to finish their own bodies. Their final sleeping child completes normally and regions close bottom-up.",
+  "unit": "region_lifecycle",
+  "rules": ["rule.region.close_begin", "rule.region.close_children_done", "inv.region.quiescence", "rule.region.close_complete"],
+  "seed": 99,
+  "lab": {"max_steps": 300},
+  "regions": [{"name": "r.main", "parent": "root", "budget": null},
+              {"name": "r.child", "parent": "r.main", "budget": null},
+              {"name": "r.leaf", "parent": "r.child", "budget": null}],
+  "channels": [], "sync": [],
+  "tasks": [{"name": "t.leaf", "region": "r.leaf", "budget": null,
+    "program": [{"op": "sleep", "ns": 100}, {"op": "checkpoint"},
+                {"op": "trace", "message": "nested child finished normally"}]}],
+  "script": [{"at_ns": 0, "op": {"op": "finish_region", "region": "r.main", "body": "ok"}},
+             {"at_ns": 50, "op": {"op": "finish_region", "region": "r.leaf", "body": "ok"}},
+             {"at_ns": 60, "op": {"op": "finish_region", "region": "r.child", "body": "ok"}}],
+  "expect": {"kind": "ok"}
+}

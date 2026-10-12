@@ -1935,7 +1935,555 @@ TEST(public_finalizer_recycled_sibling_does_not_extend_outer_drain) {
 }
 #endif
 
+/* Body-driven close waits without turning normal children into cancellation
+ * cleanup. Values below are ordinary user state, not C outcome payloads. */
+typedef struct {
+    int polls;
+    int goal;
+    int cancelled;
+    int value;
+    int park_first;
+} body_close_task_ctx;
+
+static asx_status poll_body_close_task(void *data, asx_task_id self) {
+    body_close_task_ctx *ctx = (body_close_task_ctx *)data;
+    asx_checkpoint_result checkpoint;
+    asx_status st = asx_checkpoint(self, &checkpoint);
+    if (st != ASX_OK) return st;
+    ctx->polls++;
+    if (checkpoint.cancelled) {
+        ctx->cancelled++;
+        return ASX_OK;
+    }
+    if (ctx->park_first && ctx->polls == 1) {
+        st = asx_task_park(self);
+        return st == ASX_OK ? ASX_E_PENDING : st;
+    }
+    if (ctx->polls < ctx->goal) return ASX_E_PENDING;
+    ctx->value = 42;
+    return ASX_OK;
+}
+
+static uint32_t body_close_trace_count(asx_trace_event_kind kind) {
+    uint32_t i, count = 0u;
+    for (i = 0u; i < asx_trace_event_count(); i++) {
+        asx_trace_event event;
+        if (asx_trace_event_get(i, &event) && event.kind == kind) count++;
+    }
+    return count;
+}
+
+static uint32_t body_close_trace_index(asx_region_id id) {
+    uint32_t i;
+    for (i = 0u; i < asx_trace_event_count(); i++) {
+        asx_trace_event event;
+        if (asx_trace_event_get(i, &event) && event.kind == ASX_TRACE_REGION_CLOSED &&
+            event.entity_id == id) {
+            return i;
+        }
+    }
+    return UINT32_MAX;
+}
+
+TEST(body_close_ok_preserves_child_value_and_outcome_without_cancel) {
+    body_close_task_ctx ctx;
+    asx_region_id region;
+    asx_task_id task, refused = ASX_INVALID_ID;
+    asx_budget budget = asx_budget_from_polls(8u);
+    asx_outcome body = asx_outcome_make(ASX_OUTCOME_OK), outcome;
+    asx_cancel_reason reason;
+    asx_runtime_reset();
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.goal = 2;
+    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(region, poll_body_close_task, &ctx, &task), ASX_OK);
+    ASSERT_EQ(asx_region_close_with_outcome(region, &body, NULL), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(region, poll_complete, NULL, &refused), ASX_E_REGION_CLOSED);
+    ASSERT_EQ(refused, ASX_INVALID_ID);
+    ASSERT_EQ(asx_region_wait_closed(region, &budget), ASX_OK);
+    ASSERT_EQ(ctx.polls, 2);
+    ASSERT_EQ(ctx.cancelled, 0);
+    ASSERT_EQ(ctx.value, 42);
+    ASSERT_EQ(asx_task_get_outcome(task, &outcome), ASX_OK);
+    ASSERT_EQ(outcome.severity, ASX_OUTCOME_OK);
+    ASSERT_EQ(asx_task_get_cancel_reason(task, &reason), ASX_E_NOT_FOUND);
+    ASSERT_EQ(asx_region_get_close_outcome(region, &outcome), ASX_OK);
+    ASSERT_EQ(outcome.severity, ASX_OUTCOME_OK);
+    ASSERT_EQ(asx_quiescence_check(region), ASX_OK);
+    ASSERT_EQ(body_close_trace_count(ASX_TRACE_CANCEL_REQUEST), 0u);
+    ASSERT_EQ(body_close_trace_count(ASX_TRACE_REGION_CANCELLED), 0u);
+    /* Pinned Scope's Ok body calls RegionRecord::begin_close directly:
+     * it changes admission state without a RuntimeState CloseBegin trace. */
+    ASSERT_EQ(body_close_trace_count(ASX_TRACE_REGION_CLOSE), 0u);
+    ASSERT_EQ(asx_region_wait_closed(region, &budget), ASX_OK);
+    ASSERT_EQ(ctx.polls, 2);
+}
+
+TEST(body_close_budget_retry_keeps_normal_task_runnable_without_cancel) {
+    body_close_task_ctx ctx;
+    asx_region_id region;
+    asx_task_id task;
+    asx_task_state state;
+    asx_budget budget = asx_budget_from_polls(1u);
+    asx_outcome body = asx_outcome_make(ASX_OUTCOME_OK);
+    asx_runtime_reset();
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.goal = 3;
+    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(region, poll_body_close_task, &ctx, &task), ASX_OK);
+    ASSERT_EQ(asx_region_close_with_outcome(region, &body, NULL), ASX_OK);
+    ASSERT_EQ(asx_region_wait_closed(region, &budget), ASX_E_POLL_BUDGET_EXHAUSTED);
+    ASSERT_EQ(budget.poll_quota, 0u);
+    ASSERT_EQ(ctx.polls, 1);
+    ASSERT_EQ(ctx.cancelled, 0);
+    ASSERT_EQ(asx_task_get_state(task, &state), ASX_OK);
+    ASSERT_EQ(state, ASX_TASK_RUNNING);
+    ASSERT_EQ(asx_region_close_with_outcome(region, &body, NULL), ASX_OK);
+    /* Neither the native Ok-body branch nor its retry emits CloseBegin. */
+    ASSERT_EQ(body_close_trace_count(ASX_TRACE_REGION_CLOSE), 0u);
+    budget = asx_budget_from_polls(8u);
+    ASSERT_EQ(asx_region_wait_closed(region, &budget), ASX_OK);
+    ASSERT_EQ(ctx.polls, 3);
+    ASSERT_EQ(ctx.value, 42);
+    ASSERT_EQ(ctx.cancelled, 0);
+    ASSERT_EQ(body_close_trace_count(ASX_TRACE_CANCEL_REQUEST), 0u);
+}
+
+TEST(body_close_parked_task_requires_real_wake_without_cancel) {
+    body_close_task_ctx ctx;
+    asx_region_id region;
+    asx_task_id task;
+    asx_budget budget = asx_budget_from_polls(8u);
+    asx_outcome body = asx_outcome_make(ASX_OUTCOME_OK);
+    asx_runtime_reset();
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.goal = 2;
+    ctx.park_first = 1;
+    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(region, poll_body_close_task, &ctx, &task), ASX_OK);
+    ASSERT_EQ(asx_region_close_with_outcome(region, &body, NULL), ASX_OK);
+    ASSERT_EQ(asx_region_wait_closed(region, &budget), ASX_E_WOULD_BLOCK);
+    ASSERT_EQ(ctx.polls, 1);
+    ASSERT_EQ(ctx.cancelled, 0);
+    ASSERT_EQ(asx_task_wake(task), ASX_OK);
+    ASSERT_EQ(asx_region_wait_closed(region, &budget), ASX_OK);
+    ASSERT_EQ(ctx.value, 42);
+    ASSERT_EQ(ctx.cancelled, 0);
+    ASSERT_EQ(body_close_trace_count(ASX_TRACE_CANCEL_REQUEST), 0u);
+}
+
+TEST(body_close_nested_ok_waits_for_each_body_without_closing_open_descendants) {
+    body_close_task_ctx contexts[3];
+    asx_region_id regions[3];
+    asx_task_id tasks[3];
+    asx_region_state state;
+    asx_budget budget = asx_budget_from_polls(16u);
+    asx_outcome body = asx_outcome_make(ASX_OUTCOME_OK), outcome;
+    uint32_t i;
+    asx_runtime_reset();
+    memset(contexts, 0, sizeof(contexts));
+    ASSERT_EQ(asx_region_open(&regions[0]), ASX_OK);
+    ASSERT_EQ(asx_region_open_child(regions[0], &regions[1]), ASX_OK);
+    ASSERT_EQ(asx_region_open_child(regions[1], &regions[2]), ASX_OK);
+    for (i = 0u; i < 3u; i++) {
+        contexts[i].goal = 1;
+        ASSERT_EQ(asx_task_spawn(regions[i], poll_body_close_task, &contexts[i], &tasks[i]),
+                  ASX_OK);
+    }
+    ASSERT_EQ(asx_region_close_with_outcome(regions[0], &body, NULL), ASX_OK);
+    ASSERT_EQ(asx_region_wait_closed(regions[0], &budget), ASX_E_PENDING);
+    ASSERT_EQ(asx_region_get_state(regions[1], &state), ASX_OK);
+    ASSERT_EQ(state, ASX_REGION_OPEN);
+    ASSERT_EQ(asx_region_get_state(regions[2], &state), ASX_OK);
+    ASSERT_EQ(state, ASX_REGION_OPEN);
+    ASSERT_EQ(asx_region_close_with_outcome(regions[1], &body, NULL), ASX_OK);
+    ASSERT_EQ(asx_region_wait_closed(regions[0], &budget), ASX_E_PENDING);
+    ASSERT_EQ(asx_region_close_with_outcome(regions[2], &body, NULL), ASX_OK);
+    ASSERT_EQ(asx_region_wait_closed(regions[0], &budget), ASX_OK);
+    for (i = 0u; i < 3u; i++) {
+        ASSERT_EQ(contexts[i].value, 42);
+        ASSERT_EQ(contexts[i].cancelled, 0);
+        ASSERT_EQ(asx_task_get_outcome(tasks[i], &outcome), ASX_OK);
+        ASSERT_EQ(outcome.severity, ASX_OUTCOME_OK);
+        ASSERT_EQ(asx_quiescence_check(regions[i]), ASX_OK);
+        ASSERT_NE(body_close_trace_index(regions[i]), UINT32_MAX);
+    }
+    ASSERT_TRUE(body_close_trace_index(regions[2]) < body_close_trace_index(regions[1]));
+    ASSERT_TRUE(body_close_trace_index(regions[1]) < body_close_trace_index(regions[0]));
+    ASSERT_EQ(body_close_trace_count(ASX_TRACE_CANCEL_REQUEST), 0u);
+    ASSERT_EQ(body_close_trace_count(ASX_TRACE_REGION_CANCELLED), 0u);
+}
+
+TEST(body_close_err_and_panic_cancel_fail_fast_with_parent_descendants) {
+    static const asx_outcome_severity severities[] = {ASX_OUTCOME_ERR, ASX_OUTCOME_PANICKED};
+    uint32_t severity, i;
+    for (severity = 0u; severity < 2u; severity++) {
+        body_close_task_ctx contexts[3];
+        asx_region_id regions[3];
+        asx_task_id tasks[3];
+        asx_outcome body = asx_outcome_make(severities[severity]), outcome;
+        asx_cancel_reason seen;
+        asx_budget budget = asx_budget_from_polls(16u);
+        asx_runtime_reset();
+        memset(contexts, 0, sizeof(contexts));
+        ASSERT_EQ(asx_region_open(&regions[0]), ASX_OK);
+        ASSERT_EQ(asx_region_open_child(regions[0], &regions[1]), ASX_OK);
+        ASSERT_EQ(asx_region_open_child(regions[1], &regions[2]), ASX_OK);
+        for (i = 0u; i < 3u; i++) {
+            contexts[i].goal = 2;
+            ASSERT_EQ(asx_task_spawn(regions[i], poll_body_close_task, &contexts[i], &tasks[i]),
+                      ASX_OK);
+        }
+        ASSERT_EQ(asx_region_close_with_outcome(regions[0], &body, NULL), ASX_OK);
+        ASSERT_EQ(asx_region_wait_closed(regions[0], &budget), ASX_OK);
+        for (i = 0u; i < 3u; i++) {
+            ASSERT_EQ(contexts[i].cancelled, 1);
+            ASSERT_EQ(contexts[i].value, 0);
+            ASSERT_EQ(asx_task_get_cancel_reason(tasks[i], &seen), ASX_OK);
+            ASSERT_EQ(seen.kind, i == 0u ? ASX_CANCEL_FAIL_FAST : ASX_CANCEL_PARENT);
+            ASSERT_EQ(seen.origin_region, regions[i == 0u ? 0u : i - 1u]);
+            ASSERT_EQ(asx_task_get_outcome(tasks[i], &outcome), ASX_OK);
+            ASSERT_EQ(outcome.severity, ASX_OUTCOME_CANCELLED);
+            ASSERT_EQ(asx_quiescence_check(regions[i]), ASX_OK);
+        }
+        ASSERT_EQ(asx_region_get_close_outcome(regions[0], &outcome), ASX_OK);
+        ASSERT_EQ(outcome.severity, ASX_OUTCOME_CANCELLED);
+        ASSERT_EQ(body.severity, severities[severity]);
+        ASSERT_EQ(body_close_trace_count(ASX_TRACE_CANCEL_REQUEST), 3u);
+    }
+}
+
+TEST(body_close_cancelled_preserves_requested_reason_and_cause_chain) {
+    body_close_task_ctx contexts[3];
+    asx_region_id regions[3];
+    asx_task_id tasks[3];
+    asx_outcome body = asx_outcome_make(ASX_OUTCOME_CANCELLED);
+    asx_cancel_reason requested = asx_cancel_reason_default(ASX_CANCEL_SHUTDOWN, "body stopped");
+    asx_cancel_reason seen;
+    asx_budget budget = asx_budget_from_polls(16u);
+    uint32_t i;
+    asx_runtime_reset();
+    memset(contexts, 0, sizeof(contexts));
+    ASSERT_EQ(asx_region_open(&regions[0]), ASX_OK);
+    ASSERT_EQ(asx_region_open_child(regions[0], &regions[1]), ASX_OK);
+    ASSERT_EQ(asx_region_open_child(regions[1], &regions[2]), ASX_OK);
+    requested.origin_region = regions[0];
+    requested.timestamp = 123u;
+    for (i = 0u; i < 3u; i++) {
+        contexts[i].goal = 2;
+        ASSERT_EQ(asx_task_spawn(regions[i], poll_body_close_task, &contexts[i], &tasks[i]),
+                  ASX_OK);
+    }
+    ASSERT_EQ(asx_region_close_with_outcome(regions[0], &body, &requested), ASX_OK);
+    ASSERT_EQ(asx_region_wait_closed(regions[0], &budget), ASX_OK);
+    ASSERT_EQ(asx_task_get_cancel_reason(tasks[0], &seen), ASX_OK);
+    ASSERT_EQ(seen.kind, ASX_CANCEL_SHUTDOWN);
+    ASSERT_EQ(seen.timestamp, 123u);
+    ASSERT_STR_EQ(seen.message, "body stopped");
+    ASSERT_EQ(asx_task_get_cancel_reason(tasks[2], &seen), ASX_OK);
+    ASSERT_EQ(seen.kind, ASX_CANCEL_PARENT);
+    ASSERT_EQ(seen.origin_region, regions[1]);
+    ASSERT_TRUE(seen.cause != NULL && seen.cause->cause != NULL);
+    ASSERT_EQ(seen.cause->kind, ASX_CANCEL_PARENT);
+    ASSERT_EQ(seen.cause->cause->kind, ASX_CANCEL_SHUTDOWN);
+    for (i = 0u; i < 3u; i++) { ASSERT_EQ(contexts[i].cancelled, 1); }
+    ASSERT_EQ(body_close_trace_count(ASX_TRACE_CANCEL_REQUEST), 3u);
+}
+
+TEST(body_close_wait_runs_lifo_then_cleanup_before_leak_audit) {
+    cleanup_obligation_ctx ctx;
+    cleanup_spawn_task_ctx ordinary;
+    asx_outcome body = asx_outcome_make(ASX_OUTCOME_OK);
+    asx_obligation_state state;
+    asx_budget budget = asx_budget_from_polls(0u);
+    asx_runtime_reset();
+    memset(&ctx, 0, sizeof(ctx));
+    memset(&ordinary, 0, sizeof(ordinary));
+    memset(&g_finalizer_log, 0, sizeof(g_finalizer_log));
+    ctx.commit = 1;
+    ASSERT_EQ(asx_region_open(&ctx.region), ASX_OK);
+    ordinary.region = ctx.region;
+    ASSERT_EQ(asx_obligation_reserve(ctx.region, &ctx.obligation), ASX_OK);
+    ASSERT_EQ(asx_region_defer_sync(ctx.region, finalizer_record_1, NULL), ASX_OK);
+    ASSERT_EQ(asx_region_defer_sync(ctx.region, finalizer_record_2, NULL), ASX_OK);
+    ASSERT_EQ(asx_region_defer_sync(ctx.region, finalizer_record_3, NULL), ASX_OK);
+    ASSERT_EQ(asx_region_defer_sync(ctx.region, finalizer_spawn_ordinary_task, &ordinary), ASX_OK);
+    ASSERT_EQ(asx_region_defer_sync(ctx.region, finalizer_spawn_obligation_cleanup, &ctx), ASX_OK);
+    ASSERT_EQ(asx_region_close_with_outcome(ctx.region, &body, NULL), ASX_OK);
+    ASSERT_EQ(asx_region_wait_closed(ctx.region, &budget), ASX_E_QUIESCENCE_TASKS_LIVE);
+    ASSERT_EQ(ctx.finalizer_calls, 1);
+    ASSERT_EQ(ctx.spawn_status, ASX_OK);
+    ASSERT_EQ(ctx.polls, 0);
+    ASSERT_EQ(ordinary.spawn_status, ASX_E_REGION_CLOSED);
+    ASSERT_EQ(ordinary.task_id, ASX_INVALID_ID);
+    ASSERT_EQ(g_finalizer_log.n, 3);
+    ASSERT_EQ(g_finalizer_log.order[0], 3);
+    ASSERT_EQ(g_finalizer_log.order[1], 2);
+    ASSERT_EQ(g_finalizer_log.order[2], 1);
+    ASSERT_EQ(asx_obligation_get_state(ctx.obligation, &state), ASX_OK);
+    ASSERT_EQ(state, ASX_OBLIGATION_RESERVED);
+    ASSERT_EQ(asx_obligation_leak_count(), 0u);
+    budget = asx_budget_from_polls(8u);
+    ASSERT_EQ(asx_region_wait_closed(ctx.region, &budget), ASX_OK);
+    ASSERT_EQ(ctx.polls, 1);
+    ASSERT_EQ(ctx.finalizer_calls, 1);
+    ASSERT_EQ(asx_obligation_get_state(ctx.obligation, &state), ASX_OK);
+    ASSERT_EQ(state, ASX_OBLIGATION_COMMITTED);
+    ASSERT_EQ(asx_obligation_leak_count(), 0u);
+    ASSERT_EQ(body_close_trace_count(ASX_TRACE_CANCEL_REQUEST), 0u);
+    ASSERT_EQ(asx_region_wait_closed(ctx.region, &budget), ASX_OK);
+    ASSERT_EQ(g_finalizer_log.n, 3);
+}
+
+TEST(body_close_invalid_arguments_refuse_without_state_or_trace_mutation) {
+    asx_region_id region;
+    asx_region_slot *slot;
+    asx_region_slot before;
+    asx_budget budget = asx_budget_from_polls(8u), budget_before;
+    asx_outcome ok = asx_outcome_make(ASX_OUTCOME_OK);
+    asx_outcome cancelled = asx_outcome_make(ASX_OUTCOME_CANCELLED);
+    asx_outcome invalid = asx_outcome_make((asx_outcome_severity)99);
+    asx_cancel_reason reason = asx_cancel_reason_default(ASX_CANCEL_USER, NULL);
+    uint32_t events;
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    ASSERT_EQ(asx_region_slot_lookup(region, &slot), ASX_OK);
+    memcpy(&before, slot, sizeof(before));
+    memcpy(&budget_before, &budget, sizeof(budget_before));
+    events = asx_trace_event_count();
+    ASSERT_EQ(asx_region_close_with_outcome(region, NULL, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_region_close_with_outcome(region, &invalid, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_region_close_with_outcome(region, &cancelled, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_region_close_with_outcome(region, &ok, &reason), ASX_E_INVALID_ARGUMENT);
+    reason.kind = (asx_cancel_kind)99;
+    ASSERT_EQ(asx_region_close_with_outcome(region, &cancelled, &reason), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_region_wait_closed(region, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_region_wait_closed(region, &budget), ASX_E_INVALID_STATE);
+    ASSERT_EQ(memcmp(slot, &before, sizeof(before)), 0);
+    ASSERT_EQ(memcmp(&budget, &budget_before, sizeof(budget)), 0);
+    ASSERT_EQ(asx_trace_event_count(), events);
+    ASSERT_EQ(asx_region_close_with_outcome(region, &ok, NULL), ASX_OK);
+    ASSERT_EQ(asx_region_wait_closed(region, &budget), ASX_OK);
+}
+
+TEST(body_close_bad_stale_and_poisoned_handles_refuse_atomically) {
+    asx_region_id stale, region;
+    asx_region_slot *slot;
+    asx_region_slot before;
+    asx_budget budget = asx_budget_from_polls(8u), budget_before;
+    asx_outcome body = asx_outcome_make(ASX_OUTCOME_OK),
+                out = asx_outcome_make(ASX_OUTCOME_PANICKED);
+    uint32_t events;
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_close_with_outcome(ASX_INVALID_ID, &body, NULL), ASX_E_NOT_FOUND);
+    ASSERT_EQ(asx_region_wait_closed(ASX_INVALID_ID, &budget), ASX_E_NOT_FOUND);
+    ASSERT_EQ(asx_region_open(&stale), ASX_OK);
+    ASSERT_EQ(asx_region_close_with_outcome(stale, &body, NULL), ASX_OK);
+    ASSERT_EQ(asx_region_wait_closed(stale, &budget), ASX_OK);
+    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+#ifndef ASX_DEBUG_QUARANTINE
+    ASSERT_EQ(asx_handle_slot(region), asx_handle_slot(stale));
+    ASSERT_NE(asx_handle_generation(region), asx_handle_generation(stale));
+    ASSERT_EQ(asx_region_close_with_outcome(stale, &body, NULL), ASX_E_STALE_HANDLE);
+    ASSERT_EQ(asx_region_wait_closed(stale, &budget), ASX_E_STALE_HANDLE);
+#endif
+    ASSERT_EQ(asx_region_poison(region), ASX_OK);
+    ASSERT_EQ(asx_region_slot_lookup(region, &slot), ASX_OK);
+    memcpy(&before, slot, sizeof(before));
+    memcpy(&budget_before, &budget, sizeof(budget_before));
+    events = asx_trace_event_count();
+    ASSERT_EQ(asx_region_close_with_outcome(region, &body, NULL), ASX_E_REGION_POISONED);
+    ASSERT_EQ(asx_region_wait_closed(region, &budget), ASX_E_REGION_POISONED);
+    ASSERT_EQ(asx_region_get_close_outcome(region, NULL), ASX_E_INVALID_ARGUMENT);
+#ifndef ASX_DEBUG_QUARANTINE
+    ASSERT_EQ(asx_region_get_close_outcome(stale, &out), ASX_E_STALE_HANDLE);
+#endif
+    ASSERT_EQ(out.severity, ASX_OUTCOME_PANICKED);
+    ASSERT_EQ(memcmp(slot, &before, sizeof(before)), 0);
+    ASSERT_EQ(memcmp(&budget, &budget_before, sizeof(budget)), 0);
+    ASSERT_EQ(asx_trace_event_count(), events);
+}
+
+TEST(body_close_wait_applies_real_leak_policy_after_finalization) {
+    static const asx_leak_response policies[] = {ASX_LEAK_LOG, ASX_LEAK_SILENT, ASX_LEAK_RECOVER,
+                                                 ASX_LEAK_PANIC};
+    static asx_runtime runtime;
+    uint32_t i;
+    for (i = 0u; i < 4u; i++) {
+        asx_runtime_config config;
+        asx_runtime_hooks hooks;
+        asx_region_id region;
+        asx_obligation_id obligation;
+        asx_obligation_state state;
+        asx_region_state region_state;
+        asx_budget budget = asx_budget_from_polls(8u);
+        asx_outcome body = asx_outcome_make(ASX_OUTCOME_OK);
+        asx_runtime_reset();
+        asx_runtime_config_init(&config);
+        config.leak_response = policies[i];
+        ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
+        ASSERT_EQ(asx_runtime_init(&runtime, &config, &hooks), ASX_OK);
+        ASSERT_EQ(asx_region_open(&region), ASX_OK);
+        ASSERT_EQ(asx_obligation_reserve(region, &obligation), ASX_OK);
+        ASSERT_EQ(asx_region_close_with_outcome(region, &body, NULL), ASX_OK);
+        ASSERT_EQ(asx_region_wait_closed(region, &budget),
+                  policies[i] == ASX_LEAK_PANIC ? ASX_E_UNRESOLVED_OBLIGATIONS : ASX_OK);
+        ASSERT_EQ(asx_obligation_leak_count(), 1u);
+        ASSERT_EQ(asx_obligation_get_state(obligation, &state), ASX_OK);
+        ASSERT_EQ(state,
+                  policies[i] == ASX_LEAK_RECOVER ? ASX_OBLIGATION_ABORTED : ASX_OBLIGATION_LEAKED);
+        if (policies[i] == ASX_LEAK_PANIC) {
+            ASSERT_EQ(asx_region_get_state(region, &region_state), ASX_OK);
+            ASSERT_EQ(region_state, ASX_REGION_FINALIZING);
+            ASSERT_EQ(asx_region_wait_closed(region, &budget), ASX_OK);
+        }
+        ASSERT_EQ(asx_quiescence_check(region), ASX_OK);
+        ASSERT_EQ(body_close_trace_count(ASX_TRACE_CANCEL_REQUEST), 0u);
+        asx_runtime_shutdown(&runtime);
+    }
+}
+
+typedef struct {
+    asx_scope *scope;
+    asx_region_id region;
+    asx_budget budget;
+    asx_status wait_status;
+    asx_status finish_status;
+    int unchanged;
+} body_close_poll_guard_ctx;
+
+static asx_status poll_body_close_host_guard(void *data, asx_task_id self) {
+    body_close_poll_guard_ctx *ctx = (body_close_poll_guard_ctx *)data;
+    asx_scope scope_before;
+    asx_budget budget_before;
+    asx_outcome body = asx_outcome_make(ASX_OUTCOME_OK);
+    uint32_t events = asx_trace_event_count();
+    (void)self;
+    memcpy(&scope_before, ctx->scope, sizeof(scope_before));
+    memcpy(&budget_before, &ctx->budget, sizeof(budget_before));
+    ctx->wait_status = asx_region_wait_closed(ctx->region, &ctx->budget);
+    ctx->finish_status = asx_scope_finish(ctx->scope, &body, NULL);
+    ctx->unchanged = memcmp(ctx->scope, &scope_before, sizeof(scope_before)) == 0 &&
+                     memcmp(&ctx->budget, &budget_before, sizeof(budget_before)) == 0 &&
+                     asx_trace_event_count() == events;
+    return ASX_OK;
+}
+
+TEST(body_close_wait_and_scope_finish_refuse_from_real_task_poll) {
+    body_close_poll_guard_ctx ctx;
+    asx_scope scope;
+    asx_cx cx;
+    asx_region_id region, caller_region;
+    asx_task_id caller;
+    asx_budget budget = asx_budget_from_polls(8u);
+    asx_outcome body = asx_outcome_make(ASX_OUTCOME_OK);
+    asx_region_state state;
+    asx_runtime_reset();
+    memset(&ctx, 0, sizeof(ctx));
+    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    ASSERT_EQ(asx_region_open(&caller_region), ASX_OK);
+    ASSERT_EQ(asx_cx_init(&cx, region, ASX_INVALID_ID, ASX_CAP_ALL), ASX_OK);
+    ASSERT_EQ(asx_scope_init(&scope, region, &cx, asx_budget_from_polls(8u)), ASX_OK);
+    ASSERT_EQ(asx_region_close_with_outcome(region, &body, NULL), ASX_OK);
+    ctx.region = region;
+    ctx.scope = &scope;
+    ctx.budget = asx_budget_from_polls(8u);
+    ASSERT_EQ(asx_task_spawn(caller_region, poll_body_close_host_guard, &ctx, &caller), ASX_OK);
+    ASSERT_EQ(asx_scheduler_run(caller_region, &budget), ASX_OK);
+    ASSERT_EQ(ctx.wait_status, ASX_E_INVALID_STATE);
+    ASSERT_EQ(ctx.finish_status, ASX_E_INVALID_STATE);
+    ASSERT_EQ(ctx.unchanged, 1);
+    ASSERT_EQ(asx_region_get_state(region, &state), ASX_OK);
+    ASSERT_EQ(state, ASX_REGION_CLOSING);
+    ASSERT_EQ(scope.finish_started, 0);
+    ASSERT_EQ(asx_scope_finish(&scope, &body, NULL), ASX_OK);
+    ASSERT_EQ(asx_quiescence_check(region), ASX_OK);
+}
+
+TEST(body_close_closed_exception_emits_receipts_without_reopening_or_rerunning) {
+    static const asx_outcome_severity exceptional[] = {ASX_OUTCOME_CANCELLED, ASX_OUTCOME_ERR,
+                                                       ASX_OUTCOME_PANICKED};
+    uint32_t with_child, i;
+    for (with_child = 0u; with_child < 2u; with_child++) {
+        asx_region_id region;
+        asx_task_id task = ASX_INVALID_ID;
+        body_close_task_ctx ctx;
+        asx_outcome ok = asx_outcome_make(ASX_OUTCOME_OK), outcome;
+        asx_cancel_reason requested = asx_cancel_reason_default(ASX_CANCEL_SHUTDOWN, "after close");
+        asx_cancel_reason observed;
+        asx_region_state state;
+        asx_budget budget = asx_budget_from_polls(8u);
+        uint32_t polls;
+        asx_runtime_reset();
+        memset(&ctx, 0, sizeof(ctx));
+        ctx.goal = 2;
+        ASSERT_EQ(asx_region_open(&region), ASX_OK);
+        if (with_child) {
+            ASSERT_EQ(asx_task_spawn(region, poll_body_close_task, &ctx, &task), ASX_OK);
+            ASSERT_EQ(asx_scheduler_run(region, &budget), ASX_OK);
+            ASSERT_EQ(ctx.polls, 2);
+            ASSERT_EQ(ctx.value, 42);
+        }
+        /* The body now closes an empty region; a completed child's record
+         * in the second case proves that terminal outcomes are retained. */
+        ASSERT_EQ(asx_region_close_with_outcome(region, &ok, NULL), ASX_OK);
+        ASSERT_EQ(asx_region_wait_closed(region, &budget), ASX_OK);
+        ASSERT_EQ(asx_region_get_close_outcome(region, &outcome), ASX_OK);
+        ASSERT_EQ(outcome.severity, ASX_OUTCOME_OK);
+        ASSERT_EQ(asx_region_get_cancel_reason(region, &observed), ASX_E_NOT_FOUND);
+        polls = body_close_trace_count(ASX_TRACE_SCHED_POLL);
+        ASSERT_EQ(body_close_trace_count(ASX_TRACE_REGION_CLOSED), 1u);
+        for (i = 0u; i < 3u; i++) {
+            asx_outcome body = asx_outcome_make(exceptional[i]);
+            asx_trace_event receipt;
+            uint32_t events = asx_trace_event_count();
+            ASSERT_EQ(asx_region_close_with_outcome(region, &body, i == 0u ? &requested : NULL),
+                      ASX_OK);
+            /* RuntimeState emits the receipt before skipping Closed state;
+             * it neither records a new reason nor changes terminal work. */
+            ASSERT_EQ(asx_trace_event_count(), events + 1u);
+            ASSERT_TRUE(asx_trace_event_get(events, &receipt));
+            ASSERT_EQ(receipt.kind, ASX_TRACE_REGION_CANCELLED);
+            ASSERT_EQ(receipt.entity_id, region);
+            ASSERT_EQ(receipt.aux,
+                      (uint64_t)(i == 0u ? ASX_CANCEL_SHUTDOWN : ASX_CANCEL_FAIL_FAST));
+            ASSERT_EQ(asx_region_get_state(region, &state), ASX_OK);
+            ASSERT_EQ(state, ASX_REGION_CLOSED);
+            ASSERT_EQ(asx_region_get_close_outcome(region, &outcome), ASX_OK);
+            ASSERT_EQ(outcome.severity, ASX_OUTCOME_OK);
+            ASSERT_EQ(asx_region_get_cancel_reason(region, &observed), ASX_E_NOT_FOUND);
+            ASSERT_EQ(asx_region_wait_closed(region, &budget), ASX_OK);
+            if (with_child) {
+                ASSERT_EQ(asx_task_get_outcome(task, &outcome), ASX_OK);
+                ASSERT_EQ(outcome.severity, ASX_OUTCOME_OK);
+                ASSERT_EQ(asx_task_get_cancel_reason(task, &observed), ASX_E_NOT_FOUND);
+                ASSERT_EQ(ctx.polls, 2);
+                ASSERT_EQ(ctx.value, 42);
+                ASSERT_EQ(ctx.cancelled, 0);
+            }
+        }
+        ASSERT_EQ(body_close_trace_count(ASX_TRACE_REGION_CANCELLED), 3u);
+        ASSERT_EQ(body_close_trace_count(ASX_TRACE_CANCEL_REQUEST), 0u);
+        ASSERT_EQ(body_close_trace_count(ASX_TRACE_REGION_CLOSE), 0u);
+        ASSERT_EQ(body_close_trace_count(ASX_TRACE_REGION_CLOSED), 1u);
+        ASSERT_EQ(body_close_trace_count(ASX_TRACE_SCHED_POLL), polls);
+        ASSERT_EQ(asx_quiescence_check(region), ASX_OK);
+    }
+}
+
 int main(void) {
+    RUN_TEST(body_close_closed_exception_emits_receipts_without_reopening_or_rerunning);
+    RUN_TEST(body_close_ok_preserves_child_value_and_outcome_without_cancel);
+    RUN_TEST(body_close_budget_retry_keeps_normal_task_runnable_without_cancel);
+    RUN_TEST(body_close_parked_task_requires_real_wake_without_cancel);
+    RUN_TEST(body_close_nested_ok_waits_for_each_body_without_closing_open_descendants);
+    RUN_TEST(body_close_err_and_panic_cancel_fail_fast_with_parent_descendants);
+    RUN_TEST(body_close_cancelled_preserves_requested_reason_and_cause_chain);
+    RUN_TEST(body_close_wait_runs_lifo_then_cleanup_before_leak_audit);
+    RUN_TEST(body_close_invalid_arguments_refuse_without_state_or_trace_mutation);
+    RUN_TEST(body_close_bad_stale_and_poisoned_handles_refuse_atomically);
+    RUN_TEST(body_close_wait_applies_real_leak_policy_after_finalization);
+    RUN_TEST(body_close_wait_and_scope_finish_refuse_from_real_task_poll);
     RUN_TEST(task_spawn_admission_matrix);
     RUN_TEST(cleanup_spawn_limits_and_failure_atomicity);
     RUN_TEST(cleanup_spawn_invalid_arguments_and_poison);

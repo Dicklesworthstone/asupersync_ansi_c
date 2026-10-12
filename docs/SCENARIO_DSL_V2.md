@@ -450,8 +450,17 @@ idle and virtual time is advanced to `t` (§2).
 | `cancel_region` | `region`, `kind`, optional `message` | `lab.state.cancel_request(region, &reason, None)` (`state.rs:7547`); the effects are routed with `into_parts()`, `scheduler.schedule_cancel` and `dispatch()` (pattern: `tests/api_v2_integration.rs:347-358`) | `asx_region_cancel(region, &reason, NULL)` |
 | `cancel_task` | `task` (a task's canonical name, vocabulary §2, so also a supervised child's generation `<supervisor>/<child>#<n>` once it started), `kind`, optional `message` | `lab.state.cancel_task(task, &reason)` (`state.rs:3429`), effects routed as above | `asx_task_cancel_with_origin(task, kind, task_region, ASX_INVALID_ID)` plus message |
 | `close_region` | `region`, `kind` | `cancel_request(region, kind)`, then `advance_region_state(region)` (`state.rs:10057`) after each idle until Closed | `asx_region_cancel(region, &reason, NULL)`, then `asx_scheduler_run_until_idle` until Closed |
+| `finish_region` | `region`, `body` (`ok`, `err`, `cancelled`, `panicked`); Cancelled requires `kind`, optional `message` | Scope's body-return branch (`scope.rs:877-920`): Ok only `begin_close(None)`; Cancelled `cancel_request` with the supplied reason; Err/Panicked `CancelReason::fail_fast().with_region(region)`; then `advance_region_state` once | `asx_region_close_with_outcome`, then the runtime's ordinary close advancement; subsequent lab steps finish existing work without a new cancellation |
 | `advance` | `ns` | `lab.advance_time(ns)` (`lab/runtime.rs:3076`; a forward jump, the only clock fault Rust offers) | `asx_lab_advance_time(ns)` |
 | `region_limits` | `region`, optional `max_tasks`, `max_children`, `max_obligations` | `lab.state.set_region_limits(region, RegionLimits{…})` (`state.rs:4103`; `record/region.rs:208`); a region already gone has nothing to limit: no effect | `asx_region_set_limits(region, &limits)`; an omitted or null field is `ASX_REGION_UNLIMITED`; a region already gone: no effect |
+
+`finish_region` is a primitive body-branch witness executed against the real
+Rust runtime. It does not run `Scope::region_with_child_admission`'s typed
+factory or return its body payload. Its body tag is separate from the region
+snapshot's child-derived close outcome. An Ok parent waits for still-Open
+child regions to finish their own bodies. Err/Panicked use the native
+Cx-free FailFast constructor, including its testing-default timestamp;
+Cancelled uses the driver's supplied reason and virtual-time attribution.
 
 ### Reason attribution
 
@@ -474,8 +483,14 @@ attribution, and the placeholder region happened to be named `"root"`.
 C builds the same reason and passes it whole: `asx_region_cancel(region,
 &reason, …)` and `asx_task_cancel_with_reason(task, &reason)`.
 
-Two reasons Rust itself creates do carry that testing default, and the C
+Three reasons Rust itself creates do carry that testing default, and the C
 side reproduces them (bd-wxep, an upstream issue):
+
+- **An Err/Panicked scope body.** Scope constructs
+  `CancelReason::fail_fast().with_region(child_region)` (`scope.rs:910-914`).
+  The origin is the child region, with no task and the constructor's 1 s
+  timestamp. `finish_region` reproduces this actual native branch rather
+  than substituting the driver's current virtual time.
 
 - **The step `close_region`.** Rust's Close command uses
   `CancelReason::user("owned child region body finished")`

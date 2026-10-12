@@ -3053,6 +3053,29 @@ fn apply_driver_op(lab: &mut LabRuntime, shared: &SharedRef, op: &Value) -> RunR
             .ok_or_else(|| format!("unknown region {name:?}"))
     };
     match str_field(op, "op")? {
+        "finish_region" => {
+            let region = region_id("region")?;
+            // Execute Scope's body-return branch against the real runtime.
+            // This primitive witness does not execute a typed Scope factory
+            // or project its returned body payload as a child outcome.
+            let reason = match str_field(op, "body")? {
+                "ok" => None,
+                "cancelled" => Some(cancel_reason(op, region, None, lab.now())?),
+                "err" | "panicked" => Some(CancelReason::fail_fast().with_region(region)),
+                other => return Err(format!("unknown region body outcome {other:?}")),
+            };
+            if let Some(reason) = reason {
+                let (tasks, wakes) = lab.state.cancel_request(region, &reason, None).into_parts();
+                for (task, priority) in tasks {
+                    lab.scheduler.lock().schedule_cancel(task, priority);
+                }
+                wakes.dispatch();
+            }
+            if let Some(record) = lab.state.region(region) {
+                record.begin_close(None);
+            }
+            lab.state.advance_region_state(region);
+        }
         "cancel_region" | "close_region" => {
             let region = region_id("region")?;
             // No task requests a driver cancel; it originates at the target

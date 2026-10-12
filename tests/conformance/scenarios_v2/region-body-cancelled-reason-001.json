@@ -1,0 +1,19 @@
+{
+  "schema": "asx.scenario.v2",
+  "id": "region-body-cancelled-reason-001",
+  "description": "A cancelled body supplies a Timeout reason at virtual time 50. Its own child gets Timeout; the descendant gets ParentCancelled with that cause.",
+  "unit": "region_lifecycle",
+  "rules": ["rule.region.close_cancel_children", "inv.cancel.propagates_down", "rule.region.close_complete"],
+  "seed": 42,
+  "lab": {"max_steps": 300},
+  "regions": [{"name": "r.main", "parent": "root", "budget": null},
+              {"name": "r.child", "parent": "r.main", "budget": null}],
+  "channels": [], "sync": [],
+  "tasks": [{"name": "t.main", "region": "r.main", "budget": null,
+    "program": [{"op": "sleep", "ns": 200}, {"op": "checkpoint"}]},
+            {"name": "t.child", "region": "r.child", "budget": null,
+    "program": [{"op": "sleep", "ns": 100}, {"op": "checkpoint"}]}],
+  "script": [{"at_ns": 50, "op": {"op": "finish_region", "region": "r.main",
+              "body": "cancelled", "kind": "Timeout", "message": "body timed out"}}],
+  "expect": {"kind": "ok"}
+}

@@ -1,0 +1,16 @@
+{
+  "schema": "asx.scenario.v2",
+  "id": "region-body-panic-fail-fast-001",
+  "description": "The Panicked body branch cancels its region with native Scope FailFast; it is not recorded as a child panic outcome.",
+  "unit": "region_lifecycle",
+  "rules": ["rule.region.close_begin", "rule.region.close_cancel_children", "rule.region.close_complete"],
+  "seed": 99,
+  "lab": {"max_steps": 200},
+  "regions": [{"name": "r.main", "parent": "root", "budget": null}],
+  "channels": [], "sync": [],
+  "tasks": [{"name": "t.child", "region": "r.main", "budget": null,
+    "program": [{"op": "sleep", "ns": 200}, {"op": "checkpoint"},
+                {"op": "return", "outcome": {"tag": "ok"}}]}],
+  "script": [{"at_ns": 0, "op": {"op": "finish_region", "region": "r.main", "body": "panicked"}}],
+  "expect": {"kind": "ok"}
+}

@@ -243,6 +243,13 @@
     "s_supervisor_join": {"type": "object", "required": ["op", "supervisor"], "additionalProperties": false,
       "properties": {"op": {"const": "supervisor_join"}, "supervisor": {"$ref": "#/$defs/name"}}},
     "driver_op": {"oneOf": [
+      {"type": "object", "required": ["op", "region", "body"], "additionalProperties": false,
+       "properties": {"op": {"const": "finish_region"}, "region": {"$ref": "#/$defs/name"},
+                      "body": {"enum": ["ok", "err", "panicked"]}}},
+      {"type": "object", "required": ["op", "region", "body", "kind"], "additionalProperties": false,
+       "properties": {"op": {"const": "finish_region"}, "region": {"$ref": "#/$defs/name"},
+                      "body": {"const": "cancelled"}, "kind": {"$ref": "#/$defs/cancel_kind"},
+                      "message": {"type": "string"}}},
       {"type": "object", "required": ["op", "region", "kind"], "additionalProperties": false,
        "properties": {"op": {"enum": ["cancel_region", "close_region"]}, "region": {"$ref": "#/$defs/name"},
                       "kind": {"$ref": "#/$defs/cancel_kind"}, "message": {"type": "string"}}},

@@ -295,47 +295,13 @@ void asx_region_advance_internal(asx_region_id id) {
     }
 }
 
-asx_status asx_region_drain(asx_region_id id, asx_budget *budget) {
-    asx_region_slot *r;
+/* Shared execution/finalization machinery. The caller has already chosen
+ * whether to cancel; retries here never request or strengthen cancellation. */
+static asx_status asx_region_run_to_closed(asx_region_id id, asx_budget *budget,
+                                           const asx_region_id *drain_regions, uint32_t n) {
     asx_status st;
-    uint32_t n;
     uint32_t i;
     uint32_t live;
-    int need_cancel = 0;
-    uint32_t drain_slots[ASX_MAX_REGIONS];
-    asx_region_id drain_regions[ASX_MAX_REGIONS];
-
-    if (budget == NULL) return ASX_E_INVALID_ARGUMENT;
-
-    st = asx_region_slot_lookup(id, &r);
-    if (st != ASX_OK) return st;
-    if (r->state == ASX_REGION_CLOSED) return ASX_OK;
-    if (r->cleanup.draining) return ASX_E_PENDING;
-
-    /* Call-local: a finalizer may drain an unrelated region recursively. */
-    n = asx_region_subtree_internal(id, drain_slots, ASX_MAX_REGIONS);
-
-    /* Step 1: close every open region in the subtree (parent-first). */
-    for (i = 0; i < n; i++) {
-        ASX_CHECKPOINT_WAIVER("bounded: n <= ASX_MAX_REGIONS");
-        asx_region_slot *rs = &g_regions[drain_slots[i]];
-        drain_regions[i] = asx_region_handle_for_slot(drain_slots[i]);
-        if (rs->state == ASX_REGION_OPEN) {
-            st = asx_region_set_state(asx_region_handle_for_slot(drain_slots[i]), rs,
-                                      ASX_REGION_CLOSING);
-            if (st != ASX_OK) return st;
-            need_cancel = 1;
-        }
-        if (rs->task_count > 0u &&
-            asx_region_has_uncancelled_tasks(asx_region_handle_for_slot(drain_slots[i]))) {
-            need_cancel = 1;
-        }
-    }
-
-    /* Step 2: PARENT cancel reaches every live task in the subtree.
-     * Tasks observe cancellation via asx_checkpoint() and have bounded
-     * cleanup before forced completion. (bd-2cw.3) */
-    if (need_cancel) (void)asx_cancel_propagate(id, ASX_CANCEL_PARENT);
 
     /* Step 3: run the scheduler over the subtree. */
     live = 0;
@@ -367,6 +333,68 @@ asx_status asx_region_drain(asx_region_id id, asx_budget *budget) {
     }
 
     return ASX_OK;
+}
+
+asx_status asx_region_wait_closed(asx_region_id id, asx_budget *budget) {
+    asx_region_slot *r;
+    asx_status st;
+    uint32_t slots[ASX_MAX_REGIONS];
+    asx_region_id regions[ASX_MAX_REGIONS] = {0};
+    uint32_t n;
+    uint32_t i;
+
+    if (budget == NULL) return ASX_E_INVALID_ARGUMENT;
+    st = asx_region_slot_lookup(id, &r);
+    if (st != ASX_OK) return st;
+    if (r->poisoned) return ASX_E_REGION_POISONED;
+    if (asx_task_current() != ASX_INVALID_ID || r->state == ASX_REGION_OPEN) {
+        return ASX_E_INVALID_STATE;
+    }
+    if (r->state == ASX_REGION_CLOSED) return ASX_OK;
+    if (r->cleanup.draining) return ASX_E_PENDING;
+    n = asx_region_subtree_internal(id, slots, ASX_MAX_REGIONS);
+    for (i = 0; i < n; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: n <= ASX_MAX_REGIONS");
+        regions[i] = asx_region_handle_for_slot(slots[i]);
+    }
+    st = asx_region_run_to_closed(id, budget, regions, n);
+    if (st != ASX_OK) return st;
+    st = asx_region_slot_lookup(id, &r);
+    if (st == ASX_E_STALE_HANDLE) return ASX_OK;
+    if (st != ASX_OK) return st;
+    return r->state == ASX_REGION_CLOSED ? ASX_OK : ASX_E_PENDING;
+}
+
+asx_status asx_region_drain(asx_region_id id, asx_budget *budget) {
+    asx_region_slot *r;
+    asx_status st;
+    uint32_t n;
+    uint32_t i;
+    int need_cancel = 0;
+    uint32_t drain_slots[ASX_MAX_REGIONS];
+    asx_region_id drain_regions[ASX_MAX_REGIONS];
+
+    if (budget == NULL) return ASX_E_INVALID_ARGUMENT;
+    st = asx_region_slot_lookup(id, &r);
+    if (st != ASX_OK) return st;
+    if (r->state == ASX_REGION_CLOSED) return ASX_OK;
+    if (r->cleanup.draining) return ASX_E_PENDING;
+    n = asx_region_subtree_internal(id, drain_slots, ASX_MAX_REGIONS);
+    for (i = 0; i < n; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: n <= ASX_MAX_REGIONS");
+        asx_region_slot *rs = &g_regions[drain_slots[i]];
+        drain_regions[i] = asx_region_handle_for_slot(drain_slots[i]);
+        if (rs->state == ASX_REGION_OPEN) {
+            st = asx_region_set_state(drain_regions[i], rs, ASX_REGION_CLOSING);
+            if (st != ASX_OK) return st;
+            need_cancel = 1;
+        }
+        if (rs->task_count > 0u && asx_region_has_uncancelled_tasks(drain_regions[i])) {
+            need_cancel = 1;
+        }
+    }
+    if (need_cancel) (void)asx_cancel_propagate(id, ASX_CANCEL_PARENT);
+    return asx_region_run_to_closed(id, budget, drain_regions, n);
 }
 
 /* -------------------------------------------------------------------

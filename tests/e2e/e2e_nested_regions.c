@@ -15,6 +15,7 @@
 #include <asx/asx.h>
 #include <asx/runtime/trace.h>
 #include <stdio.h>
+#include <string.h>
 
 /* Suppress warn_unused_result for intentionally-ignored calls */
 #define IGNORE_RC(expr)                                                                            \
@@ -256,10 +257,198 @@ static void scenario_nested_q2_evidence(void) {
     SCENARIO_END();
 }
 
+typedef struct {
+    int polls;
+    int cancelled;
+    int value;
+    int park_first;
+} body_child_ctx;
+
+static asx_status poll_body_child(void *data, asx_task_id self) {
+    body_child_ctx *ctx = (body_child_ctx *)data;
+    asx_checkpoint_result checkpoint;
+    asx_status st = asx_checkpoint(self, &checkpoint);
+    if (st != ASX_OK) return st;
+    ctx->polls++;
+    if (checkpoint.cancelled) {
+        ctx->cancelled++;
+        return ASX_OK;
+    }
+    if (ctx->polls == 1) {
+        if (ctx->park_first) {
+            st = asx_task_park(self);
+            if (st != ASX_OK) return st;
+        }
+        return ASX_E_PENDING;
+    }
+    ctx->value = 42;
+    return ASX_OK;
+}
+
+static uint32_t body_cancel_trace_count(void) {
+    uint32_t i, count = 0u;
+    for (i = 0u; i < asx_trace_event_count(); i++) {
+        asx_trace_event event;
+        if (asx_trace_event_get(i, &event) &&
+            (event.kind == ASX_TRACE_CANCEL_REQUEST || event.kind == ASX_TRACE_REGION_CANCELLED)) {
+            count++;
+        }
+    }
+    return count;
+}
+
+static void scenario_nested_body_ok_waits(void) {
+    SCENARIO_BEGIN("nested.body_ok_waits");
+    asx_region_id regions[3];
+    asx_task_id tasks[3];
+    asx_task_id refused = ASX_INVALID_ID;
+    body_child_ctx contexts[3];
+    asx_region_state state;
+    asx_outcome body = asx_outcome_make(ASX_OUTCOME_OK), outcome;
+    asx_budget budget = asx_budget_from_polls(1u);
+    uint32_t i;
+    asx_runtime_reset();
+    memset(contexts, 0, sizeof(contexts));
+    SCENARIO_CHECK(asx_region_open(&regions[0]) == ASX_OK, "open_root");
+    SCENARIO_CHECK(asx_region_open_child(regions[0], &regions[1]) == ASX_OK, "open_child");
+    SCENARIO_CHECK(asx_region_open_child(regions[1], &regions[2]) == ASX_OK, "open_grandchild");
+    for (i = 0u; i < 3u; i++) {
+        SCENARIO_CHECK(asx_task_spawn(regions[i], poll_body_child, &contexts[i], &tasks[i]) ==
+                           ASX_OK,
+                       "spawn_real_child");
+    }
+    SCENARIO_CHECK(asx_region_close_with_outcome(regions[0], &body, NULL) == ASX_OK,
+                   "finish_ok_root");
+    SCENARIO_CHECK(asx_task_spawn(regions[0], poll_complete, NULL, &refused) == ASX_E_REGION_CLOSED,
+                   "ordinary_spawn_refusal");
+    SCENARIO_CHECK(refused == ASX_INVALID_ID, "refused_output_unchanged");
+    SCENARIO_CHECK(asx_region_wait_closed(regions[0], &budget) == ASX_E_POLL_BUDGET_EXHAUSTED,
+                   "budget_boundary");
+    budget = asx_budget_from_polls(16u);
+    SCENARIO_CHECK(asx_region_wait_closed(regions[0], &budget) == ASX_E_PENDING,
+                   "open_child_pending");
+    SCENARIO_CHECK(asx_region_get_state(regions[1], &state) == ASX_OK && state == ASX_REGION_OPEN,
+                   "child_not_closed_by_wait");
+    SCENARIO_CHECK(asx_region_get_state(regions[2], &state) == ASX_OK && state == ASX_REGION_OPEN,
+                   "grandchild_not_closed_by_wait");
+    SCENARIO_CHECK(asx_region_close_with_outcome(regions[1], &body, NULL) == ASX_OK,
+                   "finish_ok_child");
+    SCENARIO_CHECK(asx_region_wait_closed(regions[0], &budget) == ASX_E_PENDING,
+                   "grandchild_pending");
+    SCENARIO_CHECK(asx_region_close_with_outcome(regions[2], &body, NULL) == ASX_OK,
+                   "finish_ok_grandchild");
+    SCENARIO_CHECK(asx_region_wait_closed(regions[0], &budget) == ASX_OK, "wait_inside_out_close");
+    for (i = 0u; i < 3u; i++) {
+        SCENARIO_CHECK(contexts[i].polls == 2 && contexts[i].cancelled == 0 &&
+                           contexts[i].value == 42,
+                       "normal_child_result_survives");
+        SCENARIO_CHECK(asx_task_get_outcome(tasks[i], &outcome) == ASX_OK &&
+                           outcome.severity == ASX_OUTCOME_OK,
+                       "normal_child_outcome");
+        SCENARIO_CHECK(asx_quiescence_check(regions[i]) == ASX_OK, "fully_quiescent");
+        SCENARIO_CHECK(region_closed_trace_index(regions[i]) != UINT32_MAX, "close_event_present");
+        log_region_state("body-ok-final", regions[i]);
+    }
+    SCENARIO_CHECK(region_closed_trace_index(regions[2]) < region_closed_trace_index(regions[1]) &&
+                       region_closed_trace_index(regions[1]) <
+                           region_closed_trace_index(regions[0]),
+                   "body_close_inside_out_trace");
+    SCENARIO_CHECK(body_cancel_trace_count() == 0u, "ok_must_never_cancel");
+    fprintf(stderr, "[nested-e2e] body-ok values=42,42,42 cancelled=0,0,0 closes=%u,%u,%u\n",
+            region_closed_trace_index(regions[2]), region_closed_trace_index(regions[1]),
+            region_closed_trace_index(regions[0]));
+    SCENARIO_END();
+}
+
+static void scenario_nested_body_exception(asx_outcome_severity severity) {
+    SCENARIO_BEGIN(severity == ASX_OUTCOME_ERR ? "nested.body_err_fail_fast"
+                                               : "nested.body_panic_fail_fast");
+    asx_region_id regions[3];
+    asx_task_id tasks[3];
+    body_child_ctx contexts[3];
+    asx_outcome body = asx_outcome_make(severity), outcome;
+    asx_cancel_reason reason;
+    asx_budget budget = asx_budget_from_polls(16u);
+    uint32_t i;
+    asx_runtime_reset();
+    memset(contexts, 0, sizeof(contexts));
+    SCENARIO_CHECK(asx_region_open(&regions[0]) == ASX_OK, "open_root");
+    SCENARIO_CHECK(asx_region_open_child(regions[0], &regions[1]) == ASX_OK, "open_child");
+    SCENARIO_CHECK(asx_region_open_child(regions[1], &regions[2]) == ASX_OK, "open_grandchild");
+    for (i = 0u; i < 3u; i++) {
+        SCENARIO_CHECK(asx_task_spawn(regions[i], poll_body_child, &contexts[i], &tasks[i]) ==
+                           ASX_OK,
+                       "spawn_real_child");
+    }
+    SCENARIO_CHECK(asx_region_close_with_outcome(regions[0], &body, NULL) == ASX_OK,
+                   "finish_exceptional_body");
+    SCENARIO_CHECK(asx_region_wait_closed(regions[0], &budget) == ASX_OK, "wait_exception_cleanup");
+    for (i = 0u; i < 3u; i++) {
+        SCENARIO_CHECK(contexts[i].cancelled == 1 && contexts[i].value == 0,
+                       "exception_must_cancel_child");
+        SCENARIO_CHECK(asx_task_get_cancel_reason(tasks[i], &reason) == ASX_OK, "reason_available");
+        SCENARIO_CHECK(reason.kind == (i == 0u ? ASX_CANCEL_FAIL_FAST : ASX_CANCEL_PARENT),
+                       "fail_fast_root_parent_descendants");
+        SCENARIO_CHECK(reason.origin_region == regions[i == 0u ? 0u : i - 1u],
+                       "reason_attribution");
+        SCENARIO_CHECK(asx_task_get_outcome(tasks[i], &outcome) == ASX_OK &&
+                           outcome.severity == ASX_OUTCOME_CANCELLED,
+                       "cancelled_child_outcome");
+    }
+    SCENARIO_CHECK(asx_region_get_close_outcome(regions[0], &outcome) == ASX_OK &&
+                       outcome.severity == ASX_OUTCOME_CANCELLED && body.severity == severity,
+                   "body_separate_from_child_ledger");
+    SCENARIO_CHECK(body_cancel_trace_count() == 6u, "real_cancel_trace_evidence");
+    fprintf(stderr, "[nested-e2e] body-exception severity=%d child_ledger=%d cancel_events=%u\n",
+            (int)body.severity, (int)outcome.severity, body_cancel_trace_count());
+    SCENARIO_END();
+}
+
+static void scenario_scope_finish_wake_retry(void) {
+    SCENARIO_BEGIN("nested.scope_finish_wake_retry");
+    asx_region_id region;
+    asx_cx cx;
+    asx_scope scope;
+    asx_task_handle child;
+    body_child_ctx context;
+    asx_outcome body = asx_outcome_make(ASX_OUTCOME_OK);
+    asx_outcome changed = asx_outcome_make(ASX_OUTCOME_ERR), outcome;
+    asx_runtime_reset();
+    memset(&context, 0, sizeof(context));
+    context.park_first = 1;
+    SCENARIO_CHECK(asx_region_open(&region) == ASX_OK, "open_scope_region");
+    SCENARIO_CHECK(asx_cx_init(&cx, region, ASX_INVALID_ID, ASX_CAP_ALL) == ASX_OK, "init_host_cx");
+    SCENARIO_CHECK(asx_scope_init(&scope, region, &cx, asx_budget_from_polls(8u)) == ASX_OK,
+                   "init_scope");
+    SCENARIO_CHECK(asx_scope_spawn(&scope, poll_body_child, &context, &child) == ASX_OK,
+                   "spawn_child");
+    SCENARIO_CHECK(asx_scope_finish(&scope, &body, NULL) == ASX_E_WOULD_BLOCK,
+                   "parked_wait_boundary");
+    SCENARIO_CHECK(scope.finish_started == 1 && scope.body_outcome.severity == ASX_OUTCOME_OK,
+                   "retain_body_before_retry");
+    SCENARIO_CHECK(asx_scope_finish(&scope, &changed, NULL) == ASX_E_INVALID_STATE,
+                   "changed_body_refused");
+    SCENARIO_CHECK(context.polls == 1 && context.cancelled == 0, "park_not_cancelled");
+    SCENARIO_CHECK(asx_task_wake(child.task_id) == ASX_OK, "real_wake");
+    SCENARIO_CHECK(asx_scope_finish(&scope, &body, NULL) == ASX_OK, "same_body_retry_completes");
+    SCENARIO_CHECK(context.polls == 2 && context.cancelled == 0 && context.value == 42,
+                   "normal_value_after_wake");
+    SCENARIO_CHECK(asx_task_handle_try_join(&child, &outcome) == ASX_OK &&
+                       outcome.severity == ASX_OUTCOME_OK,
+                   "joined_normal_child");
+    SCENARIO_CHECK(body_cancel_trace_count() == 0u, "retry_must_not_cancel");
+    log_quiescence_state("scope-body-finished", region);
+    SCENARIO_END();
+}
+
 int main(void) {
     scenario_nested_lifecycle_full();
     scenario_nested_inside_out_pending();
     scenario_nested_q2_evidence();
+    scenario_nested_body_ok_waits();
+    scenario_nested_body_exception(ASX_OUTCOME_ERR);
+    scenario_nested_body_exception(ASX_OUTCOME_PANICKED);
+    scenario_scope_finish_wake_retry();
 
     printf("DIGEST %016llx\n", (unsigned long long)asx_trace_digest());
     fprintf(stderr, "[e2e] nested_regions: %d passed, %d failed\n", g_pass, g_fail);

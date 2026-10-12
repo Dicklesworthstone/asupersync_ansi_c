@@ -1255,6 +1255,36 @@ ASX_API int asx_region_is_quiescent(asx_region_id id);
  * See: API_MISUSE_CATALOG.md § Region Lifecycle. */
 ASX_API ASX_MUST_USE asx_status asx_region_drain(asx_region_id id, asx_budget *budget);
 
+/* Finish a region body, following Scope::region_with_state's outcome branch
+ * (cx/scope.rs:877-920 at the pinned Rust revision). Ok begins closing
+ * without cancelling live children. Cancelled requests the supplied reason;
+ * Err and Panicked request FailFast attributed to this region. Descendants
+ * receive ParentCancelled through the ordinary region cancellation path.
+ * The body outcome is not added to the child-derived close outcome ledger.
+ *
+ * This only requests close; use asx_region_wait_closed to drive completion.
+ * A closing or closed region accepts an Ok request without another cancel.
+ * reason must be non-NULL only for Cancelled, with a valid cancel kind.
+ * Returns ASX_E_INVALID_ARGUMENT for invalid body/reason arguments, a lookup
+ * error for an invalid handle, or ASX_E_REGION_POISONED for a poisoned region.
+ * Thread-safety: scheduler-thread-only; single-threaded mode. */
+ASX_API ASX_MUST_USE asx_status asx_region_close_with_outcome(asx_region_id id,
+                                                              const asx_outcome *body,
+                                                              const asx_cancel_reason *reason);
+
+/* Drive a requested close without adding cancellation. Existing tasks and
+ * child regions keep their own outcomes and cancellation state. Finalizers
+ * and their cleanup work finish before the leak audit and Closed transition.
+ * The call is resumable with a refreshed execution budget. An Open child
+ * must finish its own body or be explicitly closed/cancelled by its owner.
+ * Returns ASX_OK when Closed, ASX_E_PENDING while child regions remain,
+ * ASX_E_INVALID_STATE for an Open region or a call from a task poll, and
+ * scheduler/leak-audit statuses as asx_region_drain does. NULL budget and
+ * poisoned regions are rejected before any work. A handle that becomes
+ * stale during the drive belonged to a region that completed and was reused.
+ * Thread-safety: not thread-safe; host driver only, outside task polls. */
+ASX_API ASX_MUST_USE asx_status asx_region_wait_closed(asx_region_id id, asx_budget *budget);
+
 /* A synchronous region finalizer: called once with its user_data. */
 typedef void (*asx_region_finalizer_fn)(void *user_data);
 

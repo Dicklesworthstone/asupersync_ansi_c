@@ -2,7 +2,7 @@
 
 > **Bead:** `bd-296.3`
 > **Status:** Semantic-unit parity tracker with acceptance-test mapping
-> **Last updated:** 2026-10-11 (bd-9kll.3.4, bd-9kll.3.5) - public synchronous finalizers and explicit cleanup admission implemented; remaining parity gaps retained
+> **Last updated:** 2026-10-12 (bd-9kll.3.4, bd-9kll.3.5) - outcome-aware close/finish increment; remaining Scope, finalizer and admission parity gaps retained
 
 This matrix tracks canonical semantic units, their source-of-truth extraction status, and required acceptance coverage before parity can be declared complete.
 
@@ -43,10 +43,54 @@ actual C predicates by `make check-rust-constants`; planted ordinary/cleanup
 Finalizing drift is rejected. This verifies the fixed admission policy, not
 end-to-end finalizer execution. Region close outcomes now aggregate completed
 task outcomes, and finalization audits unresolved obligations under the leak
-policy after callbacks and cleanup tasks finish. Body-driven close, explicit
-root-versus-descendant cancellation reasons, outcome payloads and masked,
-serialized async finalizers remain open in `bd-9kll.3.4`; the admission fixture
-requirement remains open in `bd-9kll.3.5`.
+policy after callbacks and cleanup tasks finish.
+
+The bounded outcome-aware close increment adds
+`asx_region_close_with_outcome` (`src/runtime/lifecycle.c:1130`),
+`asx_region_wait_closed` (`src/runtime/quiescence.c:338`) and
+`asx_scope_finish` (`src/cx/scope.c:203`).
+The body's `OK` severity requests close without cancellation; `CANCELLED`
+uses the supplied reason; `ERR` and `PANICKED` request FailFast, while
+descendants receive ParentCancelled. The host-driven wait consumes its supplied
+budget and advances the existing scheduler, synchronous finalizers, cleanup
+tasks and leak audit without requesting cancellation. Scope finish uses the
+scope's budget and reports the close/wait status. As in the pinned Rust
+Scope body branch (`src/cx/scope.rs:877-932`), the body outcome selects close
+and remains separate from the region's child-derived close outcome.
+The first request is saved in the scope; a same-severity retry resumes the
+wait without issuing another cancel, and a Cancelled retry may omit its reason.
+`asx_region_drain` remains an explicit cancelling shutdown operation.
+
+The direct C checks include
+`tests/unit/runtime/test_quiescence.c::body_close_ok_preserves_child_value_and_outcome_without_cancel`,
+`tests/unit/runtime/test_quiescence.c::body_close_wait_runs_lifo_then_cleanup_before_leak_audit`,
+`tests/unit/cx/test_scope.c::scope_finish_exception_keeps_body_separate_from_child_outcome`
+and `tests/unit/cx/test_scope.c::scope_finish_cancelled_retry_without_reason_does_not_cancel_again`.
+These check normal child execution, finalizer/cleanup ordering, separate body
+and child outcomes, and resumable cancellation without another request.
+`tests/unit/cx/test_scope.c::scope_finish_finalizer_reentry_keeps_first_body_and_cancel_reason`
+checks that the first body is bound before a cancellation finalizer reenters
+finish, preventing another request or a changed body from replacing it.
+
+Seven fresh linked-Rust captures exercise the primitive `finish_region` branch:
+`region-body-ok-waits-001`, `region-body-ok-nested-001`,
+`region-body-ok-parked-001`, `region-body-cancelled-reason-001`,
+`region-body-err-fail-fast-001`, `region-body-panic-fail-fast-001` and
+`region-body-closed-exception-001`.
+The parked case waits for a sibling to notify before normal completion; the
+direct C test separately checks a blocked wait and explicit retry. These
+witnesses call Rust's actual RuntimeState/RegionRecord close primitives; they
+do not invoke its typed Scope factory. The corrected C runner compares all
+160 captured fixtures with 160 passes and no failures or errors, including
+these seven primitive witnesses. The original 153 fixtures remain unchanged.
+This establishes the captured body-branch behavior, not complete Scope or
+async-finalizer parity; the broader K4 acceptance remains open.
+
+This is a partial K4 increment. The genuine Scope child-region factory,
+outcome payloads (`bd-9kll.3.14`), masked serialized async finalizers and their
+budget escalation remain unproven or absent; original `bd-9kll.3.4` stays
+open. No target-device or complete Scope claim follows from host-profile runs.
+The admission fixture requirement remains open in `bd-9kll.3.5`.
 
 The interim K18 guard also rejects a second initialization before resetting
 the active singleton. `conflicting_init_preserves_live_runtime_and_destination`
@@ -79,7 +123,7 @@ and cross-runtime handle isolation remain open in `bd-9kll.3.20`.
 | `U-C-PORTABILITY-UB` | Portable C subset + UB elimination policy | `docs/C_PORTABILITY_RULES.md` | compiler/static-analysis + UB-focused tests | UB-prone constructs in core forbidden | `impl-complete`: CI run 38051289151 passed the gcc/clang/clang-21 compiler matrix over CORE, POSIX, FREESTANDING and EMBEDDED_ROUTER, MSVC (CORE, WIN32), -m32, cross + QEMU (aarch64, armv7, riscv64, mips, mipsel) and the asan, asan-live and tsan jobs. Rust parity: not applicable | `bd-296.29`, `bd-66l.10` |
 | `U-GUARANTEE-SUBSTITUTION` | Rust guarantee -> C mechanism mapping | `docs/GUARANTEE_SUBSTITUTION_MATRIX.md` | proof artifact checklist + fixture links | missing substitution evidence forbidden | `impl-complete`: `make lint-anti-butchering` (`tools/ci/check_anti_butchering.sh`, CI `.github/workflows/ci.yml:79`) fails a change to semantic-sensitive paths that lacks a Guarantee Impact block. Rust parity: not applicable | `bd-296.6` |
 | `U-CODEC-EQUIVALENCE` | JSON/BIN canonical semantic equivalence | `tools/ci/run_conformance.sh`, `schemas/canonical_fixture.schema.json` | codec-equivalence conformance suite | semantic drift between codecs forbidden | `impl-complete`: codec round trips unit-tested (`tests/unit/runtime/test_codec_equivalence.c`, `tests/conformance/codec_equivalence_conformance_test.c`). The CI `codec-equivalence` step compares digests recorded in the legacy `fixtures/rust_reference` files without executing the C runtime (33 comparable records, 0 fail in run 38051289151). Rust parity: not applicable (C JSON vs BIN) | `bd-2n0.1`, `bd-1md.11`, `bd-j4m.1` |
-| `U-PROFILE-PARITY` | Cross-profile canonical digest equivalence | `docs/VERTICAL_CONTINUITY_FIXTURE_FAMILIES.md`, `docs/HFT_PROFILE.md`, `docs/AUTOMOTIVE_PROFILE.md`, `tools/ci/run_conformance.sh` | profile parity suite across shared fixtures + vertical fixture lanes (`E2E-VERT-HFT`, `E2E-VERT-AUTO`) | profile-only semantic forks and hidden degraded-mode behavior forbidden | `conformance-passed`: every v2 fixture passes `make conformance` built with `PROFILE=EMBEDDED_ROUTER` under QEMU on aarch64, armv7, riscv64, mips and mipsel (`.github/workflows/ci.yml:938-941`) and with -m32 (`ci.yml:1037-1038`); the aarch64, mips and -m32 job logs of run 38051289151 each show 62 `PASS` lines. The `profile-parity` step itself compares digests recorded in legacy fixtures without executing the C runtime | `bd-1md.15`, `bd-j4m.7`, `bd-1md.10`, `bd-j4m.1` |
+| `U-PROFILE-PARITY` | Cross-profile canonical digest equivalence | `docs/VERTICAL_CONTINUITY_FIXTURE_FAMILIES.md`, `docs/HFT_PROFILE.md`, `docs/AUTOMOTIVE_PROFILE.md`, `tools/ci/run_conformance.sh` | profile parity suite across shared fixtures + vertical fixture lanes (`E2E-VERT-HFT`, `E2E-VERT-AUTO`) | profile-only semantic forks and hidden degraded-mode behavior forbidden | `conformance-passed`: every v2 fixture passes `make conformance` built with `PROFILE=EMBEDDED_ROUTER` under QEMU on aarch64, armv7, riscv64, mips and mipsel (`.github/workflows/ci.yml:938-941`) and with -m32 (`ci.yml:1037-1038`); the aarch64, mips and -m32 job logs of run 38051289151 each show 62 `PASS` lines. Current `make profile-parity` first runs `profile-parity-exec` across eight native host profiles against all 160 captured fixtures, then checks legacy recorded digests (`Makefile:1945-1972`); these host runs supply no new target-device evidence | `bd-1md.15`, `bd-j4m.7`, `bd-1md.10`, `bd-j4m.1` |
 | `U-REPLAY-CONTINUITY` | Deterministic replay + continuity under restart | `docs/VERTICAL_CONTINUITY_FIXTURE_FAMILIES.md` + trace/replay docs | replay identity and crash/restart continuity tests (`E2E-CONT-RESTART`) | digest mismatch or duplicated side effects on restart forbidden | `impl-complete`: `tests/unit/runtime/test_replay.c`, `tests/unit/runtime/test_continuity.c`, e2e `tests/e2e/continuity_restart.sh` (`E2E-CONT-RESTART`). Rust parity: not applicable (C replay of C runs) | `bd-1md.15`, `bd-2n0.4`, `bd-j4m.8` |
 | `U-PARALLEL-PROFILE` | Optional parallel worker-lane semantics and single-vs-multi-worker digest parity | `docs/DEFERRED_SURFACE_REGISTER.md`, `docs/QUALITY_GATES.md`, `include/asx/runtime/parallel.h` | `parallel-parity`; `test-e2e-parallel`; `formal-litmus`; `formal-codegen`; large-swarm telemetry/admission/locality tests; `parallel-bench-json` | semantic digest drift, unclassified event-order drift, silent drops, unbounded queues, data races, stale-handle mutation, locality routing semantic drift, and weakened cancellation forbidden | `impl-complete`: `make parallel-parity` compares single- and multi-worker digests of C runs (run 38051289151: status=pass, 28 records, 21 compared). `src/runtime/parallel.c` creates no threads, so worker lanes are logical and run on the calling thread (see `docs/DEFERRED_STUBS_REGISTER.md`). Rust parity not fixture-checked | `bd-pweu.1`, `bd-pweu.7`, `bd-pweu.9`, `bd-pweu.10`, `bd-pweu.11`, `bd-pweu.12`, `bd-pweu.13`, `bd-pweu.14` |
 

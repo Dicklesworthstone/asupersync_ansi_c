@@ -1,0 +1,17 @@
+{
+  "schema": "asx.scenario.v2",
+  "id": "region-body-ok-waits-001",
+  "description": "A successful region body begins close while its child sleeps. The child checkpoints and completes normally without cancellation.",
+  "unit": "region_lifecycle",
+  "rules": ["rule.region.close_begin", "rule.region.close_children_done", "rule.region.close_complete"],
+  "seed": 42,
+  "lab": {"max_steps": 200},
+  "regions": [{"name": "r.main", "parent": "root", "budget": null}],
+  "channels": [], "sync": [],
+  "tasks": [{"name": "t.child", "region": "r.main", "budget": null,
+    "program": [{"op": "sleep", "ns": 100}, {"op": "checkpoint"},
+                {"op": "trace", "message": "child finished normally"},
+                {"op": "return", "outcome": {"tag": "ok"}}]}],
+  "script": [{"at_ns": 0, "op": {"op": "finish_region", "region": "r.main", "body": "ok"}}],
+  "expect": {"kind": "ok"}
+}

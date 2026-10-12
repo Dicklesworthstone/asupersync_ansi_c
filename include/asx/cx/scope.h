@@ -96,10 +96,12 @@ ASX_API asx_status asx_task_handle_abort_with_kind(asx_task_handle *h, asx_cance
 /* ------------------------------------------------------------------ */
 
 typedef struct {
-    asx_region_id region_id; /* owning region */
-    asx_cx cx;               /* capability context for spawned tasks */
-    asx_budget budget;       /* execution budget for this scope */
-    uint32_t spawned;        /* count of tasks spawned in this scope */
+    asx_region_id region_id;  /* owning region */
+    asx_cx cx;                /* capability context for spawned tasks */
+    asx_budget budget;        /* execution budget for this scope */
+    uint32_t spawned;         /* count of tasks spawned in this scope */
+    int finish_started;       /* body close requested; retries only wait */
+    asx_outcome body_outcome; /* retained body severity, separate from child outcomes */
 } asx_scope;
 
 /* Initialize a scope.
@@ -160,6 +162,24 @@ ASX_API ASX_MUST_USE asx_status asx_scope_run(asx_scope *scope);
  * Returns ASX_OK on success or ASX_E_INVALID_STATE if the scope value is
  * uninitialized or corrupted. */
 ASX_API ASX_MUST_USE asx_status asx_scope_drain(asx_scope *scope);
+
+/* Finish a returned body and wait for its region to close using scope->budget.
+ * Ok lets children finish normally; Err/Panicked request FailFast; Cancelled
+ * requires its explicit reason. Finalizers and cleanup finish before close.
+ * The first successful close request retains *body in scope->body_outcome.
+ * Retries require the same body severity and never request cancellation again.
+ * reason is required only for a Cancelled first call and must be NULL for
+ * other severities. Once started, a Cancelled retry may omit its reason.
+ * Body severity remains distinct from asx_region_get_close_outcome's child
+ * ledger. Payload-returning Rust scope factories are not implemented here.
+ *
+ * Returns the request/wait status, including ASX_E_PENDING for Open children,
+ * ASX_E_WOULD_BLOCK for parked work, and poll/deadline budget exhaustion.
+ * Invalid arguments, uninitialized/unauthorized scopes, changed retry severity
+ * and calls from task polls are rejected before requesting close.
+ * Thread-safety: not thread-safe; host driver only. */
+ASX_API ASX_MUST_USE asx_status asx_scope_finish(asx_scope *scope, const asx_outcome *body,
+                                                 const asx_cancel_reason *reason);
 
 /* Get the number of tasks spawned in this scope. */
 ASX_API uint32_t asx_scope_spawned_count(const asx_scope *scope);
