@@ -27,6 +27,16 @@
 /* Only public headers — simulates an external consumer */
 #include <asx/asx.h>
 
+/* Mismatch consumers may expose more headers than the linked library.
+ * Test only factories public in both builds; unavailable library surfaces
+ * cannot be linked and are not runtime comparisons. */
+#ifndef ASX_ABI_LIBRARY_HAS_APP
+#define ASX_ABI_LIBRARY_HAS_APP ASX_HAS_NATIVE_RUNTIME_SURFACES
+#endif
+#ifndef ASX_ABI_LIBRARY_HAS_LAB
+#define ASX_ABI_LIBRARY_HAS_LAB ASX_HAS_BROWSER_TRACE
+#endif
+
 asx_status asx_abi_host_start(void);
 asx_status asx_abi_host_finish(void);
 
@@ -499,11 +509,11 @@ static void test_mismatched_creation(void) {
         asx_runtime_config cfg;
         asx_runtime_hooks hooks;
         asx_runtime_builder builder;
-#if ASX_HAS_NATIVE_RUNTIME_SURFACES
+#if ASX_HAS_NATIVE_RUNTIME_SURFACES && ASX_ABI_LIBRARY_HAS_APP
         asx_app app;
         asx_app_config app_config;
 #endif
-#ifdef ASX_RUNTIME_LAB_H
+#if defined(ASX_RUNTIME_LAB_H) && ASX_ABI_LIBRARY_HAS_LAB
         asx_lab lab;
         asx_lab_config lab_config;
 #endif
@@ -537,11 +547,11 @@ static void test_mismatched_creation(void) {
                "mismatched environment creation refuses");
     SHIM_CHECK(asx_runtime_builder_build(&objects.builder, &objects.rt) == ASX_E_CONFIG_MISMATCH,
                "mismatched builder creation refuses");
-#if ASX_HAS_NATIVE_RUNTIME_SURFACES
+#if ASX_HAS_NATIVE_RUNTIME_SURFACES && ASX_ABI_LIBRARY_HAS_APP
     SHIM_CHECK(asx_app_init(&objects.app, &objects.app_config) == ASX_E_CONFIG_MISMATCH,
                "mismatched application creation refuses");
 #endif
-#ifdef ASX_RUNTIME_LAB_H
+#if defined(ASX_RUNTIME_LAB_H) && ASX_ABI_LIBRARY_HAS_LAB
     SHIM_CHECK(asx_lab_config_init(&objects.lab_config) == ASX_E_CONFIG_MISMATCH,
                "mismatched lab config constructor refuses");
     SHIM_CHECK(asx_lab_init(&objects.lab, &objects.lab_config) == ASX_E_CONFIG_MISMATCH,
@@ -561,7 +571,7 @@ static void test_mismatched_creation(void) {
 }
 
 static void test_higher_level_creation(void) {
-#if ASX_HAS_NATIVE_RUNTIME_SURFACES
+#if ASX_HAS_NATIVE_RUNTIME_SURFACES && ASX_ABI_LIBRARY_HAS_APP
     asx_app app;
     asx_app_config app_config = {"fingerprint", 64u};
     SHIM_CHECK(asx_app_init(&app, &app_config) == ASX_OK, "matching application starts");
@@ -569,7 +579,7 @@ static void test_higher_level_creation(void) {
                "matching application executes main task");
     asx_app_shutdown(&app);
 #endif
-#ifdef ASX_RUNTIME_LAB_H
+#if defined(ASX_RUNTIME_LAB_H) && ASX_ABI_LIBRARY_HAS_LAB
     {
         asx_lab lab;
         asx_lab_config config;
@@ -602,6 +612,14 @@ static void test_higher_level_creation(void) {
 }
 
 int main(int argc, char **argv) {
+    if (argc == 2 && strcmp(argv[1], "--app-available") == 0) {
+        printf("%d\n", ASX_HAS_NATIVE_RUNTIME_SURFACES);
+        return 0;
+    }
+    if (argc == 2 && strcmp(argv[1], "--lab-available") == 0) {
+        printf("%d\n", ASX_HAS_BROWSER_TRACE);
+        return 0;
+    }
     if (argc == 2 && strcmp(argv[1], "--ghost-enabled") == 0) {
 #if defined(ASX_DEBUG_GHOST) && ASX_DEBUG_GHOST
         puts("1");

@@ -823,7 +823,7 @@ model-check: $(MODEL_CHECK_BIN)
 # ---------------------------------------------------------------------------
 # test — run all test suites
 # ---------------------------------------------------------------------------
-test: test-unit test-invariants test-conformance-c test-vignettes test-examples fuzz-parsers-replay test-config-fingerprint
+test: test-unit test-invariants test-conformance-c test-vignettes test-examples fuzz-parsers-replay test-config-fingerprint test-cli-info
 	@echo "[asx] test: all suites passed"
 
 # ---------------------------------------------------------------------------
@@ -1206,6 +1206,16 @@ test-vignettes: $(VIGNETTE_TEST_BIN)
 EXAMPLE_SRC := $(sort $(wildcard examples/*.c))
 ifeq ($(PROFILE),BROWSER)
 EXAMPLE_SRC := $(filter-out examples/ex_quickstart.c,$(EXAMPLE_SRC))
+# Query the real preprocessed public contract, including custom subprofile
+# flags. These examples participate only where their APIs are public.
+EXAMPLE_HAS_BROWSER_TRACE := $(shell printf '\043include <asx/asx_config.h>\nASX_HAS_BROWSER_TRACE\n' | $(CC) $(ALL_CFLAGS) -E -P -x c - | tail -n 1)
+ifeq ($(EXAMPLE_HAS_BROWSER_TRACE),0)
+EXAMPLE_SRC := $(filter-out examples/ex_browser_replay.c examples/ex_lab_replay.c,$(EXAMPLE_SRC))
+endif
+EXAMPLE_HAS_BROWSER_IO := $(shell printf '\043include <asx/asx_config.h>\nASX_HAS_BROWSER_IO\n' | $(CC) $(ALL_CFLAGS) -E -P -x c - | tail -n 1)
+ifeq ($(EXAMPLE_HAS_BROWSER_IO),0)
+EXAMPLE_SRC := $(filter-out examples/ex_encoding_decoding.c,$(EXAMPLE_SRC))
+endif
 else
 EXAMPLE_SRC := $(filter-out examples/ex_browser_boundary.c,$(EXAMPLE_SRC))
 endif
@@ -1260,6 +1270,7 @@ test-abi-shim: $(ABI_SHIM_BIN)
 .PHONY: test-config-fingerprint
 test-config-fingerprint: test-abi-shim
 	@set -eu; \
+	surface_flags="-DASX_ABI_LIBRARY_HAS_APP=$$($(ABI_SHIM_BIN) --app-available) -DASX_ABI_LIBRARY_HAS_LAB=$$($(ABI_SHIM_BIN) --lab-available)"; \
 	for knob in ASX_MAX_REGION_CHILDREN ASX_MAX_REGIONS ASX_MAX_TASKS \
 	    ASX_MAX_OBLIGATIONS ASX_MAX_TIMERS ASX_MAX_CHANNELS ASX_MAX_MASK_DEPTH \
 	    ASX_MAX_CANCEL_WITNESSES ASX_MAX_WORKERS ASX_MAX_IO_TOKENS \
@@ -1274,7 +1285,7 @@ test-config-fingerprint: test-abi-shim
 	    ASX_MAX_OPEN_FILES ASX_MAX_OPEN_DIRS; do \
 	    bin="$(TEST_DIR)/abi/mismatch-$$knob"; \
 	    echo "[asx] config mismatch control: $$knob"; \
-	    $(CC) $(ALL_CFLAGS) -U$$knob -D$$knob=999u $(ALL_LDFLAGS) \
+	    $(CC) $(ALL_CFLAGS) $$surface_flags -U$$knob -D$$knob=999u $(ALL_LDFLAGS) \
 	        -o "$$bin" $(ABI_SHIM_SRC) $(ABI_HOST_OBJ) $(LIB_A); \
 	    "$$bin" --expect-mismatch; \
 	done; \
@@ -1302,10 +1313,24 @@ test-config-fingerprint: test-abi-shim
 	    esac; \
 	    bin="$(TEST_DIR)/abi/mismatch-$$variant"; \
 	    echo "[asx] config mismatch control: $$variant"; \
-	    $(CC) $(ALL_CFLAGS) $$flags $(ALL_LDFLAGS) -o "$$bin" $(ABI_SHIM_SRC) $(ABI_HOST_OBJ) $(LIB_A); \
+	    $(CC) $(ALL_CFLAGS) $$surface_flags $$flags $(ALL_LDFLAGS) -o "$$bin" $(ABI_SHIM_SRC) $(ABI_HOST_OBJ) $(LIB_A); \
 	    "$$bin" --expect-mismatch; \
 	done; \
 	echo "[asx] test-config-fingerprint: matching consumer and 49 mismatched builds PASS"
+
+# Compare diagnostics with a consumer's independently compiled effective flag.
+# In particular, -DASX_DEBUG_GHOST=0 must not be reported as enabled.
+.PHONY: test-cli-info
+test-cli-info: cli $(ABI_SHIM_BIN)
+	@set -eu; \
+	expected="$$($(ABI_SHIM_BIN) --ghost-enabled)"; \
+	output="$$($(BIN_DIR)/asx info)"; \
+	printf '%s\n' "$$output"; \
+	if [ "$$expected" = 0 ]; then \
+	    printf '%s\n' "$$output" | grep -Eq '^Ghost monitors: +no$$'; \
+	    printf '%s\n' "$$output" | grep -q 'ASX_DEBUG_GHOST=0'; \
+	else printf '%s\n' "$$output" | grep -Eq '^Ghost monitors: +yes$$'; fi; \
+	echo "[asx] test-cli-info: effective ghost=$$expected PASS"
 
 # ---------------------------------------------------------------------------
 # abi-check — ABI break detection gate (bd-56t.4)

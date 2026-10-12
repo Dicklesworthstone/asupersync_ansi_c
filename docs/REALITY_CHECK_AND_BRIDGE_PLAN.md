@@ -462,12 +462,16 @@ runtime-owned storage or change canonical scenario semantics.
 - [x] Centralize 206 effective resource/layout values manually, preserving classes and overrides; fixed lanes and diagnostic buffers stay fixed.
 - [x] Bind profile, codec, determinism, ghost mode, every ASX_MAX, public layout limits and complete bootstrap size/alignment/member offsets to the application fingerprint.
 - [x] Guard preparatory config/hooks/all builder preset constructors and platform hook installers too; packed caller objects must be refused before library-sized writes. Config init now returns a status; unchecked legacy exports are removed.
-- [x] Draft matching external consumers execute real tasks through all four creation paths.
-- [x] Draft 47 separately compiled mismatched consumers each pass all 14 assertions, including canaries and complete object preservation. Effective ghost/browser settings select the opposite variant; no warnings or assertions are suppressed.
+- [x] Matching external consumers execute real tasks through explicit/default/environment/builder and app/lab/snapshot/reset creation paths.
+- [x] Expand to 49 separately compiled mismatched builds, including absent/both codec flags. CORE/POSIX expose all 19 factory/canary/live-work assertions; a consumer with hidden app/lab surfaces executes 14 applicable assertions. Effective ghost/browser settings select the opposite variant.
 - [x] Every draft mismatch runs with a separately compiled matching host holding a live task and reserved obligation, then executes completion/abort/closure/quiescence. The literal wrong-stamp unit is additional coverage, not the mixed-translation-unit proof.
-- [ ] Repair the original custom-BUILD_DIR constants-control runner path without changing assertions; execute its eight controls in both layouts.
-- [ ] Run strict GCC/Clang, full core tests, all 167 canonical comparisons, pinned format/lint, fixture/document integrity and all gate controls.
-- [ ] Reverify strict example builds, CORE doctor and actual live POSIX platform probes against the original acceptance criteria.
+- [x] Repair the original custom-BUILD_DIR constants-control runner path without changing assertions; root executes all eight in the custom layout, independent review executes all 11 gate scripts there.
+- [x] At private `822a3e62`, root strict GCC/Clang release R3 and native GCC i386 each execute 49 mismatch builds and all 167 unchanged canonical fixtures; local full 164-unit/format/lint/integrity/11-gate checks pass. The unchanged old probe genuinely admits app257/library256; the corrected R3 product returns 1602. Matching C++11 `rt.h` consumer initializes successfully. These results do not certify later source changes.
+- [x] Independent `822a3e62` review executes CORE/Ghost0 and live POSIX matching consumers, all 49 mismatches, app negatives and strict examples. CORE/POSIX/BROWSER-default together compile/run all 14 shipped example source files, 13 per lane. POSIX doctor has 14 PASS and actual successful getrandom/loopback/epoll activity; CORE has 12 PASS/2 SKIP and ghost backend labels. Unknown format refuses. POSIX packed hook installation preserves all object/canary/live-host state.
+- [x] Preserve the review's actual minimal-browser example compile failures, cross-profile factory link failure and Ghost0 `info` misreport; no successful runtime credit from those failed trials.
+- [x] Fix Ghost0 information output and add an actual compile-flag comparison. Select trace/replay and adapter examples only when their public API contract is available; supported examples retain all assertions and strict flags.
+- [x] Bind cross-profile test factory availability to both library and caller public contracts. Hidden APIs are N/A, not fabricated comparisons; every available factory, canary and host-work assertion stays required.
+- [ ] Freeze and independently execute the final CLI/browser follow-up, including all 49 minimal-browser controls and supported examples. No native browser/WASM or Windows execution follows from host profile simulation.
 - [ ] Obtain independent exact-revision review, close only fully completed original RB8, synchronize Beads and publish.
 
 ## Assessment at the audited revision

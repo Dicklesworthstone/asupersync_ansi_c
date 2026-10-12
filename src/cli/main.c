@@ -98,16 +98,22 @@ static int cmd_info(void) {
         printf("Max timers:      %u\n", (unsigned)desc.max_timers);
         printf("Max obligations: %u\n", (unsigned)desc.max_obligations);
         printf("Trace capacity:  %u\n", (unsigned)desc.trace_capacity);
-        printf("Ghost monitors:  %s\n", desc.ghost_monitors ? "yes" : "no");
+#if defined(ASX_DEBUG_GHOST) && ASX_DEBUG_GHOST
+        printf("Ghost monitors:  yes\n");
+#else
+        printf("Ghost monitors:  no\n");
+#endif
         printf("Alloc sealable:  %s\n", desc.allocator_sealable ? "yes" : "no");
     }
 
     printf("\nCompile flags:\n");
 #if defined(ASX_DEBUG)
-    printf("  ASX_DEBUG=1\n");
+    printf("  ASX_DEBUG=%d\n", (int)ASX_DEBUG);
 #endif
 #if defined(ASX_DEBUG_GHOST)
-    printf("  ASX_DEBUG_GHOST=1\n");
+    printf("  ASX_DEBUG_GHOST=%d\n", (int)ASX_DEBUG_GHOST);
+#else
+    printf("  ASX_DEBUG_GHOST=0\n");
 #endif
 
     return 0;
