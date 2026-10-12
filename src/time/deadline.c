@@ -31,9 +31,12 @@ asx_status asx_deadline_after(asx_deadline *dl, uint64_t duration_ns) {
 
     st = asx_runtime_now_ns(&now);
     if (st != ASX_OK) return st;
-    if (duration_ns > UINT64_MAX - now) return ASX_E_TIMER_DURATION_EXCEEDED;
 
-    return asx_deadline_init(dl, now + duration_ns);
+    /* Saturating, as Rust's deadline arithmetic is (Sleep::after,
+     * time/sleep.rs:458-459: now.saturating_add_nanos(duration)): a target
+     * that overflows the clock is one that never comes, not an error. The
+     * timer wheel clamps such a far deadline like any other (asx_deadline_arm). */
+    return asx_deadline_init(dl, duration_ns > UINT64_MAX - now ? UINT64_MAX : now + duration_ns);
 }
 
 asx_status asx_deadline_arm(asx_deadline *dl, void *waker_data) {

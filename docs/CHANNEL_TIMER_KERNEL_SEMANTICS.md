@@ -344,7 +344,7 @@ asx_status asx_timer_update(asx_timer_wheel *wheel, const asx_timer_handle *old_
 
 | Error | Rust | C |
 |-------|------|---|
-| Duration exceeded | `TimerDurationExceeded` from `try_register` (default max 7 days); `register` and `TimerDriver::update` clamp | `register` and `update` clamp to the maximum, default 7 days as in Rust, settable with `asx_timer_set_max_duration`; no rejecting variant (`ASX_E_TIMER_DURATION_EXCEEDED` remains for `asx_deadline_after` overflowing `uint64_t`) |
+| Duration exceeded | `TimerDurationExceeded` from `try_register` (default max 7 days); `register` and `TimerDriver::update` clamp | `register` and `update` clamp to the maximum, default 7 days as in Rust, settable with `asx_timer_set_max_duration`; no rejecting variant; `asx_deadline_after` saturates on overflow as Rust does (`ASX_E_TIMER_DURATION_EXCEEDED` remains only for an interval out of ticks, `src/time/sleep.c`) |
 | Stale handle on cancel | `false` | 0 |
 | Capacity exhaustion | None: the slab grows | `ASX_E_RESOURCE_EXHAUSTED` when every arena slot is live (`ASX_MAX_TIMERS` for the application wheel; the scheduler's holds two per task and cannot fill) |
 
@@ -442,8 +442,8 @@ Rust's `Interval` (`src/time/interval.rs`) is a synchronous schedule the caller 
 | Resource | Rust | C |
 |----------|------|---|
 | Timer capacity | No limit (slab) | `ASX_MAX_TIMERS` live timers in the application wheel (default 128, `include/asx/asx_config.h:277-283`); then `ASX_E_RESOURCE_EXHAUSTED` from `asx_timer_register`. The scheduler's wheel holds `2 * ASX_MAX_TASKS`, one wake and one budget-deadline timer per task. The earlier `max_timer_nodes` config field does not exist |
-| Task timers | One per task | One heap entry per task slot (`g_timer_heap[ASX_MAX_TASKS]`, `src/runtime/scheduler.c:91`) |
-| Timer duration | `TimerDurationExceeded` (try_register) or clamp | `ASX_E_TIMER_DURATION_EXCEEDED` |
+| Task timers | One per task | One wake timer and one lab budget-deadline timer per task slot, entries of the runtime wheel (`asx_timer_wheel_runtime`, `2 * ASX_MAX_TASKS`) |
+| Timer duration | `TimerDurationExceeded` (try_register) or clamp | Clamped to the 7-day maximum by `asx_timer_register` and `asx_timer_update`; a `now + duration` that overflows saturates (Rust's `saturating_add_nanos`), so `ASX_E_TIMER_DURATION_EXCEEDED` is only an interval out of ticks |
 | Channel capacity | `Full` (try) or wait | `ASX_E_CHANNEL_FULL` (try) or park with `ASX_E_PENDING` |
 | Channel count / size | Unbounded | `ASX_MAX_CHANNELS` slots (default 16, `include/asx/asx_config.h:284-290`; `asx_channel_create` returns `ASX_E_RESOURCE_EXHAUSTED`, `src/channel/mpsc.c:473`); capacity at most `ASX_CHANNEL_MAX_CAPACITY` (64, `include/asx/asx_config.h:362-363`) |
 | Waiter nodes | Unbounded queues | One pool of `ASX_WAIT_NODE_CAPACITY` nodes, `4 * ASX_MAX_TASKS` by default (`src/sync/wait_queue.h:88-90`); on exhaustion a waiter is not parked and is re-polled each round (`src/sync/wait_queue.h:49-51`) |

@@ -82,11 +82,47 @@ TEST(after_computes_target_from_now) {
     teardown();
 }
 
-TEST(after_overflow_fails) {
+/* Rust's deadline arithmetic saturates (Sleep::after, time/sleep.rs:458-459:
+ * now.saturating_add_nanos(duration)): a target that overflows the clock is
+ * the last representable time, not an error. */
+TEST(after_saturates_at_the_last_representable_time) {
     asx_deadline dl;
     setup();
     asx_vtime_init(&g_vt, UINT64_MAX - 1u, 1u);
-    ASSERT_EQ(asx_deadline_after(&dl, 2u), ASX_E_TIMER_DURATION_EXCEEDED);
+    ASSERT_EQ(asx_deadline_after(&dl, 2u), ASX_OK);
+    ASSERT_EQ(asx_deadline_target(&dl), (asx_time)UINT64_MAX);
+    asx_vtime_init(&g_vt, 5u, 1u);
+    ASSERT_EQ(asx_deadline_after(&dl, UINT64_MAX), ASX_OK);
+    ASSERT_EQ(asx_deadline_target(&dl), (asx_time)UINT64_MAX);
+    /* An exact fit is not saturated. */
+    asx_vtime_init(&g_vt, 10u, 1u);
+    ASSERT_EQ(asx_deadline_after(&dl, UINT64_MAX - 10u), ASX_OK);
+    ASSERT_EQ(asx_deadline_target(&dl), (asx_time)UINT64_MAX);
+    asx_vtime_init(&g_vt, 10u, 1u);
+    ASSERT_EQ(asx_deadline_after(&dl, 100u), ASX_OK);
+    ASSERT_EQ(asx_deadline_target(&dl), (asx_time)110u);
+    teardown();
+}
+
+/* A saturated target registers like any far deadline: the wheel clamps it
+ * to the 7-day maximum from now, and the owner finds the true target has
+ * not come. */
+TEST(saturated_deadline_arms_and_clamps_to_the_maximum) {
+    asx_deadline dl;
+    asx_timer_wheel *wheel;
+    void *fired[2];
+    const asx_time start = 1000000ULL; /* 1 ms: the wheel's time is 1 ms */
+    setup();
+    wheel = asx_timer_wheel_global();
+    asx_timer_wheel_reset(wheel);
+    asx_vtime_init(&g_vt, start, 1u);
+    ASSERT_EQ(asx_deadline_after(&dl, UINT64_MAX), ASX_OK);
+    ASSERT_EQ(asx_deadline_target(&dl), (asx_time)UINT64_MAX);
+    ASSERT_EQ(asx_deadline_arm(&dl, NULL), ASX_OK);
+    ASSERT_EQ(asx_timer_collect_expired(wheel, start + ASX_TIMER_MAX_DURATION_NS - 1u, fired, 2u),
+              0u);
+    ASSERT_EQ(asx_timer_collect_expired(wheel, start + ASX_TIMER_MAX_DURATION_NS, fired, 2u), 1u);
+    ASSERT_FALSE(asx_deadline_is_expired_at(&dl, start + ASX_TIMER_MAX_DURATION_NS));
     teardown();
 }
 
@@ -275,7 +311,8 @@ int main(void) {
     RUN_TEST(init_sets_target);
     RUN_TEST(after_null_fails);
     RUN_TEST(after_computes_target_from_now);
-    RUN_TEST(after_overflow_fails);
+    RUN_TEST(after_saturates_at_the_last_representable_time);
+    RUN_TEST(saturated_deadline_arms_and_clamps_to_the_maximum);
 
     /* Arm / Disarm */
     RUN_TEST(arm_null_fails);
