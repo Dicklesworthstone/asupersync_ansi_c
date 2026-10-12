@@ -7,7 +7,7 @@
 #   - untouched copy                         -> compare PASS
 #   - one expected observation edited        -> ERROR (digest does not recompute)
 #   - provenance.producer not tools/twin_run -> ERROR (not a Rust capture)
-# Requires jq and rebuilds build/bin/asx-conformance from source. Logs JSONL
+# Requires jq and rebuilds the configured asx-conformance from source. Logs JSONL
 # to build/test-logs/gates.jsonl. Nothing is deleted.
 set -uo pipefail
 
@@ -17,7 +17,11 @@ RUN_ID="authenticity-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 WORK="$REPO_ROOT/build/test-gates/$RUN_ID"
 LOG_DIR="$REPO_ROOT/build/test-logs"
 LOG="$LOG_DIR/gates.jsonl"
-RUNNER="$REPO_ROOT/build/bin/asx-conformance"
+GATE_BUILD_DIR="${BUILD_DIR:-build}"
+case "$GATE_BUILD_DIR" in
+    /*) RUNNER="$GATE_BUILD_DIR/bin/asx-conformance" ;;
+    *) RUNNER="$REPO_ROOT/$GATE_BUILD_DIR/bin/asx-conformance" ;;
+esac
 SOURCE="$REPO_ROOT/fixtures/rust_reference_v2/oneshot-send-recv-001.json"
 mkdir -p "$WORK" "$LOG_DIR"
 
@@ -50,7 +54,8 @@ run_case() {
 echo "=== test_fixture_authenticity ($RUN_ID) ==="
 # A runnable cached binary can belong to an older source revision. Make's
 # conformance-lib dependency rebuilds and links the current runtime first.
-make -C "$REPO_ROOT" --no-print-directory build/bin/asx-conformance >"$WORK/build.log" 2>&1 || {
+make -C "$REPO_ROOT" --no-print-directory BUILD_DIR="$GATE_BUILD_DIR" \
+    "$GATE_BUILD_DIR/bin/asx-conformance" >"$WORK/build.log" 2>&1 || {
     echo "test_fixture_authenticity: cannot build the runner (log $WORK/build.log)"
     exit 1
 }
