@@ -526,7 +526,7 @@ A transition from `prev` to `next` is valid when ALL hold (Rust `validate_transi
 
 ## 7. Outcome Severity Lattice
 
-> **Superseded by `asupersync_v4_formal_semantics.md` §1.2 (`def.outcome.four_valued` #29, `def.outcome.severity_lattice` #30, `def.outcome.join_semantics` #31), §3.3 `CLOSE-COMPLETE` (#26) and §7 LAW-JOIN-ASSOC (`law.join.assoc` #42); C status: see C_REFINEMENT_MAP.md rows `def.outcome.four_valued`, `def.outcome.severity_lattice`, `def.outcome.join_semantics` (Partial), `rule.region.close_complete` (Partial), `law.join.assoc` (Partial).** Rust `Outcome` (`src/types/outcome.rs:218`) carries a payload; C `asx_outcome` (`include/asx/core/outcome.h:21`) holds only the severity, the cancel reason and panic message staying on the task record (`bd-9kll.3.14`).
+> **Superseded by `asupersync_v4_formal_semantics.md` §1.2 (`def.outcome.four_valued` #29, `def.outcome.severity_lattice` #30, `def.outcome.join_semantics` #31), §3.3 `CLOSE-COMPLETE` (#26) and §7 LAW-JOIN-ASSOC (`law.join.assoc` #42); C status: see C_REFINEMENT_MAP.md rows `def.outcome.four_valued`, `def.outcome.severity_lattice`, `def.outcome.join_semantics` (Implemented), `rule.region.close_complete` (Partial), `law.join.assoc` (Partial).** Rust `Outcome` (`src/types/outcome.rs:218`) carries a payload; C `asx_outcome` (`include/asx/core/outcome.h:38`) carries the severity plus the cancel reason of a Cancelled outcome and the panic message of a Panicked one (`bd-9kll.3.14`); an Err's status stays on the task.
 
 ### 7.1 Severity Ordering
 
