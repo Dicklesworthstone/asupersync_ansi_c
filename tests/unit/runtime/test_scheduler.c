@@ -596,7 +596,8 @@ int main(void) {
     RUN_TEST(scheduler_polls_three_priorities_highest_first_arena_order_within_one);
     RUN_TEST(scheduler_polls_the_cancel_lane_before_the_ready_lane);
     RUN_TEST(scheduler_orders_the_cancel_lane_by_cleanup_priority);
-    RUN_TEST(scheduler_cancel_streak_gives_ready_work_a_turn);
+    RUN_TEST_IF(ASX_MAX_TASKS >= 19u, scheduler_cancel_streak_gives_ready_work_a_turn,
+                "needs 19 tasks: 16 cancel polls in a row, the ready task, two more");
     RUN_TEST(scheduler_polls_a_task_spawned_in_a_round_in_that_round);
 
     TEST_REPORT();
