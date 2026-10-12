@@ -559,12 +559,46 @@ fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
     }
 }
 
-/// A supervisor of one to three children running small programs (no
-/// names of their own, which a restart would repeat; DSL §3.8), one in ten
-/// ending in a panic. Its restarts are bounded: every refused restart stops
-/// its child (or escalates), so it ends once its children do.
+/// A supervised child's program that creates names: a spawned child it
+/// joins, a server it uses and stops, or (only where the child runs once, so
+/// the number of supervisors stays within the arena) a nested supervisor it
+/// joins. The names (`w`, `s`, `n`, `k`) are each generation's own: the
+/// interpreters scope them under the generation's name (DSL §3.8), so a
+/// restart does not repeat them.
+fn rich_child_program(rng: &mut Rng, runs_once: bool) -> Vec<Value> {
+    match rng.below(if runs_once { 3 } else { 2 }) {
+        0 => vec![
+            json!({"op": "spawn", "as": "w", "program": child_program(rng)}),
+            json!({"op": "yield"}),
+            json!({"op": "join", "task": "w"}),
+        ],
+        1 => vec![
+            json!({"op": "server_spawn", "as": "s", "behavior": "counter", "mailbox": 2}),
+            json!({"op": "cast", "server": "s", "value": 1}),
+            json!({"op": "call", "server": "s", "request": 0}),
+            json!({"op": "server_stop", "server": "s"}),
+        ],
+        _ => vec![
+            json!({"op": "supervise", "as": "n", "policy": "one_for_one", "max_restarts": 1,
+                   "window_ns": 60_000_000_000u64,
+                   "children": [{"name": "k", "mode": "transient", "program": child_program(rng)}]}),
+            json!({"op": "supervisor_join", "supervisor": "n"}),
+        ],
+    }
+}
+
+/// A supervisor of one to three children running small programs, one in ten
+/// ending in a panic, and one in four creating names of its own (see
+/// [`rich_child_program`]). Its restarts are bounded: every refused restart
+/// stops its child (or escalates), so it ends once its children do.
+///
+/// Which children are rich is drawn from a stream derived from the main
+/// one's position without consuming it, so the main stream, and every
+/// scenario without a rich child, is what it was.
 fn supervise_step(rng: &mut Rng, name: &str) -> Value {
     let policy = *rng.pick(&["one_for_one", "one_for_all", "rest_for_one"]);
+    let mut rich = Rng::new(rng.state ^ 0x5C09_ED07_A11E_0001);
+    rich.quantum = rng.quantum;
     let mut children = Vec::new();
     for i in 0..1 + rng.below(3) {
         let mut program = child_program(rng);
@@ -573,9 +607,13 @@ fn supervise_step(rng: &mut Rng, name: &str) -> Value {
                 json!({"op": "return", "outcome": {"tag": "panicked", "message": "child panic"}}),
             );
         }
+        let mode = *rng.pick(&["permanent", "transient", "temporary"]);
+        if rich.chance(25) {
+            program = rich_child_program(&mut rich, mode == "temporary");
+        }
         children.push(json!({
             "name": format!("c{}", i + 1),
-            "mode": *rng.pick(&["permanent", "transient", "temporary"]),
+            "mode": mode,
             "program": program,
         }));
     }

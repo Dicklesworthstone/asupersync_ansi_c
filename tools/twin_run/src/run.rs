@@ -42,11 +42,15 @@ use crate::canon;
 pub type RunResult<T> = Result<T, String>;
 
 /// What a task body returns. Cancellation and panics are not values: the
-/// runtime reports them through the task handle (`JoinError`).
+/// runtime reports them through the task handle (`JoinError`). The one
+/// exception is a supervised child's body, whose factory future returns an
+/// `Outcome` and so can return `Outcome::Cancelled(reason)` itself (DSL
+/// §3.8, `return cancelled`).
 #[derive(Debug)]
 pub enum Body {
     Ok,
     Err(String),
+    Cancelled(CancelReason),
 }
 
 /// State shared between the driver and every interpreted task body.
@@ -364,7 +368,7 @@ fn project_outcome(shared: &Shared, result: Result<Body, JoinError>) -> RunResul
     Ok(match result {
         Ok(Body::Ok) => json!({"tag": "ok"}),
         Ok(Body::Err(status)) => json!({"tag": "err", "status": status}),
-        Err(JoinError::Cancelled(reason)) => {
+        Ok(Body::Cancelled(reason)) | Err(JoinError::Cancelled(reason)) => {
             json!({"tag": "cancelled", "reason": project_reason(shared, &reason)?})
         }
         Err(JoinError::Panicked(payload)) => {
@@ -599,32 +603,115 @@ fn generation_binding(
                 region: name,
                 tokens: Arc::default(),
             });
-            let program = program.clone();
+            // The names the program creates are this generation's own
+            // (DSL §3.8): scoped under its name before it runs.
+            let program = scope_program(&program, &ctx.me);
             async move {
                 match run_program(ccx, ctx, program, Vec::new()).await {
                     Body::Ok => asupersync::Outcome::Ok(()),
                     Body::Err(status) => asupersync::Outcome::Err(status),
+                    Body::Cancelled(reason) => asupersync::Outcome::Cancelled(reason),
                 }
             }
         },
     )
 }
 
-/// The first step in a program, or in the member programs of its steps,
-/// that names a task, region, server or supervisor by `as` (DSL §3.8).
-fn naming_step(program: &Value) -> Option<String> {
-    for step in program.as_array()? {
+/// Whether a step of this `op` names a task, region, server or supervisor
+/// with `as`.
+fn creates_name(op: &str) -> bool {
+    matches!(op, "spawn" | "open_region" | "server_spawn" | "supervise")
+}
+
+/// The names the steps of `program` create (their `as`), into `out`: those
+/// of member programs, masked steps and spawned children's programs
+/// included, but not those of a nested supervisor's children, which run
+/// generations of their own and are scoped by them.
+fn collect_created(program: &[Value], out: &mut HashSet<String>) {
+    for step in program {
         let op = step.get("op").and_then(Value::as_str).unwrap_or("");
-        if matches!(op, "spawn" | "open_region" | "server_spawn" | "supervise") {
-            return Some(op.to_string());
-        }
-        if let Some(members) = step.get("members").and_then(Value::as_array)
-            && let Some(op) = members.iter().find_map(naming_step)
+        if creates_name(op)
+            && let Some(name) = step.get("as").and_then(Value::as_str)
         {
-            return Some(op);
+            out.insert(name.to_string());
+        }
+        for members in step
+            .get("members")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if let Some(member) = members.as_array() {
+                collect_created(member, out);
+            }
+        }
+        if let Some(steps) = step.get("steps").and_then(Value::as_array) {
+            collect_created(steps, out);
+        }
+        if op == "spawn"
+            && let Some(child) = step.get("program").and_then(Value::as_array)
+        {
+            collect_created(child, out);
         }
     }
-    None
+}
+
+/// One step with its names scoped (see [`scope_program`]).
+fn scope_step(step: &Value, scope: &str, created: &HashSet<String>) -> Value {
+    let Some(object) = step.as_object() else {
+        return step.clone();
+    };
+    let op = step.get("op").and_then(Value::as_str).unwrap_or("");
+    let mut out = serde_json::Map::new();
+    for (key, value) in object {
+        let scoped = match (key.as_str(), value) {
+            ("as", Value::String(name)) if creates_name(op) => json!(format!("{scope}/{name}")),
+            ("task" | "region" | "server" | "supervisor", Value::String(name))
+                if created.contains(name) =>
+            {
+                json!(format!("{scope}/{name}"))
+            }
+            ("members", Value::Array(members)) => Value::Array(
+                members
+                    .iter()
+                    .map(|member| match member.as_array() {
+                        Some(program) => Value::Array(scope_steps(program, scope, created)),
+                        None => member.clone(),
+                    })
+                    .collect(),
+            ),
+            ("steps", Value::Array(steps)) => Value::Array(scope_steps(steps, scope, created)),
+            ("program", Value::Array(program)) if op == "spawn" => {
+                Value::Array(scope_steps(program, scope, created))
+            }
+            _ => value.clone(),
+        };
+        out.insert(key.clone(), scoped);
+    }
+    Value::Object(out)
+}
+
+fn scope_steps(program: &[Value], scope: &str, created: &HashSet<String>) -> Vec<Value> {
+    program
+        .iter()
+        .map(|step| scope_step(step, scope, created))
+        .collect()
+}
+
+/// A supervised generation's program with the names it creates scoped under
+/// the generation's name (DSL §3.8): every `as` of a `spawn`, `open_region`,
+/// `server_spawn` or `supervise` becomes `<scope>/<as>`, and so does every
+/// `task`, `region`, `server` or `supervisor` reference to such a name in
+/// the same program. A name the program does not create (a scenario-level
+/// region or task) is left alone. The C interpreter's `scope_steps` does the
+/// same to the same JSON.
+fn scope_program(program: &[Value], scope: &str) -> Vec<Value> {
+    let mut created = HashSet::new();
+    collect_created(program, &mut created);
+    if created.is_empty() {
+        return program.to_vec();
+    }
+    scope_steps(program, scope, &created)
 }
 
 /// The ChildStart a managed binding never invokes: the compiled topology
@@ -1952,9 +2039,42 @@ async fn exec_step(
         "return" => {
             let outcome = step.get("outcome").ok_or("return without outcome")?;
             observe(&ctx.shared, me, idx, op, "ASX_OK", Value::Null);
+            let supervised = lock(&ctx.shared).supervised.contains(me);
             return Ok(Flow::Return(match str_field(outcome, "tag")? {
                 "ok" => Body::Ok,
-                "err" => Body::Err(str_field(outcome, "status")?.to_string()),
+                "err" => {
+                    let status = str_field(outcome, "status")?;
+                    // The C body ends ASX_E_CANCELLED for Outcome::Cancelled,
+                    // so the two cannot be told apart there (DSL §3.8).
+                    if supervised && status == "ASX_E_CANCELLED" {
+                        return Err(
+                            "a supervised child returns Cancelled with tag cancelled, not err"
+                                .to_string(),
+                        );
+                    }
+                    Body::Err(status.to_string())
+                }
+                // The factory future's Outcome::Cancelled(reason): only a
+                // supervised generation's body returns one (DSL §3.8). Its
+                // reason is cx.cancel_reason() when a cancel reached the
+                // generation, else a User reason attributed to it (§4).
+                "cancelled" => {
+                    if !supervised {
+                        return Err(
+                            "return cancelled outside a supervised child's program".to_string()
+                        );
+                    }
+                    let reason = match cx.cancel_reason() {
+                        Some(reason) => reason,
+                        None => cancel_reason(
+                            &json!({"kind": "User"}),
+                            cx.region_id(),
+                            Some(cx.task_id()),
+                            cx.now(),
+                        )?,
+                    };
+                    Body::Cancelled(reason)
+                }
                 // The DSL step *is* a panic; the runtime catches it and
                 // reports JoinError::Panicked with this message.
                 "panicked" => std::panic::panic_any(str_field(outcome, "message")?.to_string()),
@@ -2022,6 +2142,8 @@ async fn exec_step(
                         match run_program(ccx, child_ctx, program, Vec::new()).await {
                             Body::Ok => Ok(()),
                             Body::Err(status) => Err(status),
+                            // Only a supervised generation returns it.
+                            Body::Cancelled(_) => Err("ASX_E_CANCELLED".to_string()),
                         }
                     }
                 })
@@ -2128,6 +2250,8 @@ async fn exec_step(
                             match run_program(ccx, child_ctx, program, Vec::new()).await {
                                 Body::Ok => Ok(()),
                                 Body::Err(status) => Err(status),
+                                // Only a supervised generation returns it.
+                                Body::Cancelled(_) => Err("ASX_E_CANCELLED".to_string()),
                             }
                         }
                     }
@@ -2317,11 +2441,6 @@ async fn exec_step(
             let mut bindings = Vec::with_capacity(children.len());
             for child in children {
                 let child_name = str_field(child, "name")?.to_string();
-                if let Some(op) = child.get("program").and_then(naming_step) {
-                    return Err(format!(
-                        "supervised child {child_name:?} uses {op:?}, whose name a restart would reuse (DSL §3.8)"
-                    ));
-                }
                 let mode = match str_field(child, "mode")? {
                     "permanent" => ManagedRestartMode::Permanent,
                     "transient" => ManagedRestartMode::Transient,
