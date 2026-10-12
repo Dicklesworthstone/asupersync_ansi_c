@@ -701,6 +701,11 @@ Closed (each verified by a fixture that now matches):
   `asx_channel_recv_many` (one parked producer woken per freed slot) and
   `asx_channel_closed` (woken by `asx_channel_seal` and
   `asx_channel_close_receiver`). Generated scenarios use all three.
+- **Owner-cancelled race and quorum take the owner Cx's reason**
+  (bd-lfwh, bd-uyd3): Rust's `cx.cancel_reason()`, which can be ahead of
+  the task record's after a tie (`race-owner-cancel-cx-reason-001`,
+  `race-deadline-wrapper-cx-reason-001`, from fuzz cases gen-622-100 and
+  gen-667-113).
 - **Broadcast senders, receiver counts and wake order** (bd-9kll.5.6):
   broadcast `senders` clones; `broadcast_send` observes the receivers it
   reached; parked receivers are woken in the order of Rust's waker Arena

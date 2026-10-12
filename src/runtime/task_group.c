@@ -264,7 +264,13 @@ static void group_decide(asx_task_group *g, asx_task_slot *owner, asx_task_id se
     }
     if (owner_cancelled) {
         g->owner_cancelled = 1u;
-        g->owner_reason = owner->cancel_reason;
+        /* Rust takes cx.cancel_reason() (race_all, cx/scope.rs:1365-1367;
+         * quorum, :1886-1887): the Cx's own reason, which a tie with a later
+         * request leaves ahead of the record's (a budget deadline over a
+         * region's Timeout). */
+        if (asx_task_get_cx_cancel_reason_internal(self, &g->owner_reason) != ASX_OK) {
+            g->owner_reason = owner->cancel_reason;
+        }
         group_begin_drain(g, ASX_CANCEL_PARENT, ASX_E_CANCELLED, 1);
         return;
     }
