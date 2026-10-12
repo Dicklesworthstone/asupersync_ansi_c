@@ -832,6 +832,7 @@ TEST(forged_permit_send_rejected) {
     forged.channel_id = ch;
     forged.token = 0xC0FFEEu;
     forged.consumed = 0;
+    forged.obligation = ASX_INVALID_ID;
 
     ASSERT_EQ(asx_send_permit_send(&forged, 123u), ASX_E_INVALID_STATE);
     ASSERT_EQ(forged.consumed, 1);
