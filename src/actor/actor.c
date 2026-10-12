@@ -827,6 +827,204 @@ void asx_actor_op_drop(asx_actor_handle actor, asx_actor_op *op) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Names (cx/registry.rs NameRegistry and NameLease)                   */
+/* ------------------------------------------------------------------ */
+
+/* The index of the entry holding `name`, or ASX_NAME_REGISTRY_CAPACITY. */
+static uint32_t name_index(const asx_name_registry *registry, const char *name) {
+    uint32_t i;
+    for (i = 0; i < ASX_NAME_REGISTRY_CAPACITY; i++) {
+        if (registry->entries[i].in_use && strcmp(registry->entries[i].name, name) == 0) break;
+    }
+    return i;
+}
+
+static int region_is_root(asx_region_id region) {
+    asx_region_slot *r;
+    return asx_region_slot_lookup(region, &r) == ASX_OK && r->parent_id == ASX_INVALID_ID;
+}
+
+asx_status asx_name_registry_init(asx_name_registry *registry) {
+    if (registry == NULL) return ASX_E_INVALID_ARGUMENT;
+    memset(registry, 0, sizeof(*registry));
+    return ASX_OK;
+}
+
+asx_status asx_name_register(asx_name_registry *registry, const char *name, asx_task_id holder,
+                             asx_region_id region, asx_time now, asx_name_lease *out_lease,
+                             asx_task_id *current_holder) {
+    asx_name_entry *slot;
+    uint32_t taken;
+    uint32_t i;
+
+    if (registry == NULL || name == NULL || out_lease == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (strlen(name) > ASX_NAME_MAX_LEN) return ASX_E_INVALID_ARGUMENT;
+
+    taken = name_index(registry, name);
+    if (taken < ASX_NAME_REGISTRY_CAPACITY) {
+        if (current_holder != NULL) *current_holder = registry->entries[taken].holder;
+        return ASX_E_NAME_CONFLICT;
+    }
+    /* The lease is minted before the table changes (:822): a root-region
+     * holder panics there, and the registry stays as it was. */
+    if (region_is_root(region)) return ASX_E_INVALID_ARGUMENT;
+    for (i = 0; i < ASX_NAME_REGISTRY_CAPACITY; i++) {
+        if (!registry->entries[i].in_use) break;
+    }
+    if (i >= ASX_NAME_REGISTRY_CAPACITY) return ASX_E_RESOURCE_EXHAUSTED;
+
+    slot = &registry->entries[i];
+    memset(slot, 0, sizeof(*slot));
+    memcpy(slot->name, name, strlen(name));
+    slot->holder = holder;
+    slot->region = region;
+    slot->acquired_at = now;
+    slot->in_use = 1;
+    registry->count++;
+
+    memset(out_lease, 0, sizeof(*out_lease));
+    memcpy(out_lease->name, name, strlen(name));
+    out_lease->holder = holder;
+    out_lease->region = region;
+    out_lease->acquired_at = now;
+    out_lease->active = 1;
+    return ASX_OK;
+}
+
+asx_status asx_name_whereis(const asx_name_registry *registry, const char *name,
+                            asx_task_id *out_holder) {
+    uint32_t i;
+    if (registry == NULL || name == NULL || out_holder == NULL) return ASX_E_INVALID_ARGUMENT;
+    i = name_index(registry, name);
+    if (i >= ASX_NAME_REGISTRY_CAPACITY) return ASX_E_NOT_FOUND;
+    *out_holder = registry->entries[i].holder;
+    return ASX_OK;
+}
+
+static void name_drop(asx_name_registry *registry, uint32_t index) {
+    memset(&registry->entries[index], 0, sizeof(registry->entries[index]));
+    registry->count--;
+}
+
+asx_status asx_name_unregister(asx_name_registry *registry, const char *name, asx_task_id caller) {
+    uint32_t i;
+    if (registry == NULL || name == NULL) return ASX_E_INVALID_ARGUMENT;
+    i = name_index(registry, name);
+    if (i >= ASX_NAME_REGISTRY_CAPACITY) return ASX_E_NOT_FOUND;
+    if (registry->entries[i].holder != caller) return ASX_E_PERMISSION_DENIED;
+    name_drop(registry, i);
+    return ASX_OK;
+}
+
+asx_status asx_name_unregister_owned(asx_name_registry *registry, const asx_name_lease *lease,
+                                     asx_time now) {
+    const asx_name_entry *e;
+    uint32_t i;
+    (void)now; /* only a waiter's grant reads it, and none is ported */
+    if (registry == NULL || lease == NULL) return ASX_E_INVALID_ARGUMENT;
+    i = name_index(registry, lease->name);
+    if (i >= ASX_NAME_REGISTRY_CAPACITY) return ASX_E_NOT_FOUND;
+    e = &registry->entries[i];
+    if (e->holder != lease->holder || e->region != lease->region ||
+        e->acquired_at != lease->acquired_at) {
+        return ASX_E_PERMISSION_DENIED;
+    }
+    name_drop(registry, i);
+    return ASX_OK;
+}
+
+uint32_t asx_name_cleanup_region(asx_name_registry *registry, asx_region_id region) {
+    uint32_t i;
+    uint32_t removed = 0u;
+    if (registry == NULL) return 0u;
+    for (i = 0; i < ASX_NAME_REGISTRY_CAPACITY; i++) {
+        if (registry->entries[i].in_use && registry->entries[i].region == region) {
+            name_drop(registry, i);
+            removed++;
+        }
+    }
+    return removed;
+}
+
+uint32_t asx_name_cleanup_task(asx_name_registry *registry, asx_task_id task) {
+    uint32_t i;
+    uint32_t removed = 0u;
+    if (registry == NULL) return 0u;
+    for (i = 0; i < ASX_NAME_REGISTRY_CAPACITY; i++) {
+        if (registry->entries[i].in_use && registry->entries[i].holder == task) {
+            name_drop(registry, i);
+            removed++;
+        }
+    }
+    return removed;
+}
+
+uint32_t asx_name_registry_count(const asx_name_registry *registry) {
+    return registry != NULL ? registry->count : 0u;
+}
+
+int asx_name_lease_is_active(const asx_name_lease *lease) { return lease != NULL && lease->active; }
+
+asx_status asx_name_lease_release(asx_name_lease *lease) {
+    if (lease == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (!lease->active) return ASX_E_OBLIGATION_ALREADY_RESOLVED;
+    lease->active = 0;
+    return ASX_OK;
+}
+
+asx_status asx_name_lease_abort(asx_name_lease *lease) {
+    /* Commit and abort both resolve the token; the proofs differ in type
+     * only (:199, :214). */
+    return asx_name_lease_release(lease);
+}
+
+asx_status asx_actor_spawn_named(asx_named_actor *out, asx_name_registry *registry,
+                                 const char *name, asx_region_id region,
+                                 const asx_actor_behavior *behavior, void *state,
+                                 uint32_t mailbox_capacity, asx_time now) {
+    asx_task_id task = ASX_INVALID_ID;
+    asx_status st;
+
+    if (out == NULL || registry == NULL || name == NULL || behavior == NULL) {
+        return ASX_E_INVALID_ARGUMENT;
+    }
+    if (strlen(name) > ASX_NAME_MAX_LEN) return ASX_E_INVALID_ARGUMENT;
+    if (name_index(registry, name) < ASX_NAME_REGISTRY_CAPACITY) return ASX_E_NAME_CONFLICT;
+    if (region_is_root(region)) return ASX_E_INVALID_ARGUMENT;
+    if (registry->count >= ASX_NAME_REGISTRY_CAPACITY) return ASX_E_RESOURCE_EXHAUSTED;
+
+    st = asx_actor_spawn(&out->actor, region, behavior, state, mailbox_capacity);
+    if (st != ASX_OK) return st;
+    /* A server whose admission the lab refused has no task to hold a name. */
+    if (asx_actor_task_id(out->actor, &task) != ASX_OK) return ASX_E_REGION_CLOSED;
+    return asx_name_register(registry, name, task, region, now, &out->lease, NULL);
+}
+
+/* The common end of release_name and abort_lease (:2693-2715): the lease
+ * names an entry the registry may no longer hold; either way the lease is
+ * resolved, and a registry error is the result. */
+static asx_status named_resolve(asx_named_actor *named, asx_name_registry *registry, asx_time now) {
+    asx_status st = asx_name_unregister_owned(registry, &named->lease, now);
+    named->lease.active = 0;
+    return st;
+}
+
+asx_status asx_named_actor_release_name(asx_named_actor *named, asx_name_registry *registry,
+                                        asx_time now) {
+    if (named == NULL || registry == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (!named->lease.active) return ASX_E_OBLIGATION_ALREADY_RESOLVED;
+    if (asx_actor_is_alive(named->actor)) return ASX_E_TASKS_STILL_ACTIVE;
+    return named_resolve(named, registry, now);
+}
+
+asx_status asx_named_actor_abort_lease(asx_named_actor *named, asx_name_registry *registry,
+                                       asx_time now) {
+    if (named == NULL || registry == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (!named->lease.active) return ASX_E_OBLIGATION_ALREADY_RESOLVED;
+    return named_resolve(named, registry, now);
+}
+
+/* ------------------------------------------------------------------ */
 /* Runtime integration                                                 */
 /* ------------------------------------------------------------------ */
 

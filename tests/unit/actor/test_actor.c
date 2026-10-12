@@ -829,6 +829,318 @@ static void test_failing_init_panics_the_server(void) {
 /* ------------------------------------------------------------------ */
 
 /* ------------------------------------------------------------------ */
+/* Names (cx/registry.rs, gen_server.rs spawn_named_gen_server)        */
+/* ------------------------------------------------------------------ */
+
+/* A task id that no server or client uses: registry tests need only a
+ * holder identity, as Rust's tests use TaskId::new_for_test. */
+static asx_task_id fake_task(uint32_t n) { return (asx_task_id)(0x7000u + n); }
+
+static void test_register_and_whereis(void) {
+    asx_name_registry reg;
+    asx_name_lease lease;
+    asx_region_id r;
+    asx_task_id holder = ASX_INVALID_ID;
+    setup();
+    r = child_region();
+    ASSERT(asx_name_registry_init(&reg) == ASX_OK, "init");
+    ASSERT(asx_name_whereis(&reg, "svc", &holder) == ASX_E_NOT_FOUND, "nothing registered");
+    ASSERT(asx_name_register(&reg, "svc", fake_task(1), r, 5u, &lease, NULL) == ASX_OK,
+           "a free name registers");
+    ASSERT(asx_name_lease_is_active(&lease), "its lease is active");
+    ASSERT(strcmp(lease.name, "svc") == 0 && lease.holder == fake_task(1) && lease.region == r &&
+               lease.acquired_at == 5u,
+           "and records the holder, region and time");
+    ASSERT(asx_name_whereis(&reg, "svc", &holder) == ASX_OK && holder == fake_task(1),
+           "whereis finds the holder");
+    ASSERT(asx_name_registry_count(&reg) == 1u, "one entry");
+}
+
+static void test_taken_name_is_refused_and_changes_nothing(void) {
+    asx_name_registry reg;
+    asx_name_lease first;
+    asx_name_lease second;
+    asx_region_id r;
+    asx_task_id current = ASX_INVALID_ID;
+    asx_task_id holder = ASX_INVALID_ID;
+    setup();
+    r = child_region();
+    MUST_OK(asx_name_registry_init(&reg));
+    ASSERT(asx_name_register(&reg, "svc", fake_task(1), r, 0u, &first, NULL) == ASX_OK, "first");
+    ASSERT(asx_name_register(&reg, "svc", fake_task(2), r, 9u, &second, &current) ==
+               ASX_E_NAME_CONFLICT,
+           "a second registration of the name is refused (NameTaken)");
+    ASSERT(current == fake_task(1), "with the current holder");
+    ASSERT(!asx_name_lease_is_active(&second), "no lease was minted");
+    ASSERT(asx_name_whereis(&reg, "svc", &holder) == ASX_OK && holder == fake_task(1),
+           "the entry is the first holder's");
+    ASSERT(asx_name_registry_count(&reg) == 1u, "and there is still one");
+}
+
+static void test_unregister_checks_the_caller_and_the_lease_identity(void) {
+    asx_name_registry reg;
+    asx_name_lease lease;
+    asx_name_lease forged;
+    asx_region_id r;
+    asx_task_id holder = ASX_INVALID_ID;
+    setup();
+    r = child_region();
+    MUST_OK(asx_name_registry_init(&reg));
+    MUST_OK(asx_name_register(&reg, "svc", fake_task(1), r, 3u, &lease, NULL));
+
+    ASSERT(asx_name_unregister(&reg, "nope", fake_task(1)) == ASX_E_NOT_FOUND, "unknown name");
+    ASSERT(asx_name_unregister(&reg, "svc", fake_task(2)) == ASX_E_PERMISSION_DENIED,
+           "only the holder unregisters");
+    forged = lease;
+    forged.acquired_at = 4u;
+    ASSERT(asx_name_unregister_owned(&reg, &forged, 0u) == ASX_E_PERMISSION_DENIED,
+           "a lease with another identity frees nothing");
+    ASSERT(asx_name_whereis(&reg, "svc", &holder) == ASX_OK, "the entry survived both");
+
+    ASSERT(asx_name_unregister_owned(&reg, &lease, 0u) == ASX_OK, "the lease's owner frees it");
+    ASSERT(asx_name_whereis(&reg, "svc", &holder) == ASX_E_NOT_FOUND, "the name is free");
+    ASSERT(asx_name_unregister_owned(&reg, &lease, 0u) == ASX_E_NOT_FOUND, "once");
+    ASSERT(asx_name_unregister(&reg, "svc", fake_task(1)) == ASX_E_NOT_FOUND, "and by name too");
+}
+
+static void test_a_lease_resolves_once_and_leaves_the_registry_alone(void) {
+    asx_name_registry reg;
+    asx_name_lease lease;
+    asx_region_id r;
+    asx_task_id holder = ASX_INVALID_ID;
+    setup();
+    r = child_region();
+    MUST_OK(asx_name_registry_init(&reg));
+    MUST_OK(asx_name_register(&reg, "svc", fake_task(1), r, 0u, &lease, NULL));
+    ASSERT(asx_name_lease_release(&lease) == ASX_OK, "release commits");
+    ASSERT(!asx_name_lease_is_active(&lease), "and resolves");
+    ASSERT(asx_name_lease_release(&lease) == ASX_E_OBLIGATION_ALREADY_RESOLVED, "once");
+    ASSERT(asx_name_lease_abort(&lease) == ASX_E_OBLIGATION_ALREADY_RESOLVED, "abort too");
+    ASSERT(asx_name_whereis(&reg, "svc", &holder) == ASX_OK,
+           "resolving the lease does not free the name (registry.rs:192)");
+}
+
+static void test_root_region_holder_and_full_registry_are_refused(void) {
+    asx_name_registry reg;
+    asx_name_lease lease;
+    asx_region_id r;
+    char name[8];
+    uint32_t i;
+    setup();
+    r = child_region();
+    MUST_OK(asx_name_registry_init(&reg));
+    ASSERT(asx_name_register(&reg, "svc", fake_task(1), g_root, 0u, &lease, NULL) ==
+               ASX_E_INVALID_ARGUMENT,
+           "a root-region holder cannot mint a lease ([ASUP-E103])");
+    ASSERT(asx_name_registry_count(&reg) == 0u, "and the registry is unchanged");
+
+    for (i = 0; i < ASX_NAME_REGISTRY_CAPACITY; i++) {
+        (void)snprintf(name, sizeof(name), "n%u", (unsigned)i);
+        ASSERT(asx_name_register(&reg, name, fake_task(i), r, 0u, &lease, NULL) == ASX_OK,
+               "names up to the capacity register");
+    }
+    ASSERT(asx_name_register(&reg, "extra", fake_task(99), r, 0u, &lease, NULL) ==
+               ASX_E_RESOURCE_EXHAUSTED,
+           "the next is refused for want of room");
+    ASSERT(asx_name_unregister(&reg, "n0", fake_task(0)) == ASX_OK, "freeing one");
+    ASSERT(asx_name_register(&reg, "extra", fake_task(99), r, 0u, &lease, NULL) == ASX_OK,
+           "makes room");
+}
+
+static void test_name_arguments_are_checked(void) {
+    asx_name_registry reg;
+    asx_name_lease lease;
+    asx_region_id r;
+    char long_name[ASX_NAME_MAX_LEN + 2u];
+    setup();
+    r = child_region();
+    MUST_OK(asx_name_registry_init(&reg));
+    memset(long_name, 'x', sizeof(long_name));
+    long_name[sizeof(long_name) - 1u] = '\0';
+    ASSERT(asx_name_register(&reg, long_name, fake_task(1), r, 0u, &lease, NULL) ==
+               ASX_E_INVALID_ARGUMENT,
+           "a name over the maximum length");
+    long_name[ASX_NAME_MAX_LEN] = '\0';
+    ASSERT(asx_name_register(&reg, long_name, fake_task(1), r, 0u, &lease, NULL) == ASX_OK,
+           "a name of exactly the maximum length");
+    ASSERT(asx_name_register(NULL, "a", fake_task(1), r, 0u, &lease, NULL) ==
+               ASX_E_INVALID_ARGUMENT,
+           "NULL registry");
+    ASSERT(asx_name_register(&reg, NULL, fake_task(1), r, 0u, &lease, NULL) ==
+               ASX_E_INVALID_ARGUMENT,
+           "NULL name");
+    ASSERT(asx_name_registry_init(NULL) == ASX_E_INVALID_ARGUMENT, "NULL init");
+}
+
+static void test_cleanup_drops_a_regions_and_a_tasks_names(void) {
+    asx_name_registry reg;
+    asx_name_lease lease;
+    asx_region_id a;
+    asx_region_id b;
+    asx_task_id holder = ASX_INVALID_ID;
+    setup();
+    a = child_region();
+    b = child_region();
+    MUST_OK(asx_name_registry_init(&reg));
+    MUST_OK(asx_name_register(&reg, "a1", fake_task(1), a, 0u, &lease, NULL));
+    MUST_OK(asx_name_register(&reg, "a2", fake_task(2), a, 0u, &lease, NULL));
+    MUST_OK(asx_name_register(&reg, "b1", fake_task(3), b, 0u, &lease, NULL));
+    MUST_OK(asx_name_register(&reg, "b2", fake_task(3), b, 0u, &lease, NULL));
+    ASSERT(asx_name_cleanup_region(&reg, a) == 2u, "region a held two names");
+    ASSERT(asx_name_whereis(&reg, "a1", &holder) == ASX_E_NOT_FOUND, "gone");
+    ASSERT(asx_name_whereis(&reg, "b1", &holder) == ASX_OK, "region b's stay");
+    ASSERT(asx_name_cleanup_task(&reg, fake_task(3)) == 2u, "task 3 held two names");
+    ASSERT(asx_name_registry_count(&reg) == 0u, "the registry is empty");
+    ASSERT(asx_name_cleanup_task(&reg, fake_task(3)) == 0u, "nothing left to drop");
+}
+
+/* spawn_named_gen_server: the name belongs to the server's task. */
+static void test_named_server_registers_its_task(void) {
+    asx_name_registry reg;
+    asx_named_actor named;
+    rec_state s;
+    asx_region_id r;
+    asx_task_id tid = ASX_INVALID_ID;
+    asx_task_id holder = ASX_INVALID_ID;
+    setup();
+    r = child_region();
+    memset(&s, 0, sizeof(s));
+    MUST_OK(asx_name_registry_init(&reg));
+    ASSERT(asx_actor_spawn_named(&named, &reg, "counter", r, &g_rec, &s, 4u, 7u) == ASX_OK,
+           "a named server spawns");
+    ASSERT(asx_actor_task_id(named.actor, &tid) == ASX_OK, "it has a task");
+    ASSERT(asx_name_whereis(&reg, "counter", &holder) == ASX_OK && holder == tid,
+           "whereis names the server's task before it has run");
+    ASSERT(named.lease.holder == tid && named.lease.region == r && named.lease.acquired_at == 7u,
+           "the lease is the server's");
+    run(r);
+    MUST_OK(asx_actor_try_cast(named.actor, 4u));
+    run(r);
+    ASSERT(s.casts == 1u && s.sum == 4u, "the server serves its mailbox as any other");
+}
+
+/* How many more servers a region takes before an arena (actors, channels,
+ * tasks) refuses one. */
+static uint32_t spawnable_servers(asx_region_id region) {
+    static rec_state sink;
+    asx_actor_handle h;
+    uint32_t n = 0u;
+    memset(&sink, 0, sizeof(sink));
+    while (n <= ASX_MAX_ACTORS && asx_actor_spawn(&h, region, &g_rec, &sink, 1u) == ASX_OK) n++;
+    return n;
+}
+
+static void test_a_taken_name_spawns_no_server(void) {
+    asx_name_registry reg;
+    asx_named_actor first;
+    asx_named_actor second;
+    rec_state s1;
+    rec_state s2;
+    asx_region_id r;
+    asx_task_id holder = ASX_INVALID_ID;
+    asx_task_id first_task = ASX_INVALID_ID;
+    uint32_t spawnable_without_conflict;
+    uint32_t spawnable_after_conflict;
+    memset(&s1, 0, sizeof(s1));
+    memset(&s2, 0, sizeof(s2));
+
+    /* The baseline: one named server, nothing else tried. */
+    setup();
+    r = child_region();
+    MUST_OK(asx_name_registry_init(&reg));
+    MUST_OK(asx_actor_spawn_named(&first, &reg, "svc", r, &g_rec, &s1, 2u, 0u));
+    spawnable_without_conflict = spawnable_servers(r);
+
+    /* The same, with a refused second spawn of the name in between. */
+    setup();
+    r = child_region();
+    MUST_OK(asx_name_registry_init(&reg));
+    ASSERT(asx_actor_spawn_named(&first, &reg, "svc", r, &g_rec, &s1, 2u, 0u) == ASX_OK, "first");
+    MUST_OK(asx_actor_task_id(first.actor, &first_task));
+    ASSERT(asx_actor_spawn_named(&second, &reg, "svc", r, &g_rec, &s2, 2u, 1u) ==
+               ASX_E_NAME_CONFLICT,
+           "the same name again is refused");
+    ASSERT(asx_name_whereis(&reg, "svc", &holder) == ASX_OK && holder == first_task,
+           "the first server keeps it");
+    spawnable_after_conflict = spawnable_servers(r);
+    ASSERT(spawnable_after_conflict == spawnable_without_conflict,
+           "the refused spawn took no actor slot, channel or task");
+    ASSERT(spawnable_without_conflict >= 1u, "and the arenas held something to compare");
+}
+
+static void test_release_name_waits_for_the_server_to_finish(void) {
+    asx_name_registry reg;
+    asx_named_actor named;
+    rec_state s;
+    asx_region_id r;
+    asx_task_id holder = ASX_INVALID_ID;
+    setup();
+    r = child_region();
+    memset(&s, 0, sizeof(s));
+    MUST_OK(asx_name_registry_init(&reg));
+    MUST_OK(asx_actor_spawn_named(&named, &reg, "svc", r, &g_rec, &s, 2u, 0u));
+    run(r);
+    ASSERT(asx_named_actor_release_name(&named, &reg, 1u) == ASX_E_TASKS_STILL_ACTIVE,
+           "a running server keeps its name (StillRunning)");
+    ASSERT(asx_name_lease_is_active(&named.lease), "and its lease stays active");
+    ASSERT(asx_name_whereis(&reg, "svc", &holder) == ASX_OK, "still registered");
+
+    MUST_OK(asx_actor_stop(named.actor));
+    run(r);
+    ASSERT(!asx_actor_is_alive(named.actor), "the server finished");
+    ASSERT(asx_named_actor_release_name(&named, &reg, 2u) == ASX_OK, "now the name is released");
+    ASSERT(!asx_name_lease_is_active(&named.lease), "the lease is committed");
+    ASSERT(asx_name_whereis(&reg, "svc", &holder) == ASX_E_NOT_FOUND, "and the name is free");
+    ASSERT(asx_named_actor_release_name(&named, &reg, 3u) == ASX_E_OBLIGATION_ALREADY_RESOLVED,
+           "a second release finds the lease resolved");
+}
+
+static void test_abort_lease_frees_the_name_without_stopping_the_server(void) {
+    asx_name_registry reg;
+    asx_named_actor named;
+    asx_named_actor again;
+    rec_state s;
+    rec_state s2;
+    asx_region_id r;
+    asx_task_id holder = ASX_INVALID_ID;
+    setup();
+    r = child_region();
+    memset(&s, 0, sizeof(s));
+    memset(&s2, 0, sizeof(s2));
+    MUST_OK(asx_name_registry_init(&reg));
+    MUST_OK(asx_actor_spawn_named(&named, &reg, "svc", r, &g_rec, &s, 2u, 0u));
+    run(r);
+    ASSERT(asx_named_actor_abort_lease(&named, &reg, 1u) == ASX_OK, "abort needs no stop");
+    ASSERT(asx_name_whereis(&reg, "svc", &holder) == ASX_E_NOT_FOUND, "the name is free");
+    ASSERT(asx_actor_is_alive(named.actor), "the server runs on");
+    ASSERT(asx_named_actor_abort_lease(&named, &reg, 2u) == ASX_E_OBLIGATION_ALREADY_RESOLVED,
+           "once");
+    ASSERT(asx_actor_spawn_named(&again, &reg, "svc", r, &g_rec, &s2, 2u, 3u) == ASX_OK,
+           "the freed name can be taken by another server");
+}
+
+static void test_release_resolves_the_lease_when_the_entry_is_gone(void) {
+    asx_name_registry reg;
+    asx_named_actor named;
+    rec_state s;
+    asx_region_id r;
+    asx_task_id tid = ASX_INVALID_ID;
+    setup();
+    r = child_region();
+    memset(&s, 0, sizeof(s));
+    MUST_OK(asx_name_registry_init(&reg));
+    MUST_OK(asx_actor_spawn_named(&named, &reg, "svc", r, &g_rec, &s, 2u, 0u));
+    MUST_OK(asx_actor_task_id(named.actor, &tid));
+    ASSERT(asx_name_cleanup_task(&reg, tid) == 1u, "something dropped the entry");
+    MUST_OK(asx_actor_stop(named.actor));
+    run(r);
+    ASSERT(asx_named_actor_release_name(&named, &reg, 1u) == ASX_E_NOT_FOUND,
+           "the registry no longer holds the entry: NotFound");
+    ASSERT(!asx_name_lease_is_active(&named.lease),
+           "the lease is aborted all the same, never left armed (:2693)");
+}
+
+/* ------------------------------------------------------------------ */
 /* CastOverflowPolicy::DropOldest (gen_server.rs:1305-1360)            */
 /* ------------------------------------------------------------------ */
 
@@ -1332,6 +1644,19 @@ int main(void) {
     RUN(test_failing_cast_panics_the_server);
     RUN(test_call_without_handler_panics_the_server);
     RUN(test_failing_init_panics_the_server);
+
+    RUN(test_register_and_whereis);
+    RUN(test_taken_name_is_refused_and_changes_nothing);
+    RUN(test_unregister_checks_the_caller_and_the_lease_identity);
+    RUN(test_a_lease_resolves_once_and_leaves_the_registry_alone);
+    RUN(test_root_region_holder_and_full_registry_are_refused);
+    RUN(test_name_arguments_are_checked);
+    RUN(test_cleanup_drops_a_regions_and_a_tasks_names);
+    RUN(test_named_server_registers_its_task);
+    RUN(test_a_taken_name_spawns_no_server);
+    RUN(test_release_name_waits_for_the_server_to_finish);
+    RUN(test_abort_lease_frees_the_name_without_stopping_the_server);
+    RUN(test_release_resolves_the_lease_when_the_entry_is_gone);
 
     RUN(test_drop_oldest_evicts_the_oldest_cast_to_make_room);
     RUN(test_reject_policy_never_evicts);

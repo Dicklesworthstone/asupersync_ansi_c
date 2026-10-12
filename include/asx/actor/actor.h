@@ -261,6 +261,143 @@ ASX_API ASX_MUST_USE asx_status asx_actor_call(asx_actor_handle actor, asx_cx *c
 ASX_API void asx_actor_op_drop(asx_actor_handle actor, asx_actor_op *op);
 
 /* -------------------------------------------------------------------
+ * Names (Rust cx/registry.rs NameRegistry and NameLease;
+ * gen_server.rs spawn_named_gen_server, NamedGenServerHandle)
+ *
+ * A registry is an object the caller owns, as the `&mut NameRegistry` Rust
+ * passes in; the runtime keeps none. It maps a name to the task holding it.
+ * A registration returns a lease, which stands for the name's ownership
+ * (Rust: a drop-bomb obligation token): it is resolved once, by release or
+ * abort, and resolving it does not touch the registry; the entry is freed
+ * by asx_name_unregister_owned (or a cleanup). Ported: registration with
+ * Rust's default collision policy (a taken name is refused), whereis,
+ * unregister, cleanup by region or task, and the named server. Not ported:
+ * the Wait and Replace collision policies and their waiter grants, name
+ * watchers and ownership notifications, and reserve/commit permits. The
+ * registry is bounded: Rust's is a HashMap.
+ * ------------------------------------------------------------------- */
+
+#ifndef ASX_NAME_REGISTRY_CAPACITY
+#define ASX_NAME_REGISTRY_CAPACITY 16u
+#endif
+#ifndef ASX_NAME_MAX_LEN
+#define ASX_NAME_MAX_LEN 63u
+#endif
+
+typedef struct {
+    char name[ASX_NAME_MAX_LEN + 1u];
+    asx_task_id holder;
+    asx_region_id region;
+    asx_time acquired_at;
+    int in_use;
+} asx_name_entry;
+
+typedef struct {
+    asx_name_entry entries[ASX_NAME_REGISTRY_CAPACITY];
+    uint32_t count;
+} asx_name_registry;
+
+/* Rust NameLease (registry.rs:106): holder, region and acquisition time
+ * identify the registration; active until released or aborted. */
+typedef struct {
+    char name[ASX_NAME_MAX_LEN + 1u];
+    asx_task_id holder;
+    asx_region_id region;
+    asx_time acquired_at;
+    int active;
+} asx_name_lease;
+
+/* Rust NamedGenServerHandle (gen_server.rs:2617): a server and the lease of
+ * its name. */
+typedef struct {
+    asx_actor_handle actor;
+    asx_name_lease lease;
+} asx_named_actor;
+
+/* An empty registry. ASX_E_INVALID_ARGUMENT for NULL. */
+ASX_API asx_status asx_name_registry_init(asx_name_registry *registry);
+
+/* `registry.register(name, holder, region, now)` (registry.rs:802).
+ * ASX_OK writes the lease. ASX_E_NAME_CONFLICT when the name is held (the
+ * holder is written to *current_holder when it is not NULL, as
+ * NameTaken's `current_holder`), ASX_E_INVALID_ARGUMENT for a NULL
+ * argument, a name over ASX_NAME_MAX_LEN, or a holder in a root region
+ * (Rust's lease mint panics there, [ASUP-E103], with the registry
+ * unchanged), ASX_E_RESOURCE_EXHAUSTED when the registry is full. Every
+ * refusal changes nothing. */
+ASX_API ASX_MUST_USE asx_status asx_name_register(asx_name_registry *registry, const char *name,
+                                                  asx_task_id holder, asx_region_id region,
+                                                  asx_time now, asx_name_lease *out_lease,
+                                                  asx_task_id *current_holder);
+
+/* `registry.whereis(name)` (:1471): ASX_OK and the holder, or
+ * ASX_E_NOT_FOUND. */
+ASX_API ASX_MUST_USE asx_status asx_name_whereis(const asx_name_registry *registry,
+                                                 const char *name, asx_task_id *out_holder);
+
+/* `registry.unregister(name, caller)` (:1173): the name's holder frees it.
+ * ASX_E_NOT_FOUND, or ASX_E_PERMISSION_DENIED for another caller. */
+ASX_API ASX_MUST_USE asx_status asx_name_unregister(asx_name_registry *registry, const char *name,
+                                                    asx_task_id caller);
+
+/* `registry.unregister_owned_and_grant(&lease, now)` (:1317): frees the
+ * entry the lease names, if its holder, region and acquisition time are the
+ * lease's. ASX_E_NOT_FOUND, or ASX_E_PERMISSION_DENIED when the entry is
+ * someone else's. (There are no waiters to grant to.) */
+ASX_API ASX_MUST_USE asx_status asx_name_unregister_owned(asx_name_registry *registry,
+                                                          const asx_name_lease *lease,
+                                                          asx_time now);
+
+/* `registry.cleanup_region(region)` / `cleanup_task(task)` (:1508, :1581):
+ * drop every entry the region's or the task's holders have; the number
+ * dropped. Leases are not touched. */
+ASX_API uint32_t asx_name_cleanup_region(asx_name_registry *registry, asx_region_id region);
+ASX_API uint32_t asx_name_cleanup_task(asx_name_registry *registry, asx_task_id task);
+
+/* Entries held (Rust len()). */
+ASX_API uint32_t asx_name_registry_count(const asx_name_registry *registry);
+
+/* `lease.is_active()`, `lease.release()` (commit) and `lease.abort()`
+ * (registry.rs:186-218). A resolved lease gives
+ * ASX_E_OBLIGATION_ALREADY_RESOLVED. */
+ASX_API int asx_name_lease_is_active(const asx_name_lease *lease);
+ASX_API ASX_MUST_USE asx_status asx_name_lease_release(asx_name_lease *lease);
+ASX_API ASX_MUST_USE asx_status asx_name_lease_abort(asx_name_lease *lease);
+
+/* `scope.spawn_named_gen_server(state, cx, registry, name, server, cap,
+ * now)` (gen_server.rs:2382): the server, then its name registered to its
+ * task and region. A taken name refuses with ASX_E_NAME_CONFLICT and no
+ * server exists: Rust creates and discards the never-scheduled task, which
+ * leaves nothing a run could see, so C checks the name first and spawns
+ * nothing. (A spawn that both conflicts and would be refused therefore
+ * reports the conflict, where Rust reports the spawn error.) Other errors
+ * are asx_actor_spawn's, plus ASX_E_RESOURCE_EXHAUSTED for a full registry
+ * and ASX_E_INVALID_ARGUMENT for a root region (the lease cannot be minted
+ * there); a spawn the lab refuses at once registers nothing and returns
+ * ASX_E_REGION_CLOSED. */
+ASX_API ASX_MUST_USE asx_status asx_actor_spawn_named(
+    asx_named_actor *out, asx_name_registry *registry, const char *name, asx_region_id region,
+    const asx_actor_behavior *behavior, void *state, uint32_t mailbox_capacity, asx_time now);
+
+/* `named.release_name(&mut registry, now)` (:2670): after the server has
+ * finished, free the name and commit the lease. ASX_E_TASKS_STILL_ACTIVE
+ * while the server runs (Rust StillRunning; the lease stays active),
+ * ASX_E_OBLIGATION_ALREADY_RESOLVED for a resolved lease. When the
+ * registry no longer holds the lease's entry (ASX_E_NOT_FOUND, or
+ * ASX_E_PERMISSION_DENIED after another registration) the lease is aborted
+ * and that status returned. */
+ASX_API ASX_MUST_USE asx_status asx_named_actor_release_name(asx_named_actor *named,
+                                                             asx_name_registry *registry,
+                                                             asx_time now);
+
+/* `named.abort_lease(&mut registry, now)` (:2712): roll the registration
+ * back without stopping the server. Statuses as release_name, without the
+ * running check. */
+ASX_API ASX_MUST_USE asx_status asx_named_actor_abort_lease(asx_named_actor *named,
+                                                            asx_name_registry *registry,
+                                                            asx_time now);
+
+/* -------------------------------------------------------------------
  * Runtime integration
  * ------------------------------------------------------------------- */
 
