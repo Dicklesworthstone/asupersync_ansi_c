@@ -2,9 +2,12 @@
  * scheduler.c — deterministic, wake-driven scheduler with event sequencing
  *
  * The scheduler drives every task in a region subtree. Within a round,
- * runnable tasks are polled in ascending arena index order (deterministic
- * tie-break). A task that returns ASX_E_PENDING stays runnable (yield)
- * unless it parked itself with asx_task_park(); parked tasks are skipped
+ * runnable tasks are polled cancel lane first (by cleanup priority), then
+ * the rest by budget priority, higher first; within one priority in
+ * ascending arena index order (deterministic tie-break); see "Dispatch
+ * order within a sweep round". A task that returns ASX_E_PENDING stays
+ * runnable (yield) unless it parked itself with asx_task_park(); parked
+ * tasks are skipped
  * until woken by a timer, a join target completing, a waker/IO signal, a
  * cancel request, or user code.
  *
@@ -1001,9 +1004,10 @@ static asx_status sched_idle(asx_time *last_idle_now, uint32_t *stall, asx_time 
  * Scheduler: run all tasks in a region subtree until completion,
  * budget exhaustion, or an unwakeable idle state.
  *
- * Ordering invariant: runnable tasks are polled in ascending arena
- * index within each round. This produces a deterministic event stream
- * for any given input and seed combination.
+ * Ordering invariant: within each round runnable tasks are polled cancel
+ * lane first, then by budget priority, ascending arena index within a
+ * priority (sweep_build). This produces a deterministic event stream for
+ * any given input and seed combination.
  * ------------------------------------------------------------------- */
 
 /* Poll task slot `i` once (live, in a run's scope, not parked, its budget
@@ -1324,6 +1328,167 @@ static asx_status sched_lab_run(asx_budget *budget, int advance_clock) {
     }
 }
 
+/* -------------------------------------------------------------------
+ * Dispatch order within a sweep round (bd-9kll.4.6)
+ *
+ * Rust's three-lane scheduler dispatches the cancel lane before the ready
+ * lane, a lane's entries by priority (higher first) and then by wake order
+ * (three_lane.rs:1777; priority.rs:546-560), and gives the ready lane a
+ * turn after cancel_streak_limit (16) cancel dispatches in a row
+ * (three_lane.rs:6930-7110). A sweep round polls every runnable task once;
+ * this is the order it does it in. The lanes:
+ *   - cancel: a task with a materialized cancel request, by its cleanup
+ *     budget's priority (the cancel table's 200..255);
+ *   - ready: every other task, by its budget's priority.
+ * The sweep has no wake order, so ascending arena index stands in for it
+ * within one priority; tasks that all share a priority and have no cancel
+ * request keep the arena order. The timed lane has no counterpart: due
+ * timers wake their tasks at the start of a round (timers_fire).
+ *
+ * A round builds its order in O(n) with a bucket per (lane, priority) and
+ * one `next` link per task, with no allocation; only the priorities in use
+ * are touched. A task spawned during the round is not in the snapshot; it
+ * is visited after it, in arena order, as the round has always done.
+ * ------------------------------------------------------------------- */
+
+#define SWEEP_PRIORITIES 256u
+#define SWEEP_NIL UINT32_MAX
+#define SWEEP_UNLISTED (UINT32_MAX - 1u)
+
+static uint32_t g_sweep_next[ASX_MAX_TASKS];
+static uint32_t g_sweep_head[2][SWEEP_PRIORITIES];
+static uint32_t g_sweep_tail[2][SWEEP_PRIORITIES];
+/* The priority range the last build used, per lane (empty when lo > hi);
+ * the next build resets just that range. Initially "everything". */
+static uint32_t g_sweep_lo[2] = {0u, 0u};
+static uint32_t g_sweep_hi[2] = {SWEEP_PRIORITIES - 1u, SWEEP_PRIORITIES - 1u};
+/* Slots 0 .. g_sweep_listed - 1 were considered by the last build. */
+static uint32_t g_sweep_listed;
+/* Consecutive cancel-lane polls, across rounds (Rust's cancel_streak). */
+static uint32_t g_sweep_streak;
+
+#define SWEEP_LANE_CANCEL 0u
+#define SWEEP_LANE_READY 1u
+
+/* List every live in-scope task in its (lane, priority) bucket, in arena
+ * order. Needs sched_compute_scope for this round. */
+static void sweep_build(void) {
+    uint32_t lane;
+    uint32_t p;
+    uint32_t i;
+
+    for (lane = 0u; lane < 2u; lane++) {
+        for (p = g_sweep_lo[lane]; p <= g_sweep_hi[lane]; p++) {
+            ASX_CHECKPOINT_WAIVER("bounded: at most SWEEP_PRIORITIES buckets");
+            g_sweep_head[lane][p] = SWEEP_NIL;
+        }
+        g_sweep_lo[lane] = SWEEP_PRIORITIES - 1u;
+        g_sweep_hi[lane] = 0u;
+    }
+    for (i = 0; i < g_task_count; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= ASX_MAX_TASKS");
+        const asx_task_slot *t = &g_tasks[i];
+        uint32_t prio;
+
+        g_sweep_next[i] = SWEEP_UNLISTED;
+        if (!t->alive || asx_task_is_terminal(t->state)) continue;
+        if (sched_scope_region(t) == NULL) continue;
+        /* A budget cancel the task raised itself is on its Cx only until a
+         * checkpoint acknowledges it (cancel_unmaterialized): no cancel
+         * lane entry in Rust, so it stays ready work. */
+        lane =
+            (t->cancel_pending && !t->cancel_unmaterialized) ? SWEEP_LANE_CANCEL : SWEEP_LANE_READY;
+        prio = lane == SWEEP_LANE_CANCEL ? t->cleanup_budget.priority : t->budget.priority;
+        g_sweep_next[i] = SWEEP_NIL;
+        if (g_sweep_head[lane][prio] == SWEEP_NIL) {
+            g_sweep_head[lane][prio] = i;
+        } else {
+            g_sweep_next[g_sweep_tail[lane][prio]] = i;
+        }
+        g_sweep_tail[lane][prio] = i;
+        if (prio < g_sweep_lo[lane]) g_sweep_lo[lane] = prio;
+        if (prio > g_sweep_hi[lane]) g_sweep_hi[lane] = prio;
+    }
+    g_sweep_listed = g_task_count;
+}
+
+typedef struct {
+    uint32_t prio; /* the bucket being walked */
+    uint32_t node; /* its next task, SWEEP_NIL when the bucket is spent */
+} sweep_cursor;
+
+static void sweep_cursor_init(sweep_cursor *c, uint32_t lane) {
+    c->prio = g_sweep_hi[lane] + 1u;
+    c->node = SWEEP_NIL;
+}
+
+/* The next task of `lane`: highest priority first, arena order within one;
+ * SWEEP_NIL when the lane is spent. */
+static uint32_t sweep_lane_next(uint32_t lane, sweep_cursor *c) {
+    while (c->node == SWEEP_NIL) {
+        ASX_CHECKPOINT_WAIVER("bounded: at most SWEEP_PRIORITIES buckets");
+        if (c->prio <= g_sweep_lo[lane]) return SWEEP_NIL;
+        c->prio--;
+        c->node = g_sweep_head[lane][c->prio];
+    }
+    {
+        uint32_t i = c->node;
+        c->node = g_sweep_next[i];
+        return i;
+    }
+}
+
+typedef struct {
+    sweep_cursor cancel;
+    sweep_cursor ready;
+    uint32_t next_cancel; /* lookahead of each lane */
+    uint32_t next_ready;
+    uint32_t tail; /* the arena scan for tasks spawned this round */
+    int in_tail;
+} sweep_walk;
+
+static void sweep_walk_start(sweep_walk *w) {
+    sweep_cursor_init(&w->cancel, SWEEP_LANE_CANCEL);
+    sweep_cursor_init(&w->ready, SWEEP_LANE_READY);
+    w->next_cancel = sweep_lane_next(SWEEP_LANE_CANCEL, &w->cancel);
+    w->next_ready = sweep_lane_next(SWEEP_LANE_READY, &w->ready);
+    w->tail = 0u;
+    w->in_tail = 0;
+}
+
+/* The next slot to visit this round, or 0 when the round is done.
+ * *out_cancel_lane says which lane it came from. After cancel_streak_limit
+ * cancel-lane polls in a row (g_sweep_streak, counted where a poll is made)
+ * a ready task goes next if there is one. */
+static int sweep_walk_next(sweep_walk *w, uint32_t *out_slot, int *out_cancel_lane) {
+    if (!w->in_tail) {
+        if (w->next_cancel != SWEEP_NIL &&
+            (g_sweep_streak < LAB_CANCEL_STREAK_LIMIT || w->next_ready == SWEEP_NIL)) {
+            *out_slot = w->next_cancel;
+            *out_cancel_lane = 1;
+            w->next_cancel = sweep_lane_next(SWEEP_LANE_CANCEL, &w->cancel);
+            return 1;
+        }
+        if (w->next_ready != SWEEP_NIL) {
+            *out_slot = w->next_ready;
+            *out_cancel_lane = 0;
+            w->next_ready = sweep_lane_next(SWEEP_LANE_READY, &w->ready);
+            return 1;
+        }
+        w->in_tail = 1;
+    }
+    /* Tasks the snapshot did not list: spawned since, ascending. */
+    while (w->tail < g_task_count) {
+        uint32_t i = w->tail++;
+        ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= ASX_MAX_TASKS");
+        if (i < g_sweep_listed && g_sweep_next[i] != SWEEP_UNLISTED) continue;
+        *out_slot = i;
+        *out_cancel_lane = 0;
+        return 1;
+    }
+    return 0;
+}
+
 static asx_status sched_run(asx_region_id region, asx_budget *budget, int advance_clock);
 
 asx_status asx_scheduler_run(asx_region_id region, asx_budget *budget) {
@@ -1352,10 +1517,13 @@ static asx_status sched_run(asx_region_id region, asx_budget *budget, int advanc
 
     if (asx_lab_dispatch_active()) return sched_lab_run(budget, advance_clock);
 
+    g_sweep_streak = 0u;
     for (round = 0;; round++) {
         uint32_t active = 0;
         uint32_t progress = 0;
         uint32_t i;
+        int from_cancel_lane = 0;
+        sweep_walk walk;
         asx_time round_now = 0;
         int have_now = 0;
 
@@ -1388,7 +1556,9 @@ static asx_status sched_run(asx_region_id region, asx_budget *budget, int advanc
             (void)timers_fire(sched_now());
         }
 
-        for (i = 0; i < g_task_count; i++) {
+        sweep_build();
+        sweep_walk_start(&walk);
+        while (sweep_walk_next(&walk, &i, &from_cancel_lane)) {
             ASX_CHECKPOINT_WAIVER("kernel-scheduler: inner poll loop bounded by "
                                   "g_task_count <= ASX_MAX_TASKS arena capacity");
             asx_task_slot *t = &g_tasks[i];
@@ -1459,6 +1629,13 @@ static asx_status sched_run(asx_region_id region, asx_budget *budget, int advanc
             }
 
             progress++;
+            /* A dispatch from the cancel lane lengthens the streak; any
+             * other ends it (Rust's cancel_streak). */
+            if (from_cancel_lane) {
+                if (g_sweep_streak < UINT32_MAX) g_sweep_streak++;
+            } else {
+                g_sweep_streak = 0u;
+            }
             {
                 int done = 0;
                 st = sched_poll_slot(i, rslot, round, &done);

@@ -374,6 +374,208 @@ TEST(scheduler_trace_emits_round_markers) {
     ASSERT_EQ(round_count, (uint32_t)2);
 }
 
+/* ---- Dispatch order within a round (bd-9kll.4.6) ----
+ *
+ * Rust's scheduler dispatches the cancel lane before the ready lane, a
+ * lane's entries by priority and then by wake order (priority.rs:546-560),
+ * and gives the ready lane a turn after cancel_streak_limit (16) cancel
+ * dispatches in a row. The sweep has no wake order; arena order stands in. */
+
+/* The slot indices of the last run's POLL events, in order. */
+static uint32_t poll_order(uint32_t *out, uint32_t cap) {
+    uint32_t n = 0;
+    uint32_t i;
+    for (i = 0; i < asx_scheduler_event_count() && n < cap; i++) {
+        asx_scheduler_event ev;
+        if (asx_scheduler_event_get(i, &ev) && ev.kind == ASX_SCHED_EVENT_POLL) {
+            out[n++] = asx_handle_slot(ev.task_id);
+        }
+    }
+    return n;
+}
+
+static asx_budget budget_with_priority(uint8_t priority) {
+    asx_budget b = asx_budget_new();
+    b.priority = priority;
+    return b;
+}
+
+TEST(scheduler_polls_higher_budget_priority_first) {
+    asx_region_id rid;
+    asx_task_id low, high;
+    asx_budget budget;
+    asx_budget b_low = budget_with_priority(10u);
+    asx_budget b_high = budget_with_priority(200u);
+    int c_low = 2;
+    int c_high = 2;
+    uint32_t order[16];
+    uint32_t n;
+
+    asx_runtime_reset();
+    asx_ghost_reset();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    /* The low-priority task is first in arena order. */
+    ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_yield_n, &c_low, &b_low, &low), ASX_OK);
+    ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_yield_n, &c_high, &b_high, &high), ASX_OK);
+
+    budget = asx_budget_infinite();
+    ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
+
+    /* Three rounds of two polls: the high-priority task goes first in each. */
+    n = poll_order(order, 16u);
+    ASSERT_EQ(n, 6u);
+    ASSERT_EQ(order[0], (uint32_t)asx_handle_slot(high));
+    ASSERT_EQ(order[1], (uint32_t)asx_handle_slot(low));
+    ASSERT_EQ(order[2], (uint32_t)asx_handle_slot(high));
+    ASSERT_EQ(order[3], (uint32_t)asx_handle_slot(low));
+    ASSERT_EQ(order[4], (uint32_t)asx_handle_slot(high));
+    ASSERT_EQ(order[5], (uint32_t)asx_handle_slot(low));
+}
+
+TEST(scheduler_polls_three_priorities_highest_first_arena_order_within_one) {
+    asx_region_id rid;
+    asx_task_id t[4];
+    asx_budget budget;
+    asx_budget b50 = budget_with_priority(50u);
+    asx_budget b200 = budget_with_priority(200u);
+    uint32_t order[8];
+
+    asx_runtime_reset();
+    asx_ghost_reset();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_complete, NULL, &b50, &t[0]), ASX_OK);
+    ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_complete, NULL, &b200, &t[1]), ASX_OK);
+    ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_complete, NULL, &b50, &t[2]), ASX_OK);
+    ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_complete, NULL, &b200, &t[3]), ASX_OK);
+
+    budget = asx_budget_infinite();
+    ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
+
+    ASSERT_EQ(poll_order(order, 8u), 4u);
+    ASSERT_EQ(order[0], (uint32_t)asx_handle_slot(t[1]));
+    ASSERT_EQ(order[1], (uint32_t)asx_handle_slot(t[3]));
+    ASSERT_EQ(order[2], (uint32_t)asx_handle_slot(t[0]));
+    ASSERT_EQ(order[3], (uint32_t)asx_handle_slot(t[2]));
+}
+
+TEST(scheduler_polls_the_cancel_lane_before_the_ready_lane) {
+    asx_region_id rid;
+    asx_task_id a, b, c;
+    asx_budget budget;
+    uint32_t order[8];
+
+    asx_runtime_reset();
+    asx_ghost_reset();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &a), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &b), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &c), ASX_OK);
+    ASSERT_EQ(asx_task_cancel(c, ASX_CANCEL_USER), ASX_OK);
+
+    budget = asx_budget_infinite();
+    ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
+
+    /* c is last in arena order but is cancel work. */
+    ASSERT_EQ(poll_order(order, 8u), 3u);
+    ASSERT_EQ(order[0], (uint32_t)asx_handle_slot(c));
+    ASSERT_EQ(order[1], (uint32_t)asx_handle_slot(a));
+    ASSERT_EQ(order[2], (uint32_t)asx_handle_slot(b));
+}
+
+TEST(scheduler_orders_the_cancel_lane_by_cleanup_priority) {
+    asx_region_id rid;
+    asx_task_id a, b, c;
+    asx_budget budget;
+    uint32_t order[8];
+
+    asx_runtime_reset();
+    asx_ghost_reset();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &a), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &b), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &c), ASX_OK);
+    /* SHUTDOWN's cleanup priority (255) is above USER's (200). */
+    ASSERT_EQ(asx_task_cancel(a, ASX_CANCEL_USER), ASX_OK);
+    ASSERT_EQ(asx_task_cancel(c, ASX_CANCEL_SHUTDOWN), ASX_OK);
+
+    budget = asx_budget_infinite();
+    ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
+
+    ASSERT_EQ(poll_order(order, 8u), 3u);
+    ASSERT_EQ(order[0], (uint32_t)asx_handle_slot(c));
+    ASSERT_EQ(order[1], (uint32_t)asx_handle_slot(a));
+    ASSERT_EQ(order[2], (uint32_t)asx_handle_slot(b));
+}
+
+TEST(scheduler_cancel_streak_gives_ready_work_a_turn) {
+    /* cancel_streak_limit = 16: after 16 cancel-lane dispatches in a row
+     * the ready lane is tried before the 17th. */
+    enum { CANCELLED = 18 };
+    asx_region_id rid;
+    asx_task_id ready;
+    asx_task_id c[CANCELLED];
+    asx_budget budget;
+    uint32_t order[32];
+    uint32_t i;
+
+    asx_runtime_reset();
+    asx_ghost_reset();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &ready), ASX_OK);
+    for (i = 0; i < (uint32_t)CANCELLED; i++) {
+        ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &c[i]), ASX_OK);
+        ASSERT_EQ(asx_task_cancel(c[i], ASX_CANCEL_USER), ASX_OK);
+    }
+
+    budget = asx_budget_infinite();
+    ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
+
+    ASSERT_EQ(poll_order(order, 32u), (uint32_t)(CANCELLED + 1));
+    for (i = 0; i < 16u; i++) { ASSERT_EQ(order[i], (uint32_t)asx_handle_slot(c[i])); }
+    ASSERT_EQ(order[16], (uint32_t)asx_handle_slot(ready));
+    ASSERT_EQ(order[17], (uint32_t)asx_handle_slot(c[16]));
+    ASSERT_EQ(order[18], (uint32_t)asx_handle_slot(c[17]));
+}
+
+typedef struct {
+    asx_region_id region;
+    asx_task_id child;
+} spawn_once_state;
+
+static asx_status poll_spawn_once_then_complete(void *data, asx_task_id self) {
+    spawn_once_state *s = (spawn_once_state *)data;
+    (void)self;
+    return asx_task_spawn(s->region, poll_complete, NULL, &s->child);
+}
+
+TEST(scheduler_polls_a_task_spawned_in_a_round_in_that_round) {
+    asx_region_id rid;
+    asx_task_id parent;
+    asx_budget budget;
+    spawn_once_state s;
+    asx_scheduler_event ev;
+    uint32_t polls_in_round_0 = 0;
+    uint32_t i;
+
+    asx_runtime_reset();
+    asx_ghost_reset();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    s.region = rid;
+    s.child = ASX_INVALID_ID;
+    ASSERT_EQ(asx_task_spawn(rid, poll_spawn_once_then_complete, &s, &parent), ASX_OK);
+
+    budget = asx_budget_infinite();
+    ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
+
+    for (i = 0; i < asx_scheduler_event_count(); i++) {
+        if (asx_scheduler_event_get(i, &ev) && ev.kind == ASX_SCHED_EVENT_POLL && ev.round == 0u) {
+            polls_in_round_0++;
+        }
+    }
+    /* The parent and the child it spawned. */
+    ASSERT_EQ(polls_in_round_0, 2u);
+}
+
 int main(void) {
     fprintf(stderr, "=== test_scheduler ===\n");
 
@@ -388,6 +590,14 @@ int main(void) {
     RUN_TEST(scheduler_round_tracking_multi_round);
     RUN_TEST(scheduler_no_tasks_is_quiescent);
     RUN_TEST(scheduler_trace_emits_round_markers);
+
+    /* Dispatch order within a round: cancel lane, then budget priority */
+    RUN_TEST(scheduler_polls_higher_budget_priority_first);
+    RUN_TEST(scheduler_polls_three_priorities_highest_first_arena_order_within_one);
+    RUN_TEST(scheduler_polls_the_cancel_lane_before_the_ready_lane);
+    RUN_TEST(scheduler_orders_the_cancel_lane_by_cleanup_priority);
+    RUN_TEST(scheduler_cancel_streak_gives_ready_work_a_turn);
+    RUN_TEST(scheduler_polls_a_task_spawned_in_a_round_in_that_round);
 
     TEST_REPORT();
     return test_failures;
