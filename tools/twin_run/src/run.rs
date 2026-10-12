@@ -1285,6 +1285,29 @@ fn exec_sync(
             };
             observe(&ctx.shared, me, idx, label, status, Value::Null);
         }
+        "rwlock_downgrade" => {
+            // The task's most recent write guard on the lock becomes a read
+            // guard in place (OwnedRwLockWriteGuard::downgrade,
+            // sync/rwlock.rs:1287).
+            let name = str_field(step, "rwlock")?;
+            let held = local.rw_guards.get_mut(name).and_then(|guards| {
+                let i = guards
+                    .iter()
+                    .rposition(|g| matches!(g, RwGuard::Write(_)))?;
+                Some((guards, i))
+            });
+            let status = match held {
+                Some((guards, i)) => {
+                    let RwGuard::Write(write) = guards.remove(i) else {
+                        return Err("rposition found no write guard".to_string());
+                    };
+                    guards.insert(i, RwGuard::Read(write.downgrade()));
+                    "ASX_OK"
+                }
+                None => NOT_HELD, // no write guard held on it (DSL §3)
+            };
+            observe(&ctx.shared, me, idx, label, status, Value::Null);
+        }
         "sem_forget" => {
             // Forgets the task's latest permit on the semaphore: its
             // permits never return (SemaphorePermit::forget,

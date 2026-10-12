@@ -2479,6 +2479,25 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
         observe_status(t, idx, label, st);
         return STEP_NEXT;
     }
+    if (strcmp(op, "rwlock_downgrade") == 0) {
+        /* The most recent write guard held on the lock becomes a read
+         * guard in place (RwLockWriteGuard::downgrade, rwlock.rs:1110). */
+        const char *name = it_str(step, "rwlock");
+        uint32_t i = t->n_rw_guards;
+        while (i > 0u && (name == NULL || strcmp(t->rw_guards[i - 1u].name, name) != 0 ||
+                          !t->rw_guards[i - 1u].is_write)) {
+            i--;
+        }
+        if (i == 0u) {
+            /* No write guard held on it (DSL §3). */
+            observe_status(t, idx, label, ASX_E_NOT_FOUND);
+            return STEP_NEXT;
+        }
+        st = asx_rwlock_downgrade(t->rw_guards[i - 1u].write, &t->rw_guards[i - 1u].read);
+        if (st == ASX_OK) t->rw_guards[i - 1u].is_write = 0;
+        observe_status(t, idx, label, st);
+        return STEP_NEXT;
+    }
     if (strcmp(op, "notify_one") == 0 || strcmp(op, "notify_all") == 0) {
         it_sync *s = sync_by_name(it_str(step, "notify"), IT_SYNC_NOTIFY);
         if (s == NULL) {

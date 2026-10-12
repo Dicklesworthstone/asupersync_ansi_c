@@ -387,6 +387,7 @@ Sync objects are declared at the top level:
 | `mutex_unlock` | `mutex` | `drop(guard)` (`:758`) | `asx_mutex_unlock` | no | ignored |
 | `rwlock_read` / `rwlock_write` | `rwlock` | `OwnedRwLockReadGuard::read(lock, &cx).await` / `OwnedRwLockWriteGuard::write(lock, &cx).await` (`sync/rwlock.rs:1155`, `:1212`), guard kept | `asx_rwlock_read_begin` / `asx_rwlock_write_begin` + `asx_rwlock_poll_read` / `asx_rwlock_poll_write` | while a writer holds or (for a read) waits; release order is bounded writer-preference by arrival (`release_writer`, `:531`) | Checked on every poll: `ASX_E_CANCELLED` (`:1339`, `:1464`). A granted lock the waiter gives up passes on. |
 | `rwlock_unlock` | `rwlock` | drops the task's most recent guard on the lock (`release_reader` / `release_writer`) | `asx_rwlock_read_unlock` / `asx_rwlock_write_unlock` | no | ignored |
+| `rwlock_downgrade` | `rwlock` | the task's most recent write guard on the lock becomes a read guard in place (`OwnedRwLockWriteGuard::downgrade`, `sync/rwlock.rs:1287`) | `asx_rwlock_downgrade` | no | ignored. No write guard held on it: `ASX_E_NOT_FOUND`. Queued readers ahead of the first queued writer are granted with it. |
 | `sem_acquire` | `semaphore`, `count` | `s.acquire(&cx, n).await` (`sync/semaphore.rs:430`), permit kept | `asx_semaphore_acquire_many_begin(s, n)` + `asx_semaphore_poll_acquire` | until n are available (all-or-nothing, FIFO) | `ASX_E_CANCELLED` (`:847`); count 0 succeeds at once with an empty permit and no obligation. Otherwise the permit registers a `SemaphorePermit` obligation. |
 | `sem_release` | `semaphore` | `drop(permit)` (`:1080`) | `asx_semaphore_release` | no | ignored |
 | `sem_forget` | `semaphore` | `permit.forget()` on the task's latest permit (`:1041`): the permits never return and its obligation is aborted (Explicit) | `asx_semaphore_forget` | no | ignored |
@@ -702,7 +703,9 @@ Closed (each verified by a fixture that now matches):
   fails while a writer waits (`sync-rwlock-arrival-order-001`,
   `sync-rwlock-forced-reader-turn-001`,
   `sync-rwlock-cancelled-front-writer-001`; generated scenarios declare an
-  rwlock at times, and rwlock crowds). Downgrade has no step.
+  rwlock at times, and rwlock crowds). Downgrade: `rwlock_downgrade`
+  (`asx_rwlock_downgrade`; `sync-rwlock-downgrade-001`; generated
+  scenarios downgrade at times).
 
 - **Region admission limits** for `region_limits`: `asx_region_set_limits`
   caps a region's live tasks, live child regions and pending obligations;

@@ -426,6 +426,92 @@ TEST(reader_queued_before_writer_goes_first) {
     asx_rwlock_close(h);
 }
 
+TEST(downgrade_keeps_the_lock_and_admits_readers_before_the_first_writer) {
+    /* Rust RwLockWriteGuard::downgrade (rwlock.rs:1110-1143): no window in
+     * which another writer could take the lock; the downgraded guard is one
+     * reader, and the readers queued before the first queued writer join
+     * it, while that writer and the readers behind it keep waiting. */
+    asx_rwlock_handle h;
+    asx_rwlock_write_guard held, wg;
+    asx_rwlock_waiter ww, rw1, rw2;
+    asx_rwlock_read_guard down, rg1, rg2, extra;
+    setup();
+    ASSERT_EQ(asx_rwlock_create(&h), ASX_OK);
+    ASSERT_EQ(asx_rwlock_try_write(h, &held), ASX_OK);
+
+    /* Arrival order: reader 1, writer, reader 2 */
+    ASSERT_EQ(asx_rwlock_read_begin(h, &rw1), ASX_OK);
+    ASSERT_EQ(asx_rwlock_poll_read(&rw1, &rg1, NULL), ASX_E_PENDING);
+    ASSERT_EQ(asx_rwlock_write_begin(h, &ww), ASX_OK);
+    ASSERT_EQ(asx_rwlock_poll_write(&ww, &wg, NULL), ASX_E_PENDING);
+    ASSERT_EQ(asx_rwlock_read_begin(h, &rw2), ASX_OK);
+    ASSERT_EQ(asx_rwlock_poll_read(&rw2, &rg2, NULL), ASX_E_PENDING);
+
+    ASSERT_EQ(asx_rwlock_downgrade(held, &down), ASX_OK);
+    ASSERT_FALSE(asx_rwlock_is_write_locked(h));
+    ASSERT_EQ(asx_rwlock_reader_count(h), 2u); /* the downgraded guard + reader 1 */
+    ASSERT_EQ(asx_rwlock_poll_read(&rw1, &rg1, NULL), ASX_OK);
+    ASSERT_EQ(asx_rwlock_poll_write(&ww, &wg, NULL), ASX_E_PENDING);
+    ASSERT_EQ(asx_rwlock_poll_read(&rw2, &rg2, NULL), ASX_E_PENDING);
+    /* A new reader is behind the queued writer: refused. */
+    ASSERT_EQ(asx_rwlock_try_read(h, &extra), ASX_E_WOULD_BLOCK);
+
+    /* The spent write guard no longer unlocks or downgrades anything. */
+    ASSERT_EQ(asx_rwlock_write_unlock(held), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_rwlock_downgrade(held, &extra), ASX_E_INVALID_STATE);
+
+    /* The last of the two readers hands the writer the lock. */
+    ASSERT_EQ(asx_rwlock_read_unlock(down), ASX_OK);
+    ASSERT_EQ(asx_rwlock_poll_write(&ww, &wg, NULL), ASX_E_PENDING);
+    ASSERT_EQ(asx_rwlock_read_unlock(rg1), ASX_OK);
+    ASSERT_EQ(asx_rwlock_poll_write(&ww, &wg, NULL), ASX_OK);
+    ASSERT_EQ(asx_rwlock_write_unlock(wg), ASX_OK);
+    ASSERT_EQ(asx_rwlock_poll_read(&rw2, &rg2, NULL), ASX_OK);
+    ASSERT_EQ(asx_rwlock_read_unlock(rg2), ASX_OK);
+    ASSERT_EQ(asx_rwlock_reader_count(h), 0u);
+    asx_rwlock_close(h);
+}
+
+TEST(downgrade_with_no_writer_queued_admits_every_reader) {
+    asx_rwlock_handle h;
+    asx_rwlock_write_guard held;
+    asx_rwlock_waiter rw1, rw2;
+    asx_rwlock_read_guard down, rg1, rg2, more;
+    setup();
+    ASSERT_EQ(asx_rwlock_create(&h), ASX_OK);
+    ASSERT_EQ(asx_rwlock_try_write(h, &held), ASX_OK);
+    ASSERT_EQ(asx_rwlock_read_begin(h, &rw1), ASX_OK);
+    ASSERT_EQ(asx_rwlock_poll_read(&rw1, &rg1, NULL), ASX_E_PENDING);
+    ASSERT_EQ(asx_rwlock_read_begin(h, &rw2), ASX_OK);
+    ASSERT_EQ(asx_rwlock_poll_read(&rw2, &rg2, NULL), ASX_E_PENDING);
+    ASSERT_EQ(asx_rwlock_downgrade(held, &down), ASX_OK);
+    ASSERT_EQ(asx_rwlock_reader_count(h), 3u);
+    ASSERT_EQ(asx_rwlock_poll_read(&rw1, &rg1, NULL), ASX_OK);
+    ASSERT_EQ(asx_rwlock_poll_read(&rw2, &rg2, NULL), ASX_OK);
+    /* No writer anywhere: a new reader joins too. */
+    ASSERT_EQ(asx_rwlock_try_read(h, &more), ASX_OK);
+    ASSERT_EQ(asx_rwlock_read_unlock(more), ASX_OK);
+    ASSERT_EQ(asx_rwlock_read_unlock(rg1), ASX_OK);
+    ASSERT_EQ(asx_rwlock_read_unlock(rg2), ASX_OK);
+    ASSERT_EQ(asx_rwlock_read_unlock(down), ASX_OK);
+    ASSERT_EQ(asx_rwlock_reader_count(h), 0u);
+    asx_rwlock_close(h);
+}
+
+TEST(downgrade_errors) {
+    asx_rwlock_handle h;
+    asx_rwlock_write_guard wg;
+    asx_rwlock_read_guard rg;
+    setup();
+    ASSERT_EQ(asx_rwlock_create(&h), ASX_OK);
+    ASSERT_EQ(asx_rwlock_try_write(h, &wg), ASX_OK);
+    ASSERT_EQ(asx_rwlock_downgrade(wg, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_rwlock_write_unlock(wg), ASX_OK);
+    ASSERT_EQ(asx_rwlock_downgrade(wg, &rg), ASX_E_INVALID_STATE); /* not write-locked */
+    ASSERT_EQ(asx_rwlock_close(h), ASX_OK);
+    ASSERT_EQ(asx_rwlock_downgrade(wg, &rg), ASX_E_STALE_HANDLE);
+}
+
 TEST(forced_reader_turn_after_sixteen_writer_handoffs) {
     /* Rust's MAX_CONSECUTIVE_WRITERS_BEFORE_READER_BATCH: after 16 writer
      * hand-offs in a row while a reader waits, the oldest queued reader
@@ -621,6 +707,9 @@ int main(void) {
     RUN_TEST(write_unlock_wakes_all_readers);
     RUN_TEST(queued_writer_ahead_of_reader_goes_first);
     RUN_TEST(reader_queued_before_writer_goes_first);
+    RUN_TEST(downgrade_keeps_the_lock_and_admits_readers_before_the_first_writer);
+    RUN_TEST(downgrade_with_no_writer_queued_admits_every_reader);
+    RUN_TEST(downgrade_errors);
     RUN_TEST(forced_reader_turn_after_sixteen_writer_handoffs);
     RUN_TEST(abandoned_last_writer_admits_queued_readers);
     RUN_TEST(abandoned_granted_writer_passes_the_lock_on);
