@@ -4003,7 +4003,7 @@ fn project_trace(lab: &LabRuntime, shared: &SharedRef) -> RunResult<Projected> {
                     kind,
                     abort_reason,
                     state: _,
-                    duration_ns: _,
+                    duration_ns,
                 },
             ) => {
                 let holder = task_name(&s, *task)?;
@@ -4027,6 +4027,12 @@ fn project_trace(lab: &LabRuntime, shared: &SharedRef) -> RunResult<Projected> {
                     "k": k, "obligation": name, "task": holder, "region": region_name(&s, *region)?,
                     "kind": format!("{kind:?}"),
                 });
+                // The virtual time the obligation was held, on the events
+                // that resolve it (`state.rs:5597`, bd-yqe4); a reserve
+                // carries none.
+                if k != "obligation.reserved" {
+                    ev["duration_ns"] = json!(*duration_ns);
+                }
                 let abort = abort_reason.map(|r| format!("{r:?}"));
                 if k == "obligation.aborted" {
                     ev["abort_reason"] = json!(abort);
