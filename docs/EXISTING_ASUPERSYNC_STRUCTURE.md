@@ -444,7 +444,7 @@ Any `next.phase.rank() < prev.phase.rank()` is Rust `CancelWitnessError::PhaseRe
 
 ### 6.4 Cancellation Kinds (11 Variants)
 
-Severities and cleanup budgets match Rust exactly (`CancelKind::severity`, `src/types/cancel.rs:473`; `CancelReason::cleanup_budget`, `src/types/cancel.rs:1027`; C `include/asx/asx_ids.h:172`, `src/core/cancel.c:35`). C's enum ordinals differ from Rust's declaration order (Rust ParentCancelled=7 … LinkedExit=10; C LinkedExit=7 … Shutdown=10; row `def.cancel.reason_kinds`, `bd-9kll.3.7`); vocabulary v2 encodes kinds by name.
+Severities and cleanup budgets match Rust exactly (`CancelKind::severity`, `src/types/cancel.rs:473`; `CancelReason::cleanup_budget`, `src/types/cancel.rs:1027`; C `include/asx/asx_ids.h:172`, `src/core/cancel.c:35`). C's enum ordinals are Rust's declaration order (ParentCancelled=7, ResourceUnavailable=8, Shutdown=9, LinkedExit=10; `bd-9kll.2.18`, DEC-006; row `def.cancel.reason_kinds`), so severity is not monotone in the ordinal; vocabulary v2 still encodes kinds by name.
 
 | Kind | Enum Value | Severity | Cleanup Quota | Cleanup Priority | Category |
 |------|-----------|----------|--------------|-----------------|----------|

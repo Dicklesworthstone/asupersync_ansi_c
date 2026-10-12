@@ -43,7 +43,7 @@ TEST(abi_enum_sentinels_match_frozen_values) {
     ASSERT_EQ((unsigned int)ASX_TASK_COMPLETED, ASX_ABI_TASK_STATE_LAST);
     ASSERT_EQ((unsigned int)ASX_OBLIGATION_LEAKED, ASX_ABI_OBLIGATION_STATE_LAST);
     ASSERT_EQ((unsigned int)ASX_OUTCOME_PANICKED, ASX_ABI_OUTCOME_SEVERITY_LAST);
-    ASSERT_EQ((unsigned int)ASX_CANCEL_SHUTDOWN, ASX_ABI_CANCEL_KIND_LAST);
+    ASSERT_EQ((unsigned int)ASX_CANCEL_LINKED_EXIT, ASX_ABI_CANCEL_KIND_LAST);
     ASSERT_EQ((unsigned int)ASX_CANCEL_PHASE_COMPLETED, ASX_ABI_CANCEL_PHASE_LAST);
 }
 
@@ -55,6 +55,10 @@ TEST(abi_frozen_numeric_assignments_remain_stable) {
     ASSERT_EQ((unsigned int)ASX_OUTCOME_OK, 0u);
     ASSERT_EQ((unsigned int)ASX_OUTCOME_PANICKED, 3u);
     ASSERT_EQ((unsigned int)ASX_CANCEL_USER, 0u);
+    ASSERT_EQ((unsigned int)ASX_CANCEL_PARENT, 7u);
+    ASSERT_EQ((unsigned int)ASX_CANCEL_RESOURCE, 8u);
+    ASSERT_EQ((unsigned int)ASX_CANCEL_SHUTDOWN, 9u);
+    ASSERT_EQ((unsigned int)ASX_CANCEL_LINKED_EXIT, 10u);
     ASSERT_EQ((unsigned int)ASX_CANCEL_PHASE_REQUESTED, 0u);
     ASSERT_EQ((unsigned int)ASX_CANCEL_PHASE_COMPLETED, 3u);
 }

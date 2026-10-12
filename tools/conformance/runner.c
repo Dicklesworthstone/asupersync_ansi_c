@@ -848,11 +848,6 @@ static void ck_build(void) {
     ck_variants("supervision.restart_mode.variants", k_restart_modes, CK_COUNT(k_restart_modes), 0);
 
     /* Recorded differences. */
-    ck_known("cancel_kind.variants", "bd-9kll.2.18: C declares LinkedExit seventh");
-    ck_known("cancel_kind.ParentCancelled.ordinal", "bd-9kll.2.18");
-    ck_known("cancel_kind.ResourceUnavailable.ordinal", "bd-9kll.2.18");
-    ck_known("cancel_kind.Shutdown.ordinal", "bd-9kll.2.18");
-    ck_known("cancel_kind.LinkedExit.ordinal", "bd-9kll.2.18");
     ck_known("runtime.default.obligation_leak_response", "bd-9kll.2.19: C defaults to Log");
 #if ASX_HAS_BROWSER_TRACE
     ck_known("lab.default.panic_on_obligation_leak", "bd-9kll.2.19");

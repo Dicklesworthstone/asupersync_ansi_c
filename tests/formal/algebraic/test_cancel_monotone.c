@@ -2,7 +2,7 @@
  * test_cancel_monotone.c — exhaustive algebraic property verification
  *                          for cancel severity and strengthen operation
  *
- * Domain: 11 cancel kinds (USER=0 .. SHUTDOWN=10)
+ * Domain: 11 cancel kinds (USER=0 .. LINKED_EXIT=10, Rust's order)
  * Total: 121 pairs for severity, 121 for strengthen
  *
  * SPDX-License-Identifier: MIT
@@ -22,15 +22,17 @@ static asx_cancel_reason make_reason(asx_cancel_kind kind, asx_time ts) {
     return r;
 }
 
-/* --- Severity is monotone non-decreasing with enum order --- */
+/* --- Severity is monotone non-decreasing with enum order, up to Rust's
+ * last-declared kind: LinkedExit (10) is severity 3 (bd-9kll.2.18) --- */
 TEST(cancel_severity_monotone) {
     int k;
     int prev_sev = -1;
-    for (k = 0; k <= 10; k++) {
+    for (k = 0; k <= 9; k++) {
         int sev = asx_cancel_severity((asx_cancel_kind)k);
         ASSERT_TRUE(sev >= prev_sev);
         prev_sev = sev;
     }
+    ASSERT_EQ(asx_cancel_severity((asx_cancel_kind)10), 3);
 }
 
 /* --- Severity is bounded [0, 5] --- */

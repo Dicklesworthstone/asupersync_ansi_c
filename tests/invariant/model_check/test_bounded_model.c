@@ -301,7 +301,8 @@ TEST(obligation_terminal_predicate_consistent) {
 /* -------------------------------------------------------------------
  * Invariant 8: Cancel severity is monotonic
  *
- * Cancellation kinds have severities from USER(0) to SHUTDOWN(10).
+ * Cancellation kinds have severities from USER(0) to SHUTDOWN(9);
+ * LinkedExit(10), which Rust declares last, is severity 3.
  * The cancel protocol must never accept a lower-severity cancellation
  * after a higher-severity one was already in effect.
  * ------------------------------------------------------------------- */

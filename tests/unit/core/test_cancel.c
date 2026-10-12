@@ -15,14 +15,33 @@
 TEST(cancel_severity_user) { ASSERT_EQ(asx_cancel_severity(ASX_CANCEL_USER), (int)0); }
 
 TEST(cancel_severity_monotone) {
-    /* Severity is non-decreasing with kind ordinal */
+    /* Rust's ordinals 0-9 are severity-ordered; LinkedExit, which Rust
+     * declares last (Spork link propagation), is severity 3 (CancelKind,
+     * types/cancel.rs:264), so the order is not monotone at 10. */
     int prev = 0;
     int k;
-    for (k = 0; k <= 10; k++) {
+    for (k = 0; k <= 9; k++) {
         int sev = asx_cancel_severity((asx_cancel_kind)k);
         ASSERT_TRUE(sev >= prev);
         prev = sev;
     }
+    ASSERT_EQ(asx_cancel_severity((asx_cancel_kind)10), (int)3);
+}
+
+TEST(cancel_kind_ordinals_are_rusts) {
+    /* The discriminants of Rust's CancelKind, which derives Ord, Hash and
+     * serde on them (types/cancel.rs:264; bd-9kll.2.18, DEC-006). */
+    ASSERT_EQ((int)ASX_CANCEL_USER, 0);
+    ASSERT_EQ((int)ASX_CANCEL_TIMEOUT, 1);
+    ASSERT_EQ((int)ASX_CANCEL_DEADLINE, 2);
+    ASSERT_EQ((int)ASX_CANCEL_POLL_QUOTA, 3);
+    ASSERT_EQ((int)ASX_CANCEL_COST_BUDGET, 4);
+    ASSERT_EQ((int)ASX_CANCEL_FAIL_FAST, 5);
+    ASSERT_EQ((int)ASX_CANCEL_RACE_LOST, 6);
+    ASSERT_EQ((int)ASX_CANCEL_PARENT, 7);
+    ASSERT_EQ((int)ASX_CANCEL_RESOURCE, 8);
+    ASSERT_EQ((int)ASX_CANCEL_SHUTDOWN, 9);
+    ASSERT_EQ((int)ASX_CANCEL_LINKED_EXIT, 10);
 }
 
 TEST(cancel_severity_known_values) {
@@ -435,6 +454,7 @@ int main(void) {
     RUN_TEST(cancel_severity_user);
     RUN_TEST(cancel_severity_monotone);
     RUN_TEST(cancel_severity_known_values);
+    RUN_TEST(cancel_kind_ordinals_are_rusts);
     RUN_TEST(cancel_quota_decreasing);
     RUN_TEST(cancel_priority_increasing);
     RUN_TEST(cancel_cleanup_budget_sets_quota);

@@ -214,9 +214,11 @@ order. They are still encoded by name.
 
 ### Cancel kinds
 
-Cancel kinds are encoded **by name**. The ordinals differ between the
+Cancel kinds are encoded **by name**. The ordinals are the same in both
 engines: Rust's wire codes follow declaration order
-(`src/cancel/symbol_cancel.rs:23-52`), and C's enum is ordered by severity.
+(`src/cancel/symbol_cancel.rs:23-52`), and C's enum has followed it since
+`bd-9kll.2.18` (DEC-006), so severity is not monotone in the ordinal
+(`LinkedExit`, declared last, is severity 3).
 
 | Name | Severity | Rust wire code | C enum (`asx_ids.h:150-160`) |
 |---|---|---|---|
@@ -227,10 +229,10 @@ engines: Rust's wire codes follow declaration order
 | `CostBudget` | 2 | 4 | `ASX_CANCEL_COST_BUDGET` = 4 |
 | `FailFast` | 3 | 5 | `ASX_CANCEL_FAIL_FAST` = 5 |
 | `RaceLost` | 3 | 6 | `ASX_CANCEL_RACE_LOST` = 6 |
-| `ParentCancelled` | 4 | 7 | `ASX_CANCEL_PARENT` = 8 |
-| `ResourceUnavailable` | 4 | 8 | `ASX_CANCEL_RESOURCE` = 9 |
-| `Shutdown` | 5 | 9 | `ASX_CANCEL_SHUTDOWN` = 10 |
-| `LinkedExit` | 3 | 10 | `ASX_CANCEL_LINKED_EXIT` = 7 |
+| `ParentCancelled` | 4 | 7 | `ASX_CANCEL_PARENT` = 7 |
+| `ResourceUnavailable` | 4 | 8 | `ASX_CANCEL_RESOURCE` = 8 |
+| `Shutdown` | 5 | 9 | `ASX_CANCEL_SHUTDOWN` = 9 |
+| `LinkedExit` | 3 | 10 | `ASX_CANCEL_LINKED_EXIT` = 10 |
 
 Severity comes from `CancelKind::severity()` (`src/types/cancel.rs:473-482`).
 `LinkedExit` is severity 3, although that function's doc comment omits it.

@@ -139,7 +139,7 @@ extern "C" {
 #define ASX_ABI_TASK_STATE_LAST 5u       /* ASX_TASK_COMPLETED */
 #define ASX_ABI_OBLIGATION_STATE_LAST 3u /* ASX_OBLIGATION_LEAKED */
 #define ASX_ABI_OUTCOME_SEVERITY_LAST 3u /* ASX_OUTCOME_PANICKED */
-#define ASX_ABI_CANCEL_KIND_LAST 10u     /* ASX_CANCEL_SHUTDOWN */
+#define ASX_ABI_CANCEL_KIND_LAST 10u     /* ASX_CANCEL_LINKED_EXIT */
 #define ASX_ABI_CANCEL_PHASE_LAST 3u     /* ASX_CANCEL_PHASE_COMPLETED */
 
 /* -----------------------------------------------------------------------
