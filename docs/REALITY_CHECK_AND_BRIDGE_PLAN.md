@@ -495,7 +495,7 @@ fingerprints, object layout, refusal ordering or the 49 controls.
 - [x] Share the immutable library-side table through the existing exported getter, now colocated with hook/config preparation. App/lab layout folding accepts a base stamp; public macros still supply their independently computed application base, while library creation passes its own base. No runtime cache or ambient selector is introduced; tests/fixtures/thresholds are unchanged.
 - [x] Independently compare the preserved `2030ceb0` and freshly built `78a280eb` CORE GCC15 release R3 products: archive text 770,387 -> 757,053 bytes (-13,334), archive file 1,642,864 -> 1,629,584 bytes (-13,280); data/BSS unchanged. Linked CLI text falls 5,224 bytes and runner text 8,080 bytes. These bounded footprint measurements do not certify latency, cold start, or the broader P2 contract.
 - [x] Root fresh `8ba3a53e` GCC15, Clang21 and genuine GCC i386 each execute 49 controls and all 167 canonical comparisons. Independent `78a280eb` CORE matching consumer has 144 assertions; optimized MINIMAL has 130 plus all 49 mismatch/live-work controls and ten supported examples. Full local strict build/164-unit/core/format/lint/integrity/11-gate/docs checks pass. Older source results and final-source results are labeled separately.
-- [ ] Publish the verified source and original tracker updates together; keep broad P2 in progress.
+- [x] Publish the verified source and original tracker updates together as `e0d7eb2b`, synchronized to both remote branches and the primary checkout. Broad P2 stays in progress; comment 262 records the measured saving and actual failed performance publication without changing acceptance or budgets.
 
 ### Discovered integration/build regressions, `bd-kpr4` and `bd-6e4j`
 
@@ -526,12 +526,16 @@ is credited as profile execution.
 - [x] Fresh strict GCC15 release MINIMAL runtime/CLI at `78a280eb` executes 49 mismatch/live-task controls and ten supported examples. Root and independent fresh `1be49a4e` MINIMAL runners each link their preserved, verified `78a280eb` R3 library and execute 167/167 canonical scenarios. Runtime/header/test bytes are identical between these commits; this is explicitly composite evidence, not a newly rebuilt `1be49a4e` library.
 - [x] Both MINIMAL runners detect a genuine mutated trace expectation. Constants report 102 compared, 96 equal, six classified differences, seven explicitly N/A, zero failures; only two unavailable public Lab defaults become N/A. CORE retains actual factory observations, all kernel comparisons and negative controls.
 - [x] Existing strict local core/unit/invariant/format/lint/integrity and all 11 gate scripts pass; the final runner's CORE 167 comparisons and documentation checks pass too.
-- [x] PinkOwl accepts final `1be49a4e`, independently executes the unchanged original eight CORE constants controls, and closes `bd-6e4j`, comment 261, `2026-10-12T17:36:01.647967185Z`. Composite runtime reuse and all actual older compile/runner/setup failures remain explicit; full-browser results are not substituted. Durable independent evidence is on hz3 at `/tmp/asx-fps-pink-1be-proof-20261012` and locally under `/data/tmp/asx-fps-pink-78-essential-20261012` plus the final runner archive.
-- [ ] Publish the completed fixes, synchronize both remote branches and the primary checkout, and observe the new publication's own hosted CI/performance outcome.
+- [x] PinkOwl accepts final `1be49a4e`, independently executes the unchanged original eight CORE constants controls, and closes `bd-6e4j`, comment 261, `2026-10-12T17:36:01.647967185Z`. Composite runtime reuse and all actual older compile/runner/setup failures remain explicit; full-browser results are not substituted. Durable independent evidence is on hz3 at `/tmp/asx-fps-pink-1be-proof-20261012` and locally under `/data/tmp/asx-fps-pink-78-essential-20261012` and `/data/tmp/asx-fps-pink-1be-essential-20261012`.
+- [x] Publish `e0d7eb2b` to both remote branches and fast-forward the primary checkout, preserving all six original untracked artifacts. Its full `093f6184..HEAD` proof-block gate passes.
+- [x] Observe its own completed performance run `38285643530`: CORE 38/41, HFT 38/41 and size/cold start 5/10; all report failure. Actual release builds and benchmarks execute; strict dashboard correctly reports failure too. Downloaded manifest/report/library hashes bind these results to `e0d7eb2b`; artifacts are retained under `/data/tmp/asx-e0d7-perf-artifact-20261012`.
+- [x] Observe the publication's own primary CI `38285643322` at `e0d7eb2b`: all 30 jobs complete successfully, including the full configured parser fuzz campaign, hosted 26-family E2E, MSVC, sanitizer, genuine 32-bit and QEMU lanes. This is primary-CI evidence for the code publication, while the separate performance run remains red. The final TODO/P2 evidence record changes no product source, tests, fixtures, build settings or budgets; it is not another runtime acceptance claim.
 
 The two independently accepted closures restore the current unfinished count
-to 114 (106 open, eight in progress). Root verifies that the other 798 issue
-rows and all 259 prior comments/136 prior events remain unchanged. Broad P2
+to 114 (106 open, eight in progress). At those closures, root verifies that
+the other 798 issue rows and all 259 prior comments/136 prior events remain
+unchanged. The later P2 progress comment changes only that original row,
+without closing it. Broad P2
 and the other original milestones stay open. Root durable final execution
 evidence is `/data/tmp/asx-fp-wiring-root-final-essential-20261012.tar.gz` on
 both local and hz3, SHA-256
