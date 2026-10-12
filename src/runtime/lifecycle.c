@@ -182,7 +182,7 @@ void asx_runtime_reset(void) {
     g_leak_count = 0;
     g_cleanup_hard_bound = 0;
     g_member_seq = 0;
-
+    asx_cancel_chain_limits_reset_internal();
     /* Reset ghost safety monitors */
     asx_ghost_reset();
     asx_scheduler_event_reset();

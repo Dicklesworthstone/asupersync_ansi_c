@@ -472,7 +472,7 @@ static uint32_t cancel_subtree_tasks(uint32_t n) {
 
 /* A descendant's reason (state.rs:7737-7748): ParentCancelled, attributed
  * to its immediate parent, stamped with the request's time, caused by the
- * parent's reason. */
+ * parent's reason under the chain bounds (with_cause_limited). */
 static void parent_cancelled_reason(asx_cancel_reason *out, asx_region_id parent,
                                     const asx_cancel_reason *parent_reason, asx_time timestamp) {
     out->kind = ASX_CANCEL_PARENT;
@@ -480,8 +480,8 @@ static void parent_cancelled_reason(asx_cancel_reason *out, asx_region_id parent
     out->origin_task = ASX_INVALID_ID;
     out->timestamp = timestamp;
     out->message = NULL;
-    out->cause = (asx_cancel_reason *)parent_reason;
     out->truncated = 0;
+    asx_cancel_reason_with_cause_limited(out, parent_reason);
 }
 
 uint32_t asx_cancel_propagate(asx_region_id region, asx_cancel_kind kind) {

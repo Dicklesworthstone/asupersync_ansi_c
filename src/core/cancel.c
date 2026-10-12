@@ -226,3 +226,84 @@ const char *asx_cancel_phase_str(asx_cancel_phase phase) {
     default: return "unknown";
     }
 }
+
+/* -------------------------------------------------------------------
+ * Cause-chain bound (Rust CancelAttributionConfig, types/cancel.rs:184-262;
+ * CancelReason::with_cause_limited, :706-761)
+ * ------------------------------------------------------------------- */
+
+/* Rust's single_reason_cost() and the per-link Box overhead
+ * (estimated_chain_cost: 80 * depth + 8 * (depth - 1)). */
+#define CHAIN_REASON_COST 80u
+#define CHAIN_LINK_COST 8u
+/* The most links a walk follows in a chain no bound cut: a guard against a
+ * cyclic chain a caller built. */
+#define CHAIN_WALK_MAX 1024u
+
+/* CancelAttributionConfig::default(): DEFAULT_MAX_DEPTH, DEFAULT_MAX_MEMORY.
+ * The runtime config's defaults (hooks.c) are the same pair. */
+#define CHAIN_DEFAULT_DEPTH 16u
+#define CHAIN_DEFAULT_MEMORY 4096u
+
+static uint32_t g_chain_max_depth = CHAIN_DEFAULT_DEPTH;
+static uint32_t g_chain_max_memory = CHAIN_DEFAULT_MEMORY;
+
+static uint64_t chain_cost(uint64_t depth) {
+    if (depth == 0u) return 0u;
+    return depth * (CHAIN_REASON_COST + CHAIN_LINK_COST) - CHAIN_LINK_COST;
+}
+
+uint32_t asx_cancel_chain_link_limit(uint32_t max_depth, uint32_t max_memory) {
+    uint32_t by_depth = max_depth > 0u ? max_depth - 1u : 0u;
+    uint32_t by_memory = 0u;
+    if (max_memory >= CHAIN_REASON_COST) {
+        by_memory = (max_memory - CHAIN_REASON_COST) / (CHAIN_REASON_COST + CHAIN_LINK_COST);
+    }
+    return by_depth < by_memory ? by_depth : by_memory;
+}
+
+void asx_cancel_chain_limits_set_internal(uint32_t max_depth, uint32_t max_memory) {
+    g_chain_max_depth = max_depth;
+    g_chain_max_memory = max_memory;
+}
+
+void asx_cancel_chain_limits_reset_internal(void) {
+    g_chain_max_depth = CHAIN_DEFAULT_DEPTH;
+    g_chain_max_memory = CHAIN_DEFAULT_MEMORY;
+}
+
+uint32_t asx_cancel_reason_chain_links(const asx_cancel_reason *r) {
+    const asx_cancel_reason *c;
+    uint32_t limit;
+    uint32_t n = 0u;
+
+    if (r == NULL) return 0u;
+    limit = r->truncated ? asx_cancel_chain_link_limit(g_chain_max_depth, g_chain_max_memory)
+                         : CHAIN_WALK_MAX;
+    for (c = r->cause; c != NULL && n < limit; c = c->cause) {
+        /* ASX_CHECKPOINT_WAIVER("bounded: n < CHAIN_WALK_MAX") */
+        n++;
+    }
+    return n;
+}
+
+void asx_cancel_reason_with_cause_limited(asx_cancel_reason *r, const asx_cancel_reason *cause) {
+    uint64_t total;
+
+    if (r == NULL) return;
+    if (cause == NULL) {
+        r->cause = NULL;
+        return;
+    }
+    /* The reason itself, the cause, and the cause's own links
+     * (with_cause_limited: current_depth 1 + cause.chain_depth()). */
+    total = (uint64_t)asx_cancel_reason_chain_links(cause) + 2u;
+    if (total > g_chain_max_depth || chain_cost(total) > g_chain_max_memory) {
+        r->truncated = 1;
+        r->cause = asx_cancel_chain_link_limit(g_chain_max_depth, g_chain_max_memory) == 0u
+                       ? NULL
+                       : (asx_cancel_reason *)cause;
+        return;
+    }
+    r->cause = (asx_cancel_reason *)cause;
+}

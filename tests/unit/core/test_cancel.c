@@ -299,6 +299,137 @@ TEST(cancel_phase_str_unknown) {
     ASSERT_STR_EQ(asx_cancel_phase_str((asx_cancel_phase)99), "unknown");
 }
 
+/* ------------------------------------------------------------------ */
+/* Cause-chain bound (Rust with_cause_limited, types/cancel.rs:706-761) */
+/* ------------------------------------------------------------------ */
+
+#define CHAIN_N 24u
+
+/* chain[0] is a root reason; chain[i] is PARENT caused by chain[i - 1],
+ * built as the runtime builds a region subtree's reasons (state.rs:7737). */
+static void build_chain(asx_cancel_reason *chain, uint32_t n) {
+    uint32_t i;
+    for (i = 0; i < n; i++) {
+        memset(&chain[i], 0, sizeof chain[i]);
+        chain[i].kind = i == 0u ? ASX_CANCEL_USER : ASX_CANCEL_PARENT;
+        chain[i].origin_task = ASX_INVALID_ID;
+        chain[i].timestamp = 1u;
+        if (i > 0u) asx_cancel_reason_with_cause_limited(&chain[i], &chain[i - 1u]);
+    }
+}
+
+/* chain[i] has i causes until the bound: from there it keeps `limit`. */
+static uint32_t expect_links(uint32_t i, uint32_t limit) { return i < limit ? i : limit; }
+
+TEST(chain_link_limit_follows_the_depth_and_memory_bounds) {
+    /* Rust's defaults, depth 16 and 4096 bytes, keep 15 links: depth binds. */
+    ASSERT_EQ(asx_cancel_chain_link_limit(16u, 4096u), (uint32_t)15u);
+    /* The runtime profiles' pairs (builder.c): depth binds in both. */
+    ASSERT_EQ(asx_cancel_chain_link_limit(8u, 2048u), (uint32_t)7u);
+    ASSERT_EQ(asx_cancel_chain_link_limit(32u, 8192u), (uint32_t)31u);
+    /* A depth of 1 leaves no room for a cause. */
+    ASSERT_EQ(asx_cancel_chain_link_limit(1u, 4096u), (uint32_t)0u);
+    ASSERT_EQ(asx_cancel_chain_link_limit(0u, 4096u), (uint32_t)0u);
+    /* Memory binds when it is the tighter: a chain of d reasons costs
+     * 88 d - 8 bytes (80 a reason, 8 a link), so 4096 holds 46 reasons. */
+    ASSERT_EQ(asx_cancel_chain_link_limit(100u, 4096u), (uint32_t)45u);
+    ASSERT_EQ(asx_cancel_chain_link_limit(65535u, 4096u), (uint32_t)45u);
+    /* Two reasons cost 168 bytes: one link at 168, none below. */
+    ASSERT_EQ(asx_cancel_chain_link_limit(16u, 168u), (uint32_t)1u);
+    ASSERT_EQ(asx_cancel_chain_link_limit(16u, 167u), (uint32_t)0u);
+    ASSERT_EQ(asx_cancel_chain_link_limit(16u, 79u), (uint32_t)0u);
+    ASSERT_EQ(asx_cancel_chain_link_limit(16u, 0u), (uint32_t)0u);
+}
+
+TEST(chain_is_cut_at_the_default_depth) {
+    /* Depth 16: a reason keeps 15 causes. The reason that would be the
+     * 17th is the first flagged truncated (Rust: total_depth 17 > 16). */
+    asx_cancel_reason chain[CHAIN_N];
+    const asx_cancel_reason *c;
+    uint32_t i;
+    uint32_t raw = 0u;
+
+    asx_cancel_chain_limits_reset_internal();
+    build_chain(chain, CHAIN_N);
+    for (i = 0; i < CHAIN_N; i++) {
+        ASSERT_EQ(asx_cancel_reason_chain_links(&chain[i]), expect_links(i, 15u));
+        ASSERT_EQ(chain[i].truncated, i >= 16u ? 1 : 0);
+    }
+    /* The stored causes are the ancestors' own reasons and go on past the
+     * cut; the link count is where the chain ends. */
+    for (c = chain[CHAIN_N - 1u].cause; c != NULL; c = c->cause) raw++;
+    ASSERT_EQ(raw, CHAIN_N - 1u);
+    ASSERT_EQ(asx_cancel_reason_chain_links(&chain[CHAIN_N - 1u]), (uint32_t)15u);
+}
+
+TEST(chain_is_cut_at_a_configured_depth) {
+    asx_cancel_reason chain[CHAIN_N];
+    uint32_t i;
+
+    asx_cancel_chain_limits_set_internal(4u, 4096u);
+    build_chain(chain, 10u);
+    for (i = 0; i < 10u; i++) {
+        ASSERT_EQ(asx_cancel_reason_chain_links(&chain[i]), expect_links(i, 3u));
+        ASSERT_EQ(chain[i].truncated, i >= 4u ? 1 : 0);
+    }
+    asx_cancel_chain_limits_reset_internal();
+}
+
+TEST(chain_is_cut_at_a_configured_memory_bound) {
+    /* 300 bytes hold 3 reasons (256) and not 4 (344): 2 links, though the
+     * depth bound of 100 would allow far more. */
+    asx_cancel_reason chain[CHAIN_N];
+    uint32_t i;
+
+    asx_cancel_chain_limits_set_internal(100u, 300u);
+    build_chain(chain, 10u);
+    for (i = 0; i < 10u; i++) {
+        ASSERT_EQ(asx_cancel_reason_chain_links(&chain[i]), expect_links(i, 2u));
+        ASSERT_EQ(chain[i].truncated, i >= 3u ? 1 : 0);
+    }
+    asx_cancel_chain_limits_reset_internal();
+}
+
+TEST(chain_bound_with_no_room_keeps_no_cause) {
+    /* Depth 1, or memory under two reasons: the reason is flagged and has
+     * no cause (Rust: "No room for any cause - mark as truncated"). */
+    asx_cancel_reason chain[3];
+
+    asx_cancel_chain_limits_set_internal(1u, 4096u);
+    build_chain(chain, 3u);
+    ASSERT_TRUE(chain[1].cause == NULL);
+    ASSERT_EQ(chain[1].truncated, 1);
+    ASSERT_EQ(asx_cancel_reason_chain_links(&chain[2]), (uint32_t)0u);
+
+    asx_cancel_chain_limits_set_internal(16u, 0u);
+    build_chain(chain, 3u);
+    ASSERT_TRUE(chain[1].cause == NULL);
+    ASSERT_EQ(chain[1].truncated, 1);
+    asx_cancel_chain_limits_reset_internal();
+}
+
+TEST(callers_own_chain_is_counted_whole) {
+    /* Rust's with_cause sets no bound: only a chain the runtime built and
+     * flagged truncated is cut. A hand-linked chain counts every link. */
+    asx_cancel_reason chain[30];
+    uint32_t i;
+
+    asx_cancel_chain_limits_reset_internal();
+    ASSERT_EQ(asx_cancel_reason_chain_links(NULL), (uint32_t)0u);
+    for (i = 0; i < 30u; i++) {
+        memset(&chain[i], 0, sizeof chain[i]);
+        chain[i].kind = ASX_CANCEL_USER;
+        chain[i].origin_task = ASX_INVALID_ID;
+        chain[i].cause = i > 0u ? &chain[i - 1u] : NULL;
+    }
+    ASSERT_EQ(asx_cancel_reason_chain_links(&chain[0]), (uint32_t)0u);
+    ASSERT_EQ(asx_cancel_reason_chain_links(&chain[29]), (uint32_t)29u);
+
+    /* Flagged, the same chain ends at the bound. */
+    chain[29].truncated = 1;
+    ASSERT_EQ(asx_cancel_reason_chain_links(&chain[29]), (uint32_t)15u);
+}
+
 int main(void) {
     fprintf(stderr, "=== test_cancel ===\n");
     RUN_TEST(cancel_severity_user);
@@ -315,6 +446,14 @@ int main(void) {
     RUN_TEST(cancel_strengthen_equal_severity_same_timestamp);
     RUN_TEST(cancel_strengthen_tie_prefers_a_message_then_the_smaller_one);
     RUN_TEST(cancel_reason_default_has_rust_default_attribution);
+
+    /* Cause-chain bound */
+    RUN_TEST(chain_link_limit_follows_the_depth_and_memory_bounds);
+    RUN_TEST(chain_is_cut_at_the_default_depth);
+    RUN_TEST(chain_is_cut_at_a_configured_depth);
+    RUN_TEST(chain_is_cut_at_a_configured_memory_bound);
+    RUN_TEST(chain_bound_with_no_room_keeps_no_cause);
+    RUN_TEST(callers_own_chain_is_counted_whole);
 
     /* Witness lifecycle */
     RUN_TEST(witness_create_and_query_phase);

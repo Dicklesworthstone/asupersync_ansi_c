@@ -592,7 +592,6 @@ static uint32_t text_store(const char *s, size_t len) {
 }
 
 static void capture_reason(const asx_cancel_reason *r, it_reason *out) {
-    const asx_cancel_reason *c;
     out->kind = r->kind;
     out->origin_region = r->origin_region;
     out->origin_task = r->origin_task;
@@ -604,10 +603,11 @@ static void capture_reason(const asx_cancel_reason *r, it_reason *out) {
         out->message_off = text_store(r->message, len);
         out->message_len = (uint32_t)len;
     }
-    out->cause_chain_len = 0;
-    for (c = r->cause; c != NULL && out->cause_chain_len < 1024u; c = c->cause) {
-        out->cause_chain_len++;
-    }
+    /* The links the runtime's chain bounds leave: a truncated chain ends
+     * where Rust's does (with_cause_limited, types/cancel.rs:706-761),
+     * though the stored causes, the ancestors' own reasons that longer
+     * chains share, continue past it. */
+    out->cause_chain_len = asx_cancel_reason_chain_links(r);
     out->truncated = r->truncated;
 }
 

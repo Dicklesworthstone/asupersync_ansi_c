@@ -450,7 +450,7 @@ A witness transition from `prev` to `next` is valid when ALL hold. The checks ar
 **Chain limits (configurable):**
 - Rust `CancelAttributionConfig` (`src/types/cancel.rs:184`): `max_chain_depth` default 16, `max_chain_memory` default 4096 bytes, estimated at 80 bytes per reason plus 8 bytes per link (`src/types/cancel.rs:237`, `src/types/cancel.rs:244`)
 - Rust truncates in `with_cause_limited` (`src/types/cancel.rs:706`), setting `truncated` and `truncated_at_depth`
-- C never truncates: its chains are links to stored region reasons. `max_cancel_chain_depth` is validated as non-zero (`src/runtime/rt.c:163`), but neither it nor `max_cancel_chain_memory` is used by cancellation (`bd-9kll.3.7`, "the config knobs do nothing")
+- C truncates as Rust does (`asx_cancel_reason_with_cause_limited`, `src/core/cancel.c`): a descendant's reason built on a chain that would pass 16 reasons or an estimated 4096 bytes is flagged `truncated` and ends after 15 causes (`asx_cancel_chain_link_limit`). Its chains are links to the ancestors' stored reasons, which longer chains share, so the cut is applied when the chain is read (`asx_cancel_reason_chain_links`) and not by copying; Rust's `truncated_at_depth` is not recorded. `max_cancel_chain_depth` is validated as non-zero (`src/runtime/rt.c:163`); installing it and `max_cancel_chain_memory` into the bound is the remaining wiring of `bd-9kll.3.7`
 
 ### 4.8 Cancellation Metadata (Legacy Section)
 
@@ -459,7 +459,7 @@ Each cancellation carries these operational fields:
 | Field | Type | Description |
 |-------|------|-------------|
 | `reason_kind` | enum | Why cancellation was initiated (see 4.4) |
-| `attribution_chain` | bounded chain | Recursive cause chain; bounded in Rust, unbounded links in C (§4.7) |
+| `attribution_chain` | bounded chain | Recursive cause chain; bounded in Rust and in C, where the bound is applied when the chain is read (§4.7) |
 | `cleanup_budget` | `asx_budget` | Budget for the cleanup phase: the request's per-kind cleanup budget (§4.4), met with any earlier request's. Rust also meets it with a region's shutdown-budget ceiling (`src/runtime/state.rs:7832`) |
 | `epoch` | `uint64_t` | Rust: set once by the first request. C: bumped by every changed request (§4.5) |
 | `phase` | `asx_cancel_phase` | Current phase of the cancellation protocol |

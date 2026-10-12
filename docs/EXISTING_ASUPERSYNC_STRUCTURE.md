@@ -509,7 +509,7 @@ A transition from `prev` to `next` is valid when ALL hold (Rust `validate_transi
 | `cause` | `asx_cancel_reason*` (optional) | Parent cause in chain (C sets it only in `asx_region_cancel`) |
 | `truncated` | `bool` | Whether chain was truncated (Rust also `truncated_at_depth`) |
 
-**Chain limits (configurable):** Rust `max_chain_depth` default 16, `max_chain_memory` default 4096 bytes, estimated at 80 bytes per reason plus 8 per link (`src/types/cancel.rs:184`, `src/types/cancel.rs:237`); truncation in `with_cause_limited` (`src/types/cancel.rs:706`) sets `truncated`. C never truncates; its `max_cancel_chain_*` config fields are not used by cancellation (`bd-9kll.3.7`).
+**Chain limits (configurable):** Rust `max_chain_depth` default 16, `max_chain_memory` default 4096 bytes, estimated at 80 bytes per reason plus 8 per link (`src/types/cancel.rs:184`, `src/types/cancel.rs:237`); truncation in `with_cause_limited` (`src/types/cancel.rs:706`) sets `truncated`. C truncates the same way when it builds a region subtree's reasons (`asx_cancel_reason_with_cause_limited`, `src/core/cancel.c`); the runtime config's `max_cancel_chain_*` fields are not yet installed into the bound (`bd-9kll.3.7`).
 
 ### 6.8 Propagation Rules
 

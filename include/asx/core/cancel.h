@@ -50,6 +50,52 @@ ASX_API asx_cancel_reason asx_cancel_strengthen(const asx_cancel_reason *a,
 ASX_API asx_cancel_reason asx_cancel_reason_default(asx_cancel_kind kind, const char *message);
 
 /* -------------------------------------------------------------------
+ * Cause-chain bound
+ *
+ * The runtime builds a chain when it cancels a region subtree: each
+ * descendant's reason is PARENT, caused by its parent's. Rust bounds that
+ * chain with CancelAttributionConfig (types/cancel.rs:184-262) and
+ * CancelReason::with_cause_limited (:706-761): a chain holds at most
+ * `max_depth` reasons (the reason and its causes) and an estimated
+ * 88 * depth - 8 bytes (80 per reason, 8 per link); a cause chain that
+ * would exceed either is cut and the reason built on it is flagged
+ * `truncated`. The runtime's bounds are asx_runtime_config's
+ * max_cancel_chain_depth and max_cancel_chain_memory.
+ * ------------------------------------------------------------------- */
+
+/* The cause links a cut chain keeps under the given bounds. A chain meets
+ * the depth bound or the memory bound first as it grows, and once cut it
+ * is cut at the same length again, so the length is a function of the
+ * bounds alone: min(max_depth - 1, (max_memory - 80) / 88), each term
+ * floored at 0. (Where a caller hands the runtime a chain already deeper
+ * than max_depth, and the memory bound is the tighter one, Rust's depth
+ * branch keeps max_depth - 1 links without checking memory; this keeps the
+ * tighter length.) */
+ASX_API uint32_t asx_cancel_chain_link_limit(uint32_t max_depth, uint32_t max_memory);
+
+/* Make `cause` the cause of `r` under the active bounds, as Rust's
+ * with_cause_limited does: a chain that would pass either bound sets
+ * `r->truncated`, and a bound that leaves room for no cause leaves
+ * `r->cause` NULL. A NULL `cause` clears the cause. `r->truncated` is left
+ * as it was when the chain fits. */
+ASX_API void asx_cancel_reason_with_cause_limited(asx_cancel_reason *r,
+                                                  const asx_cancel_reason *cause);
+
+/* The cause links of `r`'s chain: Rust's chain_depth() - 1, the
+ * vocabulary's cause_chain_len. A truncated chain ends after
+ * asx_cancel_chain_link_limit() links under the active bounds even where
+ * the stored causes continue (they are the ancestors' own reasons, which
+ * longer chains share); a caller's own chain is counted whole, up to 1024
+ * links. Walk a chain with this count, not until `cause` is NULL. */
+ASX_API uint32_t asx_cancel_reason_chain_links(const asx_cancel_reason *r);
+
+/* The runtime installs its config's bounds at init and the defaults (16
+ * reasons, 4096 bytes) return at reset. Set them through
+ * asx_runtime_config; applications do not call these. */
+ASX_API void asx_cancel_chain_limits_set_internal(uint32_t max_depth, uint32_t max_memory);
+ASX_API void asx_cancel_chain_limits_reset_internal(void);
+
+/* -------------------------------------------------------------------
  * Cancel witness protocol — lifecycle and query
  * ------------------------------------------------------------------- */
 
