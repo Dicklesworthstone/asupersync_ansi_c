@@ -130,13 +130,14 @@ TEST(cancel_kind_str) {
     ASSERT_STR_EQ(asx_cancel_kind_str(ASX_CANCEL_USER), "user");
     ASSERT_STR_EQ(asx_cancel_kind_str(ASX_CANCEL_TIMEOUT), "timeout");
     ASSERT_STR_EQ(asx_cancel_kind_str(ASX_CANCEL_DEADLINE), "deadline");
-    ASSERT_STR_EQ(asx_cancel_kind_str(ASX_CANCEL_POLL_QUOTA), "poll_quota");
-    ASSERT_STR_EQ(asx_cancel_kind_str(ASX_CANCEL_COST_BUDGET), "cost_budget");
-    ASSERT_STR_EQ(asx_cancel_kind_str(ASX_CANCEL_FAIL_FAST), "fail_fast");
-    ASSERT_STR_EQ(asx_cancel_kind_str(ASX_CANCEL_RACE_LOST), "race_lost");
-    ASSERT_STR_EQ(asx_cancel_kind_str(ASX_CANCEL_LINKED_EXIT), "linked_exit");
-    ASSERT_STR_EQ(asx_cancel_kind_str(ASX_CANCEL_PARENT), "parent");
-    ASSERT_STR_EQ(asx_cancel_kind_str(ASX_CANCEL_RESOURCE), "resource");
+    /* Rust's `impl Display for CancelKind` (types/cancel.rs:485-501) */
+    ASSERT_STR_EQ(asx_cancel_kind_str(ASX_CANCEL_POLL_QUOTA), "poll quota");
+    ASSERT_STR_EQ(asx_cancel_kind_str(ASX_CANCEL_COST_BUDGET), "cost budget");
+    ASSERT_STR_EQ(asx_cancel_kind_str(ASX_CANCEL_FAIL_FAST), "fail-fast");
+    ASSERT_STR_EQ(asx_cancel_kind_str(ASX_CANCEL_RACE_LOST), "race lost");
+    ASSERT_STR_EQ(asx_cancel_kind_str(ASX_CANCEL_LINKED_EXIT), "linked exit");
+    ASSERT_STR_EQ(asx_cancel_kind_str(ASX_CANCEL_PARENT), "parent cancelled");
+    ASSERT_STR_EQ(asx_cancel_kind_str(ASX_CANCEL_RESOURCE), "resource unavailable");
     ASSERT_STR_EQ(asx_cancel_kind_str(ASX_CANCEL_SHUTDOWN), "shutdown");
 }
 

@@ -209,18 +209,19 @@ asx_status asx_cancel_request(asx_task_id task, const asx_cancel_reason *reason)
  * String helpers
  * ------------------------------------------------------------------- */
 
+/* Rust's `impl Display for CancelKind` (types/cancel.rs:485-501). */
 const char *asx_cancel_kind_str(asx_cancel_kind kind) {
     switch (kind) {
     case ASX_CANCEL_USER: return "user";
     case ASX_CANCEL_TIMEOUT: return "timeout";
     case ASX_CANCEL_DEADLINE: return "deadline";
-    case ASX_CANCEL_POLL_QUOTA: return "poll_quota";
-    case ASX_CANCEL_COST_BUDGET: return "cost_budget";
-    case ASX_CANCEL_FAIL_FAST: return "fail_fast";
-    case ASX_CANCEL_RACE_LOST: return "race_lost";
-    case ASX_CANCEL_LINKED_EXIT: return "linked_exit";
-    case ASX_CANCEL_PARENT: return "parent";
-    case ASX_CANCEL_RESOURCE: return "resource";
+    case ASX_CANCEL_POLL_QUOTA: return "poll quota";
+    case ASX_CANCEL_COST_BUDGET: return "cost budget";
+    case ASX_CANCEL_FAIL_FAST: return "fail-fast";
+    case ASX_CANCEL_RACE_LOST: return "race lost";
+    case ASX_CANCEL_LINKED_EXIT: return "linked exit";
+    case ASX_CANCEL_PARENT: return "parent cancelled";
+    case ASX_CANCEL_RESOURCE: return "resource unavailable";
     case ASX_CANCEL_SHUTDOWN: return "shutdown";
     default: return "unknown";
     }
