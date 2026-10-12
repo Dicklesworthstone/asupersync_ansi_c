@@ -2315,7 +2315,7 @@ hooks, scheduler) is process-wide, so initializing a second runtime would
 destroy the first one's regions and tasks; the call refuses and changes
 nothing. Shut the live runtime down first (`asx_runtime_shutdown`; tests may
 use `asx_runtime_reset`). Initializing the live runtime object itself again
-restarts it.
+also returns `ASX_E_INVALID_STATE`, preserving its active work and hooks.
 
 ### Non-deterministic replay mismatch
 

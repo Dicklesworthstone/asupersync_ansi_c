@@ -380,13 +380,36 @@ reject it if any changes. The schema and full denominator remain unchanged.
 - [x] Update the existing real repeat/changed-input control for the corrected names without relaxing its assertions.
 - [x] Run draft strict C build/test/format/lint/schema/documentation/integrity gates; review the scanner's Makefile comment misclassification separately from the supported Rust/Bash scan.
 - [x] Compile and preserve the metadata-only native draft against the pinned dependency; retain its three full-batch schema failures.
-- [ ] Compile and freeze the zero-time-advance candidate; the earlier metadata-only binary cannot certify this source.
-- [ ] Validate all 200 seed-9 outputs and all 1,001 boundary inputs; enumerate exactly the three bare-operation substitutions and otherwise require old/new input identity excluding only ID/rules.
-- [ ] Compare genuine before/after native runtime and schedule fields for all three normalized operations; retain the failed original metadata-only identity claim explicitly.
-- [ ] Execute actual Rust capture and C comparison over all 200 generated inputs; retain repeat/changed-seed and planted-runtime-mutant controls.
-- [ ] Demonstrate that old invalid generation and a missing validator fail before capture.
-- [ ] Independently review the exact source and close only `bd-58jc` after all original criteria pass.
+- [x] Compile and freeze the zero-time-advance producer at `cdc48ebf`; native product SHA-256 `b779c52f7a869607892ef54c0d5ee793ed68acde92073aca8a66944b8232eab3`, against pinned Rust `5e60b1c4c`.
+- [x] Validate all 200 seed-9 outputs and all 1,001 boundary inputs; enumerate exactly the three bare-operation substitutions and otherwise require old/new input identity excluding only ID/rules. The changed-seed 1,001-input batch validates too.
+- [x] Compare genuine before/after native runtime and complete schedule objects for all three normalized operations; all match. Preserve the failed original metadata-only identity condition and its explicit amendment in the original Bead.
+- [x] Execute actual Make-target Rust capture and fresh C comparison over all 200 inputs; all pass. Repeat/changed-seed control passes 1,001/1,001; the actual priority mutant fails 75/200 with no ERROR, then a 61-to-5-operation witness freshly recaptures and passes clean C while failing the mutant. Parser-only test doubles remain excluded from parity evidence.
+- [x] Demonstrate actual old-generator Make failure before capture and genuine missing-checker failure before generation; preserve the old consumer's 200 successful captures followed by its identifier authentication failure.
+- [x] Independently review exact `cdc48ebf` against the explicitly amended current criteria and close only original `bd-58jc` (PinkOwl, comment 252, `2026-10-12T13:54:08.038125176Z`). The original literal-input condition remains explicitly unfulfilled for three inputs; every other issue and prior history is preserved.
 - [ ] Publish the accepted repair, synchronize the legacy mirror and primary checkout, and inspect actual hosted CI outcomes.
+
+Root reexecutes the final commands and an independent reviewer separately
+executes the shared immutable Rust build, full input/schema checks, 200 live
+comparisons, real mutant/minimizer controls and the three normalization
+witnesses. This is shared-build evidence with independent execution, not two
+independent Rust compilations. Final strict C build, pinned format, cppcheck,
+164 unit programs/core suites, 167 canonical fixtures, 11 gate scripts and
+documentation checks pass. Original campaigns and all 167 accepted fixture
+bytes are unchanged. Broader oracle coverage, `bd-c129`, kernel parity and
+performance remain unfinished.
+
+### Next active performance increment, original `bd-o5zh`
+
+- [x] Read the original acceptance, inspect the actual digest hot path and preserve the latest failing hosted reports.
+- [x] Claim the original Bead for a bounded, exact-digest experiment; keep its three-green-push acceptance intact.
+- [ ] Build an isolated candidate that coalesces the poll event's sequence and zero-kind bytes, preserving their exact FNV recurrence.
+- [ ] Interleave actual before/candidate scheduler measurements on one CPU; reject inconclusive benefit or a material regression.
+- [ ] Execute byte-loop digest, beyond-ring, replay, observer and telemetry checks plus all 167 canonical comparisons.
+- [ ] Independently review and land only a measured, semantics-preserving benefit; retain failed or inconclusive trials.
+
+The experiment does not refresh a baseline, raise a budget or replace the
+digest function. Landing a narrow optimization would not close original
+`bd-o5zh` or P2.
 
 ## Assessment at the audited revision
 
