@@ -985,7 +985,7 @@ Region, task, obligation and channel lookups check the type tag, so type confusi
 
 ### Wake-Driven Deterministic Scheduler
 
-`asx_scheduler_run(region, budget)` drives a whole region **subtree**. Runnable tasks are polled in ascending arena index within each round, so the same tasks and seed produce identical event sequences across runs, platforms, and profiles. `ASX_OK` means every task in the subtree completed; the regions themselves stay open until `asx_region_close` or `asx_region_drain` closes them.
+`asx_scheduler_run(region, budget)` drives a whole region **subtree**. Within a round the cancel lane (tasks with a cancel request, by cleanup priority) is polled first, then the other tasks by budget priority, higher first; within one priority in ascending arena index, and after 16 cancel-lane polls in a row one ready task goes next. The same tasks and seed produce identical event sequences across runs, platforms, and profiles. `ASX_OK` means every task in the subtree completed; the regions themselves stay open until `asx_region_close` or `asx_region_drain` closes them.
 
 `asx_scheduler_use_lab_dispatch(seed)` switches to the dispatch model of Rust asupersync's `LabRuntime` (one worker): each step draws one value from a seeded xorshift64 and polls a single task. The task comes from the cancel lane (up to 16 in a row) before the ready lane, at the highest priority, the step's value picking among equal-priority entries in wake order. Due timers wake their tasks in timer-wheel order. Each task also gets Rust's per-task entropy stream (a DetEntropy fork keyed by the task's id in a shadow of Rust's task arena), from which a race picks its winner among members ready in the same round, as Rust's `race_all` does. The conformance oracle runs every scenario this way, and with the same scenario and seed the C and Rust runs dispatch identically (`make conformance`, `make fuzz-differential`).
 
@@ -1013,7 +1013,7 @@ meet(a, b).cost_quota = min(a.cost_quota, b.cost_quota)   // UINT64_MAX = uncons
 meet(a, b).priority   = max(a.priority,   b.priority)     // most urgent wins
 ```
 
-A deadline of 0 is a deadline, due at once (Rust's `Some(Time::ZERO)`); only `ASX_TIME_INFINITE` means none. As in Rust asupersync's `Budget::combine`, priority meets upward: `asx_budget_infinite()` has priority 0 (the identity), `asx_budget_zero()` has 255 (absorbing), and ordinary budgets (`asx_budget_new()`, `asx_budget_from_polls()`) default to 128. The default sweep scheduler does not yet order tasks by budget priority (tracked as bridge bead S5); lab dispatch does.
+A deadline of 0 is a deadline, due at once (Rust's `Some(Time::ZERO)`); only `ASX_TIME_INFINITE` means none. As in Rust asupersync's `Budget::combine`, priority meets upward: `asx_budget_infinite()` has priority 0 (the identity), `asx_budget_zero()` has 255 (absorbing), and ordinary budgets (`asx_budget_new()`, `asx_budget_from_polls()`) default to 128. Both the default sweep scheduler and lab dispatch order tasks by budget priority; a cancelled task goes by its cleanup priority.
 
 This means budgets compose correctly: if a task has a 100-poll budget and its region has a 50-poll budget, the effective budget is 50. Cleanup budgets for cancellation follow the same rule: each cancel request's cleanup budget is met into the task's (severity 5, SHUTDOWN, gets 50 cleanup polls; severity 0, USER, gets 1,000). When the task acknowledges its cancel at a checkpoint, the cleanup budget replaces its budget (no deadline or cost quota, the cleanup priority), as Rust's `acknowledge_cancel` does; a later request during cleanup replaces it again with the met budget. Read it with `asx_task_get_cleanup_budget`.
 
@@ -2189,12 +2189,12 @@ execution of lanes is future work that must preserve that commit order.
 **Three lane classes**:
 - **READY**: Tasks with pending work (normal polling).
 - **CANCEL**: Tasks in CancelRequested or Cancelling phase (priority drain).
-- **TIMED**: Tasks the caller assigns there (`asx_inject_timed`); automatic classification only produces READY or CANCEL.
+- **TIMED**: Tasks the caller assigns there (`asx_inject_timed`); a task there is dispatched once its deadline (its armed wake timer or budget deadline, whichever is earlier) is due, earliest first, and the dispatch consumes the entry. Automatic classification only produces READY or CANCEL.
 
 **Fairness policies**:
 - `ROUND_ROBIN`: Equal poll share per lane per round.
 - `WEIGHTED`: Proportional distribution per configurable lane weights.
-- `PRIORITY`: Cancel lane drains first, then Ready, then Timed.
+- `PRIORITY`: Cancel lane drains first, then Timed, then Ready.
 
 **Locality policies**:
 - `COMPACT`: Legacy flat arena routing for constrained profiles and
