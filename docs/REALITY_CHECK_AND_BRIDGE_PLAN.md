@@ -507,7 +507,7 @@ warning policy unchanged.
 
 - [x] Claim `bd-kpr4` with the actual failure and complete positive acceptance criteria.
 - [x] Give native-host its intended CORE/JSON/determinism0 library and truthful family metadata in an isolated build directory.
-- [x] Build automotive-watchdog's declared profile/codec/determinism in an isolated directory before compiling its caller. Original eight checks stay required; one actual library-build check is added, so the expected family denominator is nine.
+- [x] Build automotive-watchdog's declared profile/codec/determinism in an isolated directory before compiling its caller. Original C bodies and runtime-exit guards remain required; one actual library-build check is added. Initial 10/9 successful-case predictions were wrong: independent exact `78a280eb` actually executes native-host 14/14 and automotive-watchdog 8/8. Earlier failures short-circuited native subchecks and added runtime-exit failures; inspect the actual scenario IDs, never alter machinery to force a count.
 - [ ] Re-execute both original failures and corrected families, then all 26 canonical families with manifests and raw stderr.
 - [ ] Obtain independent exact-source acceptance and close only the concrete E2E wiring bug.
 
@@ -519,6 +519,8 @@ is credited as profile execution.
 
 - [x] Claim `bd-6e4j`, retain both actual old/new compile failures, and preserve strict `-Werror`.
 - [x] Clamp dispatch's active worker count to the compiled capacity, as its existing owner/shard helpers do. Valid initialized configurations already meet this bound, preserving their scheduling behavior.
+- [x] Independent exact `78a280eb` optimized GCC minimal-browser build executes 49 controls and ten examples, with the original array-bounds failure retained. Its runner separately fails because constants reporting constructs unavailable public Lab factories; preserve that failure too.
+- [x] Guard only the two unavailable public Lab-default observations in constants reporting, with explicit N/A reasons under the minimal profile. CORE still constructs its actual Lab defaults; internal scheduling constants and every runtime comparison remain unchanged. This is required to complete the original 167-scenario criterion, not a replacement by full-browser results.
 - [ ] Fresh strict GCC release minimal-browser full build, 49 mismatch/live-task controls and all 167 canonical scenarios must execute successfully.
 - [ ] Run existing strict core/unit/invariant gates and obtain independent exact-source acceptance before closing the concrete build bug.
 

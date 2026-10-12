@@ -726,7 +726,9 @@ static const char *backoff_name(asx_restart_backoff_kind k) {
 /* The C side of every constant in schemas/rust_kernel_constants.json. */
 static void ck_build(void) {
     asx_runtime_config rt;
+#if ASX_HAS_BROWSER_TRACE
     asx_lab_config lab;
+#endif
     asx_supervisor_config sup;
     asx_cancel_reason reason;
     char key[64];
@@ -810,11 +812,16 @@ static void ck_build(void) {
     ck_na("actor.default_mailbox_capacity", "C ports GenServers only, not the plain Actor");
     ck_na("actor.yield_interval", "C ports GenServers only, not the plain Actor");
 
+#if ASX_HAS_BROWSER_TRACE
     asx_lab_config_init(&lab);
     ck_u64("lab.default.seed", lab.seed);
+    ck_bool("lab.default.panic_on_obligation_leak", rt.leak_response == ASX_LEAK_PANIC);
+#else
+    ck_na("lab.default.seed", "minimal browser excludes public Lab factories");
+    ck_na("lab.default.panic_on_obligation_leak", "minimal browser excludes public Lab factories");
+#endif
     ck_na("lab.default.max_steps",
           "asx_lab counts scenario steps (ASX_LAB_MAX_STEPS), not scheduler steps");
-    ck_bool("lab.default.panic_on_obligation_leak", rt.leak_response == ASX_LEAK_PANIC);
     ck_u64("lab.cancel_streak_limit", (uint64_t)LAB_CANCEL_STREAK_LIMIT);
     ck_u64("lab.runtime_cancel_streak_limit", (uint64_t)LAB_CANCEL_STREAK_LIMIT);
     ck_u64("lab.handle_cancel_batch", (uint64_t)LAB_HANDLE_BATCH);
@@ -847,7 +854,9 @@ static void ck_build(void) {
     ck_known("cancel_kind.Shutdown.ordinal", "bd-9kll.2.18");
     ck_known("cancel_kind.LinkedExit.ordinal", "bd-9kll.2.18");
     ck_known("runtime.default.obligation_leak_response", "bd-9kll.2.19: C defaults to Log");
+#if ASX_HAS_BROWSER_TRACE
     ck_known("lab.default.panic_on_obligation_leak", "bd-9kll.2.19");
+#endif
 }
 
 /* The JSON value as C text, for messages. */
