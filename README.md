@@ -2399,7 +2399,14 @@ installs only `libasx.a` and the headers. The `asx` CLI (`version`, `info`,
 
 ### How big is the compiled library?
 
-There is no published measurement yet. The perf workflow checks the CORE release `libasx.a` on x86_64 against the archive, `.text`, `.data` and `.bss` budgets in `tools/ci/size_cold_start_baselines.json` on every push to `main`; run `make size-gate` (or `make release && size build/lib/libasx.a`) for your own build. The plan's footprint targets (a CORE kernel under 64 KB) are unproven (`docs/REALITY_CHECK_AND_BRIDGE_PLAN.md`, V31), and RAM use per resource class has not been measured on a device.
+The x86_64 CORE release archive measured **1,595,190 bytes** at `841946a7`, exceeding
+the unchanged 1,250,000-byte archive limit in
+[hosted run 38220166433](https://github.com/Dicklesworthstone/asupersync_ansi_c/actions/runs/38220166433).
+That is the complete static archive; a linked application's footprint depends on the
+objects it uses. The perf workflow checks archive, `.text`, `.data`, `.bss` and cold-start
+budgets on every push to `main`; run `make size-gate` for your own build. The plan's
+CORE kernel target under 64 KB remains unproven (`docs/REALITY_CHECK_AND_BRIDGE_PLAN.md`,
+V31), and RAM use per resource class has not been measured on a device.
 
 ### What about thread safety?
 

@@ -47,13 +47,22 @@ no abandoned branch or reducer runs. This preserves the separate spawned-task lo
 contract. The `bd156b3` close test also establishes requested root cancellation attribution
 and descendant Parent attribution through the public cancel-then-drain sequence.
 
-Original K4/K5/K11/K18/K19 acceptance remains open: body-driven close/payload semantics,
+Original K4/K5/K11/K18/K19 acceptance remains open: complete body/payload semantics,
 serialized masked asynchronous finalization, actual Rust cleanup/admission DSL witnesses,
 the complete inline-combinator contract and Rust witnesses, independent runtime storage and
 cross-runtime handles, and runtime borrow/affinity/determinism monitor integration.
 Granular completed/pending work and revision-bound evidence remain on
 those original Beads. This increment establishes no new performance, physical-device,
 full runtime profile/codec, or release-readiness claim.
+
+The `352b9372` increment adds outcome-aware scope finish: Ok waits without cancelling
+children; Err/Panicked request FailFast; Cancelled carries its supplied reason. Repeated
+finish calls keep the first body decision and resume waiting. Seven fresh witnesses from
+the pinned Rust runtime raise the canonical corpus to 160/160 without changing the
+previous 153 captures. Independent exact-revision review confirms the bounded increment.
+Original K4 remains open for typed payload/factory semantics, serialized masked asynchronous
+finalization and the remaining authority and budget requirements. Its detailed completed
+and pending checklist remains on `bd-9kll.3.4`.
 
 ### Held-credit and handoff increment, 2026-10-12
 
@@ -129,13 +138,23 @@ benchmark prerequisites succeed. `tools/ci/run_evidence_dashboard.sh` consumes
 actual CORE/HFT SLO and CORE size/cold-start reports bound by their byte hashes,
 run IDs and workflow SHA, along with the actual step outcomes and CORE library
 binding. It reports failed or incomplete perf evidence; even a perf-only pass
-leaves full release readiness incomplete. Hosted verification of this new
-workflow remains pending. Baselines, budgets and approval governance are
-unchanged.
+leaves full release readiness incomplete. Hosted run
+[38220166433](https://github.com/Dicklesworthstone/asupersync_ansi_c/actions/runs/38220166433)
+at `841946a7` confirms HFT and CORE size collection continue after the CORE SLO
+failure. CORE passes 36/41 checks; size/cold-start passes 4/10. The dashboard reports
+failure. Its newly reached cold HFT build also exposed compiler output preceding the
+benchmark JSON; `ed4adaf6` sends build diagnostics to stderr. Fresh independent HFT
+execution then produces valid JSON. A separate actual HFT evaluation passes 39/41
+checks and still fails unchanged numeric/freshness limits. Baselines, budgets and
+approval governance are unchanged; this work claims no performance improvement.
 
-Static candidate `266611b9fcbec23d5390e033375c08a5644882e2` independently passes
+Static fix `266611b9fcbec23d5390e033375c08a5644882e2` independently passes
 160 canonical comparisons, 59 authority cases and strict analyzers. Those
-checks do not establish hosted CI success or performance acceptance. Original
+checks establish the narrow analyzer repair (`bd-dp1n`), not full CI or performance
+acceptance. The separate initialized forged-permit test (`1af96265`, `bd-y58u`)
+passes independent CORE 80/80, live POSIX 81/81 and TSan 81/81 cases; the actual hosted
+MIPS and MIPSel jobs also succeed. A subsequent native32 expected-double comparison
+defect is tracked separately in `bd-2q1f`. Original
 P2 remains in progress: raw-sample/profile evidence, governed baseline refresh,
 automotive coverage and full P2 acceptance remain unfulfilled. Historical red
 metrics below retain their original revision scope.
