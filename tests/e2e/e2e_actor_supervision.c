@@ -166,6 +166,9 @@ static asx_actor_behavior e2e_actor_behavior(void) {
     behavior.handle_cast = e2e_actor_cast;
     behavior.handle_call = e2e_actor_call;
     behavior.terminate = e2e_actor_terminate;
+    behavior.on_start_budget = NULL;
+    behavior.on_stop_budget = NULL;
+    behavior.cast_overflow_policy = ASX_ACTOR_OVERFLOW_REJECT;
     return behavior;
 }
 

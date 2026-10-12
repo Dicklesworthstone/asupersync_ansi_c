@@ -400,6 +400,9 @@ static void test_actor_surface_smoke(void) {
         behavior.handle_cast = shim_actor_cast;
         behavior.handle_call = shim_actor_call;
         behavior.terminate = NULL;
+        behavior.on_start_budget = NULL;
+        behavior.on_stop_budget = NULL;
+        behavior.cast_overflow_policy = ASX_ACTOR_OVERFLOW_REJECT;
         st = asx_actor_spawn(&actor, rid, &behavior, &state, 4u);
     }
     SHIM_CHECK(st == ASX_OK, "actor_spawn succeeds through umbrella header");

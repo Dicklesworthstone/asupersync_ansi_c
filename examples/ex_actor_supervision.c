@@ -93,6 +93,9 @@ static asx_actor_behavior echo_behavior(void) {
     behavior.handle_cast = echo_cast;
     behavior.handle_call = echo_call;
     behavior.terminate = echo_terminate;
+    behavior.on_start_budget = NULL;
+    behavior.on_stop_budget = NULL;
+    behavior.cast_overflow_policy = ASX_ACTOR_OVERFLOW_REJECT;
     return behavior;
 }
 

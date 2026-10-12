@@ -27,6 +27,12 @@
  *   4. "gen_server::terminate", the terminate callback (Rust on_stop), and
  *      the server is Stopped.
  *
+ * Phases run under a tightened task budget (Rust PhaseBudgetGuard,
+ * gen_server.rs:96): init under the budget the behavior's on_start_budget
+ * returns, met with the task's, and restored afterwards minus what the
+ * phase consumed; the drain and terminate under on_stop_budget (default
+ * Budget::MINIMAL, 100 polls), met with the task's and never restored.
+ *
  * Callbacks return ASX_OK. Any other status is the C form of a panic in
  * the callback, the only way a Rust handler fails: the server stops at
  * once without draining or terminating, the replies of queued calls are
@@ -99,8 +105,17 @@ typedef enum {
  *               reply panics it.
  * terminate:    on_stop, run once after the drain with the server's exit
  *               reason (optional). Not run after a failed callback.
+ * on_start_budget: the budget of the init phase (Rust on_start_budget,
+ *               gen_server.rs:581). NULL: asx_budget_infinite(), which
+ *               leaves the task's budget as it is.
+ * on_stop_budget: the budget of the drain and terminate (Rust
+ *               on_stop_budget, :593). NULL: Rust's Budget::MINIMAL, 100
+ *               polls, no deadline or cost limit, priority 128.
+ * cast_overflow_policy: what asx_actor_try_cast does when the mailbox is
+ *               full (Rust cast_overflow_policy, :603). Zero is REJECT.
  *
- * All callbacks receive the user state and the server's own handle.
+ * init, handle_cast, handle_call and terminate receive the user state and
+ * the server's own handle; the budget callbacks only the user state.
  * ------------------------------------------------------------------- */
 
 typedef asx_status (*asx_actor_init_fn)(void *state, asx_actor_handle self);
@@ -112,11 +127,23 @@ typedef asx_status (*asx_actor_call_fn)(void *state, uint64_t request, uint64_t 
 
 typedef void (*asx_actor_terminate_fn)(void *state, asx_status reason, asx_actor_handle self);
 
+typedef asx_budget (*asx_actor_budget_fn)(void *state);
+
+/* What asx_actor_try_cast does with a cast when the mailbox is full (Rust
+ * CastOverflowPolicy, gen_server.rs:212). */
+typedef enum {
+    ASX_ACTOR_OVERFLOW_REJECT = 0,     /* refuse it: ASX_E_CHANNEL_FULL */
+    ASX_ACTOR_OVERFLOW_DROP_OLDEST = 1 /* evict the oldest queued cast */
+} asx_actor_overflow_policy;
+
 typedef struct {
     asx_actor_init_fn init;
     asx_actor_cast_fn handle_cast;
     asx_actor_call_fn handle_call;
     asx_actor_terminate_fn terminate;
+    asx_actor_budget_fn on_start_budget;
+    asx_actor_budget_fn on_stop_budget;
+    asx_actor_overflow_policy cast_overflow_policy;
 } asx_actor_behavior;
 
 /* The progress of one cast or call. Zero it (or ASX_ACTOR_OP_INIT) before
@@ -195,8 +222,21 @@ ASX_API ASX_MUST_USE asx_status asx_actor_cast(asx_actor_handle actor, asx_cx *c
 
 /* `h.try_cast(msg)` (:1305): ASX_OK, ASX_E_CHANNEL_FULL when the mailbox
  * is full, ASX_E_DISCONNECTED when the server stops or stopped. Never
- * waits. */
+ * waits.
+ *
+ * Under ASX_ACTOR_OVERFLOW_DROP_OLDEST a full mailbox does not refuse: the
+ * oldest queued *cast* is evicted and this one queued (ASX_OK), counted by
+ * asx_actor_evicted_count and traced "gen_server::cast_evicted_oldest" on
+ * the calling task. Queued calls are never evicted: a mailbox of calls
+ * and reservations only, or with a waiting sender ahead, still gives
+ * ASX_E_CHANNEL_FULL. Only try_cast applies the policy; asx_actor_cast
+ * waits for room. With the lock-free channel backend call it from the
+ * scheduler thread (the eviction is a consumer-side operation). */
 ASX_API ASX_MUST_USE asx_status asx_actor_try_cast(asx_actor_handle actor, uint64_t msg);
+
+/* Casts evicted under ASX_ACTOR_OVERFLOW_DROP_OLDEST (Rust
+ * GenServerHandle::evicted_count, :1649). 0 for a stale handle. */
+ASX_API uint64_t asx_actor_evicted_count(asx_actor_handle actor);
 
 /* `h.call(&cx, request)` (:1171), one poll; *out_reply is written on
  * ASX_OK. Checks first: a cancelled Cx gives ASX_E_CANCELLED

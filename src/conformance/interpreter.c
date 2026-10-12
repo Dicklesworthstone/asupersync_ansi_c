@@ -2888,8 +2888,10 @@ static asx_status echo_call(void *state, uint64_t request, uint64_t *reply, asx_
     return ASX_OK;
 }
 
-static const asx_actor_behavior g_counter_behavior = {NULL, counter_cast, counter_call, NULL};
-static const asx_actor_behavior g_echo_behavior = {NULL, NULL, echo_call, NULL};
+static const asx_actor_behavior g_counter_behavior = {
+    NULL, counter_cast, counter_call, NULL, NULL, NULL, ASX_ACTOR_OVERFLOW_REJECT};
+static const asx_actor_behavior g_echo_behavior = {
+    NULL, NULL, echo_call, NULL, NULL, NULL, ASX_ACTOR_OVERFLOW_REJECT};
 
 static it_server *server_by_name(const char *name) {
     uint32_t i;

@@ -15,6 +15,7 @@
 #include <asx/core/cancel.h>
 #include <asx/runtime/lab.h>
 #include <asx/runtime/runtime.h>
+#include <asx/runtime/trace.h>
 #include <asx/time/sleep.h>
 #include <stdio.h>
 #include <string.h>
@@ -139,7 +140,8 @@ static void rec_terminate(void *state, asx_status reason, asx_actor_handle self)
     s->term_reason = reason;
 }
 
-static const asx_actor_behavior g_rec = {rec_init, rec_cast, rec_call, rec_terminate};
+static const asx_actor_behavior g_rec = {
+    rec_init, rec_cast, rec_call, rec_terminate, NULL, NULL, ASX_ACTOR_OVERFLOW_REJECT};
 
 static asx_actor_handle spawn_rec(asx_region_id region, rec_state *state, uint32_t capacity) {
     asx_actor_handle h;
@@ -826,6 +828,395 @@ static void test_failing_init_panics_the_server(void) {
 /* Handles                                                             */
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ */
+/* CastOverflowPolicy::DropOldest (gen_server.rs:1305-1360)            */
+/* ------------------------------------------------------------------ */
+
+static asx_actor_handle spawn_rec_policy(asx_region_id region, rec_state *state, uint32_t capacity,
+                                         asx_actor_overflow_policy policy) {
+    asx_actor_behavior behavior = g_rec;
+    asx_actor_handle h;
+    behavior.cast_overflow_policy = policy;
+    memset(state, 0, sizeof(*state));
+    h.slot = UINT32_MAX;
+    h.generation = 0;
+    MUST_OK(asx_actor_spawn(&h, region, &behavior, state, capacity));
+    return h;
+}
+
+static void test_drop_oldest_evicts_the_oldest_cast_to_make_room(void) {
+    rec_state s;
+    asx_actor_handle h;
+    uint64_t users_before;
+    setup();
+    h = spawn_rec_policy(g_root, &s, 2, ASX_ACTOR_OVERFLOW_DROP_OLDEST);
+    users_before = asx_trace_kind_total(ASX_TRACE_USER);
+    ASSERT(asx_actor_try_cast(h, 1) == ASX_OK && asx_actor_try_cast(h, 2) == ASX_OK, "room");
+    ASSERT(asx_actor_evicted_count(h) == 0u, "nothing evicted while there is room");
+    ASSERT(asx_actor_try_cast(h, 3) == ASX_OK, "a full mailbox takes the new cast");
+    ASSERT(asx_actor_evicted_count(h) == 1u, "by evicting one");
+    ASSERT(asx_actor_try_cast(h, 4) == ASX_OK, "again");
+    ASSERT(asx_actor_evicted_count(h) == 2u, "the second eviction is counted");
+    ASSERT(asx_actor_mailbox_count(h) == 2u, "the mailbox stays at its capacity");
+    ASSERT(asx_trace_kind_total(ASX_TRACE_USER) == users_before,
+           "from the host there is no task to attribute the eviction to");
+    run(g_root);
+    ASSERT(s.casts == 2u && s.log[0] == 3u && s.log[1] == 4u,
+           "the server serves the two newest casts, in order");
+    ASSERT(s.sum == 7u, "the evicted casts never reached the handler");
+}
+
+static void test_reject_policy_never_evicts(void) {
+    rec_state s;
+    asx_actor_handle h;
+    setup();
+    h = spawn_rec_policy(g_root, &s, 1, ASX_ACTOR_OVERFLOW_REJECT);
+    ASSERT(asx_actor_try_cast(h, 1) == ASX_OK, "room");
+    ASSERT(asx_actor_try_cast(h, 2) == ASX_E_CHANNEL_FULL, "REJECT refuses a cast when full");
+    ASSERT(asx_actor_evicted_count(h) == 0u, "nothing was evicted");
+    run(g_root);
+    ASSERT(s.casts == 1u && s.log[0] == 1u, "the queued cast is the one served");
+}
+
+/* An evicting try_cast from a task traces on that task (Cx::current(),
+ * :1347), once per eviction. */
+typedef struct {
+    asx_actor_handle server;
+    asx_status status[3];
+} evictor;
+
+static asx_status evictor_poll(void *user_data, asx_task_id self) {
+    evictor *e = (evictor *)user_data;
+    uint32_t i;
+    (void)self;
+    for (i = 0; i < 3u; i++) e->status[i] = asx_actor_try_cast(e->server, i + 1u);
+    return ASX_OK;
+}
+
+static void test_drop_oldest_traces_the_eviction_on_the_calling_task(void) {
+    rec_state s;
+    asx_actor_handle h;
+    evictor e;
+    asx_task_id tid = ASX_INVALID_ID;
+    uint64_t users_before;
+    setup();
+    memset(&e, 0, sizeof(e));
+    /* The evictor is spawned first, so the one poll below is its own. */
+    MUST_OK(asx_task_spawn(g_root, evictor_poll, &e, &tid));
+    h = spawn_rec_policy(g_root, &s, 2, ASX_ACTOR_OVERFLOW_DROP_OLDEST);
+    e.server = h;
+    users_before = asx_trace_kind_total(ASX_TRACE_USER);
+    run_one_poll(g_root);
+    ASSERT(e.status[0] == ASX_OK && e.status[1] == ASX_OK && e.status[2] == ASX_OK,
+           "all three casts were accepted");
+    ASSERT(asx_actor_evicted_count(h) == 1u, "the third evicted the first");
+    ASSERT(asx_trace_kind_total(ASX_TRACE_USER) == users_before + 1u,
+           "one gen_server::cast_evicted_oldest trace, on the task");
+}
+
+/* A queued call is never evicted: only casts are (:1321, :5322 test). */
+static void test_drop_oldest_never_evicts_a_queued_call(void) {
+    rec_state s;
+    asx_actor_handle h;
+    asx_actor_handle placeholder;
+    client c;
+    asx_region_id r;
+    setup();
+    r = child_region();
+    placeholder.slot = 0u;
+    placeholder.generation = 0u;
+    memset(&c, 0, sizeof(c));
+    client_add(&c, CL_CALL, 5u);
+    /* The client is spawned first: the single poll below is its, and the
+     * server has not run when the casts arrive. */
+    client_start(&c, placeholder, r);
+    h = spawn_rec_policy(r, &s, 2, ASX_ACTOR_OVERFLOW_DROP_OLDEST);
+    c.server = h;
+    run_one_poll(r);
+    ASSERT(s.init_called == 0, "the server has not run");
+    ASSERT(asx_actor_mailbox_count(h) == 1u, "the call is queued");
+
+    ASSERT(asx_actor_try_cast(h, 1) == ASX_OK, "a cast fits beside the call");
+    ASSERT(asx_actor_try_cast(h, 2) == ASX_OK, "full: the oldest cast is evicted, not the call");
+    ASSERT(asx_actor_evicted_count(h) == 1u, "one eviction");
+    ASSERT(asx_actor_mailbox_count(h) == 2u, "the call and the newest cast are queued");
+
+    run(r);
+    ASSERT(c.steps[0].status == ASX_OK && c.steps[0].reply == 5u,
+           "the call was served: its reply obligation was never dropped");
+    ASSERT(s.calls == 1u, "the server handled the call");
+    ASSERT(s.casts == 1u && s.log[0] == 2u, "and the newest cast, not the evicted one");
+}
+
+static void test_drop_oldest_with_only_calls_queued_is_full(void) {
+    rec_state s;
+    asx_actor_handle h;
+    asx_actor_handle placeholder;
+    client c1;
+    client c2;
+    asx_region_id r;
+    setup();
+    r = child_region();
+    placeholder.slot = 0u;
+    placeholder.generation = 0u;
+    memset(&c1, 0, sizeof(c1));
+    memset(&c2, 0, sizeof(c2));
+    client_add(&c1, CL_CALL, 10u);
+    client_add(&c2, CL_CALL, 20u);
+    client_start(&c1, placeholder, r);
+    client_start(&c2, placeholder, r);
+    h = spawn_rec_policy(r, &s, 2, ASX_ACTOR_OVERFLOW_DROP_OLDEST);
+    c1.server = h;
+    c2.server = h;
+    run_one_poll(r);
+    run_one_poll(r);
+    ASSERT(asx_actor_mailbox_count(h) == 2u, "two calls fill the mailbox");
+
+    ASSERT(asx_actor_try_cast(h, 1) == ASX_E_CHANNEL_FULL,
+           "no queued cast is evictable: the cast is refused");
+    ASSERT(asx_actor_evicted_count(h) == 0u, "nothing was evicted");
+    ASSERT(asx_actor_mailbox_count(h) == 2u, "both calls are still queued");
+
+    run(r);
+    ASSERT(c1.steps[0].status == ASX_OK && c1.steps[0].reply == 10u, "the first call is served");
+    ASSERT(c2.steps[0].status == ASX_OK && c2.steps[0].reply == 20u, "and the second");
+    ASSERT(s.casts == 0u && s.calls == 2u, "the refused cast never ran");
+}
+
+/* ------------------------------------------------------------------ */
+/* Phase budgets (PhaseBudgetGuard, gen_server.rs:96-160)              */
+/* ------------------------------------------------------------------ */
+
+/* A server that records the task budget in each phase. The budget
+ * callbacks see only the user state, so it holds the task id and reads the
+ * budget just before the phase installs its own. */
+typedef struct {
+    asx_task_id task;
+    asx_budget start_phase;  /* what on_start_budget returns */
+    asx_budget stop_phase;   /* what on_stop_budget returns */
+    uint64_t init_cost;      /* cost units init consumes */
+    asx_budget before_start; /* the task's budget when init's phase begins */
+    asx_budget at_start;     /* inside init */
+    asx_budget after_init;   /* inside the first cast */
+    asx_budget before_stop;  /* when the stop phase begins */
+    asx_budget at_stop;      /* inside terminate */
+    int start_budget_calls;
+    int stop_budget_calls;
+    int init_calls;
+    int casts;
+    int term_calls;
+} bud_state;
+
+static void bud_read(asx_task_id task, asx_budget *out) { MUST_OK(asx_task_get_budget(task, out)); }
+
+static asx_budget bud_start_budget(void *state) {
+    bud_state *b = (bud_state *)state;
+    b->start_budget_calls++;
+    bud_read(b->task, &b->before_start);
+    return b->start_phase;
+}
+
+static asx_budget bud_stop_budget(void *state) {
+    bud_state *b = (bud_state *)state;
+    b->stop_budget_calls++;
+    bud_read(b->task, &b->before_stop);
+    return b->stop_phase;
+}
+
+static asx_status bud_init(void *state, asx_actor_handle self) {
+    bud_state *b = (bud_state *)state;
+    (void)self;
+    b->init_calls++;
+    bud_read(b->task, &b->at_start);
+    if (b->init_cost > 0u) MUST_OK(asx_task_consume_cost(b->task, b->init_cost));
+    return ASX_OK;
+}
+
+static asx_status bud_cast(void *state, uint64_t msg, asx_actor_handle self) {
+    bud_state *b = (bud_state *)state;
+    (void)msg;
+    (void)self;
+    if (b->casts++ == 0) bud_read(b->task, &b->after_init);
+    return ASX_OK;
+}
+
+static void bud_terminate(void *state, asx_status reason, asx_actor_handle self) {
+    bud_state *b = (bud_state *)state;
+    (void)reason;
+    (void)self;
+    b->term_calls++;
+    bud_read(b->task, &b->at_stop);
+}
+
+static const asx_actor_behavior g_bud = {bud_init,
+                                         bud_cast,
+                                         NULL,
+                                         bud_terminate,
+                                         bud_start_budget,
+                                         bud_stop_budget,
+                                         ASX_ACTOR_OVERFLOW_REJECT};
+static const asx_actor_behavior g_bud_default = {
+    bud_init, bud_cast, NULL, bud_terminate, NULL, NULL, ASX_ACTOR_OVERFLOW_REJECT};
+
+static asx_region_id budgeted_region(const asx_budget *budget) {
+    asx_region_id r = ASX_INVALID_ID;
+    MUST_OK(asx_region_open_child_with_budget(g_root, budget, &r));
+    return r;
+}
+
+static asx_actor_handle spawn_bud(asx_region_id region, const asx_actor_behavior *behavior,
+                                  bud_state *state) {
+    asx_actor_handle h;
+    h.slot = UINT32_MAX;
+    h.generation = 0;
+    MUST_OK(asx_actor_spawn(&h, region, behavior, state, 4));
+    MUST_OK(asx_actor_task_id(h, &state->task));
+    return h;
+}
+
+/* gen_server::on_start_budget: init runs under meet(task, phase) with the
+ * larger priority, and the task's budget comes back afterwards less what
+ * the phase consumed (gen_server.rs:5800 init_budget_consumption_...). */
+static void test_start_budget_tightens_init_and_is_restored(void) {
+    bud_state s;
+    asx_actor_handle h;
+    asx_budget region_budget = asx_budget_from_polls(1000u);
+    asx_budget before_cast;
+    asx_region_id r;
+
+    setup();
+    memset(&s, 0, sizeof(s));
+    region_budget.cost_quota = 100u;
+    r = budgeted_region(&region_budget);
+    s.start_phase = asx_budget_from_polls(7u);
+    s.start_phase.priority = 200u;
+    s.start_phase.cost_quota = 10u;
+    s.stop_phase = asx_budget_infinite();
+    s.init_cost = 3u;
+    h = spawn_bud(r, &g_bud, &s);
+    run(r);
+
+    ASSERT(s.start_budget_calls == 1 && s.init_calls == 1,
+           "the phase budget is asked once, at init");
+    ASSERT(s.before_start.poll_quota > 7u, "the task's own quota is looser than the phase's");
+    ASSERT(s.at_start.poll_quota == 7u, "init runs under the tighter poll quota");
+    ASSERT(s.at_start.cost_quota == 10u, "and the tighter cost quota");
+    ASSERT(s.at_start.priority == 200u, "and the larger priority");
+
+    bud_read(s.task, &before_cast);
+    ASSERT(before_cast.poll_quota == s.before_start.poll_quota,
+           "init used no polls: the task's poll quota is back");
+    ASSERT(before_cast.cost_quota == 97u, "init's 3 cost units are not refunded: 100 - 3");
+    ASSERT(before_cast.priority == 128u, "the task's own priority is back");
+    ASSERT(before_cast.deadline == ASX_TIME_INFINITE, "no deadline was invented");
+
+    MUST_OK(asx_actor_try_cast(h, 1));
+    run(r);
+    ASSERT(s.casts == 1, "the server serves messages after init");
+    ASSERT(s.after_init.poll_quota < before_cast.poll_quota && s.after_init.poll_quota > 7u,
+           "the message loop spends the task's own quota, not the phase's");
+    ASSERT(s.after_init.cost_quota == 97u && s.after_init.priority == 128u,
+           "the loop runs under the task's own budget");
+}
+
+/* A phase budget looser than the task's changes nothing: it is met, not set. */
+static void test_start_budget_never_loosens_the_task_budget(void) {
+    bud_state s;
+    asx_actor_handle h;
+    asx_budget region_budget = asx_budget_from_polls(50u);
+    asx_region_id r;
+
+    setup();
+    memset(&s, 0, sizeof(s));
+    r = budgeted_region(&region_budget);
+    s.start_phase = asx_budget_from_polls(500u);
+    s.stop_phase = asx_budget_infinite();
+    h = spawn_bud(r, &g_bud, &s);
+    (void)h;
+    run(r);
+    ASSERT(s.init_calls == 1, "init ran");
+    ASSERT(s.at_start.poll_quota == s.before_start.poll_quota && s.at_start.poll_quota < 50u,
+           "the phase's 500 polls do not raise the task's remaining quota");
+}
+
+/* gen_server::on_stop_budget defaults to Budget::MINIMAL: 100 polls, no
+ * deadline or cost limit, priority 128 (types/budget.rs:242). */
+static void test_stop_budget_defaults_to_minimal(void) {
+    bud_state s;
+    asx_actor_handle h;
+    setup();
+    memset(&s, 0, sizeof(s));
+    h = spawn_bud(g_root, &g_bud_default, &s);
+    run(g_root);
+    MUST_OK(asx_actor_stop(h));
+    run(g_root);
+    ASSERT(s.term_calls == 1, "terminate ran");
+    ASSERT(s.at_stop.poll_quota == 100u, "the drain and terminate get 100 polls");
+    ASSERT(s.at_stop.priority == 128u, "at priority 128");
+    ASSERT(s.at_stop.deadline == ASX_TIME_INFINITE && s.at_stop.cost_quota == UINT64_MAX,
+           "with no deadline or cost limit");
+}
+
+/* gen_server::stop_budget_constrains_stop_phase (gen_server.rs:5905). */
+static void test_custom_stop_budget_is_met_with_the_task_budget(void) {
+    bud_state s;
+    asx_actor_handle h;
+    asx_budget region_budget = asx_budget_from_polls(100000u);
+    asx_region_id r;
+
+    setup();
+    memset(&s, 0, sizeof(s));
+    r = budgeted_region(&region_budget);
+    s.start_phase = asx_budget_infinite();
+    s.stop_phase = asx_budget_from_polls(42u);
+    s.stop_phase.priority = 250u;
+    h = spawn_bud(r, &g_bud, &s);
+    run(r);
+    MUST_OK(asx_actor_stop(h));
+    run(r);
+    ASSERT(s.stop_budget_calls == 1 && s.term_calls == 1, "the stop budget is asked once");
+    ASSERT(s.before_stop.poll_quota > 42u, "the task had more than the phase allows");
+    ASSERT(s.at_stop.poll_quota == 42u, "terminate runs under the tighter stop quota");
+    ASSERT(s.at_stop.priority == 250u, "and the larger priority");
+}
+
+static void test_stop_budget_never_loosens_the_task_budget(void) {
+    bud_state s;
+    asx_actor_handle h;
+    asx_budget region_budget = asx_budget_from_polls(30u);
+    asx_region_id r;
+
+    setup();
+    memset(&s, 0, sizeof(s));
+    r = budgeted_region(&region_budget);
+    s.start_phase = asx_budget_infinite();
+    s.stop_phase = asx_budget_from_polls(500u);
+    h = spawn_bud(r, &g_bud, &s);
+    run(r);
+    MUST_OK(asx_actor_stop(h));
+    run(r);
+    ASSERT(s.term_calls == 1, "terminate ran");
+    ASSERT(s.at_stop.poll_quota == s.before_stop.poll_quota && s.at_stop.poll_quota < 30u,
+           "a looser stop budget leaves the task's remaining quota alone");
+}
+
+/* A stop before the first poll skips init, so its budget is never asked;
+ * the stop phase still runs under its own. */
+static void test_skipped_init_does_not_ask_for_the_start_budget(void) {
+    bud_state s;
+    asx_actor_handle h;
+    setup();
+    memset(&s, 0, sizeof(s));
+    s.start_phase = asx_budget_from_polls(7u);
+    s.stop_phase = asx_budget_from_polls(9u);
+    h = spawn_bud(g_root, &g_bud, &s);
+    MUST_OK(asx_actor_stop(h));
+    run(g_root);
+    ASSERT(s.init_calls == 0 && s.start_budget_calls == 0, "init and its budget are skipped");
+    ASSERT(s.stop_budget_calls == 1 && s.term_calls == 1, "the stop phase ran");
+    ASSERT(s.at_stop.poll_quota == 9u, "under the stop budget");
+}
+
 static void test_forged_and_reset_handles_are_rejected(void) {
     rec_state s;
     asx_actor_handle h;
@@ -878,6 +1269,19 @@ int main(void) {
     RUN(test_failing_cast_panics_the_server);
     RUN(test_call_without_handler_panics_the_server);
     RUN(test_failing_init_panics_the_server);
+
+    RUN(test_drop_oldest_evicts_the_oldest_cast_to_make_room);
+    RUN(test_reject_policy_never_evicts);
+    RUN(test_drop_oldest_traces_the_eviction_on_the_calling_task);
+    RUN(test_drop_oldest_never_evicts_a_queued_call);
+    RUN(test_drop_oldest_with_only_calls_queued_is_full);
+
+    RUN(test_start_budget_tightens_init_and_is_restored);
+    RUN(test_start_budget_never_loosens_the_task_budget);
+    RUN(test_stop_budget_defaults_to_minimal);
+    RUN(test_custom_stop_budget_is_met_with_the_task_budget);
+    RUN(test_stop_budget_never_loosens_the_task_budget);
+    RUN(test_skipped_init_does_not_ask_for_the_start_budget);
 
     RUN(test_forged_and_reset_handles_are_rejected);
 

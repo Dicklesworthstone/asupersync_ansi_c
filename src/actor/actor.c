@@ -67,6 +67,11 @@ typedef struct {
     int ran;          /* the task was polled */
     int panicked;     /* a callback failed */
     asx_status exit_reason;
+    /* The init phase's PhaseBudgetGuard (gen_server.rs:96): the task's
+     * budget before the phase and the one the phase installed. */
+    asx_budget phase_original;
+    asx_budget phase_baseline;
+    uint64_t evicted; /* casts evicted under DROP_OLDEST */
 } asx_actor_slot;
 
 static asx_actor_slot g_actors[ASX_MAX_ACTORS];
@@ -200,10 +205,63 @@ void asx_actor_refusal_delivered_internal(uint32_t ticket) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Phase budgets (PhaseBudgetGuard, gen_server.rs:96-160)              */
+/* ------------------------------------------------------------------ */
+
+/* Rust Budget::MINIMAL (types/budget.rs:242): the default on_stop_budget,
+ * 100 polls, no deadline or cost limit, priority 128. */
+#define ACTOR_STOP_BUDGET_POLLS 100u
+
+static uint32_t sat_sub_u32(uint32_t a, uint32_t b) { return a > b ? a - b : 0u; }
+
+static uint64_t sat_sub_u64(uint64_t a, uint64_t b) { return a > b ? a - b : 0u; }
+
+/* PhaseBudgetGuard::enter (:105): the server task's budget becomes
+ * meet(budget, phase); the meet takes the larger priority, as :112 does.
+ * Rust edits the task's Cx budget in place and neither re-arms nor cancels
+ * a deadline timer, so the task slot's budget is edited the same way.
+ * Returns 0 when the server has no live task (nothing to tighten). */
+static int actor_phase_enter(asx_actor_slot *s, const asx_budget *phase) {
+    asx_task_slot *t;
+    if (s->task_id == ASX_INVALID_ID || asx_task_slot_lookup(s->task_id, &t) != ASX_OK) return 0;
+    s->phase_original = t->budget;
+    s->phase_baseline = asx_budget_meet(&t->budget, phase);
+    t->budget = s->phase_baseline;
+    return 1;
+}
+
+/* Drop of a PhaseBudgetGuard that restores (:128): the original budget
+ * less what the phase consumed, so a phase's cost is never refunded. The
+ * original deadline and priority come back unchanged. */
+static void actor_phase_restore(asx_actor_slot *s) {
+    asx_task_slot *t;
+    uint32_t polls_used;
+    uint64_t cost_used = 0u;
+    asx_budget restored;
+
+    if (s->task_id == ASX_INVALID_ID || asx_task_slot_lookup(s->task_id, &t) != ASX_OK) return;
+    polls_used = sat_sub_u32(s->phase_baseline.poll_quota, t->budget.poll_quota);
+    if (s->phase_baseline.cost_quota != UINT64_MAX && t->budget.cost_quota != UINT64_MAX) {
+        cost_used = sat_sub_u64(s->phase_baseline.cost_quota, t->budget.cost_quota);
+    }
+    restored.deadline = s->phase_original.deadline;
+    restored.poll_quota = sat_sub_u32(s->phase_original.poll_quota, polls_used);
+    restored.cost_quota = s->phase_original.cost_quota == UINT64_MAX
+                              ? UINT64_MAX
+                              : sat_sub_u64(s->phase_original.cost_quota, cost_used);
+    restored.priority = s->phase_original.priority;
+    t->budget = restored;
+}
+
+/* ------------------------------------------------------------------ */
 /* The server task (run_gen_server_loop, gen_server.rs:2074)           */
 /* ------------------------------------------------------------------ */
 
 static asx_status actor_start(asx_actor_slot *s) {
+    asx_budget phase;
+    asx_status st = ASX_OK;
+    int entered;
+
     /* start_running: Created → Running unless a stop came first. */
     if (s->state == ASX_ACTOR_CREATED) s->state = ASX_ACTOR_RUNNING;
     if (cx_cancelled(&s->cx) || s->state == ASX_ACTOR_STOPPING) {
@@ -211,8 +269,13 @@ static asx_status actor_start(asx_actor_slot *s) {
         return ASX_OK;
     }
     cx_trace(&s->cx, "gen_server::init");
-    if (s->behavior.init == NULL) return ASX_OK;
-    return s->behavior.init(s->user_state, actor_handle_of(s));
+    /* The guard is entered whether or not there is an on_start (:2093). */
+    phase = s->behavior.on_start_budget != NULL ? s->behavior.on_start_budget(s->user_state)
+                                                : asx_budget_infinite();
+    entered = actor_phase_enter(s, &phase);
+    if (s->behavior.init != NULL) st = s->behavior.init(s->user_state, actor_handle_of(s));
+    if (entered) actor_phase_restore(s);
+    return st;
 }
 
 /* dispatch_envelope (:2227): a call's reply is sent as Reply::send does
@@ -289,9 +352,15 @@ static asx_status actor_serve(asx_actor_slot *s, asx_task_id self) {
 /* Phase 3 setup: Stopping, the abort status read before the mask, the
  * mask, the sealed mailbox (:2147-2170). */
 static void actor_begin_stop(asx_actor_slot *s, asx_task_id self) {
+    asx_budget phase;
     asx_status st;
     s->state = ASX_ACTOR_STOPPING;
     s->aborted = cx_cancelled(&s->cx);
+    /* The drain and terminate run under on_stop_budget, entered without
+     * restoring (:2168): the tightened budget stays until the task ends. */
+    phase = s->behavior.on_stop_budget != NULL ? s->behavior.on_stop_budget(s->user_state)
+                                               : asx_budget_from_polls(ACTOR_STOP_BUDGET_POLLS);
+    (void)actor_phase_enter(s, &phase);
     s->masked = asx_task_mask(self) == ASX_OK;
     st = asx_channel_seal(s->mailbox);
     (void)st; /* open until now: the cell holds a sender */
@@ -442,6 +511,7 @@ asx_status asx_actor_spawn(asx_actor_handle *out, asx_region_id region,
     s->ran = 0;
     s->panicked = 0;
     s->exit_reason = ASX_OK;
+    s->evicted = 0u;
 
     *out = actor_handle_of(s);
     return ASX_OK;
@@ -509,6 +579,11 @@ uint32_t asx_actor_mailbox_count(asx_actor_handle actor) {
     return n;
 }
 
+uint64_t asx_actor_evicted_count(asx_actor_handle actor) {
+    asx_actor_slot *s = actor_lookup(actor);
+    return s != NULL ? s->evicted : 0u;
+}
+
 asx_status asx_actor_exit_reason(asx_actor_handle actor) {
     asx_actor_slot *s = actor_lookup(actor);
     if (s == NULL || s->state != ASX_ACTOR_STOPPED) return ASX_OK;
@@ -562,6 +637,40 @@ asx_status asx_actor_cast(asx_actor_handle actor, asx_cx *cx, uint64_t msg, asx_
     return ASX_E_DISCONNECTED;
 }
 
+/* The DropOldest predicate (:1321): only a queued cast may be evicted, so
+ * a call and its reply permit are never lost to backpressure. */
+static int envelope_is_cast(void *ctx, uint64_t index) {
+    const asx_actor_slot *s = (const asx_actor_slot *)ctx;
+    return index < ACTOR_ENVELOPES && s->envelopes[index].kind == ENV_CAST;
+}
+
+/* try_cast under DropOldest (:1320-1358). The new envelope fits the table
+ * beside a full mailbox: it holds capacity + 1 entries. */
+static asx_status try_cast_drop_oldest(asx_actor_slot *s, uint64_t msg) {
+    uint64_t evicted_index = 0u;
+    int evicted = 0;
+    uint32_t e;
+    asx_status st;
+
+    if (!env_alloc(s, &e)) return ASX_E_RESOURCE_EXHAUSTED;
+    s->envelopes[e].kind = ENV_CAST;
+    s->envelopes[e].payload = msg;
+    st = asx_channel_send_evict_oldest_where(s->mailbox, (uint64_t)e, envelope_is_cast, s, &evicted,
+                                             &evicted_index);
+    if (st != ASX_OK) {
+        s->envelopes[e].kind = 0u;
+        return st == ASX_E_CHANNEL_FULL ? ASX_E_CHANNEL_FULL : ASX_E_DISCONNECTED;
+    }
+    if (evicted) {
+        asx_task_id self = asx_task_current();
+        if (evicted_index < ACTOR_ENVELOPES) s->envelopes[evicted_index].kind = 0u;
+        s->evicted++;
+        /* Cx::current() when a task polls, nothing from the host (:1347). */
+        if (self != ASX_INVALID_ID) asx_trace_user(self, "gen_server::cast_evicted_oldest");
+    }
+    return ASX_OK;
+}
+
 asx_status asx_actor_try_cast(asx_actor_handle actor, uint64_t msg) {
     asx_actor_slot *s = actor_lookup(actor);
     asx_send_permit permit;
@@ -570,6 +679,9 @@ asx_status asx_actor_try_cast(asx_actor_handle actor, uint64_t msg) {
 
     if (s == NULL) return ASX_E_INVALID_ARGUMENT;
     if (actor_stopping(s)) return ASX_E_DISCONNECTED;
+    if (s->behavior.cast_overflow_policy == ASX_ACTOR_OVERFLOW_DROP_OLDEST) {
+        return try_cast_drop_oldest(s, msg);
+    }
     st = asx_channel_try_reserve(s->mailbox, &permit);
     if (st == ASX_E_CHANNEL_FULL) return ASX_E_CHANNEL_FULL;
     if (st != ASX_OK) return ASX_E_DISCONNECTED;
