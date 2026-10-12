@@ -881,6 +881,14 @@ static void parallel_drain_ready_sources(asx_region_id region, uint32_t round) {
     }
 }
 
+/* Whether the live task in arena slot `slot_idx` has a cancel request. */
+static int parallel_cancel_requested(uint16_t slot_idx) {
+    const asx_task_slot *t;
+    if (slot_idx >= ASX_MAX_TASKS) { return 0; }
+    t = &g_tasks[slot_idx];
+    return t->alive && !asx_task_is_terminal(t->state) && t->cancel_pending;
+}
+
 /* A cancel requested since the lanes were last classified moves its task
  * to the cancel lane, as Rust's inject_cancel promotes a task queued in a
  * lower lane (three_lane.rs:3078-3097). The request has already woken it. */
@@ -888,24 +896,21 @@ static void parallel_promote_cancelled(void) {
     int lane_idx;
 
     for (lane_idx = 0; lane_idx < (int)ASX_MAX_LANES; lane_idx++) {
-        lane_internal *lane = &g_lanes[lane_idx];
+        const lane_internal *lane = &g_lanes[lane_idx];
         uint32_t pos = 0u;
 
         if (lane_idx == (int)ASX_LANE_CANCEL) { continue; }
         while (pos < lane->count) { /* ASX_CHECKPOINT_WAIVER("bounded by ASX_LANE_TASK_CAPACITY") */
             uint16_t slot_idx = asx_handle_slot(lane->tasks[pos]);
-            const asx_task_slot *t;
 
-            if (slot_idx < ASX_MAX_TASKS) {
-                t = &g_tasks[slot_idx];
-                if (t->alive && !asx_task_is_terminal(t->state) && t->cancel_pending) {
-                    asx_task_id tid =
-                        asx_handle_pack(ASX_TYPE_TASK, (uint16_t)(1u << (unsigned)t->state),
-                                        asx_handle_pack_index(t->generation, slot_idx));
-                    /* On success the task left this lane at `pos`: the next
-                     * one now sits there. A full cancel lane leaves it be. */
-                    if (asx_lane_assign(tid, ASX_LANE_CANCEL) == ASX_OK) { continue; }
-                }
+            if (parallel_cancel_requested(slot_idx)) {
+                const asx_task_slot *t = &g_tasks[slot_idx];
+                asx_task_id tid =
+                    asx_handle_pack(ASX_TYPE_TASK, (uint16_t)(1u << (unsigned)t->state),
+                                    asx_handle_pack_index(t->generation, slot_idx));
+                /* On success the task left this lane at `pos`: the next one
+                 * now sits there. A full cancel lane leaves it be. */
+                if (asx_lane_assign(tid, ASX_LANE_CANCEL) == ASX_OK) { continue; }
             }
             pos++;
         }
@@ -1003,6 +1008,12 @@ static void parallel_count_waiting(uint32_t *out_parked, uint32_t *out_unparked)
 #define ASX_PARALLEL_IDLE_STALL_LIMIT 4096u
 #define ASX_PARALLEL_MAX_IDLE_WAIT_MS 1000u
 
+/* Whether this build has wake sources that complete off the run's thread:
+ * a blocking pool or the native I/O driver. Without either, timers are all
+ * there is to wait for, and the idle step has no external branch. */
+#define PARALLEL_EXTERNAL_WAKES (ASX_HAS_BLOCKING_SURFACE || ASX_HAS_NATIVE_IO_DRIVER)
+
+#if PARALLEL_EXTERNAL_WAKES
 /* Work that completes off this thread and signals a waker. */
 static int parallel_external_pending(void) {
 #if ASX_HAS_BLOCKING_SURFACE
@@ -1014,6 +1025,7 @@ static int parallel_external_pending(void) {
     return 0;
 #endif
 }
+#endif
 
 /* Block for up to timeout_ms waiting for I/O, a cross-thread wake or just
  * time to pass; returns at once when a waker is already signaled. */
@@ -1049,7 +1061,10 @@ static uint32_t parallel_ms_until(asx_time deadline, asx_time now) {
  * timer, a pending I/O registration or a blocking-pool job. */
 static int parallel_can_wake_later(void) {
     asx_time next = 0;
-    return asx_scheduler_next_timer_internal(&next) || parallel_external_pending();
+#if PARALLEL_EXTERNAL_WAKES
+    if (parallel_external_pending()) { return 1; }
+#endif
+    return asx_scheduler_next_timer_internal(&next);
 }
 
 /* One idle step: fire due timers; with the virtual clock jump straight to
@@ -1077,11 +1092,15 @@ static int parallel_idle_step(asx_time run_deadline, asx_time *last_idle_now, ui
             parallel_block(parallel_ms_until(target, now));
             now = parallel_now();
         }
-    } else if (parallel_external_pending()) {
+    }
+#if PARALLEL_EXTERNAL_WAKES
+    else if (parallel_external_pending()) {
         if (run_deadline != ASX_TIME_INFINITE && now >= run_deadline) { return 1; }
         parallel_block(parallel_ms_until(run_deadline, now));
         now = parallel_now();
-    } else {
+    }
+#endif
+    else {
         return 0;
     }
 
