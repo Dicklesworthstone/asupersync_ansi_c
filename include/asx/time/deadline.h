@@ -53,6 +53,9 @@ ASX_API ASX_MUST_USE asx_status asx_deadline_after(asx_deadline *dl, uint64_t du
 
 /* Arm a deadline by registering it with the global timer wheel.
  * waker_data is passed to the timer and returned when the timer fires.
+ * As in Rust, a target farther than the wheel's maximum duration (7 days)
+ * from now is registered at that maximum: the timer fires early and the
+ * owner re-checks the target (asx_deadline_is_expired).
  * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if dl is NULL,
  *   ASX_E_INVALID_STATE if already armed,
  *   ASX_E_RESOURCE_EXHAUSTED if timer wheel is full. */

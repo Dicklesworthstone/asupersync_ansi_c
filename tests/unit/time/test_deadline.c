@@ -119,20 +119,35 @@ TEST(arm_double_arm_fails) {
 /* bd-bf6i: the global wheel's time moves only when it is collected, and
  * the runtime never collects it, so arming measured the max duration
  * from time 0: on a clock past ASX_TIMER_MAX_DURATION_NS (a live host up
- * for longer than that) every arm failed. */
+ * for longer than that) every arm failed.
+ *
+ * The limit is Rust's clamp (TimerWheel::register, time/wheel.rs:515-528),
+ * measured from now: a deadline beyond it is registered at now + 7 days,
+ * so its timer fires early and its owner re-checks the true target. */
 TEST(arm_after_long_uptime) {
     asx_deadline soon;
     asx_deadline far;
+    asx_timer_wheel *wheel;
+    void *fired[2];
+    asx_time target;
     setup();
     asx_vtime_init(&g_vt, ASX_TIMER_MAX_DURATION_NS + 3600000000000ULL, 1000000ULL);
     ASSERT_EQ(asx_deadline_after(&soon, 1000000ULL), ASX_OK);
     ASSERT_EQ(asx_deadline_arm(&soon, NULL), ASX_OK);
     ASSERT_TRUE(asx_deadline_is_armed(&soon));
-    /* The limit still holds, measured from now */
-    ASSERT_EQ(asx_deadline_after(&far, ASX_TIMER_MAX_DURATION_NS + 1000000000ULL), ASX_OK);
-    ASSERT_EQ(asx_deadline_arm(&far, NULL), ASX_E_TIMER_DURATION_EXCEEDED);
-    ASSERT_FALSE(asx_deadline_is_armed(&far));
     MUST_OK(asx_deadline_disarm(&soon));
+
+    /* A second past the maximum from now: armed, clamped. */
+    ASSERT_EQ(asx_deadline_after(&far, ASX_TIMER_MAX_DURATION_NS + 1000000000ULL), ASX_OK);
+    ASSERT_EQ(asx_deadline_arm(&far, NULL), ASX_OK);
+    ASSERT_TRUE(asx_deadline_is_armed(&far));
+    target = asx_deadline_target(&far);
+    wheel = asx_timer_wheel_global();
+    /* Not before the clamp (about a second short of the target)... */
+    ASSERT_EQ(asx_timer_collect_expired(wheel, target - 1100000000ULL, fired, 2u), 0u);
+    /* ... but before the true target, which its owner then re-checks. */
+    ASSERT_EQ(asx_timer_collect_expired(wheel, target - 500000000ULL, fired, 2u), 1u);
+    ASSERT_FALSE(asx_deadline_is_expired_at(&far, target - 500000000ULL));
     teardown();
 }
 

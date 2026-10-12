@@ -47,10 +47,11 @@ asx_status asx_deadline_arm(asx_deadline *dl, void *waker_data) {
         /* The runtime never collects the global wheel, so its time stays
          * where the application last collected it (0 if never). As Rust's
          * TimerDriver::register synchronizes the wheel to the clock
-         * before registering (time/driver.rs:500-505), bring it to the
-         * runtime clock first, so the max-duration check measures from
-         * now; otherwise every arm fails once the clock is past
-         * ASX_TIMER_MAX_DURATION_NS. Advancing keeps pending timers. */
+         * before registering (time/driver.rs:501-508), bring it to the
+         * runtime clock first, so a deadline beyond the maximum duration
+         * is clamped relative to now; otherwise every arm would be
+         * clamped to the stale wheel time plus 7 days, in the past once
+         * the clock is beyond that. Advancing keeps pending timers. */
         if (asx_runtime_now_ns(&now) == ASX_OK) asx_timer_advance(wheel, now);
         st = asx_timer_register(wheel, dl->target_ns, waker_data, &dl->timer);
         if (st != ASX_OK) return st;
