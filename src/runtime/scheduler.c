@@ -18,11 +18,16 @@
  *      I/O readiness;
  *   4. otherwise the run returns ASX_E_WOULD_BLOCK.
  *
- * Task timers live in a binary min-heap keyed by (deadline, arm sequence),
- * i.e. an EDF timed lane with insertion-stable ties.
+ * Task timers live in the runtime timer wheel (src/time/timer_wheel.c), a
+ * port of Rust's hierarchical wheel: due timers wake their tasks in the
+ * wheel's order (1 ms tick, then arrival at the slot), not by exact
+ * deadline.
  *
  * SPDX-License-Identifier: MIT
  */
+
+/* The runtime wheel is declared for internal access only. */
+#define ASX_INTERNAL_TIMER_WHEEL_ACCESS 1
 
 #include "runtime_internal.h"
 #include <asx/asx.h>
@@ -86,80 +91,52 @@ int asx_scheduler_event_get(uint32_t index, asx_scheduler_event *out) {
 void asx_scheduler_event_reset(void) { g_event_count = 0; }
 
 /* -------------------------------------------------------------------
- * Task timer heap (EDF timed lane)
+ * Task timers (the runtime timer wheel)
+ *
+ * A task's wake timer and, under lab dispatch, its budget-deadline timer
+ * are registrations in the runtime wheel, as the sleeps and budget
+ * deadlines of Rust tasks are registrations in its timer driver's wheel.
+ * What fires, and in which order, is the wheel's (src/time/timer_wheel.c).
+ * A registration's waker data names the task slot and which of the task's
+ * two timers it is.
  * ------------------------------------------------------------------- */
-
-static uint32_t g_timer_heap[ASX_MAX_TASKS];
-static uint32_t g_timer_heap_len = 0;
-static uint64_t g_timer_seq = 0;
-/* Lab dispatch: budget-deadline timers armed (task deadline_timer_*). */
-static uint32_t g_lab_deadline_armed = 0;
 
 /* Task whose poll function is running (ASX_INVALID_ID outside polls). */
 static asx_task_id g_current_task = ASX_INVALID_ID;
 
-static int timer_less(uint32_t a, uint32_t b) {
-    const asx_task_slot *ta = &g_tasks[a];
-    const asx_task_slot *tb = &g_tasks[b];
-    if (ta->wake_at != tb->wake_at) return ta->wake_at < tb->wake_at;
-    return ta->timer_seq < tb->timer_seq;
+#define TIMER_KIND_WAKE 0u
+#define TIMER_KIND_DEADLINE 1u
+
+static asx_time sched_now(void);
+
+static void *timer_token(uint32_t slot, uint32_t kind) {
+    return (void *)(uintptr_t)(((uintptr_t)slot << 1) | (uintptr_t)kind);
 }
 
-static void timer_heap_place(uint32_t pos, uint32_t idx) {
-    g_timer_heap[pos] = idx;
-    g_tasks[idx].timer_pos = pos;
+/* Register a timer, bringing the wheel to the clock first as Rust's
+ * TimerDriver::register does (time/driver.rs:501-508). */
+static int timer_register(uint32_t slot, uint32_t kind, asx_time deadline,
+                          asx_timer_handle *out_handle) {
+    asx_timer_wheel *wheel = asx_timer_wheel_runtime();
+    asx_timer_advance(wheel, sched_now());
+    return asx_timer_register(wheel, deadline, timer_token(slot, kind), out_handle) == ASX_OK;
 }
 
-static void timer_heap_sift_up(uint32_t pos) {
-    uint32_t idx = g_timer_heap[pos];
-    while (pos > 0u) {
-        ASX_CHECKPOINT_WAIVER("bounded: heap depth <= log2(ASX_MAX_TASKS)");
-        uint32_t parent = (pos - 1u) / 2u;
-        if (!timer_less(idx, g_timer_heap[parent])) break;
-        timer_heap_place(pos, g_timer_heap[parent]);
-        pos = parent;
-    }
-    timer_heap_place(pos, idx);
+static void wake_timer_disarm(asx_task_slot *t) {
+    if (!t->timer_armed) return;
+    t->timer_armed = 0u;
+    (void)asx_timer_cancel(asx_timer_wheel_runtime(), &t->timer);
 }
 
-static void timer_heap_sift_down(uint32_t pos) {
-    uint32_t idx = g_timer_heap[pos];
-    for (;;) {
-        ASX_CHECKPOINT_WAIVER("bounded: heap depth <= log2(ASX_MAX_TASKS)");
-        uint32_t left = 2u * pos + 1u;
-        uint32_t best;
-        if (left >= g_timer_heap_len) break;
-        best = left;
-        if (left + 1u < g_timer_heap_len &&
-            timer_less(g_timer_heap[left + 1u], g_timer_heap[left])) {
-            best = left + 1u;
-        }
-        if (!timer_less(g_timer_heap[best], idx)) break;
-        timer_heap_place(pos, g_timer_heap[best]);
-        pos = best;
-    }
-    timer_heap_place(pos, idx);
-}
-
-static void timer_heap_remove_at(uint32_t pos) {
-    uint32_t removed;
-    if (pos >= g_timer_heap_len || pos >= ASX_MAX_TASKS) return; /* not in the heap */
-    removed = g_timer_heap[pos];
-    g_timer_heap_len--;
-    g_tasks[removed].timer_pos = ASX_SLOT_NONE;
-    if (pos >= g_timer_heap_len) return; /* removed the last entry */
-    timer_heap_place(pos, g_timer_heap[g_timer_heap_len]);
-    if (pos > 0u && timer_less(g_timer_heap[pos], g_timer_heap[(pos - 1u) / 2u])) {
-        timer_heap_sift_up(pos);
-    } else {
-        timer_heap_sift_down(pos);
-    }
+/* Whether any timer is registered. */
+static int sched_timers_pending(void) {
+    return asx_timer_active_count(asx_timer_wheel_runtime()) > 0u;
 }
 
 static void lab_deadline_disarm(asx_task_slot *t) {
     if (!t->deadline_timer_armed) return;
     t->deadline_timer_armed = 0u;
-    if (g_lab_deadline_armed > 0u) g_lab_deadline_armed--;
+    (void)asx_timer_cancel(asx_timer_wheel_runtime(), &t->deadline_timer);
 }
 
 void asx_task_timer_disarm_internal(asx_task_slot *task) {
@@ -175,60 +152,66 @@ void asx_task_timer_disarm_internal(asx_task_slot *task) {
                        task->traced_deadline);
         task->traced_deadline = 0u;
     }
-    if (task->timer_pos == ASX_SLOT_NONE) return;
-    timer_heap_remove_at(task->timer_pos);
+    wake_timer_disarm(task);
 }
 
 /* Arm (or tighten) a task's timer. Keeps the earliest deadline. */
 static void timer_arm(uint32_t idx, asx_time deadline) {
     asx_task_slot *t = &g_tasks[idx];
-    if (t->timer_pos != ASX_SLOT_NONE) {
+    if (t->timer_armed) {
         if (deadline >= t->wake_at) return;
-        t->wake_at = deadline;
-        t->timer_seq = g_timer_seq++;
-        t->timer_waker_prio = t->lab_waker_prio;
-        timer_heap_sift_up(t->timer_pos);
-        return;
+        /* Tighter: Rust moves the registration (timer.update), which goes
+         * behind the timers already registered. */
+        wake_timer_disarm(t);
     }
-    /* Each task holds at most one heap entry, so the heap never exceeds
-     * ASX_MAX_TASKS; the guard keeps that invariant locally checkable. */
-    if (g_timer_heap_len >= ASX_MAX_TASKS) return;
+    /* Each task holds at most two registrations (this and its budget
+     * deadline), which the runtime wheel has room for. */
+    if (!timer_register(idx, TIMER_KIND_WAKE, deadline, &t->timer)) return;
+    t->timer_armed = 1u;
     t->wake_at = deadline;
-    t->timer_seq = g_timer_seq++;
     t->timer_waker_prio = t->lab_waker_prio;
-    timer_heap_place(g_timer_heap_len, idx);
-    g_timer_heap_len++;
-    timer_heap_sift_up(g_timer_heap_len - 1u);
 }
 
 /* Lab dispatch: Rust arms a work task's budget-deadline timer when it is
  * created or admitted (Cx::arm_budget_deadline, cx/cx.rs:3860-3890;
  * runtime/state.rs:4400-4403, 4892), a wheel timer behind those registered
  * before it. */
+static void lab_deadline_register(uint32_t slot, asx_time at) {
+    asx_task_slot *t = &g_tasks[slot];
+    if (!timer_register(slot, TIMER_KIND_DEADLINE, at, &t->deadline_timer)) return;
+    t->deadline_timer_armed = 1u;
+    t->deadline_timer_at = at;
+}
+
 void asx_lab_arm_budget_deadline_internal(asx_task_slot *t) {
     if (t->budget.deadline == ASX_TIME_INFINITE) return;
     if (t->deadline_timer_armed) {
         /* The creation's budget, met after the task was armed: still the
-         * one registration (asx_task_spawn_with_budget). */
-        t->deadline_timer_at = t->budget.deadline;
-        return;
+         * one registration (asx_task_spawn_with_budget), moved to the met
+         * deadline. Nothing registers between the two calls, so it keeps
+         * its place. */
+        if (t->deadline_timer_at == t->budget.deadline) return;
+        lab_deadline_disarm(t);
     }
-    t->deadline_timer_armed = 1u;
-    t->deadline_timer_at = t->budget.deadline;
-    t->deadline_timer_seq = g_timer_seq++;
-    g_lab_deadline_armed++;
+    lab_deadline_register((uint32_t)(t - g_tasks), t->budget.deadline);
 }
 
 /* The budget-deadline timer fires (BudgetDeadlineWake, cx/cx.rs:313-367):
  * unless the task is already cancel-requested or its budget lost this
  * deadline (an acknowledged cancel's cleanup budget replaced it), a
- * DEADLINE cancel stamped with the deadline, its cancel waker at once. */
+ * DEADLINE cancel stamped with the deadline, its cancel waker at once. A
+ * deadline past the wheel's horizon fires early, at the horizon: it is
+ * registered again for the real one (cx/cx.rs:340-351). */
 static void lab_deadline_fire(uint32_t slot) {
     asx_task_slot *t = &g_tasks[slot];
     asx_time at = t->deadline_timer_at;
     asx_status st;
     lab_deadline_disarm(t);
     if (!t->alive || asx_task_is_terminal(t->state) || t->cancel_pending) return;
+    if (sched_now() < at) {
+        lab_deadline_register(slot, at);
+        return;
+    }
     if (t->budget.deadline == ASX_TIME_INFINITE || t->budget.deadline > at) return;
     st = asx_task_cancel_budget_internal(asx_task_handle_for_slot(slot), ASX_CANCEL_DEADLINE, at);
     (void)st;
@@ -236,116 +219,57 @@ static void lab_deadline_fire(uint32_t slot) {
     asx_lab_cancel_wake(t);
 }
 
-/* Whether a timer is pending, and the earliest deadline (lab
- * budget-deadline timers included). */
+/* Whether a timer is pending, and when the next one fires (lab
+ * budget-deadline timers included): the wheel's next deadline, no earlier
+ * than now, as Rust's TimerDriver::next_deadline (time/driver.rs:614-626). */
 int asx_scheduler_next_timer_internal(asx_time *out_next) {
-    int any = 0;
-    asx_time next = 0;
-    uint32_t i;
-    if (g_timer_heap_len > 0u) {
-        next = g_tasks[g_timer_heap[0]].wake_at;
-        any = 1;
-    }
-    for (i = 0; g_lab_deadline_armed > 0u && i < g_task_count; i++) {
-        ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= ASX_MAX_TASKS");
-        if (!g_tasks[i].deadline_timer_armed) continue;
-        if (!any || g_tasks[i].deadline_timer_at < next) next = g_tasks[i].deadline_timer_at;
-        any = 1;
-    }
-    if (any) *out_next = next;
-    return any;
+    asx_timer_wheel *wheel = asx_timer_wheel_runtime();
+    asx_time now = sched_now();
+    asx_time next;
+    asx_timer_advance(wheel, now);
+    if (!asx_timer_next_deadline(wheel, &next)) return 0;
+    *out_next = next > now ? next : now;
+    return 1;
 }
 
-/* Lab dispatch: fire the timers due at `now` in the order Rust's timer
- * wheel wakes them, which decides their wake order and so their dispatch
- * generations (bd-9kll.4.2). The wheel keeps a timer due within its
- * current 1 ms tick in its ready vector in registration order, files later
- * ones in per-tick slots drained in tick order, and fires every due entry
- * of the ready vector, keeping the others in order (time/wheel.rs:710-754,
- * 921-968): (deadline tick, registration) for timers within the first
- * level's 256 ms. A task's wake timer and its budget-deadline timer are
- * separate entries; due[] marks the latter with LAB_DUE_DEADLINE. The tick
- * is LAB_WHEEL_TICK_NS (runtime_internal.h). */
-#define LAB_DUE_DEADLINE 0x80000000u
-
-static void lab_due_key(uint32_t entry, asx_time *out_tick, uint64_t *out_seq) {
-    const asx_task_slot *t = &g_tasks[entry & ~LAB_DUE_DEADLINE];
-    if (entry & LAB_DUE_DEADLINE) {
-        *out_tick = t->deadline_timer_at / LAB_WHEEL_TICK_NS;
-        *out_seq = t->deadline_timer_seq;
-    } else {
-        *out_tick = t->wake_at / LAB_WHEEL_TICK_NS;
-        *out_seq = t->timer_seq;
-    }
-}
-
-static uint32_t timers_fire_wheel_order(asx_time now) {
-    uint32_t due[2u * (uint32_t)ASX_MAX_TASKS];
-    uint32_t n = 0;
-    uint32_t i;
-    for (i = 0; i < g_timer_heap_len + g_task_count; i++) {
-        ASX_CHECKPOINT_WAIVER("bounded: heap length and g_task_count <= ASX_MAX_TASKS");
-        uint32_t entry;
-        uint32_t j = n;
-        asx_time qt;
-        uint64_t qs;
-        if (i < g_timer_heap_len) {
-            entry = g_timer_heap[i];
-            if (g_tasks[entry].wake_at > now) continue;
-        } else {
-            entry = i - g_timer_heap_len;
-            if (!g_tasks[entry].deadline_timer_armed || g_tasks[entry].deadline_timer_at > now) {
-                continue;
-            }
-            entry |= LAB_DUE_DEADLINE;
-        }
-        lab_due_key(entry, &qt, &qs);
-        /* Insertion by (tick, registration). */
-        while (j > 0u) {
-            ASX_CHECKPOINT_WAIVER("bounded: insertion into <= 2 * ASX_MAX_TASKS entries");
-            asx_time pt;
-            uint64_t ps;
-            lab_due_key(due[j - 1u], &pt, &ps);
-            if (pt < qt || (pt == qt && ps < qs)) break;
-            due[j] = due[j - 1u];
-            j--;
-        }
-        due[j] = entry;
-        n++;
-    }
-    for (i = 0; i < n; i++) {
-        ASX_CHECKPOINT_WAIVER("bounded: due timers <= 2 * ASX_MAX_TASKS");
-        asx_task_slot *t = &g_tasks[due[i] & ~LAB_DUE_DEADLINE];
-        if (due[i] & LAB_DUE_DEADLINE) {
-            lab_deadline_fire(due[i] & ~LAB_DUE_DEADLINE);
-            continue;
-        }
-        if (t->timer_pos != ASX_SLOT_NONE) timer_heap_remove_at(t->timer_pos);
-        /* The timer wakes the waker it was armed with, at that waker's
-         * priority, not the task's latest (bd-1maj). */
-        asx_lab_schedule(t, t->timer_waker_prio);
-    }
-    return n;
-}
-
-/* Fire every task timer due at `now`, in (deadline, seq) order: wake its
- * task. The trace records nothing here: as in Rust, the sleep records
- * fired or cancelled itself when it completes (asx_task_complete_timer,
+/* Fire every timer due at `now`, in the order the wheel wakes them (the
+ * ready list front to back: a timer's 1 ms tick, then its arrival at the
+ * slot; time/wheel.rs:710-755, 921-968), which in lab dispatch decides the
+ * wake order and so the dispatch generations (bd-9kll.4.2). A wake timer
+ * wakes its task; a budget-deadline timer runs its deadline handling. The
+ * trace records nothing here: as in Rust, the sleep records fired or
+ * cancelled itself when it completes (asx_task_complete_timer,
  * asx_task_cancel_timer; sleep.rs:670-690), so a sleeper woken by its
  * timer that first observes a cancel records a cancel (fuzz finding
- * gen-1-21, bd-ij9w). Returns the number of tasks woken. */
+ * gen-1-21, bd-ij9w). The whole due set is collected before any is acted
+ * on. Returns the number of timers fired. */
 static uint32_t timers_fire(asx_time now) {
-    uint32_t fired = 0;
-    if (asx_lab_dispatch_active()) return timers_fire_wheel_order(now);
-    while (g_timer_heap_len > 0u) {
-        ASX_CHECKPOINT_WAIVER("bounded: each iteration removes one heap entry");
-        uint32_t idx = g_timer_heap[0];
-        if (g_tasks[idx].wake_at > now) break;
-        timer_heap_remove_at(0u);
-        asx_task_wake_slot_internal(&g_tasks[idx]);
-        fired++;
+    void *due[2u * (uint32_t)ASX_MAX_TASKS];
+    asx_timer_wheel *wheel = asx_timer_wheel_runtime();
+    int lab = asx_lab_dispatch_active();
+    uint32_t n;
+    uint32_t i;
+
+    if (asx_timer_active_count(wheel) == 0u) return 0u;
+    n = asx_timer_collect_expired(wheel, now, due, (uint32_t)(sizeof(due) / sizeof(due[0])));
+    for (i = 0; i < n; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: due timers <= 2 * ASX_MAX_TASKS");
+        uint32_t slot = (uint32_t)((uintptr_t)due[i] >> 1);
+        asx_task_slot *t = &g_tasks[slot];
+        if (((uintptr_t)due[i] & 1u) != 0u) {
+            lab_deadline_fire(slot);
+            continue;
+        }
+        t->timer_armed = 0u;
+        if (lab) {
+            /* The timer wakes the waker it was armed with, at that waker's
+             * priority, not the task's latest (bd-1maj). */
+            asx_lab_schedule(t, t->timer_waker_prio);
+        } else {
+            asx_task_wake_slot_internal(t);
+        }
     }
-    return fired;
+    return n;
 }
 
 /* -------------------------------------------------------------------
@@ -353,8 +277,7 @@ static uint32_t timers_fire(asx_time now) {
  * ------------------------------------------------------------------- */
 
 void asx_scheduler_reset_internal(void) {
-    g_timer_heap_len = 0;
-    g_timer_seq = 0;
+    asx_timer_wheel_reset(asx_timer_wheel_runtime());
     g_current_task = ASX_INVALID_ID;
 }
 
@@ -365,11 +288,13 @@ void asx_task_sched_init_internal(asx_task_slot *task) {
     task->parked = 0;
     task->last_error = ASX_OK;
     task->wake_at = 0;
-    task->timer_seq = 0;
-    task->timer_pos = ASX_SLOT_NONE;
+    task->timer.slot = 0;
+    task->timer.generation = 0;
+    task->timer_armed = 0;
     task->deadline_timer_armed = 0;
     task->deadline_timer_at = 0;
-    task->deadline_timer_seq = 0;
+    task->deadline_timer.slot = 0;
+    task->deadline_timer.generation = 0;
     task->first_waiter = ASX_SLOT_NONE;
     task->next_waiter = ASX_SLOT_NONE;
     task->waiting_on = ASX_SLOT_NONE;
@@ -588,7 +513,7 @@ static void sched_trace_sleep_timer(asx_task_id self, asx_task_slot *t, asx_time
         asx_trace_emit(ASX_TRACE_TIMER_CANCEL, (uint64_t)self, deadline);
         asx_trace_emit_payload_internal(ASX_TRACE_TIMER_SET, (uint64_t)self, deadline, &rearm);
         t->traced_waker_epoch = t->lab_waker_epoch;
-        if (t->timer_pos != ASX_SLOT_NONE) timer_heap_remove_at(t->timer_pos);
+        wake_timer_disarm(t);
     }
     timer_arm((uint32_t)(t - g_tasks), deadline);
 }
@@ -630,7 +555,7 @@ asx_status asx_task_cancel_timer(asx_task_id self) {
         asx_trace_emit(ASX_TRACE_TIMER_CANCEL, (uint64_t)self, t->traced_deadline);
         t->traced_deadline = 0u;
     }
-    if (t->timer_pos != ASX_SLOT_NONE) timer_heap_remove_at(t->timer_pos);
+    wake_timer_disarm(t);
     return ASX_OK;
 }
 
@@ -645,7 +570,7 @@ asx_status asx_task_complete_timer(asx_task_id self) {
         asx_trace_emit(ASX_TRACE_TIMER_FIRE, (uint64_t)self, t->traced_deadline);
         t->traced_deadline = 0u;
     }
-    if (t->timer_pos != ASX_SLOT_NONE) timer_heap_remove_at(t->timer_pos);
+    wake_timer_disarm(t);
     return ASX_OK;
 }
 
@@ -890,7 +815,7 @@ static uint32_t sched_unpark_cancelled(int stranded) {
         if (!t->alive || !t->parked || !t->cancel_pending) continue;
         if (sched_scope_region(t) == NULL) continue;
         if (stranded) {
-            if (t->timer_pos != ASX_SLOT_NONE || t->waiting_on != ASX_SLOT_NONE) continue;
+            if (t->timer_armed || t->waiting_on != ASX_SLOT_NONE) continue;
         } else if (t->cancel_polled) {
             continue;
         }
@@ -992,13 +917,15 @@ static asx_status sched_idle(asx_time *last_idle_now, uint32_t *stall, asx_time 
      * while some task is runnable; the clock is the caller's to move. */
     if (!advance_clock) {
         /* ASX_ANALYZER_WAIVER("config-dependent: 0 without blocking pool/native I/O") */
-        return (g_timer_heap_len > 0u || sched_external_pending()) ? ASX_E_PENDING
-                                                                   : ASX_E_WOULD_BLOCK;
+        return (sched_timers_pending() || sched_external_pending()) ? ASX_E_PENDING
+                                                                    : ASX_E_WOULD_BLOCK;
     }
 
-    if (g_timer_heap_len > 0u) {
-        asx_time next = g_tasks[g_timer_heap[0]].wake_at;
-        asx_time target = next;
+    if (sched_timers_pending()) {
+        asx_time next = 0;
+        asx_time target;
+        (void)asx_scheduler_next_timer_internal(&next);
+        target = next;
         if (run_deadline < target) target = run_deadline;
         now = sched_now();
         if (now < target && asx_runtime_clock_is_virtual()) {
@@ -1264,7 +1191,7 @@ static asx_status sched_lab_step(uint32_t step, int *out_dispatched) {
     asx_lab_drain_deferred_cancels();
     if (asx_lab_handle_cancels_pending() || asx_lab_deferred_cancels_pending()) return ASX_OK;
     r = asx_lab_rng_next();
-    if (g_timer_heap_len > 0u || g_lab_deadline_armed > 0u) (void)timers_fire(sched_now());
+    if (sched_timers_pending()) (void)timers_fire(sched_now());
     (void)sched_drain_wakers();
     if (asx_lab_dispatch_overflowed()) return ASX_E_RESOURCE_EXHAUSTED;
     if (!asx_lab_pick(r, &slot, &task_gen, &cancel_lane)) return ASX_OK;
@@ -1417,7 +1344,7 @@ static asx_status sched_run(asx_region_id region, asx_budget *budget, int advanc
         /* Due timers fire at the start of a round, as a lab step processes
          * them before polling; run-until-idle starts no round for them
          * when nothing is runnable (sched_any_runnable). */
-        if (g_timer_heap_len > 0u && (advance_clock || sched_any_runnable())) {
+        if (sched_timers_pending() && (advance_clock || sched_any_runnable())) {
             (void)timers_fire(sched_now());
         }
 

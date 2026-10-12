@@ -16,6 +16,7 @@
 #include <asx/core/cancel.h>
 #include <asx/core/cleanup.h>
 #include <asx/core/outcome.h>
+#include <asx/time/timer_wheel.h>
 #define ASX_INTERNAL_TRACE_FAMILY_ACCESS 1
 #include <asx/runtime/trace.h>
 #undef ASX_INTERNAL_TRACE_FAMILY_ACCESS
@@ -190,10 +191,11 @@ typedef struct {
      * tasks in this order, as Rust's insertion-ordered Membership. */
     uint64_t member_seq;
     asx_status last_error; /* status returned by a failing poll_fn */
-    /* Task timer (EDF heap keyed by (wake_at, timer_seq)). */
+    /* Task timer: the task's registration in the runtime timer wheel
+     * (asx_timer_wheel_runtime), `timer` valid while `timer_armed`. */
     asx_time wake_at;
-    uint64_t timer_seq;
-    uint32_t timer_pos; /* heap index, ASX_SLOT_NONE when disarmed */
+    asx_timer_handle timer;
+    uint8_t timer_armed;
     /* Lab dispatch: the priority of the waker the timer was (re)armed
      * with, the waker of that poll. A Rust Sleep wakes the waker it last
      * registered, so a task polled again without re-polling its sleep (its
@@ -204,7 +206,7 @@ typedef struct {
      * its own, pending until it fires or the task ends. */
     uint8_t deadline_timer_armed;
     asx_time deadline_timer_at;
-    uint64_t deadline_timer_seq;
+    asx_timer_handle deadline_timer;
     /* Deadline of the task's traced sleep timer (asx_task_wait_until),
      * 0 when none: ASX_TRACE_TIMER_SET when registered, TIMER_FIRE when
      * due, TIMER_CANCEL when the task completes first. Internal wakeups

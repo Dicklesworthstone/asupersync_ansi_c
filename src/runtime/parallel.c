@@ -115,13 +115,13 @@ static asx_time parallel_now(void) {
  * the deadline from its caller; here it is the task's own. */
 static asx_time parallel_task_deadline(const asx_task_slot *t) {
     asx_time deadline = t->budget.deadline;
-    if (t->timer_pos != ASX_SLOT_NONE && t->wake_at < deadline) { deadline = t->wake_at; }
+    if (t->timer_armed && t->wake_at < deadline) { deadline = t->wake_at; }
     return deadline;
 }
 
 /* The deadline a timed-lane entry carries: what the task asked for when it
  * entered the lane, kept after its wake timer fires (the timer leaves the
- * heap then), tightened by anything it asks for later. */
+ * wheel then), tightened by anything it asks for later. */
 static asx_time parallel_timed_deadline(const asx_task_slot *t, uint16_t slot_idx) {
     asx_time deadline = parallel_task_deadline(t);
     if (g_task_timed_deadline[slot_idx] < deadline) { deadline = g_task_timed_deadline[slot_idx]; }
