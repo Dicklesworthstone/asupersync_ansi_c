@@ -936,6 +936,14 @@ TEST(explicit_group_cancel_drains_and_resolves_cancelled) {
     ASSERT_TRUE(g_owner.done);
     ASSERT_EQ(g_owner.result, ASX_E_CANCELLED);
     ASSERT_EQ(g_m[0].kind, ASX_CANCEL_SHUTDOWN);
+
+    /* The group's outcome says why it ended: the kind it was cancelled
+     * with, not an unattributed Cancelled (bd-9kll.3.14). */
+    {
+        asx_outcome out = asx_task_group_outcome(&g_owner.group);
+        ASSERT_EQ(out.severity, ASX_OUTCOME_CANCELLED);
+        ASSERT_EQ(out.cancel_reason.kind, ASX_CANCEL_SHUTDOWN);
+    }
 }
 
 /* -------------------------------------------------------------------

@@ -423,7 +423,12 @@ asx_status asx_region_get_close_outcome(asx_region_id region, asx_outcome *out) 
     }
     if (r->state != ASX_REGION_CLOSED) return ASX_E_NOT_FOUND;
     /* complete_close's default, fixed once the region is Closed (its
-     * cancel state can no longer change). */
-    *out = asx_outcome_make(r->cancel_requested ? ASX_OUTCOME_CANCELLED : ASX_OUTCOME_OK);
+     * cancel state can no longer change): Cancelled with the region's own
+     * reason when it was cancelled (record/region.rs:1810-1823). */
+    if (r->cancel_requested) {
+        *out = asx_outcome_cancelled(&r->cancel_reason);
+    } else {
+        *out = asx_outcome_make(ASX_OUTCOME_OK);
+    }
     return ASX_OK;
 }

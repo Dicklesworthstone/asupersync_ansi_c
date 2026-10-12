@@ -104,7 +104,9 @@ static void group_collect(asx_task_group *g, const asx_task_slot *owner) {
                 if (sequential) break;
                 continue;
             }
-            g->outcomes[i] = asx_outcome_make(ASX_OUTCOME_CANCELLED);
+            /* Its join reports the denial's reason, strengthened by the
+             * aborts the group sent it (task_handle.rs:544-554). */
+            g->outcomes[i] = asx_outcome_cancelled(&g->refused_reason[i]);
             g->statuses[i] = ASX_E_CANCELLED;
             g->cancel_kinds[i] = g->refused_reason[i].kind;
             g->completed[i] = 1;
@@ -552,6 +554,7 @@ asx_status asx_task_group_cancel(asx_task_group *g, asx_cancel_kind kind) {
     if (g->mode == ASX_TASK_GROUP_FIRST_OK) {
         /* No further attempt; the running one is cancelled and awaited. */
         g->early = 1u;
+        g->drain_kind = kind; /* the group outcome's reason */
         g->result = ASX_E_CANCELLED;
         if (g->spawned > 0u && !g->completed[g->spawned - 1u] && !g->forwarded) {
             asx_status st = asx_task_cancel(g->members[g->spawned - 1u], kind);
@@ -589,7 +592,13 @@ asx_outcome asx_task_group_outcome(const asx_task_group *g) {
         acc = asx_outcome_join(&acc, &g->outcomes[i]);
     }
     if (g->early) {
-        asx_outcome cancelled = asx_outcome_make(ASX_OUTCOME_CANCELLED);
+        /* Why the group ended early: its owner's reason when the owner's
+         * cancel did, else the kind it drained its members with (the
+         * deadline's TIMEOUT, or the one asx_task_group_cancel was given).
+         * A member's stronger reason still wins the join. */
+        asx_cancel_reason why =
+            g->owner_cancelled ? g->owner_reason : asx_cancel_reason_default(g->drain_kind, NULL);
+        asx_outcome cancelled = asx_outcome_cancelled(&why);
         acc = asx_outcome_join(&acc, &cancelled);
     }
     return acc;

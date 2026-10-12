@@ -23,6 +23,14 @@ asx_outcome asx_outcome_join(const asx_outcome *a, const asx_outcome *b) {
         result = *a;
     } else if (a->severity >= b->severity) {
         result = *a; /* left-bias on equal severity */
+        /* Rust strengthens the left reason with the right one only when
+         * the right kind is strictly more severe (types/outcome.rs:
+         * 568-573). */
+        if (a->severity == ASX_OUTCOME_CANCELLED && b->severity == ASX_OUTCOME_CANCELLED &&
+            asx_cancel_severity(b->cancel_reason.kind) >
+                asx_cancel_severity(a->cancel_reason.kind)) {
+            result.cancel_reason = asx_cancel_strengthen(&a->cancel_reason, &b->cancel_reason);
+        }
     } else {
         result = *b;
     }

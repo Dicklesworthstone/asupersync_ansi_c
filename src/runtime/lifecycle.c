@@ -714,6 +714,16 @@ asx_status asx_region_audit_leaks_internal(asx_region_id region) {
 }
 
 void asx_task_on_complete_internal(asx_task_slot *task, asx_region_slot *region) {
+    /* Rust's outcome carries its payload: Cancelled(reason), Panicked(
+     * payload). Every completion path sets the severity, and the slot's
+     * reason (the Cx's, once reconciled) or panic message, before this
+     * runs, so the outcome takes its payload here, once, for the task's
+     * join, its handle, its group and its region's close outcome. */
+    if (task->outcome.severity == ASX_OUTCOME_CANCELLED) {
+        task->outcome.cancel_reason = task->cancel_reason;
+    } else if (task->outcome.severity == ASX_OUTCOME_PANICKED) {
+        task->outcome.panic_message = task->panic_message;
+    }
     if (task->first_held != ASX_SLOT_NONE) {
         int fail_fast = 0;
         (void)asx_task_resolve_held_obligations_internal(task, &fail_fast);

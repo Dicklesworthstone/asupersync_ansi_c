@@ -1608,6 +1608,8 @@ The join rule: `join(a, b) = max_severity(a, b)`, with left-bias on equal severi
 
 This is a bounded semilattice with `Ok` as the bottom element and `Panicked` as the top. It composes associatively: `join(join(a, b), c) = join(a, join(b, c))`, so you can fold over any number of branch outcomes in any grouping order and get the same result.
 
+An outcome also carries what its variant carries in Rust. `Cancelled` holds the cancel reason (`asx_outcome.cancel_reason`) and `Panicked` the panic message (`asx_outcome.panic_message`, borrowed: the string `asx_task_panic` was given). A task's outcome (`asx_task_get_outcome`, `asx_task_join`), the outcomes of a task group's members and a region's close outcome carry them; a cancelled region that closes with no task outcome reports `Cancelled` with the region's own reason, as Rust's `complete_close` does. The join keeps the winner's payload whole. For two `Cancelled` outcomes it keeps the left reason unless the right one's kind is strictly more severe, which replaces it (Rust's `Outcome::join` strengthens only then: a tie in kind severity stays left, whatever the timestamps say). `asx_outcome_make` builds a payload-free outcome for the lattice alone; `asx_outcome_cancelled` and `asx_outcome_panicked` build one with its payload.
+
 ## Affinity Domains: Send/Sync for C
 
 In Rust, `Send` and `Sync` prevent data races at compile time. `asx` offers opt-in runtime affinity checks instead (compile-time gated behind `ASX_DEBUG_AFFINITY` for zero overhead in release):

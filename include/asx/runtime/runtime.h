@@ -1297,8 +1297,9 @@ ASX_API ASX_MUST_USE asx_status asx_region_defer_sync(asx_region_id region,
 /* Read a region's close outcome, as Rust's
  * RuntimeState::region_close_outcome does (runtime/state.rs:3743): the
  * outcomes of the tasks that completed in it, joined (asx_outcome_join:
- * the most severe wins). A Closed region with no task outcome recorded
- * reports Cancelled if it was cancelled, else Ok (RegionRecord::
+ * the most severe wins, with its cancel reason or panic message). A Closed
+ * region with no task outcome recorded reports Cancelled, carrying the
+ * region's own cancel reason, if it was cancelled, else Ok (RegionRecord::
  * complete_close's default, record/region.rs:1810-1823): a cancelled region
  * whose tasks all completed Ok reports Ok, as in Rust.
  * Returns ASX_OK, ASX_E_INVALID_ARGUMENT if out is NULL, a lookup error for
