@@ -1199,10 +1199,237 @@ static int cmd_constants(const char *path) {
 static int usage(void) {
     fprintf(stderr, "usage: asx-conformance run <scenario.json>\n"
                     "       asx-conformance compare <fixture.json>...\n"
+                    "       asx-conformance compare-sweep [--known <file>] <fixture.json>...\n"
                     "       asx-conformance self-test <fixture.json>\n"
                     "       asx-conformance canon <cases.jsonl>\n"
                     "       asx-conformance constants <rust_kernel_constants.json>\n");
     return 2;
+}
+
+/* ---- Sweep mode (bd-9kll.4.9) -------------------------------------------
+ *
+ * Every other comparison here runs the scenario under lab dispatch, so the
+ * scheduler a live user runs (asx_scheduler_run without it) is compared
+ * with nothing. `compare-sweep` runs each fixture's scenario under the
+ * default sweep scheduler and compares only what a scheduler that picks
+ * differently must still agree on: the final snapshot and the per-task
+ * observations (both canonical, so independent of dispatch order). Not the
+ * trace, the dispatch order or the certificate.
+ *
+ * A divergence is either a real semantic difference or an order dependence
+ * the scenario has by design. The second kind is listed, one line each with
+ * its reason, in the known-divergence file (id, whitespace, reason); a
+ * fixture that diverges and is not listed FAILs, and one that is listed
+ * but now matches is STALE and fails too, so the list can neither hide a
+ * new divergence nor rot. */
+
+#define KNOWN_CAP 256u
+#define KNOWN_ID_CAP 96u
+#define KNOWN_REASON_CAP 192u
+
+typedef struct {
+    char id[KNOWN_ID_CAP];
+    char reason[KNOWN_REASON_CAP];
+    int used; /* a compared fixture carried this id */
+} known_divergence;
+
+static known_divergence g_known[KNOWN_CAP];
+static uint32_t g_n_known;
+
+/* Read `id reason...` lines ('#' comments and blank lines skipped). A line
+ * with no reason is refused: a listing is a justification. Returns 1 on
+ * success. */
+static int load_known(const char *path) {
+    FILE *f = fopen(path, "r");
+    char line[KNOWN_ID_CAP + KNOWN_REASON_CAP + 8u];
+    unsigned long lineno = 0;
+    int ok = 1;
+
+    if (f == NULL) {
+        fprintf(stderr, "asx-conformance: cannot open %s\n", path);
+        return 0;
+    }
+    while (fgets(line, (int)sizeof(line), f) != NULL) {
+        char *p = line;
+        const char *id;
+        char *reason;
+        size_t n;
+        size_t id_len;
+        lineno++;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '#' || *p == '\n' || *p == '\0') continue;
+        id = p;
+        while (*p != '\0' && *p != ' ' && *p != '\t' && *p != '\n') p++;
+        if (*p != '\0') *p++ = '\0';
+        while (*p == ' ' || *p == '\t') p++;
+        reason = p;
+        n = strlen(reason);
+        while (n > 0u && (reason[n - 1u] == '\n' || reason[n - 1u] == ' ')) reason[--n] = '\0';
+        if (*id == '\0' || n == 0u) {
+            fprintf(stderr, "asx-conformance: %s:%lu: expected `<scenario_id> <reason>`\n", path,
+                    lineno);
+            ok = 0;
+            continue;
+        }
+        id_len = strlen(id);
+        if (g_n_known >= KNOWN_CAP || id_len >= KNOWN_ID_CAP || n >= KNOWN_REASON_CAP) {
+            fprintf(stderr, "asx-conformance: %s:%lu: entry too long or list full\n", path, lineno);
+            ok = 0;
+            continue;
+        }
+        memcpy(g_known[g_n_known].id, id, id_len + 1u);
+        memcpy(g_known[g_n_known].reason, reason, n + 1u);
+        g_known[g_n_known].used = 0;
+        g_n_known++;
+    }
+    fclose(f);
+    return ok;
+}
+
+static known_divergence *find_known(const char *id) {
+    uint32_t i;
+    for (i = 0; i < g_n_known; i++) {
+        if (strcmp(g_known[i].id, id) == 0) return &g_known[i];
+    }
+    return NULL;
+}
+
+typedef enum { SWEEP_PASS, SWEEP_KNOWN, SWEEP_FAIL, SWEEP_STALE, SWEEP_ERROR } sweep_result;
+
+/* The first differing member of each snapshot part and of the observations,
+ * printed for a divergence nobody has explained. */
+static void sweep_detail(uint32_t want_snapshot, uint32_t want_obs, uint32_t run, int snap_ok,
+                         int obs_ok) {
+    if (!snap_ok) {
+        uint32_t got = asx_json_get(&g_run, run, "snapshot");
+        static const char *const parts[] = {"tasks", "regions", "obligations"};
+        size_t k;
+        for (k = 0; k < sizeof(parts) / sizeof(parts[0]); k++) {
+            char label[32];
+            (void)snprintf(label, sizeof(label), "snapshot.%s", parts[k]);
+            (void)diff_members(label, asx_json_get(&g_fixture, want_snapshot, parts[k]),
+                               asx_json_get(&g_run, got, parts[k]));
+        }
+        {
+            static const char *const scalars[] = {"now_ns", "quiescent", "timers_pending",
+                                                  "channels"};
+            for (k = 0; k < sizeof(scalars) / sizeof(scalars[0]); k++) {
+                uint32_t w = asx_json_get(&g_fixture, want_snapshot, scalars[k]);
+                uint32_t g = asx_json_get(&g_run, got, scalars[k]);
+                if (w == ASX_JSON_NONE || g == ASX_JSON_NONE || !same_part(w, g)) {
+                    fprintf(stdout, "    snapshot.%s differs\n", scalars[k]);
+                    if (w != ASX_JSON_NONE && canonical(&g_fixture, w, g_a)) show("rust:", g_a);
+                    if (g != ASX_JSON_NONE && canonical(&g_run, g, g_b)) show("c:   ", g_b);
+                }
+            }
+        }
+    }
+    if (!obs_ok) {
+        (void)diff_items("observations", want_obs, asx_json_get(&g_run, run, "observations"));
+    }
+}
+
+/* One fixture under the sweep scheduler. */
+static sweep_result sweep_one(const char *path) {
+    uint32_t root;
+    uint32_t scenario;
+    uint32_t run = ASX_JSON_NONE;
+    uint32_t want_snapshot;
+    uint32_t want_obs;
+    const char *id;
+    known_divergence *known;
+    char why[256];
+    asx_status st;
+    int snap_ok = 0;
+    int obs_ok = 0;
+    int diverged = 0;
+
+    if (!load(path, &g_fixture, &root)) return SWEEP_ERROR;
+    id = asx_json_get_string(&g_fixture, root, "scenario_id");
+    scenario = asx_json_get(&g_fixture, root, "scenario");
+    want_snapshot = asx_json_get(&g_fixture, root, "snapshot");
+    want_obs = asx_json_get(&g_fixture, root, "observations");
+    if (id == NULL || scenario == ASX_JSON_NONE || want_snapshot == ASX_JSON_NONE ||
+        want_obs == ASX_JSON_NONE) {
+        fprintf(stdout,
+                "ERROR %s: not an asx.fixture.v2 file with scenario, snapshot and "
+                "observations\n",
+                path);
+        return SWEEP_ERROR;
+    }
+    if (!fixture_authentic(root, id)) return SWEEP_ERROR;
+    known = find_known(id);
+
+    why[0] = '\0';
+    asx_json_doc_init(&g_run);
+    st = asx_conformance_run_sweep(&g_fixture, scenario, &g_run, &run, g_error, sizeof(g_error));
+    if (st != ASX_OK) {
+        /* The scenario could not be played under the sweep at all. */
+        (void)snprintf(why, sizeof(why), "sweep run failed: %.200s",
+                       g_error[0] != '\0' ? g_error : "?");
+        diverged = 1;
+    } else {
+        snap_ok = same_part(want_snapshot, asx_json_get(&g_run, run, "snapshot"));
+        obs_ok = same_part(want_obs, asx_json_get(&g_run, run, "observations"));
+        if (!snap_ok || !obs_ok) {
+            (void)snprintf(why, sizeof(why), "%s%s%s", snap_ok ? "" : "snapshot",
+                           (!snap_ok && !obs_ok) ? " and " : "", obs_ok ? "" : "observations");
+            diverged = 1;
+        }
+    }
+
+    if (!diverged) {
+        if (known != NULL) {
+            known->used = 1;
+            fprintf(stdout,
+                    "STALE %s: listed as order-dependent (%s) but matches Rust under the sweep; "
+                    "remove it from the list\n",
+                    id, known->reason);
+            return SWEEP_STALE;
+        }
+        fprintf(stdout, "PASS %s\n", id);
+        return SWEEP_PASS;
+    }
+    if (known != NULL) {
+        known->used = 1;
+        fprintf(stdout, "KNOWN %s: %s differ; %s\n", id, why, known->reason);
+        return SWEEP_KNOWN;
+    }
+    fprintf(stdout, "FAIL %s: %s differ under the sweep\n", id, why);
+    if (st == ASX_OK) sweep_detail(want_snapshot, want_obs, run, snap_ok, obs_ok);
+    return SWEEP_FAIL;
+}
+
+/* compare-sweep [--known FILE] fixture.json... */
+static int cmd_compare_sweep(int argc, char **argv) {
+    unsigned counts[5] = {0u, 0u, 0u, 0u, 0u};
+    unsigned unmatched = 0u;
+    int i = 2;
+    uint32_t k;
+
+    if (i + 1 < argc && strcmp(argv[i], "--known") == 0) {
+        if (!load_known(argv[i + 1])) return 2;
+        i += 2;
+    }
+    if (i >= argc) return usage();
+    for (; i < argc; i++) counts[sweep_one(argv[i])]++;
+    /* A listed id that no compared fixture carries is a typo or a removed
+     * scenario: the list must not name things that do not exist. */
+    for (k = 0; k < g_n_known; k++) {
+        if (!g_known[k].used) {
+            fprintf(stdout, "STALE %s: listed but no compared fixture has this id\n",
+                    g_known[k].id);
+            unmatched++;
+        }
+    }
+    fprintf(stdout,
+            "asx-conformance sweep: pass=%u known=%u fail=%u stale=%u error=%u unmatched=%u\n",
+            counts[SWEEP_PASS], counts[SWEEP_KNOWN], counts[SWEEP_FAIL], counts[SWEEP_STALE],
+            counts[SWEEP_ERROR], unmatched);
+    return (counts[SWEEP_FAIL] == 0u && counts[SWEEP_STALE] == 0u && counts[SWEEP_ERROR] == 0u &&
+            unmatched == 0u)
+               ? 0
+               : 1;
 }
 
 int main(int argc, char **argv) {
@@ -1214,6 +1441,7 @@ int main(int argc, char **argv) {
     if (strcmp(argv[1], "run") == 0 && argc == 3) return cmd_run(argv[2]);
     if (strcmp(argv[1], "canon") == 0 && argc == 3) return cmd_canon(argv[2]);
     if (strcmp(argv[1], "constants") == 0 && argc == 3) return cmd_constants(argv[2]);
+    if (strcmp(argv[1], "compare-sweep") == 0) return cmd_compare_sweep(argc, argv);
     if (strcmp(argv[1], "self-test") == 0 && argc == 3) {
         cmp_result r = compare_one(argv[2], 1);
         if (r == CMP_FAIL) {

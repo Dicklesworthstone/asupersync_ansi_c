@@ -39,6 +39,16 @@ ASX_MUST_USE asx_status asx_conformance_run(const asx_json_doc *in, uint32_t sce
                                             asx_json_doc *out, uint32_t *out_root, char *error,
                                             size_t error_cap);
 
+/* As asx_conformance_run, but under the runtime's default sweep scheduler
+ * instead of lab dispatch: what asx_scheduler_run does for a live user
+ * (bd-9kll.4.9). Same fail-closed contract. Only "snapshot" and
+ * "observations" of the projection are comparable with a Rust capture: the
+ * sweep polls in its own order, so "trace", "dispatches" and the schedule
+ * certificate (which it does not produce) are not. */
+ASX_MUST_USE asx_status asx_conformance_run_sweep(const asx_json_doc *in, uint32_t scenario,
+                                                  asx_json_doc *out, uint32_t *out_root,
+                                                  char *error, size_t error_cap);
+
 /* Replay a recorded schedule in the runs that follow, instead of the seeded
  * picker (asx_lab_forced_schedule_begin/_end around the run): every lab
  * step takes its task from `schedule`, and the run ends exactly where its

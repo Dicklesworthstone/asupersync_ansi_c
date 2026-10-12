@@ -4529,8 +4529,13 @@ static void set_digest(uint32_t obj, const char *key, uint32_t node) {
     asx_json_set(g_out, obj, key, asx_json_new_string(g_out, digest));
 }
 
-asx_status asx_conformance_run(const asx_json_doc *in, uint32_t scenario, asx_json_doc *out,
-                               uint32_t *out_root, char *error, size_t error_cap) {
+/* One run of a scenario. `lab` selects the scheduler: 1 dispatches as the
+ * Rust lab does with the scenario's seed (and records its dispatches and
+ * schedule certificate, and replays a forced schedule if one is installed);
+ * 0 leaves the runtime on its default sweep scheduler, which is what
+ * asx_scheduler_run does for a live user (bd-9kll.4.9). */
+static asx_status conformance_run(const asx_json_doc *in, uint32_t scenario, asx_json_doc *out,
+                                  uint32_t *out_root, char *error, size_t error_cap, int lab) {
     asx_runtime_config cfg;
     asx_runtime_hooks hooks;
     asx_budget budget;
@@ -4590,14 +4595,14 @@ asx_status asx_conformance_run(const asx_json_doc *in, uint32_t scenario, asx_js
     asx_runtime_config_init(&cfg);
     st = asx_runtime_hooks_init(&hooks);
     if (st == ASX_OK) st = asx_runtime_init(&g_rt, &cfg, &hooks);
-    if (st == ASX_OK) st = asx_scheduler_use_lab_dispatch(seed);
+    if (st == ASX_OK && lab) st = asx_scheduler_use_lab_dispatch(seed);
     if (st != ASX_OK) {
         it_fail("runtime init failed", NULL);
         return st;
     }
-    asx_scheduler_record_dispatches(g_dispatches, IT_MAX_DISPATCHES);
+    if (lab) asx_scheduler_record_dispatches(g_dispatches, IT_MAX_DISPATCHES);
     g_forced_on = 0;
-    if (g_forced != NULL) {
+    if (lab && g_forced != NULL) {
         /* Replay the recorded schedule: every lab step takes its task from
          * it, the scenario's tasks found by name. */
         asx_forced_error ferr;
@@ -4789,4 +4794,14 @@ asx_status asx_conformance_run(const asx_json_doc *in, uint32_t scenario, asx_js
     }
     *out_root = result;
     return ASX_OK;
+}
+
+asx_status asx_conformance_run(const asx_json_doc *in, uint32_t scenario, asx_json_doc *out,
+                               uint32_t *out_root, char *error, size_t error_cap) {
+    return conformance_run(in, scenario, out, out_root, error, error_cap, 1);
+}
+
+asx_status asx_conformance_run_sweep(const asx_json_doc *in, uint32_t scenario, asx_json_doc *out,
+                                     uint32_t *out_root, char *error, size_t error_cap) {
+    return conformance_run(in, scenario, out, out_root, error, error_cap, 0);
 }
