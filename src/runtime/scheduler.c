@@ -133,9 +133,8 @@ static void wake_timer_disarm(asx_task_slot *t) {
  * horizon (Rust computes the same at registration, time/sleep.rs:935). */
 static uint8_t timer_past_horizon(asx_time deadline) {
     asx_time now = sched_now();
-    asx_time end = now > UINT64_MAX - ASX_TIMER_MAX_DURATION_NS
-                       ? UINT64_MAX
-                       : now + ASX_TIMER_MAX_DURATION_NS;
+    asx_time end = UINT64_MAX;
+    if (now <= UINT64_MAX - ASX_TIMER_MAX_DURATION_NS) end = now + ASX_TIMER_MAX_DURATION_NS;
     return deadline > end ? 1u : 0u;
 }
 

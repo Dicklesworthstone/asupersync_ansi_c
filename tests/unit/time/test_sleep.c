@@ -9,6 +9,8 @@
 
 #include "../../test_harness.h"
 #include <asx/runtime/rt.h>
+#include <asx/runtime/runtime.h>
+#include <asx/runtime/trace.h>
 #include <asx/runtime/virtual_time.h>
 #include <asx/time/sleep.h>
 #include <string.h>
@@ -441,6 +443,92 @@ TEST(interval_ticks_increment) {
 }
 
 /* ------------------------------------------------------------------ */
+/* A sleep beyond the wheel's horizon, under the scheduler             */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    asx_sleep_state s;
+    uint32_t polls;
+    asx_status result;
+} long_sleep_task;
+
+static asx_status poll_long_sleep(void *user_data, asx_task_id self) {
+    long_sleep_task *t = (long_sleep_task *)user_data;
+    t->polls++;
+    t->result = asx_sleep_poll(&t->s, self);
+    return t->result == ASX_E_PENDING ? ASX_E_PENDING : ASX_OK;
+}
+
+/* The runtime wheel clamps a registration to its 7-day maximum, so a sleep
+ * 8 days out wakes early, at 7 days; the sleep then registers again for
+ * the remaining day and completes at 8 (Rust's registered_partial,
+ * time/sleep.rs:854-872: the spent handle is cancelled and a new one
+ * scheduled). The trace shows two schedules, one cancel and one fire; the
+ * early wake is the middle poll. */
+TEST(sleep_beyond_the_wheel_horizon_fires_early_and_registers_again) {
+    static long_sleep_task t;
+    asx_runtime rt;
+    asx_runtime_config cfg;
+    asx_runtime_hooks hooks;
+    asx_region_id r;
+    asx_task_id id;
+    asx_budget budget;
+    const asx_time eight_days = (asx_time)8u * 86400u * 1000000000ULL;
+
+    /* The virtual clock (default stub hooks) even in live POSIX builds. */
+    asx_runtime_config_init(&cfg);
+    MUST_OK(asx_runtime_hooks_init(&hooks));
+    MUST_OK(asx_runtime_init(&rt, &cfg, &hooks));
+    asx_trace_reset();
+    memset(&t, 0, sizeof(t));
+    MUST_OK(asx_sleep_init(&t.s, eight_days));
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(r, poll_long_sleep, &t, &id), ASX_OK);
+    budget = asx_budget_from_polls(100);
+
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
+    ASSERT_EQ(t.result, ASX_OK);
+    ASSERT_EQ(t.polls, 3u);
+    ASSERT_EQ(asx_runtime_virtual_now(), eight_days);
+    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_TIMER_SET), (uint64_t)2u);
+    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_TIMER_CANCEL), (uint64_t)1u);
+    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_TIMER_FIRE), (uint64_t)1u);
+    asx_runtime_reset();
+}
+
+/* A sleep inside the maximum is registered once: no early wake, no second
+ * schedule. */
+TEST(sleep_within_the_wheel_horizon_registers_once) {
+    static long_sleep_task t;
+    asx_runtime rt;
+    asx_runtime_config cfg;
+    asx_runtime_hooks hooks;
+    asx_region_id r;
+    asx_task_id id;
+    asx_budget budget;
+    const asx_time six_days = (asx_time)6u * 86400u * 1000000000ULL;
+
+    asx_runtime_config_init(&cfg);
+    MUST_OK(asx_runtime_hooks_init(&hooks));
+    MUST_OK(asx_runtime_init(&rt, &cfg, &hooks));
+    asx_trace_reset();
+    memset(&t, 0, sizeof(t));
+    MUST_OK(asx_sleep_init(&t.s, six_days));
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(r, poll_long_sleep, &t, &id), ASX_OK);
+    budget = asx_budget_from_polls(100);
+
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
+    ASSERT_EQ(t.result, ASX_OK);
+    ASSERT_EQ(t.polls, 2u);
+    ASSERT_EQ(asx_runtime_virtual_now(), six_days);
+    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_TIMER_SET), (uint64_t)1u);
+    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_TIMER_CANCEL), (uint64_t)0u);
+    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_TIMER_FIRE), (uint64_t)1u);
+    asx_runtime_reset();
+}
+
+/* ------------------------------------------------------------------ */
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
 
@@ -486,6 +574,10 @@ int main(void) {
     RUN_TEST(interval_saturates_and_ends_after_the_last_tick);
     RUN_TEST(interval_completes_after_max_ticks);
     RUN_TEST(interval_ticks_increment);
+
+    /* Beyond the wheel's horizon */
+    RUN_TEST(sleep_beyond_the_wheel_horizon_fires_early_and_registers_again);
+    RUN_TEST(sleep_within_the_wheel_horizon_registers_once);
 
     TEST_REPORT();
     return test_failures;

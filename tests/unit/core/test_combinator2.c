@@ -949,6 +949,112 @@ TEST(hedge_waits_for_its_delay_after_long_uptime) {
     MUST_OK(asx_runtime_set_hooks(&saved));
 }
 
+/* The hedge delay is measured against the clock, not registered in the
+ * application timer wheel (bd-9kll.7.4). Before, arming it in the global
+ * wheel meant a full wheel, a delay past the wheel's 7-day maximum or one
+ * that overflowed the clock all made the hedge skip its delay and start
+ * the backup on the first poll: a resource limit changing semantics. */
+static void hedge_clock_on(asx_runtime_hooks *saved, asx_vtime_state *vt, asx_time start) {
+    const asx_runtime_hooks *active = asx_runtime_get_hooks();
+    asx_runtime_hooks hooks;
+
+    if (active != NULL) {
+        memcpy(saved, active, sizeof(*saved));
+    } else {
+        MUST_OK(asx_runtime_hooks_init(saved));
+    }
+    memcpy(&hooks, saved, sizeof(hooks));
+    asx_vtime_init(vt, start, 1000000ULL);
+    hooks.clock.now_ns_fn = asx_vtime_now_ns;
+    hooks.clock.logical_now_ns_fn = asx_vtime_now_ns;
+    hooks.clock.ctx = vt;
+    MUST_OK(asx_runtime_set_hooks(&hooks));
+}
+
+/* Starts a hedge with `delay_ns` over a pending primary and returns its
+ * first poll; the backup must not have started. */
+static asx_status hedge_first_poll_waits(uint64_t delay_ns, asx_hedge_state *hs,
+                                         int *backup_polls) {
+    hedge_primary_pending_count = 0;
+    *backup_polls = 0;
+    MUST_OK(asx_hedge_init(hs, hedge_primary_pending, NULL, hedge_backup_counted, backup_polls,
+                           delay_ns));
+    return asx_hedge_poll(hs, 0);
+}
+
+TEST(hedge_waits_for_its_delay_when_the_timer_wheel_is_full) {
+    asx_runtime_hooks saved;
+    asx_vtime_state vt;
+    asx_timer_wheel *wheel = asx_timer_wheel_global();
+    asx_timer_handle h;
+    asx_hedge_state hs;
+    int backup_polls;
+    uint32_t i;
+
+    hedge_clock_on(&saved, &vt, 0u);
+    asx_timer_wheel_reset(wheel);
+    for (i = 0; i < ASX_MAX_TIMERS; i++) {
+        ASSERT_EQ(asx_timer_register(wheel, 1000000000ULL + i, NULL, &h), ASX_OK);
+    }
+    ASSERT_EQ(asx_timer_register(wheel, 5u, NULL, &h), ASX_E_RESOURCE_EXHAUSTED);
+
+    ASSERT_EQ(hedge_first_poll_waits(1000000000ULL, &hs, &backup_polls), ASX_E_PENDING);
+    ASSERT_EQ(asx_hedge_current_phase(&hs), ASX_HEDGE_PRIMARY_ONLY);
+    ASSERT_EQ(hedge_primary_pending_count, 1);
+    ASSERT_EQ(backup_polls, 0);
+
+    asx_timer_wheel_reset(wheel);
+    MUST_OK(asx_runtime_set_hooks(&saved));
+}
+
+TEST(hedge_waits_for_a_delay_beyond_the_wheels_maximum) {
+    asx_runtime_hooks saved;
+    asx_vtime_state vt;
+    asx_hedge_state hs;
+    int backup_polls;
+
+    hedge_clock_on(&saved, &vt, 0u);
+    ASSERT_EQ(hedge_first_poll_waits(8u * 86400u * 1000000000ULL, &hs, &backup_polls),
+              ASX_E_PENDING);
+    ASSERT_EQ(asx_hedge_current_phase(&hs), ASX_HEDGE_PRIMARY_ONLY);
+    ASSERT_EQ(backup_polls, 0);
+
+    MUST_OK(asx_runtime_set_hooks(&saved));
+}
+
+/* Rust's deadline saturates (Sleep::after, hedge.rs:634): a delay that
+ * overflows the clock is a delay that never ends, not a skipped one. */
+TEST(hedge_with_an_overflowing_delay_waits_forever) {
+    asx_runtime_hooks saved;
+    asx_vtime_state vt;
+    asx_hedge_state hs;
+    int backup_polls;
+
+    hedge_clock_on(&saved, &vt, 5000000000ULL);
+    ASSERT_EQ(hedge_first_poll_waits(UINT64_MAX, &hs, &backup_polls), ASX_E_PENDING);
+    ASSERT_EQ(asx_hedge_current_phase(&hs), ASX_HEDGE_PRIMARY_ONLY);
+    ASSERT_EQ(asx_deadline_target(&hs.deadline), (asx_time)UINT64_MAX);
+    ASSERT_EQ(backup_polls, 0);
+
+    MUST_OK(asx_runtime_set_hooks(&saved));
+}
+
+/* The hedge no longer holds a timer in the application wheel. */
+TEST(hedge_registers_nothing_with_the_timer_wheel) {
+    asx_runtime_hooks saved;
+    asx_vtime_state vt;
+    asx_timer_wheel *wheel = asx_timer_wheel_global();
+    asx_hedge_state hs;
+    int backup_polls;
+
+    hedge_clock_on(&saved, &vt, 0u);
+    asx_timer_wheel_reset(wheel);
+    ASSERT_EQ(hedge_first_poll_waits(1000000000ULL, &hs, &backup_polls), ASX_E_PENDING);
+    ASSERT_EQ(asx_timer_active_count(wheel), (uint32_t)0);
+
+    MUST_OK(asx_runtime_set_hooks(&saved));
+}
+
 /* Parks its task and never completes. */
 static asx_status hedge_primary_parks(void *user_data, asx_task_id self) {
     asx_status st = asx_task_park(self);
@@ -1415,6 +1521,10 @@ int main(void) {
 
     /* Last: installs a clock hook */
     RUN_TEST(hedge_waits_for_its_delay_after_long_uptime);
+    RUN_TEST(hedge_waits_for_its_delay_when_the_timer_wheel_is_full);
+    RUN_TEST(hedge_waits_for_a_delay_beyond_the_wheels_maximum);
+    RUN_TEST(hedge_with_an_overflowing_delay_waits_forever);
+    RUN_TEST(hedge_registers_nothing_with_the_timer_wheel);
     RUN_TEST(hedge_delay_wakes_a_parked_owner);
     RUN_TEST(hedge_owner_cancel_drops_both_attempts);
 

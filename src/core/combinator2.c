@@ -666,14 +666,23 @@ asx_status asx_hedge_poll(void *user_data, asx_task_id self) {
     if (owner_cancelled(self)) return hedge_cancelled(state);
 
     if (state->phase == ASX_HEDGE_PRIMARY_ONLY) {
-        /* Arm deadline on first poll */
+        /* Start the hedge delay on the first poll, as Rust's
+         * Sleep::after(now, hedge_delay) does (hedge.rs:634): the target
+         * saturates rather than overflowing. Nothing is registered with
+         * the timer wheel: the delay is checked against the clock and wakes
+         * the owner through its own task timer below, so a wheel's
+         * capacity or maximum duration cannot change when the backup
+         * starts. */
         if (!state->deadline_armed) {
-            asx_status dst = asx_deadline_after(&state->deadline, state->deadline_ns);
+            asx_time now;
+            asx_status dst = asx_runtime_now_ns(&now);
             if (dst == ASX_OK) {
-                dst = asx_deadline_arm(&state->deadline, NULL);
-                if (dst == ASX_OK) { state->deadline_armed = 1; }
+                dst = asx_deadline_init(&state->deadline, state->deadline_ns > UINT64_MAX - now
+                                                              ? UINT64_MAX
+                                                              : now + state->deadline_ns);
             }
-            /* If deadline cannot be armed, skip to racing immediately */
+            if (dst == ASX_OK) { state->deadline_armed = 1; }
+            /* Without a clock the delay cannot be measured: race at once */
             if (!state->deadline_armed) {
                 state->phase = ASX_HEDGE_RACING;
                 state->backup.poll_fn = state->backup_fn;
