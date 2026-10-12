@@ -732,12 +732,18 @@ asx_status asx_channel_try_reserve(asx_channel_id id, asx_send_permit *out) {
 /* Settle a genuine permit's SendPermit obligation (callers have consumed
  * its token, so a forged permit never reaches here): commit on delivery,
  * else abort with `reason` (mpsc.rs:1477, :1633). */
+static int channel_permit_drop(uint64_t channel_id, uint64_t token);
+
 static void channel_permit_resolve(asx_send_permit *permit, int delivered,
                                    asx_obligation_abort_reason reason) {
     asx_status st;
     if (permit->obligation == ASX_INVALID_ID) return;
-    st = delivered ? asx_obligation_commit(permit->obligation)
-                   : asx_obligation_abort_with_reason(permit->obligation, reason);
+    st = asx_obligation_resolve_token_internal(permit->obligation, channel_permit_drop,
+                                               (uint64_t)permit->channel_id,
+                                               (uint64_t)permit->token, 0u,
+                                               delivered ? ASX_OBLIGATION_COMMITTED
+                                                         : ASX_OBLIGATION_ABORTED,
+                                               reason);
     (void)st; /* refused only for an obligation the runtime already resolved */
     permit->obligation = ASX_INVALID_ID;
 }
@@ -751,6 +757,12 @@ asx_status asx_send_permit_send(asx_send_permit *permit, uint64_t value) {
 
     if (permit == NULL) { return ASX_E_INVALID_ARGUMENT; }
     if (permit->consumed) { return ASX_E_INVALID_STATE; }
+    if (permit->obligation != ASX_INVALID_ID) {
+        st = asx_obligation_check_token_internal(permit->obligation, channel_permit_drop,
+                                                 (uint64_t)permit->channel_id,
+                                                 (uint64_t)permit->token, 0u);
+        if (st != ASX_OK && st != ASX_E_OBLIGATION_ALREADY_RESOLVED) return st;
+    }
 
     st = channel_slot_lookup(permit->channel_id, &s);
     if (st != ASX_OK) {
@@ -803,11 +815,17 @@ asx_status asx_send_permit_send(asx_send_permit *permit, uint64_t value) {
 /* Two-phase send: abort (return capacity)                            */
 /* ------------------------------------------------------------------ */
 
-void asx_send_permit_abort(asx_send_permit *permit) {
+static void channel_permit_abort(asx_send_permit *permit, asx_obligation_abort_reason reason) {
     asx_channel_slot *s;
     asx_status st;
 
     if (permit == NULL || permit->consumed) { return; }
+    if (permit->obligation != ASX_INVALID_ID) {
+        st = asx_obligation_check_token_internal(permit->obligation, channel_permit_drop,
+                                                 (uint64_t)permit->channel_id,
+                                                 (uint64_t)permit->token, 0u);
+        if (st != ASX_OK && st != ASX_E_OBLIGATION_ALREADY_RESOLVED) return;
+    }
 
     permit->consumed = 1;
 
@@ -818,7 +836,7 @@ void asx_send_permit_abort(asx_send_permit *permit) {
 #if ASX_CHANNEL_BACKEND_LOCKFREE
         channel_lf_release_capacity(s);
 #endif
-        channel_permit_resolve(permit, 0, ASX_OBLIGATION_ABORT_EXPLICIT);
+        channel_permit_resolve(permit, 0, reason);
         channel_settle(s); /* the slot is free again */
         /* With the sender side closed, the last outstanding permit going
          * away can turn an empty queue into a disconnect: re-check them. */
@@ -826,6 +844,14 @@ void asx_send_permit_abort(asx_send_permit *permit) {
             (void)asx_wait_queue_wake_all(&s->recv_waiters);
         }
     }
+}
+
+void asx_send_permit_abort(asx_send_permit *permit) {
+    channel_permit_abort(permit, ASX_OBLIGATION_ABORT_EXPLICIT);
+}
+
+void asx_send_permit_drop_internal(asx_send_permit *permit) {
+    channel_permit_abort(permit, ASX_OBLIGATION_ABORT_CANCEL);
 }
 
 /* A tracked permit dropped with its holder task, unsent (Rust SendPermit's
@@ -1027,7 +1053,7 @@ asx_status asx_channel_reserve(asx_channel_id id, asx_cx *cx, asx_send_permit *o
                                     &ob) == ASX_OK) {
             out->obligation = ob;
             asx_obligation_set_drop_internal(ob, channel_permit_drop, (uint64_t)id,
-                                             (uint64_t)out->token);
+                                             (uint64_t)out->token, 0u);
         }
     }
     return ASX_OK;

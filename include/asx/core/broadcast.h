@@ -77,6 +77,7 @@ typedef struct {
     uint16_t generation;
     int consumed;                 /* 1 once sent or aborted */
     asx_obligation_id obligation; /* ASX_INVALID_ID when untracked */
+    uint32_t serial;              /* authenticates this individual reserved permit */
 } asx_broadcast_permit;
 
 /* -------------------------------------------------------------------
@@ -133,7 +134,8 @@ ASX_API void asx_broadcast_receiver_drop(asx_broadcast_receiver *receiver);
  * with Cancel by asx_broadcast_permit_abort or when the task completes
  * still holding it (the permit's drop, :624). A NULL cx skips the
  * cancellation check and the obligation.
- * Returns ASX_E_INVALID_STATE for a dropped sender. */
+ * Returns ASX_E_INVALID_STATE for a dropped sender and
+ * ASX_E_RESOURCE_EXHAUSTED when the process-wide permit serial is exhausted. */
 ASX_API ASX_MUST_USE asx_status asx_broadcast_reserve(const asx_broadcast_sender *sender,
                                                       asx_cx *cx, asx_broadcast_permit *out_permit);
 
@@ -144,7 +146,9 @@ ASX_API ASX_MUST_USE asx_status asx_broadcast_reserve(const asx_broadcast_sender
  * ASX_OK: the permit was honoured). Returns ASX_E_INVALID_STATE for a
  * consumed permit, or when the last sender dropped since the reserve (a
  * Rust permit borrows its sender, so C refuses that and aborts the
- * obligation with Cancel). */
+ * obligation with Cancel). A genuine permit may move to another caller;
+ * changing its tracked resource binding is refused before consumption or
+ * publication. Raw obligation IDs cannot settle tracked permits. */
 ASX_API ASX_MUST_USE asx_status asx_broadcast_permit_send(asx_broadcast_permit *permit,
                                                           uint64_t value, uint32_t *out_receivers);
 

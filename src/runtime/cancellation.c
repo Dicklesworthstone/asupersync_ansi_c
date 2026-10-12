@@ -48,7 +48,7 @@ asx_cancel_reason asx_cancel_reason_default(asx_cancel_kind kind, const char *me
 
 void asx_region_trace_cancel_of_gone_internal(asx_region_id region,
                                               const asx_cancel_reason *reason) {
-    asx_trace_payload payload;
+    asx_trace_payload payload = {0};
     payload.text = NULL;
     payload.reason = reason;
     asx_trace_emit_payload_internal(ASX_TRACE_REGION_CANCELLED, region, (uint64_t)reason->kind,
@@ -340,7 +340,7 @@ asx_status asx_task_cancel_reason_internal(asx_task_id id, const asx_cancel_reas
      * budget cancel strengthened it to (state.rs:7861-7864; fuzz finding
      * gen-50-10). */
     if (source == ASX_CANCEL_SRC_REGION) {
-        asx_trace_payload payload;
+        asx_trace_payload payload = {0};
         payload.text = NULL;
         payload.reason = requested;
         asx_trace_emit_payload_internal(ASX_TRACE_CANCEL_REQUEST, (uint64_t)id,
@@ -537,7 +537,7 @@ asx_status asx_region_cancel(asx_region_id region, const asx_cancel_reason *reas
         uint32_t slot = g_propagate_slots[r];
         asx_region_slot *rs = &g_regions[slot];
         asx_region_id rid = asx_region_handle_for_slot(slot);
-        asx_trace_payload payload;
+        asx_trace_payload payload = {0};
 
         settle_regions[r] = rid;
 

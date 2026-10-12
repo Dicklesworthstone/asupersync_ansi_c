@@ -7,6 +7,7 @@
 #include "../../test_harness.h"
 #include <asx/core/oneshot.h>
 #include <asx/runtime/runtime.h>
+#include <asx/runtime/trace.h>
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -231,7 +232,8 @@ TEST(permit_abort_closes_the_channel) {
     ASSERT_EQ(asx_oneshot_permit_send(&p, 1), ASX_E_INVALID_STATE);
 }
 
-/* A task (never polled) whose Cx holds obligations in its region. */
+/* Cancellation probes can name an idle task; tracked resolution below
+ * uses real scheduler polls of the task holding the permit. */
 static asx_status poll_idle(void *ud, asx_task_id self) {
     (void)ud;
     (void)self;
@@ -257,7 +259,11 @@ static int obligation_is(asx_obligation_id id, asx_obligation_state state,
            info.abort_reason == reason;
 }
 
-TEST(tracked_permit_resolves_its_obligation) {
+typedef struct {
+    asx_region_id region;
+} tracked_permit_context;
+
+static void check_tracked_permit_resolution(asx_region_id region, asx_task_id self) {
     /* The permit's SendPermit obligation (oneshot.rs:528): committed by a
      * delivered send, aborted ERROR when the receiver is gone, EXPLICIT by
      * an abort (:731-799). */
@@ -266,27 +272,241 @@ TEST(tracked_permit_resolves_its_obligation) {
     asx_oneshot_receiver rx;
     asx_oneshot_permit p;
     asx_obligation_id ob;
-    (void)cx_task(&cx);
+    uint64_t value = 0u;
+    ASSERT_EQ(asx_cx_init(&cx, region, self, ASX_CAP_NONE), ASX_OK);
 
-    MUST_OK(asx_oneshot_create(&tx, &rx));
+    ASSERT_EQ(asx_oneshot_create(&tx, &rx), ASX_OK);
     ASSERT_EQ(asx_oneshot_reserve(&tx, &cx, &p), ASX_OK);
     ob = p.obligation;
     ASSERT_TRUE(obligation_is(ob, ASX_OBLIGATION_RESERVED, ASX_OBLIGATION_ABORT_NONE));
     ASSERT_EQ(asx_oneshot_permit_send(&p, 1), ASX_OK);
     ASSERT_TRUE(obligation_is(ob, ASX_OBLIGATION_COMMITTED, ASX_OBLIGATION_ABORT_NONE));
+    ASSERT_EQ(asx_oneshot_try_recv(&rx, &value), ASX_OK);
+    ASSERT_EQ(value, 1u);
 
-    MUST_OK(asx_oneshot_create(&tx, &rx));
-    MUST_OK(asx_oneshot_reserve(&tx, &cx, &p));
+    ASSERT_EQ(asx_oneshot_create(&tx, &rx), ASX_OK);
+    ASSERT_EQ(asx_oneshot_reserve(&tx, &cx, &p), ASX_OK);
     ob = p.obligation;
     asx_oneshot_receiver_drop(&rx);
     ASSERT_EQ(asx_oneshot_permit_send(&p, 2), ASX_E_DISCONNECTED);
     ASSERT_TRUE(obligation_is(ob, ASX_OBLIGATION_ABORTED, ASX_OBLIGATION_ABORT_ERROR));
 
-    MUST_OK(asx_oneshot_create(&tx, &rx));
-    MUST_OK(asx_oneshot_reserve(&tx, &cx, &p));
+    ASSERT_EQ(asx_oneshot_create(&tx, &rx), ASX_OK);
+    ASSERT_EQ(asx_oneshot_reserve(&tx, &cx, &p), ASX_OK);
     ob = p.obligation;
     asx_oneshot_permit_abort(&p);
     ASSERT_TRUE(obligation_is(ob, ASX_OBLIGATION_ABORTED, ASX_OBLIGATION_ABORT_EXPLICIT));
+    ASSERT_EQ(asx_oneshot_try_recv(&rx, &value), ASX_E_DISCONNECTED);
+}
+
+static asx_status poll_tracked_permit_resolution(void *data, asx_task_id self) {
+    tracked_permit_context *ctx = (tracked_permit_context *)data;
+    check_tracked_permit_resolution(ctx->region, self);
+    return test_current_failed ? ASX_E_INVALID_STATE : ASX_OK;
+}
+
+TEST(tracked_permit_resolves_its_obligation) {
+    tracked_permit_context ctx;
+    asx_task_id holder;
+    asx_budget budget = asx_budget_from_polls(8u);
+    asx_runtime_reset();
+    setup();
+    ASSERT_EQ(asx_region_open(&ctx.region), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(ctx.region, poll_tracked_permit_resolution, &ctx, &holder), ASX_OK);
+    ASSERT_EQ(asx_scheduler_run(ctx.region, &budget), ASX_OK);
+}
+
+typedef struct {
+    asx_region_id region;
+    asx_oneshot_sender sender;
+    asx_oneshot_receiver receiver;
+    asx_oneshot_permit permit;
+    asx_obligation_id obligation;
+    asx_task_id holder;
+    uint32_t phase;
+    int abort_after_rejection;
+    int settle_in_other_task;
+    int wrong_task_checked;
+} tracked_oneshot_misuse;
+
+static void check_tracked_oneshot_holder(tracked_oneshot_misuse *ctx, asx_task_id self) {
+    asx_cx cx;
+    asx_obligation_info info;
+    ASSERT_EQ(asx_handle_index(self), asx_handle_index(ctx->holder));
+    if (ctx->phase == 0u) {
+        ASSERT_EQ(asx_cx_init(&cx, ctx->region, self, ASX_CAP_NONE), ASX_OK);
+        ASSERT_EQ(asx_oneshot_reserve(&ctx->sender, &cx, &ctx->permit), ASX_OK);
+        ctx->obligation = ctx->permit.obligation;
+        ASSERT_TRUE(
+            obligation_is(ctx->obligation, ASX_OBLIGATION_RESERVED, ASX_OBLIGATION_ABORT_NONE));
+        ASSERT_EQ(asx_obligation_get_info(ctx->obligation, &info), ASX_OK);
+        ASSERT_EQ(asx_handle_index(info.holder), asx_handle_index(self));
+        ctx->phase = 1u;
+        ASSERT_EQ(asx_task_park(self), ASX_OK);
+        return;
+    }
+    ASSERT_EQ(ctx->phase, 1u);
+    ASSERT_TRUE(ctx->wrong_task_checked);
+    if (ctx->abort_after_rejection && !ctx->settle_in_other_task) {
+        asx_oneshot_permit_abort(&ctx->permit);
+    } else if (!ctx->settle_in_other_task) {
+        ASSERT_EQ(asx_oneshot_permit_send(&ctx->permit, 77u), ASX_OK);
+    }
+    ASSERT_TRUE(obligation_is(ctx->obligation,
+                              ctx->abort_after_rejection ? ASX_OBLIGATION_ABORTED
+                                                         : ASX_OBLIGATION_COMMITTED,
+                              ctx->abort_after_rejection ? ASX_OBLIGATION_ABORT_EXPLICIT
+                                                         : ASX_OBLIGATION_ABORT_NONE));
+    ASSERT_EQ(asx_obligation_get_info(ctx->obligation, &info), ASX_OK);
+    ASSERT_EQ(asx_handle_index(info.holder), asx_handle_index(self));
+    ASSERT_EQ(ctx->permit.live, 0);
+    ctx->phase = 2u;
+}
+
+static asx_status poll_tracked_oneshot_holder(void *data, asx_task_id self) {
+    tracked_oneshot_misuse *ctx = (tracked_oneshot_misuse *)data;
+    check_tracked_oneshot_holder(ctx, self);
+    if (test_current_failed) return ASX_E_INVALID_STATE;
+    return ctx->phase == 2u ? ASX_OK : ASX_E_PENDING;
+}
+
+static void check_forged_tracked_oneshot_binding(tracked_oneshot_misuse *ctx) {
+    asx_oneshot_sender sender;
+    asx_oneshot_receiver receiver;
+    asx_oneshot_permit forged;
+    asx_oneshot_permit before;
+    asx_obligation_info before_info;
+    asx_obligation_info info;
+    uint64_t emitted;
+    uint64_t digest;
+    uint64_t value = 0u;
+    memset(&sender, 0, sizeof(sender));
+    memset(&receiver, 0, sizeof(receiver));
+    memset(&forged, 0, sizeof(forged));
+    ASSERT_EQ(asx_oneshot_create(&sender, &receiver), ASX_OK);
+    ASSERT_EQ(asx_oneshot_reserve(&sender, NULL, &forged), ASX_OK);
+    forged.obligation = ctx->obligation;
+    memcpy(&before, &forged, sizeof(before));
+    ASSERT_EQ(asx_obligation_get_info(ctx->obligation, &before_info), ASX_OK);
+    emitted = asx_trace_emitted_total();
+    digest = asx_trace_digest();
+    ASSERT_EQ(asx_oneshot_permit_send(&forged, 999u), ASX_E_PERMISSION_DENIED);
+    asx_oneshot_permit_abort(&forged);
+    ASSERT_EQ(memcmp(&forged, &before, sizeof(forged)), 0);
+    ASSERT_TRUE(obligation_is(ctx->obligation, ASX_OBLIGATION_RESERVED, ASX_OBLIGATION_ABORT_NONE));
+    ASSERT_EQ(asx_obligation_get_info(ctx->obligation, &info), ASX_OK);
+    ASSERT_EQ(info.kind, before_info.kind);
+    ASSERT_EQ(info.state, before_info.state);
+    ASSERT_EQ(info.abort_reason, before_info.abort_reason);
+    ASSERT_EQ(info.holder, before_info.holder);
+    ASSERT_EQ(info.region, before_info.region);
+    ASSERT_EQ(asx_oneshot_get_state(receiver.slot, receiver.generation), ASX_ONESHOT_EMPTY);
+    ASSERT_FALSE(asx_oneshot_receiver_is_closed(&receiver));
+    ASSERT_EQ(asx_oneshot_get_state(ctx->receiver.slot, ctx->receiver.generation),
+              ASX_ONESHOT_EMPTY);
+    ASSERT_EQ(asx_trace_emitted_total(), emitted);
+    ASSERT_EQ(asx_trace_digest(), digest);
+    forged.obligation = ASX_INVALID_ID;
+    asx_oneshot_permit_abort(&forged);
+    ASSERT_EQ(asx_oneshot_try_recv(&receiver, &value), ASX_E_DISCONNECTED);
+}
+
+static void check_wrong_task_oneshot_attempts(tracked_oneshot_misuse *ctx, asx_task_id self) {
+    asx_oneshot_permit before;
+    asx_obligation_info info;
+    uint64_t emitted;
+    uint64_t digest;
+    uint64_t value = 0u;
+    ASSERT_NE(asx_handle_index(self), asx_handle_index(ctx->holder));
+    ASSERT_EQ(ctx->phase, 1u);
+    memcpy(&before, &ctx->permit, sizeof(before));
+    emitted = asx_trace_emitted_total();
+    digest = asx_trace_digest();
+    /* The owned permit may move; a copied raw ledger ID confers no authority. */
+    ASSERT_EQ(asx_obligation_commit(ctx->obligation), ASX_E_PERMISSION_DENIED);
+    ASSERT_EQ(asx_obligation_abort(ctx->obligation), ASX_E_PERMISSION_DENIED);
+    ASSERT_EQ(asx_obligation_drop(ctx->obligation), ASX_E_PERMISSION_DENIED);
+    ASSERT_EQ(ctx->permit.sender.slot, before.sender.slot);
+    ASSERT_EQ(ctx->permit.sender.generation, before.sender.generation);
+    ASSERT_EQ(ctx->permit.live, before.live);
+    ASSERT_EQ(ctx->permit.obligation, before.obligation);
+    ASSERT_EQ(memcmp(&ctx->permit, &before, sizeof(before)), 0);
+    ASSERT_TRUE(obligation_is(ctx->obligation, ASX_OBLIGATION_RESERVED, ASX_OBLIGATION_ABORT_NONE));
+    ASSERT_EQ(asx_obligation_get_info(ctx->obligation, &info), ASX_OK);
+    ASSERT_EQ(asx_handle_index(info.holder), asx_handle_index(ctx->holder));
+    ASSERT_EQ(info.region, ctx->region);
+    ASSERT_EQ(asx_oneshot_get_state(ctx->receiver.slot, ctx->receiver.generation),
+              ASX_ONESHOT_EMPTY);
+    ASSERT_FALSE(asx_oneshot_permit_is_closed(&ctx->permit));
+    ASSERT_FALSE(asx_oneshot_receiver_is_closed(&ctx->receiver));
+    ASSERT_EQ(asx_trace_emitted_total(), emitted);
+    ASSERT_EQ(asx_trace_digest(), digest);
+    ASSERT_EQ(asx_oneshot_try_send(&ctx->sender, 999u), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_oneshot_try_recv(&ctx->receiver, &value), ASX_E_WOULD_BLOCK);
+    check_forged_tracked_oneshot_binding(ctx);
+    if (test_current_failed) return;
+    if (ctx->settle_in_other_task) {
+        if (ctx->abort_after_rejection) {
+            asx_oneshot_permit_abort(&ctx->permit);
+        } else {
+            ASSERT_EQ(asx_oneshot_permit_send(&ctx->permit, 77u), ASX_OK);
+        }
+        ASSERT_TRUE(obligation_is(ctx->obligation,
+                                  ctx->abort_after_rejection ? ASX_OBLIGATION_ABORTED
+                                                             : ASX_OBLIGATION_COMMITTED,
+                                  ctx->abort_after_rejection ? ASX_OBLIGATION_ABORT_EXPLICIT
+                                                             : ASX_OBLIGATION_ABORT_NONE));
+        ASSERT_EQ(asx_obligation_get_info(ctx->obligation, &info), ASX_OK);
+        ASSERT_EQ(asx_handle_index(info.holder), asx_handle_index(ctx->holder));
+    }
+    ctx->wrong_task_checked = 1;
+    ASSERT_EQ(asx_task_wake(ctx->holder), ASX_OK);
+}
+
+static asx_status poll_wrong_task_oneshot_attempts(void *data, asx_task_id self) {
+    check_wrong_task_oneshot_attempts((tracked_oneshot_misuse *)data, self);
+    return test_current_failed ? ASX_E_INVALID_STATE : ASX_OK;
+}
+
+static void run_tracked_oneshot_misuse(int abort_after_rejection, int settle_in_other_task) {
+    tracked_oneshot_misuse ctx;
+    asx_task_id other;
+    asx_budget budget = asx_budget_from_polls(8u);
+    uint64_t value = 0u;
+    asx_runtime_reset();
+    setup();
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.abort_after_rejection = abort_after_rejection;
+    ctx.settle_in_other_task = settle_in_other_task;
+    ASSERT_EQ(asx_region_open(&ctx.region), ASX_OK);
+    ASSERT_EQ(asx_oneshot_create(&ctx.sender, &ctx.receiver), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(ctx.region, poll_tracked_oneshot_holder, &ctx, &ctx.holder), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(ctx.region, poll_wrong_task_oneshot_attempts, &ctx, &other), ASX_OK);
+    ASSERT_EQ(asx_scheduler_run(ctx.region, &budget), ASX_OK);
+    ASSERT_EQ(ctx.phase, 2u);
+    ASSERT_TRUE(ctx.wrong_task_checked);
+    if (abort_after_rejection) {
+        ASSERT_EQ(asx_oneshot_try_recv(&ctx.receiver, &value), ASX_E_DISCONNECTED);
+    } else {
+        ASSERT_EQ(asx_oneshot_try_recv(&ctx.receiver, &value), ASX_OK);
+        ASSERT_EQ(value, 77u);
+    }
+}
+
+TEST(tracked_permit_credit_rejects_wrong_task_before_holder_send) {
+    run_tracked_oneshot_misuse(0, 0);
+}
+
+TEST(tracked_permit_credit_rejects_wrong_task_before_holder_abort) {
+    run_tracked_oneshot_misuse(1, 0);
+}
+
+TEST(tracked_permit_moved_to_another_task_can_send_without_reassigning_holder) {
+    run_tracked_oneshot_misuse(0, 1);
+}
+
+TEST(tracked_permit_moved_to_another_task_can_abort_without_reassigning_holder) {
+    run_tracked_oneshot_misuse(1, 1);
 }
 
 TEST(cancelled_reserve_closes_the_channel) {
@@ -505,6 +725,10 @@ int main(void) {
     RUN_TEST(reserve_consumes_the_sender_until_the_permit_sends);
     RUN_TEST(permit_abort_closes_the_channel);
     RUN_TEST(tracked_permit_resolves_its_obligation);
+    RUN_TEST(tracked_permit_credit_rejects_wrong_task_before_holder_send);
+    RUN_TEST(tracked_permit_credit_rejects_wrong_task_before_holder_abort);
+    RUN_TEST(tracked_permit_moved_to_another_task_can_send_without_reassigning_holder);
+    RUN_TEST(tracked_permit_moved_to_another_task_can_abort_without_reassigning_holder);
     RUN_TEST(cancelled_reserve_closes_the_channel);
 
     RUN_TEST(closed_predicates_follow_rust);

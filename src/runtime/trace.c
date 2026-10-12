@@ -208,7 +208,7 @@ static void trace_unlock(void) {
 
 static void trace_record(asx_trace_event_kind kind, uint64_t entity_id, uint64_t aux,
                          const asx_trace_payload *payload) {
-    static const asx_trace_payload none = {NULL, NULL};
+    static const asx_trace_payload none = {0};
     asx_trace_event *e;
     asx_trace_event copy;
     asx_trace_observer_fn observer = NULL;
@@ -250,7 +250,7 @@ void asx_trace_set_observer(asx_trace_observer_fn fn, void *ctx) {
 }
 
 void asx_trace_user(asx_task_id task, const char *message) {
-    asx_trace_payload payload;
+    asx_trace_payload payload = {0};
     payload.text = message == NULL ? "" : message;
     payload.reason = NULL;
     trace_record(ASX_TRACE_USER, (uint64_t)task,
@@ -582,6 +582,7 @@ const char *asx_trace_event_kind_str(asx_trace_event_kind kind) {
     case ASX_TRACE_OBLIGATION_COMMIT: return "obligation_commit";
     case ASX_TRACE_OBLIGATION_ABORT: return "obligation_abort";
     case ASX_TRACE_OBLIGATION_LEAK: return "obligation_leak";
+    case ASX_TRACE_OBLIGATION_HANDOFF: return "obligation_handoff";
     case ASX_TRACE_CHANNEL_SEND: return "channel_send";
     case ASX_TRACE_CHANNEL_RECV: return "channel_recv";
     case ASX_TRACE_TIMER_SET: return "timer_set";

@@ -339,7 +339,7 @@ asx_status asx_oneshot_reserve(asx_oneshot_sender *sender, asx_cx *cx, asx_onesh
                                     &ob) == ASX_OK) {
             out->obligation = ob;
             asx_obligation_set_drop_internal(ob, oneshot_permit_drop, (uint64_t)sender->slot,
-                                             (uint64_t)sender->generation);
+                                             (uint64_t)sender->generation, 0u);
         }
     }
     return ASX_OK;
@@ -365,8 +365,12 @@ static void oneshot_permit_resolve(asx_oneshot_permit *permit, int delivered,
         permit->obligation = ASX_INVALID_ID;
         return;
     }
-    st = delivered ? asx_obligation_commit(permit->obligation)
-                   : asx_obligation_abort_with_reason(permit->obligation, reason);
+    st = asx_obligation_resolve_token_internal(permit->obligation, oneshot_permit_drop,
+                                               (uint64_t)permit->sender.slot,
+                                               (uint64_t)permit->sender.generation, 0u,
+                                               delivered ? ASX_OBLIGATION_COMMITTED
+                                                         : ASX_OBLIGATION_ABORTED,
+                                               reason);
     (void)st; /* refused only for an obligation the runtime already resolved */
     permit->obligation = ASX_INVALID_ID;
 }
@@ -377,6 +381,12 @@ asx_status asx_oneshot_permit_send(asx_oneshot_permit *permit, uint64_t value) {
 
     if (permit == NULL) return ASX_E_INVALID_ARGUMENT;
     if (!permit->live) return ASX_E_INVALID_STATE;
+    if (permit->obligation != ASX_INVALID_ID) {
+        st = asx_obligation_check_token_internal(permit->obligation, oneshot_permit_drop,
+                                                 (uint64_t)permit->sender.slot,
+                                                 (uint64_t)permit->sender.generation, 0u);
+        if (st != ASX_OK && st != ASX_E_OBLIGATION_ALREADY_RESOLVED) return st;
+    }
     s = oneshot_permit_take(permit);
     st = s != NULL ? oneshot_deliver(&permit->sender, s, value) : ASX_E_STALE_HANDLE;
     /* Delivered commits; a dropped receiver aborts with reason Error
@@ -386,7 +396,14 @@ asx_status asx_oneshot_permit_send(asx_oneshot_permit *permit, uint64_t value) {
 }
 
 void asx_oneshot_permit_abort(asx_oneshot_permit *permit) {
+    asx_status st;
     if (permit == NULL || !permit->live) return;
+    if (permit->obligation != ASX_INVALID_ID) {
+        st = asx_obligation_check_token_internal(permit->obligation, oneshot_permit_drop,
+                                                 (uint64_t)permit->sender.slot,
+                                                 (uint64_t)permit->sender.generation, 0u);
+        if (st != ASX_OK && st != ASX_E_OBLIGATION_ALREADY_RESOLVED) return;
+    }
     /* The channel closes: the receiver sees it closed (:774-799). */
     if (oneshot_permit_take(permit) != NULL) asx_oneshot_sender_drop(&permit->sender);
     oneshot_permit_resolve(permit, 0, ASX_OBLIGATION_ABORT_EXPLICIT);

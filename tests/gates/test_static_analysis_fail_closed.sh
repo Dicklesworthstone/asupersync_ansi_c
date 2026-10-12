@@ -34,8 +34,16 @@ failures=0
 
 log_case() {
     # case expected observed status detail
-    printf '{"ts":"%s","run_id":"%s","layer":"gates","suite":"static_analysis_fail_closed","test":"%s","expected":"%s","observed":"%s","status":"%s","detail":"%s"}\n' \
-        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$RUN_ID" "$1" "$2" "$3" "$4" "$5" >>"$LOG"
+    python3 - "$RUN_ID" "$1" "$2" "$3" "$4" "$5" >>"$LOG" <<'PY'
+import datetime
+import json
+import sys
+
+row = dict(zip(("run_id", "test", "expected", "observed", "status", "detail"), sys.argv[1:]))
+row.update(ts=datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+           layer="gates", suite="static_analysis_fail_closed")
+print(json.dumps(row, separators=(",", ":")))
+PY
 }
 
 # Sources the stub findings point at: plain.c has no waiver, waived.c has one
@@ -113,6 +121,33 @@ run_case missing_analyzers_skip_when_lenient 0 'static-analysis: PASS' \
     CPPCHECK= CLANG_TIDY= FAIL_ON_MISSING_LINTER=0 --
 run_case analyzer_crash_fails nonzero '1 analyzer error' \
     CPPCHECK=false CLANG_TIDY= FAIL_ON_MISSING_LINTER=0 --
+
+# Validate only this run: older raw artifacts are preserved, including any
+# malformed records that previously exposed the unescaped-regex defect.
+if python3 - "$LOG" "$RUN_ID" >"$WORK/jsonl.log" 2>&1 <<'PY'
+import json
+import sys
+
+prefix = '"run_id":' + json.dumps(sys.argv[2])
+with open(sys.argv[1]) as stream:
+    rows = [json.loads(line) for line in stream if prefix in line]
+if len(rows) != 8:
+    raise ValueError(f"expected all eight actual controls, got {len(rows)}")
+if any(row["suite"] != "static_analysis_fail_closed" or
+       row["run_id"] != sys.argv[2] for row in rows):
+    raise ValueError("record does not belong to the current static-analysis run")
+waived = next(row for row in rows if row["test"] == "waived_finding_passes")
+if waived["expected"] != r"0:cppcheck: 0 finding\(s\), 1 waived":
+    raise ValueError("JSON encoding changed the original expected regex")
+print("all eight current-run records are valid JSON and preserve the expected regex")
+PY
+then
+    echo "  PASS: current_run_jsonl_is_valid (8 records)"
+else
+    cat "$WORK/jsonl.log" >&2
+    echo "  FAIL: current_run_jsonl_is_valid (log $WORK/jsonl.log)"
+    failures=$((failures + 1))
+fi
 
 echo ""
 if [ "$failures" -eq 0 ]; then

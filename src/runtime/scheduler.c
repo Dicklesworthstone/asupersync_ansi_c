@@ -582,7 +582,7 @@ static void sched_trace_sleep_timer(asx_task_id self, asx_task_slot *t, asx_time
          * registers it afresh, behind the timers already registered
          * (timer.update, time/sleep.rs:952-998). The same timer: the new
          * registration is marked "rearm". */
-        asx_trace_payload rearm;
+        asx_trace_payload rearm = {0};
         rearm.text = "rearm";
         rearm.reason = NULL;
         asx_trace_emit(ASX_TRACE_TIMER_CANCEL, (uint64_t)self, deadline);

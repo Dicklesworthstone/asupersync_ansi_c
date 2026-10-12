@@ -12,8 +12,12 @@
  */
 
 #include <asx/asx.h>
+#include <asx/runtime/lab.h>
 #include <asx/time/timer_wheel.h>
+#include <errno.h>
+#include <inttypes.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* Suppress warn_unused_result for intentionally-ignored calls */
@@ -29,17 +33,225 @@
 
 static int g_pass = 0;
 static int g_fail = 0;
+static uint64_t g_seed = 42u;
+static uint64_t g_entropy_sample = 0u;
+static uint32_t g_source_yields = 0u;
+static const char *g_run_id = "standalone-draft";
+static const char *g_scenario_id;
+static asx_lab g_lab;
+
+#define E2E_STRINGIFY_IMPL(value) #value
+#define E2E_STRINGIFY(value) E2E_STRINGIFY_IMPL(value)
+#ifndef ASX_E2E_BUILD_SHA
+#define ASX_E2E_BUILD_SHA unknown_dirty_draft
+#endif
+#ifndef ASX_E2E_RUST_REV
+#define ASX_E2E_RUST_REV unknown_reference
+#endif
+
+typedef struct {
+    asx_task_id caller;
+    asx_obligation_id obligation;
+    asx_obligation_info before;
+    asx_obligation_info after;
+    asx_status observed;
+    asx_status expected;
+    const char *first_changed_state;
+    int observed_set;
+} lifecycle_evidence;
+
+static lifecycle_evidence g_evidence;
+
+static const char *compiled_profile(void) {
+#if defined(ASX_PROFILE_CORE)
+    return "CORE";
+#elif defined(ASX_PROFILE_POSIX)
+    return "POSIX";
+#elif defined(ASX_PROFILE_WIN32)
+    return "WIN32";
+#elif defined(ASX_PROFILE_FREESTANDING)
+    return "FREESTANDING";
+#elif defined(ASX_PROFILE_EMBEDDED_ROUTER)
+    return "EMBEDDED_ROUTER";
+#elif defined(ASX_PROFILE_HFT)
+    return "HFT";
+#elif defined(ASX_PROFILE_AUTOMOTIVE)
+    return "AUTOMOTIVE";
+#elif defined(ASX_PROFILE_PARALLEL)
+    return "PARALLEL";
+#elif defined(ASX_PROFILE_BROWSER)
+    return "BROWSER";
+#else
+    return "unknown";
+#endif
+}
+
+static const char *compiled_codec(void) {
+#if defined(ASX_CODEC_BIN)
+    return "bin";
+#elif defined(ASX_CODEC_JSON)
+    return "json";
+#else
+    return "unspecified";
+#endif
+}
+
+static const char *compiled_resource_class(void) {
+#if defined(ASX_RESOURCE_CLASS) && ASX_RESOURCE_CLASS == 1
+    return "R1";
+#elif defined(ASX_RESOURCE_CLASS) && ASX_RESOURCE_CLASS == 2
+    return "R2";
+#elif defined(ASX_RESOURCE_CLASS) && ASX_RESOURCE_CLASS == 3
+    return "R3";
+#else
+    return "unclassed";
+#endif
+}
+
+static void json_string(const char *value) {
+    const unsigned char *p = (const unsigned char *)value;
+    putchar('"');
+    while (*p != 0u) {
+        if (*p == '"' || *p == '\\') {
+            putchar('\\');
+            putchar((int)*p);
+        } else if (*p < 0x20u) {
+            printf("\\u%04x", (unsigned)*p);
+        } else {
+            putchar((int)*p);
+        }
+        p++;
+    }
+    putchar('"');
+}
+
+static uint64_t fingerprint_u64(uint64_t hash, uint64_t value) {
+    unsigned i;
+    for (i = 0u; i < 8u; i++) {
+        hash ^= value & UINT64_C(0xff);
+        hash *= UINT64_C(1099511628211);
+        value >>= 8u;
+    }
+    return hash;
+}
+
+static uint64_t fingerprint_text(uint64_t hash, const char *text) {
+    while (*text != '\0') {
+        hash ^= (uint64_t)(unsigned char)*text++;
+        hash *= UINT64_C(1099511628211);
+    }
+    return hash;
+}
+
+static uint64_t config_fingerprint(void) {
+    asx_runtime_config cfg;
+    uint64_t hash = UINT64_C(14695981039346656037);
+    asx_runtime_config_init(&cfg);
+    if (g_lab.initialized) cfg = g_lab.rt.config;
+    hash = fingerprint_text(hash, compiled_profile());
+    hash = fingerprint_text(hash, compiled_codec());
+    hash = fingerprint_text(hash, compiled_resource_class());
+    hash = fingerprint_u64(hash, g_seed);
+    hash = fingerprint_u64(hash, (uint64_t)ASX_DETERMINISTIC);
+    hash = fingerprint_u64(hash, asx_runtime_region_capacity());
+    hash = fingerprint_u64(hash, asx_runtime_task_capacity());
+    hash = fingerprint_u64(hash, asx_runtime_obligation_capacity());
+    hash = fingerprint_u64(hash, (uint64_t)cfg.wait_policy);
+    hash = fingerprint_u64(hash, (uint64_t)cfg.io_backend);
+    hash = fingerprint_u64(hash, (uint64_t)cfg.leak_response);
+    hash = fingerprint_u64(hash, cfg.finalizer_poll_budget);
+    hash = fingerprint_u64(hash, cfg.finalizer_time_budget_ns);
+    hash = fingerprint_u64(hash, (uint64_t)cfg.finalizer_escalation);
+    hash = fingerprint_u64(hash, cfg.max_cancel_chain_depth);
+    hash = fingerprint_u64(hash, cfg.max_cancel_chain_memory);
+    hash = fingerprint_u64(hash, cfg.cleanup_hard_bound);
+    hash = fingerprint_u64(hash, cfg.leak_escalation != NULL ? 1u : 0u);
+    hash = fingerprint_u64(hash, g_lab.initialized ? g_lab.config.max_polls : 0u);
+    hash = fingerprint_u64(hash, g_lab.initialized ? g_lab.config.auto_advance : 0u);
+    return hash;
+}
+
+static void emit_evidence(const char *test, int pass, const char *diagnostic) {
+    printf("DETAIL {\"run_id\":");
+    json_string(g_run_id);
+    printf(",\"suite\":\"core-lifecycle\",\"test\":");
+    json_string(test);
+    printf(",\"status\":\"%s\",\"seed\":%" PRIu64, pass ? "pass" : "fail", g_seed);
+    printf(",\"profile\":");
+    json_string(compiled_profile());
+    printf(",\"codec\":");
+    json_string(compiled_codec());
+    printf(",\"resource_class\":");
+    json_string(compiled_resource_class());
+    printf(",\"rust_rev\":");
+    json_string(E2E_STRINGIFY(ASX_E2E_RUST_REV));
+    printf(",\"c_git_sha\":");
+    json_string(E2E_STRINGIFY(ASX_E2E_BUILD_SHA));
+    printf(",\"config_fingerprint\":\"fnv1a64:%016" PRIx64 "\"", config_fingerprint());
+    printf(",\"caller\":\"0x%016" PRIx64 "\",\"holder\":\"0x%016" PRIx64
+           "\",\"region\":\"0x%016" PRIx64 "\",\"obligation\":\"0x%016" PRIx64 "\"",
+           g_evidence.caller, g_evidence.before.holder, g_evidence.before.region,
+           g_evidence.obligation);
+    printf(",\"generation\":%u", (unsigned)asx_handle_generation(g_evidence.obligation));
+    printf(",\"observed_status\":");
+    if (g_evidence.observed_set)
+        json_string(asx_status_str(g_evidence.observed));
+    else
+        printf("null");
+    printf(",\"expected_status\":");
+    if (g_evidence.observed_set)
+        json_string(asx_status_str(g_evidence.expected));
+    else
+        printf("null");
+    printf(",\"first_changed_state\":");
+    json_string(g_evidence.first_changed_state);
+    printf(",\"first_divergence\":");
+    if (pass)
+        printf("null");
+    else
+        json_string(diagnostic);
+    printf(",\"before_state\":");
+    if (g_evidence.observed_set)
+        printf("%d", (int)g_evidence.before.state);
+    else
+        printf("null");
+    printf(",\"after_state\":");
+    if (g_evidence.observed_set)
+        printf("%d", (int)g_evidence.after.state);
+    else
+        printf("null");
+    printf(",\"after_holder\":\"0x%016" PRIx64 "\",\"after_region\":\"0x%016" PRIx64
+           "\",\"entropy_sample\":%" PRIu64 ",\"source_yields\":%u,\"lab_seed_applied\":%s",
+           g_evidence.after.holder, g_evidence.after.region, g_entropy_sample,
+           (unsigned)g_source_yields, g_lab.initialized ? "true" : "false");
+    printf(",\"arena_capacities\":{\"regions\":%u,\"tasks\":%u,\"obligations\":%u},"
+           "\"diagnostic\":",
+           (unsigned)asx_runtime_region_capacity(), (unsigned)asx_runtime_task_capacity(),
+           (unsigned)asx_runtime_obligation_capacity());
+    json_string(diagnostic);
+    printf("}\n");
+}
+
+static void reset_evidence(const char *scenario_id) {
+    g_scenario_id = scenario_id;
+    g_entropy_sample = 0u;
+    g_source_yields = 0u;
+    memset(&g_evidence, 0, sizeof(g_evidence));
+    g_evidence.first_changed_state = "none";
+}
 
 #define SCENARIO_BEGIN(id)                                                                         \
     do {                                                                                           \
         const char *_scenario_id = (id);                                                           \
         int _scenario_ok = 1;                                                                      \
+        reset_evidence(_scenario_id);                                                              \
     (void)0
 
 #define SCENARIO_CHECK(cond, msg)                                                                  \
     do {                                                                                           \
         if (!(cond)) {                                                                             \
             printf("SCENARIO %s fail %s\n", _scenario_id, (msg));                                  \
+            emit_evidence(_scenario_id, 0, (msg));                                                 \
             _scenario_ok = 0;                                                                      \
             g_fail++;                                                                              \
             goto _scenario_end;                                                                    \
@@ -50,6 +262,7 @@ static int g_fail = 0;
     _scenario_end:                                                                                 \
     if (_scenario_ok) {                                                                            \
         printf("SCENARIO %s pass\n", _scenario_id);                                                \
+        emit_evidence(_scenario_id, 1, "");                                                        \
         g_pass++;                                                                                  \
     }                                                                                              \
     }                                                                                              \
@@ -683,11 +896,356 @@ static void scenario_quiescence_evidence(void) {
     SCENARIO_END();
 }
 
+/* The source and destination execute inside actual cooperative polls.
+ * The Lab seed changes their spawn order and the source's initial yields. */
+typedef enum {
+    HOLDER_RAW_GUARD,
+    HOLDER_HANDOFF_SAME,
+    HOLDER_HANDOFF_CROSS,
+    HOLDER_HANDOFF_FULL,
+    HOLDER_HANDOFF_CANCEL
+} holder_case_kind;
+
+typedef enum {
+    HOLDER_COMMIT,
+    HOLDER_ABORT,
+    HOLDER_DROP,
+    HOLDER_HANDOFF,
+    HOLDER_ABORT_CANCEL
+} holder_operation;
+
+typedef struct {
+    holder_case_kind kind;
+    asx_region_id root;
+    asx_region_id source_region;
+    asx_region_id destination_region;
+    asx_task_id source;
+    asx_task_id destination;
+    asx_obligation_id obligation;
+    uint32_t initial_yields;
+    int ready;
+    int source_action;
+    int destination_action;
+    int failed;
+} holder_case;
+
+static uint32_t obligation_events(asx_obligation_id id, asx_trace_event_kind kind) {
+    asx_trace_event event;
+    uint32_t i;
+    uint32_t n = 0u;
+    for (i = 0u; i < asx_trace_event_count(); i++) {
+        if (asx_trace_event_get(i, &event) && event.entity_id == id && event.kind == kind) n++;
+    }
+    return n;
+}
+
+static const char *first_obligation_change(const asx_obligation_info *before,
+                                           const asx_obligation_info *after) {
+    if (before->state != after->state) return "state";
+    if (before->kind != after->kind) return "kind";
+    if (before->holder != after->holder) return "holder";
+    if (before->region != after->region) return "region";
+    if (before->abort_reason != after->abort_reason) return "abort_reason";
+    return "none";
+}
+
+static int holder_operate(holder_case *c, asx_task_id caller, holder_operation operation,
+                          asx_status expected, const char *step) {
+    uint32_t commits = obligation_events(c->obligation, ASX_TRACE_OBLIGATION_COMMIT);
+    uint32_t aborts = obligation_events(c->obligation, ASX_TRACE_OBLIGATION_ABORT);
+    uint32_t leaks = obligation_events(c->obligation, ASX_TRACE_OBLIGATION_LEAK);
+    uint32_t handoffs = obligation_events(c->obligation, ASX_TRACE_OBLIGATION_HANDOFF);
+    char test[160];
+    int pass;
+    asx_status st;
+
+    memset(&g_evidence, 0, sizeof(g_evidence));
+    g_evidence.caller = asx_task_current();
+    g_evidence.obligation = c->obligation;
+    g_evidence.expected = expected;
+    g_evidence.observed_set = 1;
+    g_evidence.first_changed_state = "lookup";
+    st = asx_obligation_get_info(c->obligation, &g_evidence.before);
+    if (st != ASX_OK) {
+        c->failed = 1;
+        g_evidence.observed = st;
+        emit_evidence(g_scenario_id, 0, "credit missing before actual operation");
+        return 0;
+    }
+    switch (operation) {
+    case HOLDER_COMMIT: st = asx_obligation_commit(c->obligation); break;
+    case HOLDER_ABORT: st = asx_obligation_abort(c->obligation); break;
+    case HOLDER_DROP: st = asx_obligation_drop(c->obligation); break;
+    case HOLDER_HANDOFF: st = asx_obligation_handoff(c->obligation, c->destination); break;
+    case HOLDER_ABORT_CANCEL:
+        st = asx_obligation_abort_with_reason(c->obligation, ASX_OBLIGATION_ABORT_CANCEL);
+        break;
+    }
+    g_evidence.observed = st;
+    pass = st == expected && g_evidence.caller != ASX_INVALID_ID &&
+           asx_handle_index(g_evidence.caller) == asx_handle_index(caller);
+    if (asx_obligation_get_info(c->obligation, &g_evidence.after) != ASX_OK) {
+        pass = 0;
+    } else {
+        g_evidence.first_changed_state =
+            first_obligation_change(&g_evidence.before, &g_evidence.after);
+        if (expected != ASX_OK) {
+            pass = pass && strcmp(g_evidence.first_changed_state, "none") == 0;
+        } else if (operation == HOLDER_HANDOFF) {
+            pass = pass && g_evidence.after.state == ASX_OBLIGATION_RESERVED &&
+                   g_evidence.after.kind == g_evidence.before.kind &&
+                   g_evidence.after.abort_reason == g_evidence.before.abort_reason &&
+                   asx_handle_index(g_evidence.after.holder) == asx_handle_index(c->destination) &&
+                   g_evidence.after.region == c->destination_region;
+        } else {
+            pass = pass && g_evidence.after.holder == g_evidence.before.holder &&
+                   g_evidence.after.region == g_evidence.before.region &&
+                   g_evidence.after.kind == g_evidence.before.kind &&
+                   g_evidence.after.state == (operation == HOLDER_COMMIT ? ASX_OBLIGATION_COMMITTED
+                                                                         : ASX_OBLIGATION_ABORTED);
+            if (operation == HOLDER_ABORT_CANCEL) {
+                pass = pass && g_evidence.after.abort_reason == ASX_OBLIGATION_ABORT_CANCEL;
+            }
+        }
+    }
+    pass = pass &&
+           obligation_events(c->obligation, ASX_TRACE_OBLIGATION_COMMIT) ==
+               commits + (expected == ASX_OK && operation == HOLDER_COMMIT ? 1u : 0u) &&
+           obligation_events(c->obligation, ASX_TRACE_OBLIGATION_ABORT) ==
+               aborts + (expected == ASX_OK && operation == HOLDER_ABORT_CANCEL ? 1u : 0u) &&
+           obligation_events(c->obligation, ASX_TRACE_OBLIGATION_LEAK) == leaks &&
+           obligation_events(c->obligation, ASX_TRACE_OBLIGATION_HANDOFF) ==
+               handoffs + (expected == ASX_OK && operation == HOLDER_HANDOFF ? 1u : 0u);
+    if (snprintf(test, sizeof(test), "%s.%s", g_scenario_id, step) < 0) {
+        c->failed = 1;
+        return 0;
+    }
+    emit_evidence(test, pass, pass ? "" : "status, ownership, state or trace delta differs");
+    if (!pass) c->failed = 1;
+    return pass;
+}
+
+static void holder_raw_denials(holder_case *c, asx_task_id caller) {
+    static const holder_operation operations[] = {HOLDER_COMMIT, HOLDER_ABORT, HOLDER_DROP};
+    static const char *steps[] = {"raw_commit_denied", "raw_abort_denied", "raw_drop_denied"};
+    uint32_t i;
+    uint32_t rotation = (uint32_t)(g_entropy_sample % 3u);
+    for (i = 0u; i < 3u; i++) {
+        uint32_t which = (i + rotation) % 3u;
+        (void)holder_operate(c, caller, operations[which], ASX_E_PERMISSION_DENIED, steps[which]);
+    }
+}
+
+static asx_status poll_holder_source(void *data, asx_task_id self) {
+    holder_case *c = (holder_case *)data;
+    asx_status st;
+    if (!c->ready) {
+        if (c->initial_yields > 0u) {
+            c->initial_yields--;
+            g_source_yields++;
+            return ASX_E_PENDING;
+        }
+        st = asx_obligation_reserve_ex(c->source_region, ASX_OBLIGATION_KIND_SEND_PERMIT, self,
+                                       &c->obligation);
+        if (st != ASX_OK) return st;
+        c->ready = 1;
+    }
+    if (!c->source_action) {
+        st = asx_task_park(self);
+        return st == ASX_OK ? ASX_E_PENDING : st;
+    }
+    if (c->kind == HOLDER_RAW_GUARD) {
+        (void)holder_operate(c, self, HOLDER_COMMIT, ASX_OK, "holder_commit");
+    } else {
+        asx_status expected = c->kind == HOLDER_HANDOFF_FULL && c->source_action == 1
+                                  ? ASX_E_ADMISSION_LIMIT
+                                  : ASX_OK;
+        (void)holder_operate(c, self, HOLDER_HANDOFF, expected, "handoff");
+        if (expected == ASX_E_ADMISSION_LIMIT) {
+            c->source_action = 0;
+            st = asx_task_park(self);
+            return st == ASX_OK ? ASX_E_PENDING : st;
+        }
+        holder_raw_denials(c, self);
+    }
+    return c->failed ? ASX_E_INVALID_STATE : ASX_OK;
+}
+
+static asx_status poll_holder_destination(void *data, asx_task_id self) {
+    holder_case *c = (holder_case *)data;
+    asx_status st;
+    if (!c->destination_action) {
+        st = asx_task_park(self);
+        return st == ASX_OK ? ASX_E_PENDING : st;
+    }
+    if (c->kind == HOLDER_RAW_GUARD) {
+        holder_raw_denials(c, self);
+    } else if (c->kind == HOLDER_HANDOFF_CANCEL) {
+        asx_checkpoint_result checkpoint;
+        st = asx_checkpoint(self, &checkpoint);
+        if (st != ASX_OK || !checkpoint.cancelled) return ASX_E_INVALID_STATE;
+        (void)holder_operate(c, self, HOLDER_ABORT_CANCEL, ASX_OK, "new_holder_cancel_abort");
+        st = asx_task_finalize(self);
+        if (st != ASX_OK) return st;
+    } else {
+        (void)holder_operate(c, self, HOLDER_COMMIT, ASX_OK, "new_holder_commit");
+    }
+    return c->failed ? ASX_E_INVALID_STATE : ASX_OK;
+}
+
+static void scenario_real_holders(const char *id, holder_case_kind kind) {
+    SCENARIO_BEGIN(id);
+    holder_case c;
+    asx_lab_config cfg;
+    asx_budget budget;
+    asx_obligation_info info;
+    asx_obligation_id blocker = ASX_INVALID_ID;
+    asx_region_limits limits = {ASX_REGION_UNLIMITED, ASX_REGION_UNLIMITED, 1u};
+    asx_drain_progress progress;
+    asx_outcome outcome;
+    uint64_t leaks;
+    int cross_region = kind != HOLDER_RAW_GUARD && kind != HOLDER_HANDOFF_SAME;
+
+    memset(&c, 0, sizeof(c));
+    c.kind = kind;
+    asx_runtime_reset();
+    asx_lab_config_init(&cfg);
+    cfg.seed = g_seed;
+    cfg.max_polls = 128u;
+    SCENARIO_CHECK(asx_lab_init(&g_lab, &cfg) == ASX_OK, "seeded lab init");
+    SCENARIO_CHECK(g_lab.config.seed == g_seed, "requested seed not applied to lab");
+    SCENARIO_CHECK(asx_runtime_region_capacity() == (uint32_t)ASX_MAX_REGIONS &&
+                       asx_runtime_task_capacity() == (uint32_t)ASX_MAX_TASKS &&
+                       asx_runtime_obligation_capacity() == (uint32_t)ASX_MAX_OBLIGATIONS,
+                   "binary and linked library resource configuration differ");
+    g_entropy_sample = asx_lab_random_u64(&g_lab);
+    c.initial_yields = (uint32_t)(g_entropy_sample % 3u);
+    SCENARIO_CHECK(asx_lab_open_region(&g_lab, &c.root) == ASX_OK, "lab root open");
+    c.source_region = c.root;
+    c.destination_region = c.root;
+    if (cross_region) {
+        SCENARIO_CHECK(asx_region_open_child(c.root, &c.source_region) == ASX_OK, "source child");
+        SCENARIO_CHECK(asx_region_open_child(c.root, &c.destination_region) == ASX_OK,
+                       "destination child");
+    }
+    SCENARIO_CHECK(asx_region_set_limits(c.source_region, &limits) == ASX_OK, "source quota");
+    SCENARIO_CHECK(asx_region_set_limits(c.destination_region, &limits) == ASX_OK,
+                   "destination quota");
+    if (kind == HOLDER_HANDOFF_FULL) {
+        SCENARIO_CHECK(asx_obligation_reserve(c.destination_region, &blocker) == ASX_OK,
+                       "fill destination obligation quota");
+    }
+    if ((g_entropy_sample & 1u) != 0u) {
+        SCENARIO_CHECK(asx_task_spawn(c.destination_region, poll_holder_destination, &c,
+                                      &c.destination) == ASX_OK,
+                       "destination spawn first");
+        SCENARIO_CHECK(asx_task_spawn(c.source_region, poll_holder_source, &c, &c.source) == ASX_OK,
+                       "source spawn second");
+    } else {
+        SCENARIO_CHECK(asx_task_spawn(c.source_region, poll_holder_source, &c, &c.source) == ASX_OK,
+                       "source spawn first");
+        SCENARIO_CHECK(asx_task_spawn(c.destination_region, poll_holder_destination, &c,
+                                      &c.destination) == ASX_OK,
+                       "destination spawn second");
+    }
+    budget = asx_budget_from_polls(cfg.max_polls);
+    SCENARIO_CHECK(asx_lab_run(&g_lab, c.root, &budget) == ASX_E_WOULD_BLOCK && c.ready,
+                   "real source and destination should both park");
+    SCENARIO_CHECK(asx_obligation_get_info(c.obligation, &info) == ASX_OK &&
+                       info.state == ASX_OBLIGATION_RESERVED &&
+                       asx_handle_index(info.holder) == asx_handle_index(c.source) &&
+                       info.region == c.source_region,
+                   "source should own the checked credit");
+    leaks = asx_obligation_leak_count();
+    if (kind == HOLDER_RAW_GUARD) {
+        c.destination_action = 1;
+        SCENARIO_CHECK(asx_task_wake(c.destination) == ASX_OK, "wake wrong live caller");
+        budget = asx_budget_from_polls(cfg.max_polls);
+        SCENARIO_CHECK(asx_lab_run(&g_lab, c.root, &budget) == ASX_E_WOULD_BLOCK && !c.failed,
+                       "wrong live caller must leave source credit unchanged");
+    }
+    c.source_action = 1;
+    SCENARIO_CHECK(asx_task_wake(c.source) == ASX_OK, "wake actual holder");
+    budget = asx_budget_from_polls(cfg.max_polls);
+    SCENARIO_CHECK(asx_lab_run(&g_lab, c.root, &budget) ==
+                           (kind == HOLDER_RAW_GUARD ? ASX_OK : ASX_E_WOULD_BLOCK) &&
+                       !c.failed,
+                   "actual holder action or old holder denial failed");
+    if (kind == HOLDER_HANDOFF_FULL) {
+        SCENARIO_CHECK(asx_region_drain_progress(c.source_region, &progress) == ASX_OK &&
+                           progress.obligations_reserved == 1u,
+                       "refusal must retain source quota credit");
+        SCENARIO_CHECK(asx_region_drain_progress(c.destination_region, &progress) == ASX_OK &&
+                           progress.obligations_reserved == 1u,
+                       "refusal must not consume destination quota");
+        SCENARIO_CHECK(asx_obligation_abort(blocker) == ASX_OK, "free destination quota");
+        c.source_action = 2;
+        SCENARIO_CHECK(asx_task_wake(c.source) == ASX_OK, "retry original holder after refusal");
+        budget = asx_budget_from_polls(cfg.max_polls);
+        SCENARIO_CHECK(asx_lab_run(&g_lab, c.root, &budget) == ASX_E_WOULD_BLOCK && !c.failed,
+                       "same original credit must hand off after quota becomes available");
+    }
+    if (kind != HOLDER_RAW_GUARD) {
+        SCENARIO_CHECK(asx_obligation_get_info(c.obligation, &info) == ASX_OK &&
+                           info.state == ASX_OBLIGATION_RESERVED &&
+                           asx_handle_index(info.holder) == asx_handle_index(c.destination) &&
+                           info.region == c.destination_region,
+                       "same obligation must retain new holder and destination region");
+        SCENARIO_CHECK(obligation_events(c.obligation, ASX_TRACE_OBLIGATION_HANDOFF) == 1u,
+                       "exactly one handoff event required");
+        c.destination_action = 1;
+        if (kind == HOLDER_HANDOFF_CANCEL) {
+            SCENARIO_CHECK(asx_task_cancel(c.destination, ASX_CANCEL_USER) == ASX_OK,
+                           "cancel new holder");
+        }
+        SCENARIO_CHECK(asx_task_wake(c.destination) == ASX_OK, "wake new holder");
+        budget = asx_budget_from_polls(cfg.max_polls);
+        SCENARIO_CHECK(asx_lab_run(&g_lab, c.root, &budget) == ASX_OK && !c.failed,
+                       "new holder must settle and finish");
+    }
+    SCENARIO_CHECK(asx_obligation_get_info(c.obligation, &info) == ASX_OK &&
+                       info.state == (kind == HOLDER_HANDOFF_CANCEL ? ASX_OBLIGATION_ABORTED
+                                                                    : ASX_OBLIGATION_COMMITTED),
+                   "final obligation state");
+    SCENARIO_CHECK(asx_obligation_leak_count() == leaks, "ownership work must not leak");
+    SCENARIO_CHECK(obligation_events(c.obligation, ASX_TRACE_OBLIGATION_COMMIT) ==
+                           (kind == HOLDER_HANDOFF_CANCEL ? 0u : 1u) &&
+                       obligation_events(c.obligation, ASX_TRACE_OBLIGATION_ABORT) ==
+                           (kind == HOLDER_HANDOFF_CANCEL ? 1u : 0u),
+                   "exactly one resolution required");
+    if (kind == HOLDER_HANDOFF_CANCEL) {
+        SCENARIO_CHECK(info.abort_reason == ASX_OBLIGATION_ABORT_CANCEL, "cancel abort reason");
+        SCENARIO_CHECK(asx_task_get_outcome(c.destination, &outcome) == ASX_OK &&
+                           outcome.severity == ASX_OUTCOME_CANCELLED,
+                       "cancelled destination task outcome");
+    }
+    budget = asx_budget_from_polls(cfg.max_polls);
+    SCENARIO_CHECK(asx_region_drain(c.root, &budget) == ASX_OK, "drain after ownership cleanup");
+    SCENARIO_CHECK(asx_quiescence_check(c.root) == ASX_OK, "ownership subtree quiescent");
+    SCENARIO_END();
+    asx_lab_shutdown(&g_lab);
+}
+
 /* -------------------------------------------------------------------
  * Main
  * ------------------------------------------------------------------- */
 
 int main(void) {
+    const char *seed = getenv("ASX_E2E_SEED");
+    const char *run_id = getenv("ASX_E2E_RUN_ID");
+    if (run_id != NULL && run_id[0] != '\0') g_run_id = run_id;
+    if (seed != NULL) {
+        char *end;
+        unsigned long long parsed;
+        errno = 0;
+        parsed = strtoull(seed, &end, 10);
+        if (seed[0] < '0' || seed[0] > '9' || end == seed || *end != '\0' || errno == ERANGE ||
+            parsed > UINT64_MAX) {
+            fprintf(stderr, "[e2e] invalid ASX_E2E_SEED: %s\n", seed);
+            return 2;
+        }
+        g_seed = (uint64_t)parsed;
+    }
     scenario_region_open_close();
     scenario_task_spawn_complete();
     scenario_task_coroutine_yields();
@@ -708,6 +1266,11 @@ int main(void) {
     scenario_region_poison_containment();
     scenario_drain_progress_snapshot();
     scenario_quiescence_evidence();
+    scenario_real_holders("obligation.real_holder_guard", HOLDER_RAW_GUARD);
+    scenario_real_holders("obligation.handoff_same_region", HOLDER_HANDOFF_SAME);
+    scenario_real_holders("obligation.handoff_cross_region", HOLDER_HANDOFF_CROSS);
+    scenario_real_holders("obligation.handoff_full_destination", HOLDER_HANDOFF_FULL);
+    scenario_real_holders("obligation.handoff_cancel_cleanup", HOLDER_HANDOFF_CANCEL);
 
     fprintf(stderr, "[e2e] core_lifecycle: %d passed, %d failed\n", g_pass, g_fail);
     return g_fail > 0 ? 1 : 0;

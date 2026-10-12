@@ -405,7 +405,7 @@ static asx_status sem_hand_out(sem_slot *s, const asx_semaphore_waiter *waiter, 
             asx_obligation_set_drop_internal(id, sem_permit_drop,
                                              (uint64_t)out->sem_slot |
                                                  ((uint64_t)out->generation << 32),
-                                             (uint64_t)count);
+                                             (uint64_t)count, out->serial);
         }
     }
     return ASX_OK;
@@ -595,13 +595,25 @@ asx_status asx_semaphore_acquire_cancel(asx_semaphore_waiter *waiter) {
 static void sem_commit_obligation(const asx_semaphore_permit *permit) {
     asx_status st;
     if (permit->obligation == ASX_INVALID_ID) return;
-    st = asx_obligation_commit(permit->obligation);
+    st = asx_obligation_resolve_token_internal(permit->obligation, sem_permit_drop,
+                                               (uint64_t)permit->sem_slot |
+                                                   ((uint64_t)permit->generation << 32),
+                                               (uint64_t)permit->count, permit->serial,
+                                               ASX_OBLIGATION_COMMITTED, ASX_OBLIGATION_ABORT_NONE);
     (void)st; /* refused only for an obligation already reported leaked */
 }
 
 asx_status asx_semaphore_release(asx_semaphore_permit permit) {
     sem_slot *s;
     uint32_t i;
+    asx_status st;
+    if (permit.obligation != ASX_INVALID_ID) {
+        st = asx_obligation_check_token_internal(permit.obligation, sem_permit_drop,
+                                                 (uint64_t)permit.sem_slot |
+                                                     ((uint64_t)permit.generation << 32),
+                                                 (uint64_t)permit.count, permit.serial);
+        if (st != ASX_OK && st != ASX_E_OBLIGATION_ALREADY_RESOLVED) return st;
+    }
     if (permit.sem_slot >= ASX_SEMAPHORE_MAX) return ASX_E_INVALID_ARGUMENT;
     s = &g_slots[permit.sem_slot];
     if (!s->alive || s->generation != permit.generation) {
@@ -645,6 +657,14 @@ asx_status asx_semaphore_release(asx_semaphore_permit permit) {
  * waiter in turn fails at its next poll and passes it on. */
 asx_status asx_semaphore_mutex_release_poisoned(asx_semaphore_permit permit) {
     sem_slot *s;
+    asx_status st;
+    if (permit.obligation != ASX_INVALID_ID) {
+        st = asx_obligation_check_token_internal(permit.obligation, sem_permit_drop,
+                                                 (uint64_t)permit.sem_slot |
+                                                     ((uint64_t)permit.generation << 32),
+                                                 (uint64_t)permit.count, permit.serial);
+        if (st != ASX_OK && st != ASX_E_OBLIGATION_ALREADY_RESOLVED) return st;
+    }
     if (permit.sem_slot >= ASX_SEMAPHORE_MAX) return ASX_E_INVALID_ARGUMENT;
     s = &g_slots[permit.sem_slot];
     if (!s->alive || s->generation != permit.generation) return ASX_E_STALE_HANDLE;
@@ -664,6 +684,13 @@ int asx_semaphore_mutex_poisoned(asx_semaphore_handle handle) {
 asx_status asx_semaphore_forget(asx_semaphore_permit permit) {
     sem_slot *s;
     asx_status st = ASX_OK;
+    if (permit.obligation != ASX_INVALID_ID) {
+        st = asx_obligation_check_token_internal(permit.obligation, sem_permit_drop,
+                                                 (uint64_t)permit.sem_slot |
+                                                     ((uint64_t)permit.generation << 32),
+                                                 (uint64_t)permit.count, permit.serial);
+        if (st != ASX_OK && st != ASX_E_OBLIGATION_ALREADY_RESOLVED) return st;
+    }
     if (permit.sem_slot >= ASX_SEMAPHORE_MAX) return ASX_E_INVALID_ARGUMENT;
     s = &g_slots[permit.sem_slot];
     if (!s->alive || s->generation != permit.generation) {
@@ -678,8 +705,10 @@ asx_status asx_semaphore_forget(asx_semaphore_permit permit) {
     /* The permit was intentionally leaked: abort its obligation
      * (SemaphorePermit::forget, sync/semaphore.rs:1041). */
     if (permit.obligation != ASX_INVALID_ID) {
-        asx_status ost =
-            asx_obligation_abort_with_reason(permit.obligation, ASX_OBLIGATION_ABORT_EXPLICIT);
+        asx_status ost = asx_obligation_resolve_token_internal(
+            permit.obligation, sem_permit_drop,
+            (uint64_t)permit.sem_slot | ((uint64_t)permit.generation << 32), (uint64_t)permit.count,
+            permit.serial, ASX_OBLIGATION_ABORTED, ASX_OBLIGATION_ABORT_EXPLICIT);
         (void)ost; /* refused only for an obligation already reported leaked */
     }
     return st;

@@ -744,7 +744,7 @@ typedef enum {
     ASX_OBLIGATION_ABORT_ERROR = 3     /* an error path, or a leak RECOVER aborted */
 } asx_obligation_abort_reason;
 
-typedef struct {
+typedef struct asx_obligation_info {
     asx_obligation_state state;
     asx_obligation_kind kind;
     asx_region_id region;
@@ -817,22 +817,50 @@ ASX_API ASX_MUST_USE asx_status asx_obligation_reserve(asx_region_id region,
 /* Commit a reserved obligation. Transitions: Reserved → Committed.
  *
  * Preconditions: id must be a valid obligation handle in RESERVED state.
+ * A held obligation is resolved only from its holder's current scheduler
+ * poll. An unowned obligation may be resolved by the host outside a poll
+ * or by a current task of its owning region. A raw ID carries no authority
+ * to resolve another holder's obligation.
+ * A channel or semaphore credit bound to an owned permit must be settled
+ * through that permit's send/abort/release/forget operation, even by the
+ * holder. A genuine permit may move between tasks without reassigning its
+ * original holder's liability; its resource binding authenticates settlement.
  * Postconditions: obligation transitions to COMMITTED.
  * Returns ASX_OK on success, ASX_E_NOT_FOUND if id is invalid,
- *   ASX_E_INVALID_TRANSITION if not in RESERVED state (e.g., double commit).
+ *   ASX_E_OBLIGATION_ALREADY_RESOLVED if not RESERVED,
+ *   ASX_E_PERMISSION_DENIED for another holder/region or an owned credit
+ *   outside its holder's poll, or a bound permit credit. Refusal changes
+ *   no ledger or trace state.
  * Thread-safety: not thread-safe; single-threaded mode only.
  * See: API_MISUSE_CATALOG.md § Obligation Lifecycle. */
 ASX_API ASX_MUST_USE asx_status asx_obligation_commit(asx_obligation_id id);
 
 /* Abort a reserved obligation. Transitions: Reserved → Aborted.
  *
- * Preconditions: id must be a valid obligation handle in RESERVED state.
+ * Preconditions: id must be a valid obligation handle in RESERVED state;
+ * caller authority is the same as asx_obligation_commit.
  * Postconditions: obligation transitions to ABORTED.
  * Returns ASX_OK on success, ASX_E_NOT_FOUND if id is invalid,
- *   ASX_E_INVALID_TRANSITION if not in RESERVED state (e.g., after commit).
+ *   ASX_E_OBLIGATION_ALREADY_RESOLVED if not RESERVED,
+ *   ASX_E_PERMISSION_DENIED for another holder or execution context.
  * Thread-safety: not thread-safe; single-threaded mode only.
  * See: API_MISUSE_CATALOG.md § Obligation Lifecycle. */
 ASX_API ASX_MUST_USE asx_status asx_obligation_abort(asx_obligation_id id);
+
+/* Atomically transfer a checked, held Reserved obligation to another live
+ * task, as Rust ObligationToken::try_transfer. Only its current holder's
+ * poll may transfer it. The destination must be uncancelled in an Open,
+ * unpoisoned region. Same-region transfer reuses the existing quota credit;
+ * cross-region transfer checks the destination's max_obligations first.
+ * Preserves the obligation ID/generation/kind and loses the old holder's
+ * resolution authority immediately; every refusal leaves ownership intact.
+ * Returns ASX_OK, lookup errors, ASX_E_PERMISSION_DENIED, _INVALID_STATE
+ * for an unowned/unchecked source or completed destination, _INVALID_ARGUMENT
+ * for the same holder, _CANCELLED, _REGION_CLOSED, _REGION_POISONED, or
+ * _ADMISSION_LIMIT for a full destination region.
+ * Thread-safety: not thread-safe; single-threaded mode only. */
+ASX_API ASX_MUST_USE asx_status asx_obligation_handoff(asx_obligation_id id,
+                                                       asx_task_id destination);
 
 /* Abort a reserved obligation, recording why (Rust ObligationToken::abort
  * with ObligationAbortReason): ASX_OBLIGATION_ABORT_EXPLICIT (what
@@ -849,7 +877,8 @@ asx_obligation_abort_with_reason(asx_obligation_id id, asx_obligation_abort_reas
  * ASX_OBLIGATION_ABORT_ERROR; PANIC also routes the leak through
  * the region's containment policy, surfaced by the scheduler).
  *
- * Preconditions: id must be a valid obligation handle in RESERVED state.
+ * Preconditions: id must be a valid obligation handle in RESERVED state;
+ * caller authority is the same as asx_obligation_commit.
  * Returns ASX_OK, ASX_E_NOT_FOUND / ASX_E_STALE_HANDLE for an invalid
  *   handle, ASX_E_INVALID_TRANSITION if it is not RESERVED.
  * Thread-safety: not thread-safe; single-threaded mode only. */

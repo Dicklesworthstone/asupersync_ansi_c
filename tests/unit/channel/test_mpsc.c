@@ -886,7 +886,8 @@ static asx_status poll_idle(void *ud, asx_task_id self) {
     return ASX_E_PENDING;
 }
 
-/* A task (never polled) whose Cx holds obligations in g_rid. */
+/* Cancellation and untracked API probes can name a live, idle task.
+ * Tracked permit resolution below runs inside the holder's real poll. */
 static asx_task_id cx_task(asx_cx *cx) {
     asx_task_id t = ASX_INVALID_ID;
     CH_IGNORE(asx_task_spawn(g_rid, poll_idle, NULL, &t));
@@ -924,15 +925,11 @@ static int last_event_is_user_trace(asx_task_id task, const char *message) {
            strcmp(g_last_text, message) == 0;
 }
 
-TEST(reserve_with_cx_registers_send_permit_committed_by_send) {
-    asx_channel_id ch;
+static void check_tracked_permit_commit(asx_channel_id ch, asx_task_id t) {
     asx_send_permit p;
     asx_cx cx;
-    asx_task_id t;
     uint64_t v = 0;
-    setup();
-    t = cx_task(&cx);
-    ASSERT_EQ(asx_channel_create(g_rid, 2, &ch), ASX_OK);
+    ASSERT_EQ(asx_cx_init(&cx, g_rid, t, ASX_CAP_NONE), ASX_OK);
     ASSERT_EQ(asx_channel_reserve(ch, &cx, &p), ASX_OK);
     ASSERT_TRUE(obligation_is(p.obligation, t, ASX_OBLIGATION_RESERVED, ASX_OBLIGATION_ABORT_NONE));
     {
@@ -944,17 +941,28 @@ TEST(reserve_with_cx_registers_send_permit_committed_by_send) {
     ASSERT_EQ(v, 7u);
 }
 
-TEST(reserved_permit_abort_and_disconnect_abort_the_obligation) {
+static asx_status poll_tracked_permit_commit(void *data, asx_task_id self) {
+    check_tracked_permit_commit(*(asx_channel_id *)data, self);
+    return test_current_failed ? ASX_E_INVALID_STATE : ASX_OK;
+}
+
+TEST(reserve_with_cx_registers_send_permit_committed_by_send) {
     asx_channel_id ch;
+    asx_task_id t;
+    asx_budget budget = asx_budget_from_polls(8u);
+    setup();
+    ASSERT_EQ(asx_channel_create(g_rid, 2, &ch), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(g_rid, poll_tracked_permit_commit, &ch, &t), ASX_OK);
+    ASSERT_EQ(asx_scheduler_run(g_rid, &budget), ASX_OK);
+}
+
+static void check_tracked_permit_abort_and_disconnect(asx_channel_id ch, asx_task_id t) {
     asx_send_permit p1;
     asx_send_permit p2;
     asx_obligation_id ob1;
     asx_obligation_id ob2;
     asx_cx cx;
-    asx_task_id t;
-    setup();
-    t = cx_task(&cx);
-    ASSERT_EQ(asx_channel_create(g_rid, 2, &ch), ASX_OK);
+    ASSERT_EQ(asx_cx_init(&cx, g_rid, t, ASX_CAP_NONE), ASX_OK);
     ASSERT_EQ(asx_channel_reserve(ch, &cx, &p1), ASX_OK);
     ASSERT_EQ(asx_channel_reserve(ch, &cx, &p2), ASX_OK);
     ob1 = p1.obligation;
@@ -969,6 +977,224 @@ TEST(reserved_permit_abort_and_disconnect_abort_the_obligation) {
     ASSERT_EQ(asx_channel_close_receiver(ch), ASX_OK);
     ASSERT_EQ(asx_send_permit_send(&p2, 1u), ASX_E_DISCONNECTED);
     ASSERT_TRUE(obligation_is(ob2, t, ASX_OBLIGATION_ABORTED, ASX_OBLIGATION_ABORT_ERROR));
+}
+
+static asx_status poll_tracked_permit_abort_and_disconnect(void *data, asx_task_id self) {
+    check_tracked_permit_abort_and_disconnect(*(asx_channel_id *)data, self);
+    return test_current_failed ? ASX_E_INVALID_STATE : ASX_OK;
+}
+
+TEST(reserved_permit_abort_and_disconnect_abort_the_obligation) {
+    asx_channel_id ch;
+    asx_task_id t;
+    asx_budget budget = asx_budget_from_polls(8u);
+    setup();
+    ASSERT_EQ(asx_channel_create(g_rid, 2, &ch), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(g_rid, poll_tracked_permit_abort_and_disconnect, &ch, &t), ASX_OK);
+    ASSERT_EQ(asx_scheduler_run(g_rid, &budget), ASX_OK);
+}
+
+typedef struct {
+    asx_channel_id channel;
+    asx_send_permit permit;
+    asx_obligation_id obligation;
+    asx_task_id holder;
+    uint32_t phase;
+    int abort_after_rejection;
+    int settle_in_other_task;
+    int wrong_task_checked;
+} tracked_permit_misuse;
+
+static void check_tracked_permit_holder(tracked_permit_misuse *ctx, asx_task_id self) {
+    asx_cx cx;
+    uint32_t reserved;
+    ASSERT_EQ(asx_handle_index(self), asx_handle_index(ctx->holder));
+    if (ctx->phase == 0u) {
+        ASSERT_EQ(asx_cx_init(&cx, g_rid, self, ASX_CAP_NONE), ASX_OK);
+        ASSERT_EQ(asx_channel_reserve(ctx->channel, &cx, &ctx->permit), ASX_OK);
+        ctx->obligation = ctx->permit.obligation;
+        ASSERT_TRUE(obligation_is(ctx->obligation, self, ASX_OBLIGATION_RESERVED,
+                                  ASX_OBLIGATION_ABORT_NONE));
+        ctx->phase = 1u;
+        ASSERT_EQ(asx_task_park(self), ASX_OK);
+        return;
+    }
+    ASSERT_EQ(ctx->phase, 1u);
+    ASSERT_TRUE(ctx->wrong_task_checked);
+    if (ctx->abort_after_rejection && !ctx->settle_in_other_task) {
+        asx_send_permit_abort(&ctx->permit);
+    } else if (!ctx->settle_in_other_task) {
+        ASSERT_EQ(asx_send_permit_send(&ctx->permit, 77u), ASX_OK);
+    }
+    ASSERT_TRUE(obligation_is(ctx->obligation, self,
+                              ctx->abort_after_rejection ? ASX_OBLIGATION_ABORTED
+                                                         : ASX_OBLIGATION_COMMITTED,
+                              ctx->abort_after_rejection ? ASX_OBLIGATION_ABORT_EXPLICIT
+                                                         : ASX_OBLIGATION_ABORT_NONE));
+    ASSERT_EQ(ctx->permit.consumed, 1);
+    ASSERT_EQ(asx_channel_reserved_count(ctx->channel, &reserved), ASX_OK);
+    ASSERT_EQ(reserved, 0u);
+    ctx->phase = 2u;
+}
+
+static asx_status poll_tracked_permit_holder(void *data, asx_task_id self) {
+    tracked_permit_misuse *ctx = (tracked_permit_misuse *)data;
+    check_tracked_permit_holder(ctx, self);
+    if (test_current_failed) return ASX_E_INVALID_STATE;
+    return ctx->phase == 2u ? ASX_OK : ASX_E_PENDING;
+}
+
+static void check_forged_tracked_permit_binding(tracked_permit_misuse *ctx) {
+    asx_channel_id foreign_channel;
+    asx_send_permit forged;
+    asx_send_permit before;
+    asx_obligation_info before_info;
+    asx_obligation_info info;
+    uint32_t reserved;
+    uint32_t queued;
+    uint64_t emitted;
+    uint64_t digest;
+    memset(&forged, 0, sizeof(forged));
+    ASSERT_EQ(asx_channel_create(g_rid, 1u, &foreign_channel), ASX_OK);
+    ASSERT_EQ(asx_channel_try_reserve(foreign_channel, &forged), ASX_OK);
+    /* A genuine credit cannot authorize a different physical reservation. */
+    forged.obligation = ctx->obligation;
+    memcpy(&before, &forged, sizeof(before));
+    ASSERT_EQ(asx_obligation_get_info(ctx->obligation, &before_info), ASX_OK);
+    emitted = asx_trace_emitted_total();
+    digest = asx_trace_digest();
+    ASSERT_EQ(asx_send_permit_send(&forged, 999u), ASX_E_PERMISSION_DENIED);
+    asx_send_permit_abort(&forged);
+    ASSERT_EQ(memcmp(&forged, &before, sizeof(forged)), 0);
+    ASSERT_TRUE(obligation_is(ctx->obligation, ctx->holder, ASX_OBLIGATION_RESERVED,
+                              ASX_OBLIGATION_ABORT_NONE));
+    ASSERT_EQ(asx_obligation_get_info(ctx->obligation, &info), ASX_OK);
+    ASSERT_EQ(info.kind, before_info.kind);
+    ASSERT_EQ(info.state, before_info.state);
+    ASSERT_EQ(info.abort_reason, before_info.abort_reason);
+    ASSERT_EQ(info.holder, before_info.holder);
+    ASSERT_EQ(info.region, before_info.region);
+    ASSERT_EQ(asx_channel_reserved_count(foreign_channel, &reserved), ASX_OK);
+    ASSERT_EQ(reserved, 1u);
+    ASSERT_EQ(asx_channel_queue_len(foreign_channel, &queued), ASX_OK);
+    ASSERT_EQ(queued, 0u);
+    ASSERT_EQ(asx_channel_reserved_count(ctx->channel, &reserved), ASX_OK);
+    ASSERT_EQ(reserved, 1u);
+    ASSERT_EQ(asx_trace_emitted_total(), emitted);
+    ASSERT_EQ(asx_trace_digest(), digest);
+    /* Restore the independently owned untracked permit and return its slot. */
+    forged.obligation = ASX_INVALID_ID;
+    asx_send_permit_abort(&forged);
+    ASSERT_EQ(asx_channel_reserved_count(foreign_channel, &reserved), ASX_OK);
+    ASSERT_EQ(reserved, 0u);
+    ASSERT_EQ(asx_channel_close_sender(foreign_channel), ASX_OK);
+    ASSERT_EQ(asx_channel_close_receiver(foreign_channel), ASX_OK);
+}
+
+static void check_wrong_task_permit_attempts(tracked_permit_misuse *ctx, asx_task_id self) {
+    asx_send_permit before;
+    asx_send_permit probe;
+    asx_channel_state state;
+    asx_obligation_info info;
+    uint32_t queued;
+    uint32_t reserved;
+    uint64_t emitted;
+    uint64_t digest;
+    ASSERT_NE(asx_handle_index(self), asx_handle_index(ctx->holder));
+    ASSERT_EQ(ctx->phase, 1u);
+    memcpy(&before, &ctx->permit, sizeof(before));
+    emitted = asx_trace_emitted_total();
+    digest = asx_trace_digest();
+    /* A raw ledger ID is not the owned physical permit capability. */
+    ASSERT_EQ(asx_obligation_commit(ctx->obligation), ASX_E_PERMISSION_DENIED);
+    ASSERT_EQ(asx_obligation_abort(ctx->obligation), ASX_E_PERMISSION_DENIED);
+    ASSERT_EQ(asx_obligation_drop(ctx->obligation), ASX_E_PERMISSION_DENIED);
+    ASSERT_EQ(ctx->permit.channel_id, before.channel_id);
+    ASSERT_EQ(ctx->permit.token, before.token);
+    ASSERT_EQ(ctx->permit.consumed, before.consumed);
+    ASSERT_EQ(ctx->permit.obligation, before.obligation);
+    ASSERT_EQ(memcmp(&ctx->permit, &before, sizeof(before)), 0);
+    ASSERT_TRUE(obligation_is(ctx->obligation, ctx->holder, ASX_OBLIGATION_RESERVED,
+                              ASX_OBLIGATION_ABORT_NONE));
+    ASSERT_EQ(asx_obligation_get_info(ctx->obligation, &info), ASX_OK);
+    ASSERT_EQ(info.region, g_rid);
+    ASSERT_EQ(asx_channel_get_state(ctx->channel, &state), ASX_OK);
+    ASSERT_EQ(state, ASX_CHANNEL_OPEN);
+    ASSERT_EQ(asx_channel_queue_len(ctx->channel, &queued), ASX_OK);
+    ASSERT_EQ(queued, 0u);
+    ASSERT_EQ(asx_channel_reserved_count(ctx->channel, &reserved), ASX_OK);
+    ASSERT_EQ(reserved, 1u);
+    ASSERT_EQ(asx_trace_emitted_total(), emitted);
+    ASSERT_EQ(asx_trace_digest(), digest);
+    ASSERT_EQ(asx_channel_try_reserve(ctx->channel, &probe), ASX_E_CHANNEL_FULL);
+    check_forged_tracked_permit_binding(ctx);
+    if (test_current_failed) return;
+    if (ctx->settle_in_other_task) {
+        /* Moving the genuine permit does not move holder liability, but
+         * its physical channel/token capability may settle the credit. */
+        if (ctx->abort_after_rejection) {
+            asx_send_permit_abort(&ctx->permit);
+        } else {
+            ASSERT_EQ(asx_send_permit_send(&ctx->permit, 77u), ASX_OK);
+        }
+        ASSERT_TRUE(obligation_is(ctx->obligation, ctx->holder,
+                                  ctx->abort_after_rejection ? ASX_OBLIGATION_ABORTED
+                                                             : ASX_OBLIGATION_COMMITTED,
+                                  ctx->abort_after_rejection ? ASX_OBLIGATION_ABORT_EXPLICIT
+                                                             : ASX_OBLIGATION_ABORT_NONE));
+    }
+    ctx->wrong_task_checked = 1;
+    ASSERT_EQ(asx_task_wake(ctx->holder), ASX_OK);
+}
+
+static asx_status poll_wrong_task_permit_attempts(void *data, asx_task_id self) {
+    check_wrong_task_permit_attempts((tracked_permit_misuse *)data, self);
+    return test_current_failed ? ASX_E_INVALID_STATE : ASX_OK;
+}
+
+static void run_tracked_permit_misuse(int abort_after_rejection, int settle_in_other_task) {
+    tracked_permit_misuse ctx;
+    asx_task_id other;
+    asx_send_permit probe;
+    asx_budget budget = asx_budget_from_polls(8u);
+    uint64_t value = 0u;
+    uint32_t reserved;
+    setup();
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.abort_after_rejection = abort_after_rejection;
+    ctx.settle_in_other_task = settle_in_other_task;
+    ASSERT_EQ(asx_channel_create(g_rid, 1u, &ctx.channel), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(g_rid, poll_tracked_permit_holder, &ctx, &ctx.holder), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(g_rid, poll_wrong_task_permit_attempts, &ctx, &other), ASX_OK);
+    ASSERT_EQ(asx_scheduler_run(g_rid, &budget), ASX_OK);
+    ASSERT_EQ(ctx.phase, 2u);
+    ASSERT_TRUE(ctx.wrong_task_checked);
+    if (abort_after_rejection) {
+        ASSERT_EQ(asx_channel_try_recv(ctx.channel, &value), ASX_E_WOULD_BLOCK);
+    } else {
+        ASSERT_EQ(asx_channel_try_recv(ctx.channel, &value), ASX_OK);
+        ASSERT_EQ(value, 77u);
+    }
+    ASSERT_EQ(asx_channel_try_reserve(ctx.channel, &probe), ASX_OK);
+    asx_send_permit_abort(&probe);
+    ASSERT_EQ(asx_channel_reserved_count(ctx.channel, &reserved), ASX_OK);
+    ASSERT_EQ(reserved, 0u);
+}
+
+TEST(tracked_permit_credit_rejects_wrong_task_before_holder_send) {
+    run_tracked_permit_misuse(0, 0);
+}
+
+TEST(tracked_permit_credit_rejects_wrong_task_before_holder_abort) {
+    run_tracked_permit_misuse(1, 0);
+}
+
+TEST(tracked_permit_moved_to_another_task_can_send_without_reassigning_holder) {
+    run_tracked_permit_misuse(0, 1);
+}
+
+TEST(tracked_permit_moved_to_another_task_can_abort_without_reassigning_holder) {
+    run_tracked_permit_misuse(1, 1);
 }
 
 TEST(untracked_reserves_register_no_obligation) {
@@ -1626,6 +1852,10 @@ int main(void) {
 
     RUN_TEST(reserve_with_cx_registers_send_permit_committed_by_send);
     RUN_TEST(reserved_permit_abort_and_disconnect_abort_the_obligation);
+    RUN_TEST(tracked_permit_credit_rejects_wrong_task_before_holder_send);
+    RUN_TEST(tracked_permit_credit_rejects_wrong_task_before_holder_abort);
+    RUN_TEST(tracked_permit_moved_to_another_task_can_send_without_reassigning_holder);
+    RUN_TEST(tracked_permit_moved_to_another_task_can_abort_without_reassigning_holder);
     RUN_TEST(untracked_reserves_register_no_obligation);
     RUN_TEST(cancelled_cx_wins_over_ready_channel_and_traces);
     RUN_TEST(seal_keeps_the_queue_receivable);

@@ -75,13 +75,16 @@ typedef enum {
     OB_POST_RESERVE = 1,
     OB_POST_COMMIT = 2,
     OB_POST_ABORT = 3,
-    OB_POST_LEAK = 4
+    OB_POST_LEAK = 4,
+    OB_POST_HANDOFF = 5
 } ob_post_kind;
 
 typedef struct {
     uint8_t kind;
     uint32_t idx;
     uint16_t generation;
+    asx_obligation_info reservation;
+    asx_trace_handoff handoff;
 } ob_post;
 
 /* A reservation and one resolution per slot. */
@@ -162,6 +165,10 @@ void asx_runtime_reset(void) {
         g_obligations[i].holder = ASX_INVALID_ID;
         g_obligations[i].next_held = ASX_SLOT_NONE;
         g_obligations[i].abort_reason = ASX_OBLIGATION_ABORT_NONE;
+        g_obligations[i].drop_fn = NULL;
+        g_obligations[i].drop_a = 0u;
+        g_obligations[i].drop_b = 0u;
+        g_obligations[i].drop_serial = 0u;
         g_obligations[i].counted = 0;
         g_obligations[i].checked = 0;
         g_obligations[i].posts = 0;
@@ -588,13 +595,14 @@ static void obligation_drop_permit(uint32_t idx) {
 }
 
 void asx_obligation_set_drop_internal(asx_obligation_id id, asx_obligation_drop_fn fn, uint64_t a,
-                                      uint64_t b) {
+                                      uint64_t b, uint32_t serial) {
     asx_obligation_slot *o;
     if (asx_obligation_slot_lookup(id, &o) != ASX_OK) return;
     if (o->state != ASX_OBLIGATION_RESERVED) return;
     o->drop_fn = fn;
     o->drop_a = a;
     o->drop_b = b;
+    o->drop_serial = serial;
 }
 
 uint32_t asx_task_resolve_held_obligations_internal(asx_task_slot *task, int *out_fail_fast) {
@@ -1614,12 +1622,14 @@ static asx_obligation_id obligation_handle(uint32_t idx) {
 
 /* The applied effects of each operation: record visible, ghost monitor,
  * event log and trace. */
-static void obligation_apply_reserve(uint32_t idx) {
+static void obligation_apply_reserve(uint32_t idx, const asx_obligation_info *original) {
     asx_obligation_id id = obligation_handle(idx);
+    asx_region_id region = original != NULL ? original->region : g_obligations[idx].region;
+    asx_trace_payload payload = {0};
     asx_ghost_obligation_reserved(id);
-    (void)asx_event_emit(ASX_EVENT_OBLIGATION_CREATE, id, (uint64_t)g_obligations[idx].region,
-                         ASX_OK);
-    asx_trace_emit(ASX_TRACE_OBLIGATION_RESERVE, id, (uint64_t)g_obligations[idx].region);
+    (void)asx_event_emit(ASX_EVENT_OBLIGATION_CREATE, id, (uint64_t)region, ASX_OK);
+    payload.obligation = original;
+    asx_trace_emit_payload_internal(ASX_TRACE_OBLIGATION_RESERVE, id, (uint64_t)region, &payload);
 }
 
 static void obligation_apply_resolution(uint32_t idx, asx_obligation_state to) {
@@ -1653,6 +1663,11 @@ static void obligation_post(ob_post_kind kind, uint32_t idx) {
     g_ob_posts[g_ob_post_n].kind = (uint8_t)kind;
     g_ob_posts[g_ob_post_n].idx = idx;
     g_ob_posts[g_ob_post_n].generation = g_obligations[idx].generation;
+    g_ob_posts[g_ob_post_n].reservation.state = g_obligations[idx].state;
+    g_ob_posts[g_ob_post_n].reservation.kind = g_obligations[idx].kind;
+    g_ob_posts[g_ob_post_n].reservation.region = g_obligations[idx].region;
+    g_ob_posts[g_ob_post_n].reservation.holder = g_obligations[idx].holder;
+    g_ob_posts[g_ob_post_n].reservation.abort_reason = g_obligations[idx].abort_reason;
     g_ob_post_n++;
     g_obligations[idx].posts++;
 }
@@ -1685,7 +1700,7 @@ void asx_obligation_drain_posts_internal(void) {
                 }
                 o->counted = 1;
             }
-            obligation_apply_reserve(p->idx);
+            obligation_apply_reserve(p->idx, &p->reservation);
             break;
         case OB_POST_COMMIT:
             if (!o->checked) o->counted = 0;
@@ -1696,6 +1711,13 @@ void asx_obligation_drain_posts_internal(void) {
             obligation_apply_resolution(p->idx, ASX_OBLIGATION_ABORTED);
             break;
         case OB_POST_LEAK: obligation_apply_leak(p->idx); break;
+        case OB_POST_HANDOFF: {
+            asx_trace_payload payload = {0};
+            payload.handoff = &p->handoff;
+            asx_trace_emit_payload_internal(ASX_TRACE_OBLIGATION_HANDOFF, obligation_handle(p->idx),
+                                            p->handoff.to_task, &payload);
+            break;
+        }
         }
     }
 }
@@ -1744,6 +1766,7 @@ static asx_status asx_obligation_reserve_impl(asx_region_id region, asx_obligati
     g_obligations[idx].next_held = ASX_SLOT_NONE;
     g_obligations[idx].holder = ASX_INVALID_ID;
     g_obligations[idx].drop_fn = NULL;
+    g_obligations[idx].drop_serial = 0u;
     g_obligations[idx].checked = checked ? 1u : 0u;
     g_obligations[idx].counted = (checked || !posting) ? 1u : 0u;
     g_obligations[idx].posts = 0;
@@ -1758,7 +1781,7 @@ static asx_status asx_obligation_reserve_impl(asx_region_id region, asx_obligati
     if (posting) {
         obligation_post(OB_POST_RESERVE, idx);
     } else {
-        obligation_apply_reserve(idx);
+        obligation_apply_reserve(idx, NULL);
     }
     return ASX_OK;
 }
@@ -1836,6 +1859,84 @@ static asx_status obligation_resolve(uint32_t idx, asx_obligation_state to) {
     return ASX_OK;
 }
 
+/* Application authority comes from the scheduler, never a caller-supplied
+ * holder ID. Runtime completion/leak settlement uses its slot helpers and
+ * does not call this application boundary. */
+asx_status asx_obligation_check_access_internal(asx_obligation_id id) {
+    asx_obligation_slot *o;
+    asx_task_slot *caller;
+    asx_task_slot *holder;
+    asx_region_slot *region;
+    asx_task_id current = asx_task_current();
+    asx_status st = asx_obligation_slot_lookup(id, &o);
+    if (st != ASX_OK) return st;
+    if (o->state != ASX_OBLIGATION_RESERVED) return ASX_E_OBLIGATION_ALREADY_RESOLVED;
+#ifdef ASX_MUTANT_OBLIGATION_AUTH_BYPASS
+    /* Isolated authorization negative control, never a release define. */
+    return ASX_OK;
+#endif
+    /* A bound primitive's credit is private to its owned permit: even its
+     * holder must release/send that permit rather than settle by raw ID. */
+    if (o->drop_fn != NULL) return ASX_E_PERMISSION_DENIED;
+    st = asx_region_slot_lookup(o->region, &region);
+    if (st != ASX_OK) return st;
+    if (region->state == ASX_REGION_CLOSED) return ASX_E_REGION_CLOSED;
+    if (current == ASX_INVALID_ID) {
+        return o->holder == ASX_INVALID_ID ? ASX_OK : ASX_E_PERMISSION_DENIED;
+    }
+    st = asx_task_slot_lookup(current, &caller);
+    if (st != ASX_OK) return st;
+    if (!caller->in_poll || asx_task_is_terminal(caller->state)) return ASX_E_INVALID_STATE;
+    if (asx_handle_index(caller->region) != asx_handle_index(o->region)) {
+        return ASX_E_PERMISSION_DENIED;
+    }
+    if (o->holder != ASX_INVALID_ID) {
+        st = asx_task_slot_lookup(o->holder, &holder);
+        if (st != ASX_OK) return st;
+        /* State-rights bits may differ between the first and later polls;
+         * validated slot/generation identity supplies holder authority. */
+        if (holder != caller) return ASX_E_PERMISSION_DENIED;
+    }
+    return ASX_OK;
+}
+
+asx_status asx_obligation_check_token_internal(asx_obligation_id id, asx_obligation_drop_fn fn,
+                                               uint64_t a, uint64_t b, uint32_t serial) {
+    asx_obligation_slot *o;
+    asx_region_slot *region;
+    asx_status st = asx_obligation_slot_lookup(id, &o);
+    if (st != ASX_OK) return st;
+    if (fn == NULL || o->drop_a != a || o->drop_b != b || o->drop_serial != serial ||
+        (o->drop_fn != fn && (o->state == ASX_OBLIGATION_RESERVED || o->drop_fn != NULL))) {
+        return ASX_E_PERMISSION_DENIED;
+    }
+    if (o->state != ASX_OBLIGATION_RESERVED) return ASX_E_OBLIGATION_ALREADY_RESOLVED;
+    st = asx_region_slot_lookup(o->region, &region);
+    if (st != ASX_OK) return st;
+    return region->state == ASX_REGION_CLOSED ? ASX_E_REGION_CLOSED : ASX_OK;
+}
+
+asx_status asx_obligation_resolve_token_internal(asx_obligation_id id, asx_obligation_drop_fn fn,
+                                                 uint64_t a, uint64_t b, uint32_t serial,
+                                                 asx_obligation_state to,
+                                                 asx_obligation_abort_reason reason) {
+    asx_obligation_slot *o;
+    asx_status st;
+    if (to != ASX_OBLIGATION_COMMITTED && to != ASX_OBLIGATION_ABORTED) {
+        return ASX_E_INVALID_ARGUMENT;
+    }
+    if (to == ASX_OBLIGATION_ABORTED && reason != ASX_OBLIGATION_ABORT_EXPLICIT &&
+        reason != ASX_OBLIGATION_ABORT_CANCEL && reason != ASX_OBLIGATION_ABORT_ERROR) {
+        return ASX_E_INVALID_ARGUMENT;
+    }
+    st = asx_obligation_check_token_internal(id, fn, a, b, serial);
+    if (st != ASX_OK) return st;
+    st = asx_obligation_slot_lookup(id, &o);
+    if (st != ASX_OK) return st;
+    if (to == ASX_OBLIGATION_ABORTED) o->abort_reason = reason;
+    return obligation_resolve((uint32_t)(o - g_obligations), to);
+}
+
 asx_status asx_obligation_commit(asx_obligation_id id) {
     asx_obligation_slot *o;
     asx_status st;
@@ -1852,6 +1953,8 @@ asx_status asx_obligation_commit(asx_obligation_id id) {
         return ASX_E_OBLIGATION_ALREADY_RESOLVED;
     }
     st = asx_obligation_transition_check(o->state, ASX_OBLIGATION_COMMITTED);
+    if (st != ASX_OK) return st;
+    st = asx_obligation_check_access_internal(id);
     if (st != ASX_OK) return st;
     return obligation_resolve((uint32_t)(o - g_obligations), ASX_OBLIGATION_COMMITTED);
 }
@@ -1876,6 +1979,8 @@ asx_status asx_obligation_drop(asx_obligation_id id) {
     return asx_obligation_commit(id);
 #endif
     st = asx_obligation_transition_check(o->state, ASX_OBLIGATION_LEAKED);
+    if (st != ASX_OK) return st;
+    st = asx_obligation_check_access_internal(id);
     if (st != ASX_OK) return st;
     idx = (uint32_t)(o - g_obligations);
     asx_obligation_unlink_holder(idx);
@@ -1916,8 +2021,71 @@ asx_status asx_obligation_abort_with_reason(asx_obligation_id id,
     }
     st = asx_obligation_transition_check(o->state, ASX_OBLIGATION_ABORTED);
     if (st != ASX_OK) return st;
+    st = asx_obligation_check_access_internal(id);
+    if (st != ASX_OK) return st;
     o->abort_reason = reason;
     return obligation_resolve((uint32_t)(o - g_obligations), ASX_OBLIGATION_ABORTED);
+}
+
+asx_status asx_obligation_handoff(asx_obligation_id id, asx_task_id destination) {
+    asx_obligation_slot *o;
+    asx_task_slot *target;
+    asx_region_slot *target_region;
+    asx_region_id source_region;
+    asx_trace_handoff handoff;
+    asx_trace_payload payload = {0};
+    uint32_t idx;
+    asx_status st = asx_obligation_check_access_internal(id);
+    if (st != ASX_OK) return st;
+    st = asx_obligation_slot_lookup(id, &o);
+    if (st != ASX_OK) return st;
+    /* Rust ObligationToken::try_transfer rejects legacy/unowned sources,
+     * a same holder, a cancelled destination, and closed destination
+     * admission (obligation_mailbox.rs:721-790; record/region.rs:555). */
+    if (!o->checked || o->holder == ASX_INVALID_ID) return ASX_E_INVALID_STATE;
+    st = asx_task_slot_lookup(destination, &target);
+    if (st != ASX_OK) return st;
+    if (asx_handle_index(destination) == asx_handle_index(o->holder)) {
+        return ASX_E_INVALID_ARGUMENT;
+    }
+    if (target->cancel_pending) return ASX_E_CANCELLED;
+    st = asx_region_slot_lookup(target->region, &target_region);
+    if (st != ASX_OK) return st;
+    if (target_region->poisoned) return ASX_E_REGION_POISONED;
+    if (!asx_region_can_accept_work(target_region->state)) return ASX_E_REGION_CLOSED;
+    if (asx_task_is_terminal(target->state)) return ASX_E_INVALID_STATE;
+    if (asx_handle_index(target->region) != asx_handle_index(o->region) &&
+        target_region->limits.max_obligations != ASX_REGION_UNLIMITED &&
+        region_pending_obligations(target->region) >= target_region->limits.max_obligations) {
+        return ASX_E_ADMISSION_LIMIT;
+    }
+
+    /* Every refusal precedes the authority change. The same slot/generation
+     * and checked credit move, so no temporary double counting or extra
+     * arena capacity is needed. Observers see the completed rebinding. */
+    idx = (uint32_t)(o - g_obligations);
+    source_region = o->region;
+    handoff.from_task = o->holder;
+    handoff.to_task = destination;
+    handoff.from_region = source_region;
+    handoff.to_region = target->region;
+    asx_obligation_unlink_holder(idx);
+    o->holder = destination;
+    o->region = target->region;
+    o->next_held = target->first_held;
+    target->first_held = idx;
+    payload.handoff = &handoff;
+    if (obligation_posting()) {
+        obligation_post(OB_POST_HANDOFF, idx);
+        g_ob_posts[g_ob_post_n - 1u].handoff = handoff;
+    } else {
+        asx_trace_emit_payload_internal(ASX_TRACE_OBLIGATION_HANDOFF, id, destination, &payload);
+    }
+    /* Releasing a source region's final credit may permit its close. */
+    if (asx_handle_index(source_region) != asx_handle_index(o->region) && !obligation_posting()) {
+        asx_region_advance_internal(source_region);
+    }
+    return ASX_OK;
 }
 
 asx_status asx_obligation_get_state(asx_obligation_id id, asx_obligation_state *out_state) {

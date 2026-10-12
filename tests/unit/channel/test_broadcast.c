@@ -6,6 +6,9 @@
 
 #include "../../test_harness.h"
 #include <asx/core/broadcast.h>
+#include <asx/runtime/runtime.h>
+#include <asx/runtime/trace.h>
+#include <string.h>
 
 static asx_status st_sink_;
 #define MUST_OK(expr)                                                                              \
@@ -334,6 +337,105 @@ TEST(permit_after_the_receivers_or_the_last_sender_left) {
     ASSERT_EQ(reached, 0u);
 }
 
+static asx_status broadcast_holder_poll(void *data, asx_task_id self) {
+    (void)data;
+    (void)self;
+    return ASX_OK;
+}
+
+TEST(tracked_permit_authenticates_each_reservation_and_moves) {
+    asx_broadcast_sender tx;
+    asx_broadcast_receiver rx;
+    asx_broadcast_permit first = {0}, second = {0}, forged, before;
+    asx_region_id region;
+    asx_task_id holder;
+    asx_cx cx;
+    asx_obligation_info info;
+    uint64_t digest;
+    uint64_t value;
+    uint32_t reached = 99u;
+    asx_runtime_reset();
+    setup();
+    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(region, broadcast_holder_poll, NULL, &holder), ASX_OK);
+    ASSERT_EQ(asx_cx_init(&cx, region, holder, ASX_CAP_NONE), ASX_OK);
+    ASSERT_EQ(asx_broadcast_create(4, &tx, &rx), ASX_OK);
+    ASSERT_EQ(asx_broadcast_reserve(&tx, &cx, &first), ASX_OK);
+    ASSERT_EQ(asx_broadcast_reserve(&tx, &cx, &second), ASX_OK);
+    ASSERT_TRUE(first.obligation != ASX_INVALID_ID);
+    ASSERT_TRUE(second.obligation != ASX_INVALID_ID);
+    ASSERT_TRUE(first.serial != second.serial);
+    ASSERT_EQ(asx_obligation_commit(first.obligation), ASX_E_PERMISSION_DENIED);
+    forged = second;
+    forged.obligation = first.obligation;
+    before = forged;
+    digest = asx_trace_digest();
+    ASSERT_EQ(asx_broadcast_permit_send(&forged, 999u, &reached), ASX_E_PERMISSION_DENIED);
+    asx_broadcast_permit_abort(&forged);
+    ASSERT_EQ(memcmp(&forged, &before, sizeof(forged)), 0);
+    ASSERT_EQ(reached, 0u);
+    ASSERT_EQ(asx_broadcast_total_sent(&tx), 0u);
+    ASSERT_EQ(asx_trace_digest(), digest);
+    ASSERT_EQ(asx_obligation_get_info(first.obligation, &info), ASX_OK);
+    ASSERT_EQ(info.state, ASX_OBLIGATION_RESERVED);
+    ASSERT_EQ(info.holder, holder);
+    /* The genuine owned token settles outside its holder's poll. */
+    ASSERT_EQ(asx_broadcast_permit_send(&first, 7u, &reached), ASX_OK);
+    ASSERT_EQ(reached, 1u);
+    ASSERT_EQ(asx_obligation_get_info(before.obligation, &info), ASX_OK);
+    ASSERT_EQ(info.state, ASX_OBLIGATION_COMMITTED);
+    ASSERT_EQ(asx_obligation_get_info(second.obligation, &info), ASX_OK);
+    ASSERT_EQ(info.state, ASX_OBLIGATION_RESERVED);
+    before = second;
+    asx_broadcast_permit_abort(&second);
+    ASSERT_EQ(second.consumed, 1);
+    ASSERT_EQ(asx_obligation_get_info(before.obligation, &info), ASX_OK);
+    ASSERT_EQ(info.state, ASX_OBLIGATION_ABORTED);
+    ASSERT_EQ(info.abort_reason, ASX_OBLIGATION_ABORT_CANCEL);
+    ASSERT_EQ(asx_broadcast_try_recv(&rx, &value), ASX_OK);
+    ASSERT_EQ(value, 7u);
+    ASSERT_EQ(asx_broadcast_try_recv(&rx, &value), ASX_E_WOULD_BLOCK);
+    ASSERT_EQ(asx_obligation_leak_count(), 0u);
+}
+
+typedef struct {
+    asx_broadcast_sender sender;
+    asx_broadcast_permit permit;
+    asx_region_id region;
+    asx_status status;
+} broadcast_drop_probe;
+
+static asx_status broadcast_drop_poll(void *data, asx_task_id self) {
+    broadcast_drop_probe *probe = (broadcast_drop_probe *)data;
+    asx_cx cx;
+    probe->status = asx_cx_init(&cx, probe->region, self, ASX_CAP_NONE);
+    if (probe->status != ASX_OK) return probe->status;
+    probe->status = asx_broadcast_reserve(&probe->sender, &cx, &probe->permit);
+    return probe->status;
+}
+
+TEST(tracked_permit_drops_with_its_holder_without_publication) {
+    broadcast_drop_probe probe = {0};
+    asx_broadcast_receiver rx;
+    asx_task_id holder;
+    asx_budget budget = asx_budget_infinite();
+    asx_obligation_info info;
+    uint64_t value;
+    asx_runtime_reset();
+    setup();
+    ASSERT_EQ(asx_region_open(&probe.region), ASX_OK);
+    ASSERT_EQ(asx_broadcast_create(4, &probe.sender, &rx), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(probe.region, broadcast_drop_poll, &probe, &holder), ASX_OK);
+    ASSERT_EQ(asx_scheduler_run(probe.region, &budget), ASX_OK);
+    ASSERT_EQ(probe.status, ASX_OK);
+    ASSERT_TRUE(probe.permit.obligation != ASX_INVALID_ID);
+    ASSERT_EQ(asx_obligation_get_info(probe.permit.obligation, &info), ASX_OK);
+    ASSERT_EQ(info.state, ASX_OBLIGATION_ABORTED);
+    ASSERT_EQ(info.abort_reason, ASX_OBLIGATION_ABORT_CANCEL);
+    ASSERT_EQ(asx_broadcast_try_recv(&rx, &value), ASX_E_WOULD_BLOCK);
+    ASSERT_EQ(asx_obligation_leak_count(), 0u);
+}
+
 /* ------------------------------------------------------------------ */
 /* Null safety                                                         */
 /* ------------------------------------------------------------------ */
@@ -413,6 +515,8 @@ int main(void) {
 
     RUN_TEST(permit_sends_once_and_abort_publishes_nothing);
     RUN_TEST(permit_after_the_receivers_or_the_last_sender_left);
+    RUN_TEST(tracked_permit_authenticates_each_reservation_and_moves);
+    RUN_TEST(tracked_permit_drops_with_its_holder_without_publication);
 
     RUN_TEST(send_null_fails);
     RUN_TEST(recv_null_fails);

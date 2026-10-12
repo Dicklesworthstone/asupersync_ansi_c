@@ -794,9 +794,9 @@ lint-scenarios-v2:
 	@$(CHECK_JSONSCHEMA) --schemafile schemas/scenario_dsl_v2.json tests/conformance/scenarios_v2/*.json
 	@# A step on an obligation or send permit the task does not hold observes
 	@# ASX_E_NOT_FOUND (DSL §3), so a misspelt name would pass silently: every
-	@# name such a step uses must be acquired by some reserve / reserve_send.
+	@# name such a step uses must be acquired by reserve / reserve_send / handoff.
 	@for f in tests/conformance/scenarios_v2/*.json; do \
-		missing=$$(jq -r '([.. | objects | select(.op == "reserve" or .op == "reserve_send") | .as]) as $$acq | ([.. | objects | select(.op == "commit" or .op == "abort" or .op == "leak") | .obligation] + [.. | objects | select(.op == "permit_send" or .op == "permit_abort") | .permit]) | map(select(. as $$n | ($$acq | index($$n)) == null)) | unique | .[]' "$$f"); \
+		missing=$$(jq -r '([.. | objects | select(.op == "reserve" or .op == "reserve_send" or .op == "handoff") | .as]) as $$acq | ([.. | objects | select(.op == "commit" or .op == "abort" or .op == "leak" or .op == "handoff") | .obligation] + [.. | objects | select(.op == "permit_send" or .op == "permit_abort") | .permit]) | map(select(. as $$n | ($$acq | index($$n)) == null)) | unique | .[]' "$$f"); \
 		if [ -n "$$missing" ]; then \
 			echo "[asx] lint-scenarios-v2: FAIL $$f names never acquired: $$missing"; exit 1; \
 		fi; \

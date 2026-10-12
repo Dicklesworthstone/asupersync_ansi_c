@@ -249,6 +249,12 @@ typedef struct {
 /* The drop of a permit an obligation tracks (asx_obligation_set_drop_internal). */
 typedef int (*asx_obligation_drop_fn)(uint64_t a, uint64_t b);
 
+/* Read-only raw-ID application preflight: validates a Reserved obligation's
+ * actual scheduler caller and holder/region. A bound primitive's credit
+ * requires its owned permit instead. Resolved credits return their typed error;
+ * completion and leak-policy settlement remain internal slot operations. */
+ASX_MUST_USE asx_status asx_obligation_check_access_internal(asx_obligation_id id);
+
 typedef struct {
     asx_obligation_state state;
     asx_region_id region;
@@ -264,6 +270,7 @@ typedef struct {
     asx_obligation_drop_fn drop_fn;
     uint64_t drop_a;
     uint64_t drop_b;
+    uint32_t drop_serial; /* authenticates a distinct semaphore permit */
     /* Rust's obligation mailbox (bd-2fga): under lab dispatch the
      * operations made inside a poll are posts applied, in order, when the
      * poll returns. counted: it counts against its region's
@@ -633,7 +640,25 @@ uint32_t asx_task_resolve_held_obligations_internal(asx_task_slot *task, int *ou
  * (SemaphorePermit), 0 when it aborts it with Cancel (SendPermit). A
  * resolved or unknown obligation is left alone. */
 void asx_obligation_set_drop_internal(asx_obligation_id id, asx_obligation_drop_fn fn, uint64_t a,
-                                      uint64_t b);
+                                      uint64_t b, uint32_t serial);
+
+/* A genuine owned permit may move while retaining its original holder's
+ * liability (Rust ObligationToken). These private boundaries authenticate
+ * its primitive-specific resource binding; a raw obligation ID is not
+ * sufficient. They do not transfer holder or region ownership. */
+ASX_MUST_USE asx_status asx_obligation_check_token_internal(asx_obligation_id id,
+                                                            asx_obligation_drop_fn fn, uint64_t a,
+                                                            uint64_t b, uint32_t serial);
+ASX_MUST_USE asx_status asx_obligation_resolve_token_internal(asx_obligation_id id,
+                                                              asx_obligation_drop_fn fn, uint64_t a,
+                                                              uint64_t b, uint32_t serial,
+                                                              asx_obligation_state to,
+                                                              asx_obligation_abort_reason reason);
+
+/* Interpreter task-body destruction uses the same authenticated physical
+ * permit release as explicit abort, with Rust's Drop reason Cancel. */
+struct asx_send_permit;
+void asx_send_permit_drop_internal(struct asx_send_permit *permit);
 
 /* Poll a Rust Sleep for `deadline` on task `self`'s traced sleep timer
  * without parking it (a wait with a deadline, such as the mutex's

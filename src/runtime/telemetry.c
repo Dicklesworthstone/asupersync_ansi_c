@@ -97,6 +97,7 @@ int asx_telemetry_retains(asx_telemetry_tier tier, asx_trace_event_kind kind) {
     case ASX_TRACE_OBLIGATION_RESERVE:
     case ASX_TRACE_OBLIGATION_COMMIT:
     case ASX_TRACE_OBLIGATION_ABORT:
+    case ASX_TRACE_OBLIGATION_HANDOFF:
     case ASX_TRACE_CHANNEL_SEND:
     case ASX_TRACE_CHANNEL_RECV:
     case ASX_TRACE_TIMER_SET:

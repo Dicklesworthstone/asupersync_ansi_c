@@ -92,7 +92,7 @@ through the snapshot (`now_ns`, timer deadlines).
 | `obligation.committed` | `obligation`, `task`, `region`, `kind` | `ObligationCommit` (`:205`) | `ASX_TRACE_OBLIGATION_COMMIT` |
 | `obligation.aborted` | `obligation`, `task`, `region`, `kind`, `abort_reason` | `ObligationAbort` (`:207`) | `ASX_TRACE_OBLIGATION_ABORT` |
 | `obligation.leaked` | `obligation`, `task`, `region`, `kind` | `ObligationLeak` (`:209`) | `ASX_TRACE_OBLIGATION_LEAK` |
-| `obligation.handoff` | `obligation`, `from_task`, `to_task`, `from_region`, `to_region` | `UserTrace` carrying `obligation_handoff_v1 <json>` (`:24-76`) | **missing in C** (§11) |
+| `obligation.handoff` | `obligation`, `from_task`, `to_task`, `from_region`, `to_region` | `UserTrace` carrying `obligation_handoff_v1 <json>` (`:24-76`) | `ASX_TRACE_OBLIGATION_HANDOFF`; observer payload carries all four ownership endpoints |
 | `timer.scheduled` | `timer`, `deadline_ns` | `TimerScheduled`, `Timer{timer_id,deadline:Some}` (`:213`) | `ASX_TRACE_TIMER_SET` |
 | `timer.fired` | `timer` | `TimerFired` (`:215`) | `ASX_TRACE_TIMER_FIRE` |
 | `timer.cancelled` | `timer` | `TimerCancelled` (`:217`) | `ASX_TRACE_TIMER_CANCEL` |
@@ -503,10 +503,17 @@ the version they were captured under.
 
 ## 11. Work this vocabulary requires on the C side
 
-The C runtime does not yet emit every projected kind. W1.5 (bd-9kll.2.5)
-must add the rest, in the runtime or as interpreter projections from
-runtime state, following the emission rules in §3:
-- `obligation.handoff`.
+The C runtime emits `obligation.handoff` from accepted checked-credit
+rebinding. Under Lab dispatch it is posted in poll order, after its original
+reservation; reservation metadata retains its original owner even when a
+same-poll handoff already changed the ledger. The Rust interpreter validates
+the private versioned payload's maintained serde IDs, increasing tickets and
+its accepted runtime transfer linkage before projecting it. Missing, unknown,
+duplicate or malformed fields fail capture. The logical obligation name stays
+unchanged across transfers. `obligation-handoff-cross-region-commit-001`,
+`obligation-handoff-chain-001` and the refusal/drop captures exercise this path.
+The native fixed trace record retains entity and new holder; its observer
+metadata is not a complete persisted native ownership journal.
 
 Emitted now, each verified by a matching fixture: `region.cancelled` and
 `cancel.requested` (`region-lifecycle-cancel-propagates-001`),

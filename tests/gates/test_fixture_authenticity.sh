@@ -7,7 +7,7 @@
 #   - untouched copy                         -> compare PASS
 #   - one expected observation edited        -> ERROR (digest does not recompute)
 #   - provenance.producer not tools/twin_run -> ERROR (not a Rust capture)
-# Requires jq and builds build/bin/asx-conformance when missing. Logs JSONL
+# Requires jq and rebuilds build/bin/asx-conformance from source. Logs JSONL
 # to build/test-logs/gates.jsonl. Nothing is deleted.
 set -uo pipefail
 
@@ -28,13 +28,15 @@ log_case() {
         "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$RUN_ID" "$1" "$2" "$3" "$4" "$5" >>"$LOG"
 }
 
-# run_case <name> <expected line regex> <fixture file>
+# run_case <name> <expected exit> <expected line regex> <fixture file>
 run_case() {
-    local name="$1" pattern="$2" fixture="$3"
-    local out status
+    local name="$1" expect="$2" pattern="$3" fixture="$4"
+    local out rc status
     out="$("$RUNNER" compare "$fixture" 2>&1)"
+    rc=$?
     printf '%s\n' "$out" >"$WORK/$name.log"
     status="pass"
+    if [ "$rc" -ne "$expect" ]; then status="fail"; fi
     if ! grep -Eq -- "$pattern" <<<"$out"; then status="fail"; fi
     if [ "$status" = "pass" ]; then
         echo "  PASS: $name"
@@ -42,24 +44,24 @@ run_case() {
         echo "  FAIL: $name (expected /$pattern/; log $WORK/$name.log)"
         failures=$((failures + 1))
     fi
-    log_case "$name" "$pattern" "$(head -1 <<<"$out")" "$status" "$WORK/$name.log"
+    log_case "$name" "$expect:$pattern" "exit$rc:$(head -1 <<<"$out")" "$status" "$WORK/$name.log"
 }
 
 echo "=== test_fixture_authenticity ($RUN_ID) ==="
-if [ ! -x "$RUNNER" ]; then
-    make -C "$REPO_ROOT" --no-print-directory build/bin/asx-conformance >"$WORK/build.log" 2>&1 || {
-        echo "test_fixture_authenticity: cannot build the runner (log $WORK/build.log)"
-        exit 1
-    }
-fi
+# A runnable cached binary can belong to an older source revision. Make's
+# conformance-lib dependency rebuilds and links the current runtime first.
+make -C "$REPO_ROOT" --no-print-directory build/bin/asx-conformance >"$WORK/build.log" 2>&1 || {
+    echo "test_fixture_authenticity: cannot build the runner (log $WORK/build.log)"
+    exit 1
+}
 
 cp "$SOURCE" "$WORK/untouched.json"
 jq -c '.observations[0].status = "ASX_E_EDITED"' "$SOURCE" >"$WORK/edited.json"
 jq -c '.provenance.producer = "asx-conformance"' "$SOURCE" >"$WORK/other_producer.json"
 
-run_case untouched_capture_passes '^PASS ' "$WORK/untouched.json"
-run_case edited_fixture_rejected '^ERROR .*does not recompute' "$WORK/edited.json"
-run_case other_producer_rejected '^ERROR .*not a Rust capture' "$WORK/other_producer.json"
+run_case untouched_capture_passes 0 '^PASS ' "$WORK/untouched.json"
+run_case edited_fixture_rejected 1 '^ERROR .*does not recompute' "$WORK/edited.json"
+run_case other_producer_rejected 1 '^ERROR .*not a Rust capture' "$WORK/other_producer.json"
 
 if [ "$failures" -eq 0 ]; then
     echo "test_fixture_authenticity: all cases passed"

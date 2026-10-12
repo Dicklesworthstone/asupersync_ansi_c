@@ -12,7 +12,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::Duration;
 
 use asupersync::channel::{broadcast, mpsc, oneshot, watch};
@@ -53,6 +53,14 @@ struct Shared {
     /// Canonical (admitted) task ids; see `resolve_admissions`.
     task_ids: HashMap<String, TaskId>,
     task_names: HashMap<TaskId, String>,
+    /// Real task-record contexts, including declared tasks not yet polled.
+    task_contexts: HashMap<String, Cx>,
+    /// Weak references only: the destination future owns incoming tokens,
+    /// including before its first poll, and drops them with its body.
+    obligation_tokens: HashMap<String, Weak<Mutex<HashMap<String, ObligationToken>>>>,
+    /// Accepted ticket links from real try_transfer calls, checked against
+    /// the ownership envelope instead of trusting user annotations.
+    handoff_tickets: BTreeMap<(u64, u64), (TaskId, TaskId, RegionId, RegionId)>,
     /// Children spawned through `cx.spawn` by provisional mailbox id, until
     /// their admission is resolved.
     provisional: HashMap<TaskId, String>,
@@ -146,7 +154,7 @@ enum GroupValue {
 
 type SharedRef = Arc<Mutex<Shared>>;
 
-fn lock(shared: &SharedRef) -> MutexGuard<'_, Shared> {
+fn lock<T>(shared: &Arc<Mutex<T>>) -> MutexGuard<'_, T> {
     // A panicking task body (the DSL `return panicked` step) must not make
     // the shared state unusable for the driver.
     shared
@@ -438,7 +446,7 @@ fn harness_error(shared: &SharedRef, msg: String) {
 /// deterministic and the C interpreter can mirror it.
 #[derive(Default)]
 struct Local {
-    tokens: HashMap<String, ObligationToken>,
+    _tokens: OwnedTokens,
     /// Child regions still open; an ordered map so the drop backstop's
     /// Close commands (ChildRegion's Drop) queue by name.
     regions: BTreeMap<String, ChildRegion>,
@@ -475,6 +483,20 @@ struct Local {
     /// Supervisors this task spawned, by name, joined or not (DSL §3.8):
     /// each aborts its controller when dropped, in name order.
     supervisors: BTreeMap<String, Supervisor>,
+}
+
+#[derive(Default)]
+struct OwnedTokens {
+    tokens: Arc<Mutex<HashMap<String, ObligationToken>>>,
+}
+
+impl Drop for OwnedTokens {
+    fn drop(&mut self) {
+        // Token drop notifies the real runtime; never hold a scenario
+        // mutex while running those destructors.
+        let tokens = std::mem::take(&mut *lock(&self.tokens));
+        drop(tokens);
+    }
 }
 
 /// `ManagedSupervisorHandle` (supervision.rs:3402-3450), built the way
@@ -544,6 +566,7 @@ fn generation_binding(
                 shared: Arc::clone(&shared),
                 me: name.clone(),
                 region: name,
+                tokens: Arc::default(),
             });
             let program = program.clone();
             async move {
@@ -911,6 +934,7 @@ struct TaskCtx {
     shared: SharedRef,
     me: String,
     region: String,
+    tokens: Arc<Mutex<HashMap<String, ObligationToken>>>,
 }
 
 fn run_program(
@@ -919,6 +943,14 @@ fn run_program(
     steps: Vec<Value>,
     endpoints: Vec<(String, Endpoint)>,
 ) -> Pin<Box<dyn Future<Output = Body> + Send>> {
+    // Spawn factories receive the admitted task's real context while
+    // constructing its future, before its first poll.
+    {
+        let mut s = lock(&ctx.shared);
+        s.task_contexts.insert(ctx.me.clone(), cx.clone());
+        s.obligation_tokens
+            .insert(ctx.me.clone(), Arc::downgrade(&ctx.tokens));
+    }
     Box::pin(async move {
         // Its canonical id under its own name: a spawn its admission refused
         // has no TaskAdmitted event, so resolve_admissions names admitted
@@ -928,6 +960,9 @@ fn run_program(
             .entry(ctx.me.clone())
             .or_insert_with(|| cx.task_id());
         let mut local = Local {
+            _tokens: OwnedTokens {
+                tokens: ctx.tokens.clone(),
+            },
             cx: Some(Box::new(cx.clone())),
             ..Local::default()
         };
@@ -1002,7 +1037,8 @@ fn exec_sync(
             let name = str_field(step, "as")?.to_string();
             let status = match cx.try_register_obligation_checked(kind, cx.task_id()) {
                 Ok(Some(token)) => {
-                    local.tokens.insert(name, token);
+                    let old = lock(&ctx.tokens).insert(name, token);
+                    drop(old);
                     "ASX_OK".to_string()
                 }
                 Ok(None) => return Err("obligation registration without a runtime".to_string()),
@@ -1012,7 +1048,8 @@ fn exec_sync(
         }
         "commit" | "abort" | "leak" => {
             let name = str_field(step, "obligation")?;
-            let Some(token) = local.tokens.remove(name) else {
+            let token = lock(&ctx.tokens).remove(name);
+            let Some(token) = token else {
                 // Its reserve failed, or a step resolved it (DSL §3).
                 observe(&ctx.shared, me, idx, label, NOT_HELD, Value::Null);
                 return Ok(Flow::Continue);
@@ -1038,6 +1075,65 @@ fn exec_sync(
                 Value::Null,
             );
         }
+        "handoff" => {
+            let name = str_field(step, "obligation")?;
+            let destination = str_field(step, "task")?;
+            let alias = str_field(step, "as")?;
+            if !lock(&ctx.tokens).contains_key(name) {
+                observe(&ctx.shared, me, idx, label, NOT_HELD, Value::Null);
+                return Ok(Flow::Continue);
+            }
+            let (destination_cx, destination_tokens) = {
+                let s = lock(&ctx.shared);
+                let destination_cx = s.task_contexts.get(destination).cloned();
+                let destination_tokens =
+                    s.obligation_tokens.get(destination).and_then(Weak::upgrade);
+                (destination_cx, destination_tokens)
+            };
+            if destination != me
+                && destination_tokens
+                    .as_ref()
+                    .is_some_and(|tokens| lock(tokens).contains_key(alias))
+            {
+                return Err(format!(
+                    "handoff destination token {destination}/{alias} exists"
+                ));
+            }
+            let token = lock(&ctx.tokens).remove(name);
+            let Some(token) = token else {
+                observe(&ctx.shared, me, idx, label, NOT_HELD, Value::Null);
+                return Ok(Flow::Continue);
+            };
+            let source_ticket = token.ticket();
+            let source_holder = token.holder();
+            let source_region = token.region();
+            let (status, token, token_name, token_store) = match destination_cx {
+                Some(destination_cx) => match token.try_transfer(&destination_cx) {
+                    Ok(next) => {
+                        let store = destination_tokens.ok_or_else(|| {
+                            format!("live destination {destination} has no token store")
+                        })?;
+                        lock(&ctx.shared).handoff_tickets.insert(
+                            (source_ticket, next.ticket()),
+                            (source_holder, next.holder(), source_region, next.region()),
+                        );
+                        ("ASX_OK".to_string(), next, alias, store)
+                    }
+                    Err(failure) => {
+                        let (reason, original) = failure.into_parts();
+                        (
+                            obligation_transfer_status(&reason)?,
+                            original,
+                            name,
+                            ctx.tokens.clone(),
+                        )
+                    }
+                },
+                None => (NOT_HELD.to_string(), token, name, ctx.tokens.clone()),
+            };
+            lock(&token_store).insert(token_name.to_string(), token);
+            observe(&ctx.shared, me, idx, label, &status, Value::Null);
+        }
         "spawn" => {
             let child = str_field(step, "as")?.to_string();
             let program = step
@@ -1054,6 +1150,7 @@ fn exec_sync(
                 shared: ctx.shared.clone(),
                 me: child.clone(),
                 region: child_region,
+                tokens: Arc::default(),
             });
             let factory = move |ccx: Cx| run_program(ccx, child_ctx, program, Vec::new());
             let spawned = if let Some(r) = step.get("region").and_then(Value::as_str) {
@@ -1398,6 +1495,25 @@ fn obligation_admission_status(
                 "obligation admission error {other:?} has no status in vocabulary §5"
             ));
         }
+    }
+    .to_string())
+}
+
+fn obligation_transfer_status(
+    err: &asupersync::runtime::obligation_mailbox::ObligationTransferError,
+) -> RunResult<String> {
+    use asupersync::runtime::obligation_mailbox::{
+        ObligationAdmissionError as A, ObligationTransferError as E,
+    };
+    Ok(match err {
+        E::SameHolder => "ASX_E_INVALID_ARGUMENT",
+        E::DestinationCancelled => "ASX_E_CANCELLED",
+        E::SourceNotChecked | E::SourceHolderNotLive => "ASX_E_INVALID_STATE",
+        E::SourceResolved | E::SourceSettlementStarted => "ASX_E_OBLIGATION_ALREADY_RESOLVED",
+        E::RuntimeUnavailable => "ASX_E_SCHEDULER_UNAVAILABLE",
+        E::Destination(A::HolderNotLive) => "ASX_E_INVALID_STATE",
+        E::Destination(reason) => return obligation_admission_status(reason),
+        other => return Err(format!("unmapped obligation transfer error {other:?}")),
     }
     .to_string())
 }
@@ -1770,6 +1886,7 @@ async fn exec_step(
                         shared: ctx.shared.clone(),
                         me: member_name(me, idx, i),
                         region: ctx.region.clone(),
+                        tokens: Arc::default(),
                     });
                     let program = program.clone();
                     move |ccx: Cx| async move {
@@ -1865,6 +1982,7 @@ async fn exec_step(
                         shared: ctx.shared.clone(),
                         me: member_name(me, idx, i),
                         region: ctx.region.clone(),
+                        tokens: Arc::default(),
                     });
                     let program = program.clone();
                     move |ccx: Cx| {
@@ -2271,6 +2389,7 @@ fn spawn_members(
             shared: ctx.shared.clone(),
             me: name.clone(),
             region: ctx.region.clone(),
+            tokens: Arc::default(),
         });
         let handle = cx
             .spawn(move |ccx: Cx| run_program(ccx, child_ctx, program, Vec::new()))
@@ -2308,6 +2427,7 @@ async fn race_with_deadline(
         shared: ctx.shared.clone(),
         me: format!("{}/g{idx}.timeout", ctx.me),
         region: ctx.region.clone(),
+        tokens: Arc::default(),
     });
     let owner = ctx.clone();
     let race = step.clone();
@@ -2729,7 +2849,11 @@ pub fn run_scenario_with(scenario: &Value, raw: Option<&mut Vec<String>>) -> Run
             shared: shared.clone(),
             me: name.clone(),
             region,
+            tokens: Arc::default(),
         });
+        lock(&shared)
+            .obligation_tokens
+            .insert(name.clone(), Arc::downgrade(&ctx.tokens));
         let mine = endpoints.remove(&name).unwrap_or_default();
         let body = async move {
             match Cx::current() {
@@ -2744,8 +2868,14 @@ pub fn run_scenario_with(scenario: &Value, raw: Option<&mut Vec<String>>) -> Run
             .state
             .create_task(region_id, budget(t.get("budget"))?, body)
             .map_err(|e| format!("create task {name}: {e:?}"))?;
+        let task_cx = lab
+            .state
+            .task(task_id)
+            .and_then(|record| record.cx.clone())
+            .ok_or_else(|| format!("task {name} has no runtime context"))?;
         lab.scheduler.lock().schedule(task_id, 0);
         let mut s = lock(&shared);
+        s.task_contexts.insert(name.clone(), task_cx);
         s.task_ids.insert(name.clone(), task_id);
         s.task_names.insert(task_id, name.clone());
         s.handles.insert(name, handle);
@@ -3580,9 +3710,44 @@ struct Projected {
     timers_pending: Vec<Value>,
 }
 
+/// The pinned private ownership envelope (trace/event.rs:24-76). Decode
+/// IDs through their maintained serde form, never debug strings.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HandoffFields {
+    id: asupersync::ObligationId,
+    #[serde(rename = "source_holder")]
+    source: TaskId,
+    #[serde(rename = "destination_holder")]
+    destination: TaskId,
+    source_region: RegionId,
+    destination_region: RegionId,
+    source_ticket: u64,
+    destination_ticket: u64,
+}
+
+fn handoff_fields(message: &str) -> RunResult<HandoffFields> {
+    if message.len() > 2048 {
+        return Err("handoff message exceeds 2048 bytes".to_string());
+    }
+    let payload = message
+        .strip_prefix("obligation_handoff_v1 ")
+        .ok_or("unsupported obligation handoff message version")?;
+    let fields: HandoffFields =
+        serde_json::from_str(payload).map_err(|e| format!("invalid handoff: {e}"))?;
+    if fields.destination_ticket <= fields.source_ticket {
+        return Err("handoff destination ticket must follow source".to_string());
+    }
+    if fields.source == fields.destination {
+        return Err("handoff requires distinct holder generations".to_string());
+    }
+    Ok(fields)
+}
+
 fn project_trace(lab: &LabRuntime, shared: &SharedRef) -> RunResult<Projected> {
     use TraceEventKind as K;
     let s = lock(shared);
+    let mut accepted_handoffs = s.handoff_tickets.clone();
     let mut events = Vec::new();
     let mut obligation_names: HashMap<asupersync::ObligationId, String> = HashMap::new();
     let mut per_holder: HashMap<String, u32> = HashMap::new();
@@ -3718,26 +3883,63 @@ fn project_trace(lab: &LabRuntime, shared: &SharedRef) -> RunResult<Projected> {
             }
             (K::UserTrace, TraceData::Message(message)) => {
                 if message.starts_with("obligation_handoff_v") {
-                    return Err("obligation handoff projection is not implemented yet".to_string());
-                }
-                match parse_supervisor_trace(message)? {
-                    // Its raw ids replaced by their names (vocabulary §3).
-                    Some(t) => {
-                        let region = ids_seen
-                            .regions
-                            .get(t.region)
-                            .ok_or_else(|| format!("supervisor trace names {}", t.region))?;
-                        let task = ids_seen
-                            .tasks
-                            .get(t.task)
-                            .ok_or_else(|| format!("supervisor trace names {}", t.task))?;
-                        json!({"k": "user.trace", "message": format!(
-                            "{SUPERVISOR_TRACE}action={} supervisor={:?} child={:?} generation={} region={} task={} outcome={}",
-                            t.action, t.supervisor, t.child, t.generation,
-                            region_name(&s, *region)?, task_name(&s, *task)?, t.outcome,
-                        )})
+                    if event.version != asupersync::trace::TRACE_EVENT_SCHEMA_VERSION {
+                        return Err("unsupported handoff trace envelope".to_string());
                     }
-                    None => json!({"k": "user.trace", "message": message}),
+                    let h = handoff_fields(message)?;
+                    if accepted_handoffs.remove(&(h.source_ticket, h.destination_ticket))
+                        != Some((
+                            h.source,
+                            h.destination,
+                            h.source_region,
+                            h.destination_region,
+                        ))
+                    {
+                        return Err(
+                            "handoff trace lacks an accepted runtime ticket link".to_string()
+                        );
+                    }
+                    let name = obligation_names
+                        .get(&h.id)
+                        .ok_or("handoff of an unnamed obligation")?
+                        .clone();
+                    let source = task_name(&s, h.source)?;
+                    let destination = task_name(&s, h.destination)?;
+                    let source_region = region_name(&s, h.source_region)?;
+                    let destination_region = region_name(&s, h.destination_region)?;
+                    let (_, record) = obligations
+                        .iter_mut()
+                        .find(|(n, _)| *n == name)
+                        .ok_or("handoff lacks a reserved record")?;
+                    if record["state"] != "Reserved"
+                        || record["holder"] != source
+                        || record["region"] != source_region
+                    {
+                        return Err("handoff disagrees with pending source ownership".to_string());
+                    }
+                    record["holder"] = json!(destination);
+                    record["region"] = json!(destination_region);
+                    json!({"k": "obligation.handoff", "obligation": name, "from_task": source, "to_task": destination, "from_region": source_region, "to_region": destination_region})
+                } else {
+                    match parse_supervisor_trace(message)? {
+                        // Its raw ids replaced by their names (vocabulary §3).
+                        Some(t) => {
+                            let region = ids_seen
+                                .regions
+                                .get(t.region)
+                                .ok_or_else(|| format!("supervisor trace names {}", t.region))?;
+                            let task = ids_seen
+                                .tasks
+                                .get(t.task)
+                                .ok_or_else(|| format!("supervisor trace names {}", t.task))?;
+                            json!({"k": "user.trace", "message": format!(
+                                "{SUPERVISOR_TRACE}action={} supervisor={:?} child={:?} generation={} region={} task={} outcome={}",
+                                t.action, t.supervisor, t.child, t.generation,
+                                region_name(&s, *region)?, task_name(&s, *task)?, t.outcome,
+                            )})
+                        }
+                        None => json!({"k": "user.trace", "message": message}),
+                    }
                 }
             }
             // docs/VOCABULARY_EXCLUSIONS.md
@@ -3783,6 +3985,9 @@ fn project_trace(lab: &LabRuntime, shared: &SharedRef) -> RunResult<Projected> {
             }
         };
         events.push(ev);
+    }
+    if !accepted_handoffs.is_empty() {
+        return Err("accepted handoff is missing its runtime ownership trace".to_string());
     }
     let mut timers_pending: Vec<Value> = timer_order
         .iter()

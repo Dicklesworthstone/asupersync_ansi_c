@@ -61,6 +61,7 @@ typedef struct {
 
 static asx_broadcast_slot g_slots[ASX_MAX_BROADCASTS];
 static uint32_t g_slot_count = 0;
+static uint32_t g_permit_serial = 0;
 
 static uint16_t next_gen(uint16_t g) {
     g++;
@@ -368,10 +369,12 @@ asx_status asx_broadcast_reserve(const asx_broadcast_sender *sender, asx_cx *cx,
     /* Cancellation, then a receiver to send to (broadcast.rs:409-432). */
     if (cx != NULL && asx_cx_checkpoint(cx) != ASX_OK) return ASX_E_CANCELLED;
     if (s->receiver_count == 0u) return ASX_E_DISCONNECTED;
+    if (g_permit_serial == UINT32_MAX) return ASX_E_RESOURCE_EXHAUSTED;
     if (cx != NULL && cx->task_id != ASX_INVALID_ID &&
         asx_obligation_register(cx->region_id, ASX_OBLIGATION_KIND_SEND_PERMIT, cx->task_id, &ob) ==
             ASX_OK) {
-        asx_obligation_set_drop_internal(ob, broadcast_permit_drop, 0u, 0u);
+        asx_obligation_set_drop_internal(ob, broadcast_permit_drop, (uint64_t)sender->slot,
+                                         (uint64_t)s->generation, g_permit_serial + 1u);
     } else {
         ob = ASX_INVALID_ID; /* untracked, as a refused Rust registration */
     }
@@ -380,6 +383,7 @@ asx_status asx_broadcast_reserve(const asx_broadcast_sender *sender, asx_cx *cx,
     out_permit->generation = s->generation;
     out_permit->consumed = 0;
     out_permit->obligation = ob;
+    out_permit->serial = ++g_permit_serial;
     return ASX_OK;
 }
 
@@ -392,13 +396,23 @@ asx_status asx_broadcast_permit_send(asx_broadcast_permit *permit, uint64_t valu
     if (out_receivers != NULL) *out_receivers = 0u;
     if (permit == NULL) return ASX_E_INVALID_ARGUMENT;
     if (permit->consumed) return ASX_E_INVALID_STATE;
+    if (permit->obligation != ASX_INVALID_ID) {
+        st = asx_obligation_check_token_internal(permit->obligation, broadcast_permit_drop,
+                                                 (uint64_t)permit->slot,
+                                                 (uint64_t)permit->generation, permit->serial);
+        if (st != ASX_OK && st != ASX_E_OBLIGATION_ALREADY_RESOLVED) return st;
+    }
     permit->consumed = 1;
 
     s = broadcast_slot(permit->slot, permit->generation, &st);
     if (s == NULL || s->sender_count == 0u) {
         /* No sender left to have borrowed: the permit is dropped unsent. */
         if (permit->obligation != ASX_INVALID_ID) {
-            st = asx_obligation_abort_with_reason(permit->obligation, ASX_OBLIGATION_ABORT_CANCEL);
+            st = asx_obligation_resolve_token_internal(permit->obligation, broadcast_permit_drop,
+                                                       (uint64_t)permit->slot,
+                                                       (uint64_t)permit->generation, permit->serial,
+                                                       ASX_OBLIGATION_ABORTED,
+                                                       ASX_OBLIGATION_ABORT_CANCEL);
             (void)st; /* only an already-resolved obligation refuses */
             permit->obligation = ASX_INVALID_ID;
         }
@@ -407,7 +421,11 @@ asx_status asx_broadcast_permit_send(asx_broadcast_permit *permit, uint64_t valu
 
     /* The send commits first, even with no receiver left (:715-719). */
     if (permit->obligation != ASX_INVALID_ID) {
-        st = asx_obligation_commit(permit->obligation);
+        st = asx_obligation_resolve_token_internal(permit->obligation, broadcast_permit_drop,
+                                                   (uint64_t)permit->slot,
+                                                   (uint64_t)permit->generation, permit->serial,
+                                                   ASX_OBLIGATION_COMMITTED,
+                                                   ASX_OBLIGATION_ABORT_EXPLICIT);
         (void)st; /* only an already-resolved obligation refuses */
         permit->obligation = ASX_INVALID_ID;
     }
@@ -429,9 +447,19 @@ asx_status asx_broadcast_permit_send(asx_broadcast_permit *permit, uint64_t valu
 void asx_broadcast_permit_abort(asx_broadcast_permit *permit) {
     asx_status st;
     if (permit == NULL || permit->consumed) return;
+    if (permit->obligation != ASX_INVALID_ID) {
+        st = asx_obligation_check_token_internal(permit->obligation, broadcast_permit_drop,
+                                                 (uint64_t)permit->slot,
+                                                 (uint64_t)permit->generation, permit->serial);
+        if (st != ASX_OK && st != ASX_E_OBLIGATION_ALREADY_RESOLVED) return;
+    }
     permit->consumed = 1;
     if (permit->obligation != ASX_INVALID_ID) {
-        st = asx_obligation_abort_with_reason(permit->obligation, ASX_OBLIGATION_ABORT_CANCEL);
+        st = asx_obligation_resolve_token_internal(permit->obligation, broadcast_permit_drop,
+                                                   (uint64_t)permit->slot,
+                                                   (uint64_t)permit->generation, permit->serial,
+                                                   ASX_OBLIGATION_ABORTED,
+                                                   ASX_OBLIGATION_ABORT_CANCEL);
         (void)st; /* only an already-resolved obligation refuses */
         permit->obligation = ASX_INVALID_ID;
     }

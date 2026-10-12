@@ -391,6 +391,26 @@ static int sem_obligation_is(asx_obligation_id id, asx_task_id task, asx_obligat
            asx_handle_index(info.holder) == asx_handle_index(task) && info.region == g_region;
 }
 
+/* Run the assertions while their holder is actually being polled. A Cx
+ * naming a live task does not grant a host caller that task's authority. */
+typedef void (*holder_case_fn)(asx_task_id holder);
+
+static asx_status poll_holder_case(void *data, asx_task_id self) {
+    holder_case_fn *body = (holder_case_fn *)data;
+    (*body)(self);
+    return test_current_failed ? ASX_E_INVALID_STATE : ASX_OK;
+}
+
+static void run_as_holder(holder_case_fn body) {
+    asx_task_id holder;
+    asx_budget budget;
+    ASSERT_TRUE(setup());
+    reset_sem_fixtures();
+    ASSERT_EQ(asx_task_spawn(g_region, poll_holder_case, &body, &holder), ASX_OK);
+    budget = asx_budget_from_polls(20u);
+    ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_OK);
+}
+
 TEST(sem_permit_polled_with_cx_is_an_obligation_until_release) {
     /* Rust: a permit acquired with a task Cx registers a SemaphorePermit
      * runtime obligation (sync/semaphore.rs:119) that dropping the permit
@@ -503,7 +523,7 @@ TEST(sem_holders_ending_with_permits_and_tokens_under_each_leak_policy) {
     }
 }
 
-TEST(untracked_permits_hold_no_obligation) {
+static void check_untracked_permits_hold_no_obligation(asx_task_id holder) {
     /* No Cx to hold it (try_acquire, an acquire polled without a Cx) and
      * mutex guards (Rust's Mutex registers none) stay untracked. */
     asx_semaphore_handle h;
@@ -512,12 +532,8 @@ TEST(untracked_permits_hold_no_obligation) {
     asx_mutex_handle m;
     asx_mutex_lock_waiter mw;
     asx_mutex_guard g;
-    asx_task_id holder;
     asx_cx cx;
 
-    ASSERT_TRUE(setup());
-    reset_sem_fixtures();
-    ASSERT_EQ(asx_task_spawn(g_region, poll_sem_task, &g_sem[0], &holder), ASX_OK);
     asx_cx_init(&cx, g_region, holder, ASX_CAP_NONE);
     ASSERT_EQ(asx_semaphore_create(2, &h), ASX_OK);
     ASSERT_EQ(asx_semaphore_try_acquire(h, &p), ASX_OK);
@@ -542,7 +558,11 @@ TEST(untracked_permits_hold_no_obligation) {
     ASSERT_EQ(asx_mutex_unlock(g), ASX_OK);
 }
 
-TEST(tracked_permit_released_or_forgotten_once_while_others_are_out) {
+TEST(untracked_permits_hold_no_obligation) {
+    run_as_holder(check_untracked_permits_hold_no_obligation);
+}
+
+static void check_tracked_permit_released_or_forgotten_once(asx_task_id holder) {
     /* A tracked permit's release commits its obligation and forget aborts
      * it: a second release or forget of that permit is refused even while
      * other permits are out to absorb its count (Rust's permit is consumed
@@ -550,13 +570,9 @@ TEST(tracked_permit_released_or_forgotten_once_while_others_are_out) {
     asx_semaphore_handle h;
     asx_semaphore_waiter w;
     asx_semaphore_permit p[3];
-    asx_task_id holder;
     asx_cx cx;
     uint32_t i;
 
-    ASSERT_TRUE(setup());
-    reset_sem_fixtures();
-    ASSERT_EQ(asx_task_spawn(g_region, poll_sem_task, &g_sem[0], &holder), ASX_OK);
     asx_cx_init(&cx, g_region, holder, ASX_CAP_NONE);
     ASSERT_EQ(asx_semaphore_create(3, &h), ASX_OK);
     for (i = 0; i < 3u; i++) {
@@ -572,6 +588,8 @@ TEST(tracked_permit_released_or_forgotten_once_while_others_are_out) {
     ASSERT_EQ(asx_semaphore_available(h), 1u);
 
     ASSERT_EQ(asx_semaphore_forget(p[1]), ASX_OK);
+    ASSERT_TRUE(sem_obligation_is(p[0].obligation, holder, ASX_OBLIGATION_COMMITTED));
+    ASSERT_TRUE(sem_obligation_is(p[1].obligation, holder, ASX_OBLIGATION_ABORTED));
     ASSERT_EQ(asx_semaphore_release(p[1]), ASX_E_INVALID_STATE);
     ASSERT_EQ(asx_semaphore_forget(p[1]), ASX_E_INVALID_STATE);
     ASSERT_EQ(asx_semaphore_available(h), 1u);
@@ -579,6 +597,10 @@ TEST(tracked_permit_released_or_forgotten_once_while_others_are_out) {
     ASSERT_EQ(asx_semaphore_release(p[2]), ASX_OK);
     ASSERT_EQ(asx_semaphore_available(h), 2u);
     ASSERT_TRUE(sem_obligation_is(p[2].obligation, holder, ASX_OBLIGATION_COMMITTED));
+}
+
+TEST(tracked_permit_released_or_forgotten_once_while_others_are_out) {
+    run_as_holder(check_tracked_permit_released_or_forgotten_once);
 }
 
 /* ===================================================================
