@@ -372,7 +372,7 @@ static int fault_should_fire(asx_fault_injection *f, uint32_t call_number) {
 
 asx_status asx_runtime_hooks_init_checked(asx_runtime_hooks *hooks,
                                           uint64_t application_fingerprint) {
-    if (application_fingerprint != ASX_CONFIG_FINGERPRINT) return ASX_E_CONFIG_MISMATCH;
+    if (application_fingerprint != asx_runtime_config_fingerprint()) return ASX_E_CONFIG_MISMATCH;
     if (!hooks) return ASX_E_INVALID_ARGUMENT;
     memset(hooks, 0, sizeof(*hooks));
 
@@ -763,9 +763,13 @@ asx_status asx_runtime_log_write(int level, const char *message) {
 /* Config initialization                                              */
 /* ------------------------------------------------------------------ */
 
+/* One immutable library-side table; application headers compute their own
+ * stamp independently. Preparatory constructors need no runtime state. */
+uint64_t asx_runtime_config_fingerprint(void) { return asx_header_config_fingerprint(); }
+
 asx_status asx_runtime_config_init_checked(asx_runtime_config *cfg,
                                            uint64_t application_fingerprint) {
-    if (application_fingerprint != ASX_CONFIG_FINGERPRINT) return ASX_E_CONFIG_MISMATCH;
+    if (application_fingerprint != asx_runtime_config_fingerprint()) return ASX_E_CONFIG_MISMATCH;
     if (!cfg) return ASX_E_INVALID_ARGUMENT;
     memset(cfg, 0, sizeof(*cfg));
     cfg->size = (uint32_t)sizeof(*cfg);

@@ -80,7 +80,7 @@ ASX_API ASX_MUST_USE asx_status asx_lab_init_checked(asx_lab *lab, const asx_lab
 #define asx_lab_init(lab, cfg) asx_lab_init_checked((lab), (cfg), ASX_LAB_CONFIG_FINGERPRINT)
 
 /* The lab's own public object/config layout joins the runtime build identity. */
-static inline uint64_t asx_header_lab_fingerprint(void) {
+static inline uint64_t asx_header_lab_fingerprint(uint64_t fingerprint) {
     typedef struct {
         char pad;
         asx_lab value;
@@ -103,7 +103,6 @@ static inline uint64_t asx_header_lab_fingerprint(void) {
         offsetof(asx_lab_config, max_polls),
         offsetof(asx_lab_config, auto_advance),
     };
-    uint64_t fingerprint = ASX_CONFIG_FINGERPRINT;
     size_t i;
     for (i = 0u; i < sizeof(values) / sizeof(values[0]); i++) {
         /* ASX_CHECKPOINT_WAIVER("bounded lab bootstrap layout facts") */
@@ -111,7 +110,7 @@ static inline uint64_t asx_header_lab_fingerprint(void) {
     }
     return fingerprint;
 }
-#define ASX_LAB_CONFIG_FINGERPRINT (asx_header_lab_fingerprint())
+#define ASX_LAB_CONFIG_FINGERPRINT (asx_header_lab_fingerprint(ASX_CONFIG_FINGERPRINT))
 
 /* Shut down the lab runtime and restore hooks. */
 ASX_API void asx_lab_shutdown(asx_lab *lab);

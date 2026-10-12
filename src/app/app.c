@@ -154,8 +154,10 @@ asx_status asx_app_parse_args(asx_app_args *args, int argc, const char **argv) {
 asx_status asx_app_init_checked(asx_app *app, const asx_app_config *config,
                                 uint64_t application_fingerprint) {
     asx_status st;
+    uint64_t fingerprint = asx_runtime_config_fingerprint();
 
-    if (application_fingerprint != ASX_APP_CONFIG_FINGERPRINT) return ASX_E_CONFIG_MISMATCH;
+    if (application_fingerprint != asx_header_app_fingerprint(fingerprint))
+        return ASX_E_CONFIG_MISMATCH;
     if (app == NULL || config == NULL) return ASX_E_INVALID_ARGUMENT;
 
     memset(app, 0, sizeof(*app));
@@ -165,7 +167,7 @@ asx_status asx_app_init_checked(asx_app *app, const asx_app_config *config,
     if (app->config.poll_budget == 0) { app->config.poll_budget = ASX_APP_DEFAULT_POLL_BUDGET; }
 
     /* Initialize runtime with defaults */
-    st = asx_runtime_init_default(&app->runtime);
+    st = asx_runtime_init_default_checked(&app->runtime, fingerprint);
     if (st != ASX_OK) return st;
 
     /* Open root region */

@@ -42,7 +42,8 @@ asx_status asx_snapshot_restore_checked(asx_lab *lab, asx_snapshot_id id,
                                         uint64_t application_fingerprint) {
     asx_snapshot *snap;
     asx_status st;
-    if (application_fingerprint != ASX_LAB_CONFIG_FINGERPRINT) return ASX_E_CONFIG_MISMATCH;
+    if (application_fingerprint != asx_header_lab_fingerprint(asx_runtime_config_fingerprint()))
+        return ASX_E_CONFIG_MISMATCH;
     if (lab == NULL) return ASX_E_INVALID_ARGUMENT;
     if (id.slot >= ASX_SNAPSHOT_MAX) return ASX_E_INVALID_ARGUMENT;
     snap = &g_snapshots[id.slot];
@@ -399,7 +400,8 @@ static asx_status minimize_observe(const asx_minimize_state *state,
     out->oracle_message = "";
     out->failure_class = ASX_MINIMIZE_FAILURE_NONE;
 
-    st = asx_lab_init(&lab, state->config);
+    st = asx_lab_init_checked(&lab, state->config,
+                              asx_header_lab_fingerprint(asx_runtime_config_fingerprint()));
     if (st != ASX_OK) {
         out->run_status = st;
         out->last_status = st;

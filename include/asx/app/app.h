@@ -122,7 +122,7 @@ ASX_API ASX_MUST_USE asx_status asx_app_init_checked(asx_app *app, const asx_app
 #define asx_app_init(app, config) asx_app_init_checked((app), (config), ASX_APP_CONFIG_FINGERPRINT)
 
 /* Include the app-specific object/config layout in its constructor identity. */
-static inline uint64_t asx_header_app_fingerprint(void) {
+static inline uint64_t asx_header_app_fingerprint(uint64_t fingerprint) {
     typedef struct {
         char pad;
         asx_app value;
@@ -144,7 +144,6 @@ static inline uint64_t asx_header_app_fingerprint(void) {
         offsetof(asx_app_config, name),
         offsetof(asx_app_config, poll_budget),
     };
-    uint64_t fingerprint = ASX_CONFIG_FINGERPRINT;
     size_t i;
     for (i = 0u; i < sizeof(values) / sizeof(values[0]); i++) {
         /* ASX_CHECKPOINT_WAIVER("bounded application bootstrap layout facts") */
@@ -152,7 +151,7 @@ static inline uint64_t asx_header_app_fingerprint(void) {
     }
     return fingerprint;
 }
-#define ASX_APP_CONFIG_FINGERPRINT (asx_header_app_fingerprint())
+#define ASX_APP_CONFIG_FINGERPRINT (asx_header_app_fingerprint(ASX_CONFIG_FINGERPRINT))
 
 /* Parse CLI arguments into an args struct.
  * Recognizes: run, doctor, replay, --seed=N, --verbose, --help.

@@ -730,11 +730,11 @@ static void posix_log_stderr(void *ctx, int level, const char *message) {
 
 asx_status asx_posix_hooks_install_checked(asx_runtime_hooks *hooks,
                                            uint64_t application_fingerprint) {
-    if (application_fingerprint != ASX_CONFIG_FINGERPRINT) return ASX_E_CONFIG_MISMATCH;
+    if (application_fingerprint != asx_runtime_config_fingerprint()) return ASX_E_CONFIG_MISMATCH;
     if (hooks == NULL) return ASX_E_INVALID_ARGUMENT;
 
     /* Start from safe defaults */
-    asx_runtime_hooks_init(hooks);
+    asx_runtime_hooks_init_checked(hooks, application_fingerprint);
 
     /* Override with POSIX implementations */
     hooks->clock.now_ns_fn = posix_wall_clock;

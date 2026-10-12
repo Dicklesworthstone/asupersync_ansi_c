@@ -46,7 +46,8 @@ static uint64_t lab_entropy_u64(void *ctx) {
 /* ------------------------------------------------------------------ */
 
 asx_status asx_lab_config_init_checked(asx_lab_config *cfg, uint64_t application_fingerprint) {
-    if (application_fingerprint != ASX_LAB_CONFIG_FINGERPRINT) return ASX_E_CONFIG_MISMATCH;
+    if (application_fingerprint != asx_header_lab_fingerprint(asx_runtime_config_fingerprint()))
+        return ASX_E_CONFIG_MISMATCH;
     if (cfg == NULL) return ASX_E_INVALID_ARGUMENT;
     cfg->seed = 42u; /* Rust LabConfig::default() (lab/config.rs:444) */
     cfg->start_time_ns = 0;
@@ -63,19 +64,20 @@ static asx_status lab_bootstrap_runtime(asx_lab *lab) {
     asx_runtime_config rt_cfg;
     asx_runtime_hooks hooks;
     asx_status st;
+    uint64_t fingerprint = asx_runtime_config_fingerprint();
 
     /* Set up runtime config */
-    asx_runtime_config_init(&rt_cfg);
+    asx_runtime_config_init_checked(&rt_cfg, fingerprint);
 
     /* Seeded entropy, and the default clocks: both read the runtime's
      * virtual clock (asx_runtime_virtual_now), frozen until the lab
      * advances it, so the scheduler sees a virtual clock it may jump. */
-    asx_runtime_hooks_init(&hooks);
+    asx_runtime_hooks_init_checked(&hooks, fingerprint);
     hooks.entropy.random_u64_fn = lab_entropy_u64;
     hooks.entropy.ctx = lab;
     hooks.deterministic_seeded_prng = 1;
 
-    st = asx_runtime_init(&lab->rt, &rt_cfg, &hooks);
+    st = asx_runtime_init_checked(&lab->rt, &rt_cfg, &hooks, fingerprint);
     if (st != ASX_OK) return st;
     asx_runtime_virtual_set_internal(lab->config.start_time_ns);
     return ASX_OK;
@@ -85,7 +87,8 @@ asx_status asx_lab_init_checked(asx_lab *lab, const asx_lab_config *cfg,
                                 uint64_t application_fingerprint) {
     asx_status st;
 
-    if (application_fingerprint != ASX_LAB_CONFIG_FINGERPRINT) return ASX_E_CONFIG_MISMATCH;
+    if (application_fingerprint != asx_header_lab_fingerprint(asx_runtime_config_fingerprint()))
+        return ASX_E_CONFIG_MISMATCH;
     if (lab == NULL || cfg == NULL) return ASX_E_INVALID_ARGUMENT;
 
     memset(lab, 0, sizeof(*lab));
@@ -115,7 +118,8 @@ void asx_lab_shutdown(asx_lab *lab) {
 asx_status asx_lab_reset_checked(asx_lab *lab, uint64_t application_fingerprint) {
     asx_status st;
 
-    if (application_fingerprint != ASX_LAB_CONFIG_FINGERPRINT) return ASX_E_CONFIG_MISMATCH;
+    if (application_fingerprint != asx_header_lab_fingerprint(asx_runtime_config_fingerprint()))
+        return ASX_E_CONFIG_MISMATCH;
     if (lab == NULL) return ASX_E_INVALID_ARGUMENT;
     if (!lab->initialized) return ASX_E_INVALID_STATE;
     asx_runtime_shutdown(&lab->rt);

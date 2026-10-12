@@ -474,7 +474,7 @@ runtime-owned storage or change canonical scenario semantics.
 - [x] Freeze `2030ceb0`; root fresh GCC/Clang release R3 and genuine i386 each execute all 49 mismatch builds and 167 canonical comparisons. Minimal-browser Clang executes 49 applicable controls and all 10 supported examples. Full local 164-unit/core/format/lint/integrity/11-gate/docs checks pass at this exact source.
 - [x] PinkOwl independently accepts every original criterion at clean `2030ceb0`: fresh CORE/Ghost0, live POSIX and minimal-browser each execute 49 controls, matching consumers 144/144/130, examples 13/13/10; app suites 69/68, actual doctor probes, 167 canonical comparisons and all 11 custom-layout gate scripts pass. Genuine old Ghost0 output fails both new field assertions; three hidden API compile controls reject. Native browser/WASM and Windows execution are not claimed.
 - [x] PinkOwl closes only original RB8 at `2026-10-12T16:24:56.597187013Z`, binding original acceptance to `2030ceb0`; independent evidence is on hz3 at `/tmp/asx-rb8-pink-2030-proof-20261012`. The tracker now has 114 unfinished items.
-- [ ] Publish/synchronize the accepted source and tracker to both remote branches and the primary checkout, preserving pre-existing artifacts.
+- [x] Publish/synchronize `e08cacb3` to both remote branches and the primary checkout; all six pre-existing untracked artifacts remain. Its own main CI `38277425775` and performance run `38277425798` are observed in progress, not passing evidence.
 - [ ] Observe the publication's own hosted CI and performance outcomes; older successful CI does not certify this source.
 
 The live POSIX doctor is observed reading OS entropy successfully; its entropy
@@ -492,7 +492,7 @@ pass. Share library-side calculation without changing application-side
 fingerprints, object layout, refusal ordering or the 49 controls.
 
 - [x] Measure and retain the actual object-size cost; no footprint/performance-green claim.
-- [ ] Share the library-side calculation and retain independent application stamps.
+- [x] Share the immutable library-side table through the existing exported getter, now colocated with hook/config preparation. App/lab layout folding accepts a base stamp; public macros still supply their independently computed application base, while library creation passes its own base. No runtime cache or ambient selector is introduced; tests/fixtures/thresholds are unchanged.
 - [ ] Measure identical-toolchain before/after size and execute matching/mismatch, strict full-suite and canonical controls before landing; keep broad P2 open.
 
 ## Assessment at the audited revision

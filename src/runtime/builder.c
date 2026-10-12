@@ -18,12 +18,12 @@ static asx_status builder_init_common(asx_runtime_builder *builder, asx_runtime_
                                       uint64_t application_fingerprint) {
     asx_status st;
 
-    if (application_fingerprint != ASX_CONFIG_FINGERPRINT) return ASX_E_CONFIG_MISMATCH;
+    if (application_fingerprint != asx_runtime_config_fingerprint()) return ASX_E_CONFIG_MISMATCH;
     if (builder == NULL) return ASX_E_INVALID_ARGUMENT;
 
     memset(builder, 0, sizeof(*builder));
-    asx_runtime_config_init(&builder->config);
-    st = asx_runtime_hooks_init(&builder->hooks);
+    asx_runtime_config_init_checked(&builder->config, application_fingerprint);
+    st = asx_runtime_hooks_init_checked(&builder->hooks, application_fingerprint);
     if (st != ASX_OK) return st;
     builder->preset = preset;
     return ASX_OK;
@@ -137,12 +137,15 @@ static asx_status parse_preset(const char *text, asx_runtime_preset *out_preset)
 }
 
 static asx_status builder_apply_preset(asx_runtime_builder *builder, asx_runtime_preset preset) {
+    uint64_t fingerprint = asx_runtime_config_fingerprint();
     switch (preset) {
-    case ASX_RUNTIME_PRESET_DEFAULT: return asx_runtime_builder_init(builder);
-    case ASX_RUNTIME_PRESET_CURRENT_THREAD: return asx_runtime_builder_init_current_thread(builder);
-    case ASX_RUNTIME_PRESET_LOW_LATENCY: return asx_runtime_builder_init_low_latency(builder);
+    case ASX_RUNTIME_PRESET_DEFAULT: return asx_runtime_builder_init_checked(builder, fingerprint);
+    case ASX_RUNTIME_PRESET_CURRENT_THREAD:
+        return asx_runtime_builder_init_current_thread_checked(builder, fingerprint);
+    case ASX_RUNTIME_PRESET_LOW_LATENCY:
+        return asx_runtime_builder_init_low_latency_checked(builder, fingerprint);
     case ASX_RUNTIME_PRESET_HIGH_THROUGHPUT:
-        return asx_runtime_builder_init_high_throughput(builder);
+        return asx_runtime_builder_init_high_throughput_checked(builder, fingerprint);
     default: return ASX_E_INVALID_ARGUMENT;
     }
 }
@@ -605,7 +608,7 @@ asx_status asx_runtime_builder_build_checked(const asx_runtime_builder *builder,
                                              uint64_t application_fingerprint) {
     asx_status st;
 
-    if (application_fingerprint != ASX_CONFIG_FINGERPRINT) return ASX_E_CONFIG_MISMATCH;
+    if (application_fingerprint != asx_runtime_config_fingerprint()) return ASX_E_CONFIG_MISMATCH;
     if (builder == NULL || out_runtime == NULL) return ASX_E_INVALID_ARGUMENT;
 
     st = asx_runtime_builder_validate(builder);

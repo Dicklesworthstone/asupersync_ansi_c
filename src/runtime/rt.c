@@ -170,14 +170,12 @@ asx_status asx_runtime_config_validate(const asx_runtime_config *config) {
 /* Lifecycle                                                           */
 /* ------------------------------------------------------------------ */
 
-uint64_t asx_runtime_config_fingerprint(void) { return ASX_CONFIG_FINGERPRINT; }
-
 asx_status asx_runtime_init_checked(asx_runtime *rt, const asx_runtime_config *config,
                                     const asx_runtime_hooks *hooks,
                                     uint64_t application_fingerprint) {
     asx_status st;
 
-    if (application_fingerprint != ASX_CONFIG_FINGERPRINT) return ASX_E_CONFIG_MISMATCH;
+    if (application_fingerprint != asx_runtime_config_fingerprint()) return ASX_E_CONFIG_MISMATCH;
     if (rt == NULL || config == NULL || hooks == NULL) return ASX_E_INVALID_ARGUMENT;
 
     /* Step 1: validate config */
@@ -257,17 +255,17 @@ asx_status asx_runtime_init_default_checked(asx_runtime *rt, uint64_t applicatio
     asx_runtime_hooks hooks;
     asx_status st;
 
-    if (application_fingerprint != ASX_CONFIG_FINGERPRINT) return ASX_E_CONFIG_MISMATCH;
+    if (application_fingerprint != asx_runtime_config_fingerprint()) return ASX_E_CONFIG_MISMATCH;
     if (rt == NULL) return ASX_E_INVALID_ARGUMENT;
 
-    asx_runtime_config_init(&config);
+    asx_runtime_config_init_checked(&config, application_fingerprint);
 
 #if defined(ASX_PROFILE_POSIX) && !ASX_DETERMINISTIC
     /* Live POSIX builds default to the real platform: monotonic clock,
      * OS entropy, epoll/poll readiness reactor, blocking pool. */
-    st = asx_posix_hooks_install(&hooks);
+    st = asx_posix_hooks_install_checked(&hooks, application_fingerprint);
 #else
-    st = asx_runtime_hooks_init(&hooks);
+    st = asx_runtime_hooks_init_checked(&hooks, application_fingerprint);
 #endif
     if (st != ASX_OK) return st;
 
@@ -279,10 +277,10 @@ asx_status asx_runtime_init_from_env_checked(asx_runtime *rt, const char *prefix
     asx_runtime_builder builder;
     asx_status st;
 
-    if (application_fingerprint != ASX_CONFIG_FINGERPRINT) return ASX_E_CONFIG_MISMATCH;
+    if (application_fingerprint != asx_runtime_config_fingerprint()) return ASX_E_CONFIG_MISMATCH;
     if (rt == NULL) return ASX_E_INVALID_ARGUMENT;
 
-    st = asx_runtime_builder_init(&builder);
+    st = asx_runtime_builder_init_checked(&builder, application_fingerprint);
     if (st != ASX_OK) return st;
 
     st = asx_runtime_builder_apply_env(&builder, prefix);
