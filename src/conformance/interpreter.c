@@ -165,6 +165,8 @@ typedef struct {
      * supervised child, left out of the snapshot (vocabulary §6). */
     int supervisor;
     int supervised;
+    /* A region finalizer's task (DSL §1, Region finalizers). */
+    int finalizer;
     /* Projection of the task's sleep timers (vocabulary §2: "<task>/tm<k>"). */
     uint32_t timers;         /* timers registered so far (k of the latest) */
     uint32_t timer_name_off; /* name of the latest, in g_text */
@@ -3616,6 +3618,12 @@ static step_result exec_step(it_task *t, asx_task_id self, uint32_t step, uint32
             }
             t->end = ASX_E_CANCELLED;
         } else if (strcmp(tag, "panicked") == 0) {
+            /* Rust reports a finalizer future's panic as its task's panic,
+             * which twin_run does not catch (DSL §1, Region finalizers). */
+            if (t->finalizer) {
+                it_fail_task(t, idx, "a finalizer's program cannot return panicked");
+                return STEP_END;
+            }
             /* The step is a panic: the observation is recorded first, as in
              * Rust where the step's observation precedes panic_any. The
              * locals then drop while panicking (drop_locals). */
@@ -3762,6 +3770,7 @@ static void register_finalizers(uint32_t r, const char *region_name, asx_region_
         uint32_t f = asx_json_item(g_in, list, k);
         it_task *t = add_task(it_str(f, "name"), region_name, id, asx_json_get(g_in, f, "program"));
         if (t == NULL) return;
+        t->finalizer = 1;
         if (asx_region_defer_async(id, finalizer_poll, t) != ASX_OK) {
             it_fail("cannot register finalizer", t->name);
             return;

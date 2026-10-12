@@ -144,6 +144,18 @@ that region (Rust `Scope::defer_async`):
   follows the ordinary rules: a budget cancel (poll quota, deadline) is
   raised and not delivered while the mask holds, so a finalizer that
   outlasts its budget still runs to its end.
+- **Return.** A finalizer program ends `ok` or, with `return err`, `err`;
+  that body result is the task's outcome in both engines (a masked
+  finalizer is never delivered a cancel). `return panicked` is a harness
+  error: Rust reports a finalizer future's panic as its task's panic,
+  which twin_run does not catch.
+- **Driving it.** A finalizer is spawned by a lab *step*, so a scenario
+  with finalizers finishes or cancels its region (`finish_region`,
+  `cancel_region`) and lets the closing run (`run_with_auto_advance`)
+  step. The driver op `close_region` ends each of its rounds in
+  `run_until_idle`, which takes no step with an empty scheduler, so it
+  never spawns a finalizer and fails with "did not close within 1000 idle
+  rounds" in both engines.
 
 ## 2. Execution model
 
