@@ -1116,7 +1116,7 @@ The `ASX_TRY(expr)` macro provides Rust-style `?` operator behavior in C: it eva
 
 Every scheduler round, lifecycle transition, and significant event is recorded in a bounded event journal (ring buffer, default 1,024 entries). Each event is a tuple of `(sequence, kind, entity_id, aux)`; the trace keeps a 64-bit emit counter, and each event stores its low 32 bits as `sequence`.
 
-The **trace digest** (`src/runtime/trace.c`) uses FNV-1a mixing (64-bit). Every emitted event is folded in when it is emitted, so the digest covers events the ring has already dropped:
+The **trace digest** (`src/runtime/trace.c`) uses FNV-1a mixing (64-bit). Every emitted event is folded in, in order, no later than the moment the ring would overwrite it (or the digest is read), so the digest covers events the ring has already dropped and a short run that never reads it pays no per-event fold cost:
 
 ```
 hash = 0x517cc1b727220a95   // the asx digest seed, not the FNV-1a offset basis

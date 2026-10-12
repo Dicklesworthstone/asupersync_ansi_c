@@ -237,13 +237,17 @@ ASX_API void asx_trace_reset(void);
 /* -------------------------------------------------------------------
  * Rolling digest
  *
- * Every emitted event is folded into the digest when it is emitted, so
- * the digest covers the whole trace, not just the retained ring. It is
- * deterministic for identical event sequences: FNV-1a mixing of each
- * event's (sequence, kind, entity_id, aux), little-endian, starting from
+ * Every emitted event is folded into the digest, so the digest covers
+ * the whole trace, not just the retained ring. It is deterministic for
+ * identical event sequences: FNV-1a mixing of each event's (sequence,
+ * kind, entity_id, aux), little-endian, in emission order, starting from
  * the asx digest seed 0x517cc1b727220a95. This is the C runtime's fast
  * self-consistency digest; cross-engine parity with the Rust reference
  * uses the canonical vocabulary digest instead.
+ *
+ * The fold is lazy: an event is folded when the ring is about to
+ * overwrite it or when the digest is read, never twice, always in order.
+ * The value is exactly the one an eager fold at emit time gives.
  * ------------------------------------------------------------------- */
 
 /* Current rolling digest over every event emitted since the last reset. */

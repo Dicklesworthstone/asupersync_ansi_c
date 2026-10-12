@@ -978,6 +978,109 @@ TEST(trace_digest_is_fnv1a_over_le_event_fields) {
     ASSERT_EQ(asx_trace_digest(), expected);
 }
 
+/* The digest is folded lazily (when the ring is about to overwrite an
+ * event, or when it is read). These tests pin that the value is exactly the
+ * eager byte-wise fold, wherever and however often it is read. The event
+ * stream mixes three kinds, zero and non-zero aux, and full-width ids. */
+static void pin_event(uint32_t i, asx_trace_event_kind *kind, uint64_t *entity, uint64_t *aux) {
+    *kind = (i % 5u == 0u)   ? ASX_TRACE_TASK_SPAWN
+            : (i % 7u == 0u) ? ASX_TRACE_CHANNEL_SEND
+                             : ASX_TRACE_SCHED_POLL;
+    *entity = (uint64_t)i * 0x9E3779B97F4A7C15ULL;
+    *aux = (i % 11u == 0u) ? 0u : (((uint64_t)i << 33) ^ (uint64_t)i);
+}
+
+static void pin_emit(uint32_t i) {
+    asx_trace_event_kind kind;
+    uint64_t entity;
+    uint64_t aux;
+
+    pin_event(i, &kind, &entity, &aux);
+    asx_trace_emit(kind, entity, aux);
+}
+
+/* the reference digest after event i has been folded into h */
+static uint64_t pin_model_fold(uint64_t h, uint32_t i) {
+    asx_trace_event_kind kind;
+    uint64_t entity;
+    uint64_t aux;
+
+    pin_event(i, &kind, &entity, &aux);
+    h = fnv1a_le_reference(h, i, 4u);
+    h = fnv1a_le_reference(h, (uint32_t)kind, 4u);
+    h = fnv1a_le_reference(h, entity, 8u);
+    return fnv1a_le_reference(h, aux, 8u);
+}
+
+#define PIN_SEED 0x517cc1b727220a95ULL
+
+/* Values computed once with an independent byte-wise FNV-1a over the
+ * little-endian (sequence, kind, entity, aux) of pin_event() 0..n-1. They
+ * do not depend on ASX_TRACE_CAPACITY. */
+TEST(trace_digest_pinned_values_for_long_sequence) {
+    static const struct {
+        uint32_t n;
+        uint64_t digest;
+    } pins[] = {{1u, 0x1d5a464cf55e3a56ULL},    {1023u, 0x937362ac61a157afULL},
+                {1024u, 0xe775e6e029148b6dULL}, {1025u, 0xd2c782ade0706a91ULL},
+                {2048u, 0xd5a26da14b07be67ULL}, {3000u, 0xf7ce12944b8d94f9ULL}};
+    uint32_t i;
+    uint32_t p = 0u;
+
+    asx_trace_reset();
+    for (i = 0u; i < 3000u; i++) {
+        pin_emit(i);
+        if (p < (uint32_t)(sizeof(pins) / sizeof(pins[0])) && i + 1u == pins[p].n) {
+            ASSERT_EQ(asx_trace_digest(), pins[p].digest);
+            p++;
+        }
+    }
+    ASSERT_EQ(p, (uint32_t)(sizeof(pins) / sizeof(pins[0])));
+    ASSERT_EQ(asx_trace_digest(), (uint64_t)0xf7ce12944b8d94f9ULL);
+}
+
+TEST(trace_digest_reads_at_ring_boundaries_match_reference) {
+    const uint32_t cap = (uint32_t)ASX_TRACE_CAPACITY;
+    const uint32_t reads[] = {0u,       1u,       cap - 1u,      cap,
+                              cap + 1u, 2u * cap, 2u * cap + 3u, 3u * cap + 1u};
+    const uint32_t last = 3u * cap + 1u;
+    uint64_t model = PIN_SEED;
+    uint32_t i;
+    uint32_t r = 0u;
+
+    /* run A: read at the ring boundaries only (and twice at each) */
+    asx_trace_reset();
+    if (reads[r] == 0u) {
+        ASSERT_EQ(asx_trace_digest(), PIN_SEED);
+        r++;
+    }
+    for (i = 0u; i < last; i++) {
+        pin_emit(i);
+        model = pin_model_fold(model, i);
+        if (r < (uint32_t)(sizeof(reads) / sizeof(reads[0])) && i + 1u == reads[r]) {
+            ASSERT_EQ(asx_trace_digest(), model);
+            ASSERT_EQ(asx_trace_digest(), model); /* a read changes nothing */
+            r++;
+        }
+    }
+    ASSERT_EQ(r, (uint32_t)(sizeof(reads) / sizeof(reads[0])));
+    ASSERT_EQ(asx_trace_digest(), model);
+
+    /* run B: never read until the end */
+    asx_trace_reset();
+    for (i = 0u; i < last; i++) pin_emit(i);
+    ASSERT_EQ(asx_trace_digest(), model);
+
+    /* run C: read after every event */
+    asx_trace_reset();
+    model = PIN_SEED;
+    for (i = 0u; i < last; i++) {
+        pin_emit(i);
+        model = pin_model_fold(model, i);
+        ASSERT_EQ(asx_trace_digest(), model);
+    }
+}
+
 TEST(trace_kind_totals_exact_beyond_capacity) {
     uint32_t i;
 
@@ -1066,6 +1169,61 @@ TEST(trace_import_rejects_inconsistent_truncation) {
     g_long_trace_buf[13] = 0x80u;
     ASSERT_EQ(asx_trace_import_binary(g_long_trace_buf, written), ASX_E_INVALID_ARGUMENT);
     g_long_trace_buf[13] = 0u;
+}
+
+static uint64_t le64_at(const uint8_t *p) {
+    uint64_t v = 0u;
+    uint32_t k;
+
+    for (k = 0u; k < 8u; k++) v |= (uint64_t)p[k] << (8u * k);
+    return v;
+}
+
+/* Every reader of the digest (export header, replay verify, continuity)
+ * must see the settled value even when it is the first to read it and
+ * events are still pending, and a reset must drop pending events. */
+TEST(trace_digest_lazy_fold_agrees_with_export_verify_and_reset) {
+    const uint32_t cap = (uint32_t)ASX_TRACE_CAPACITY;
+    const uint32_t n = cap + 37u; /* ring wrapped; unfolded events pending */
+    uint64_t model = PIN_SEED;
+    uint64_t three = PIN_SEED;
+    uint32_t written = 0u;
+    uint32_t i;
+    asx_replay_result r;
+
+    for (i = 0u; i < n; i++) model = pin_model_fold(model, i);
+    for (i = 0u; i < 3u; i++) three = pin_model_fold(three, i);
+
+    /* the exported header carries the settled digest, not a stale one */
+    asx_trace_reset();
+    for (i = 0u; i < n; i++) pin_emit(i);
+    ASSERT_EQ(asx_trace_export_binary(g_long_trace_buf, sizeof(g_long_trace_buf), &written),
+              ASX_OK);
+    ASSERT_EQ(le64_at(g_long_trace_buf + 16), model);
+    ASSERT_EQ(asx_trace_digest(), model);
+
+    /* a replay verify as the first reader reports the settled digest */
+    asx_trace_reset();
+    for (i = 0u; i < n; i++) pin_emit(i);
+    ASSERT_EQ(asx_trace_import_binary(g_long_trace_buf, written), ASX_OK);
+    r = asx_replay_verify();
+    ASSERT_EQ(r.result, ASX_REPLAY_MATCH);
+    ASSERT_EQ(r.actual_digest, model);
+    ASSERT_EQ(r.expected_digest, model);
+    asx_replay_clear_reference();
+
+    /* a reset with events still unfolded leaves nothing behind */
+    asx_trace_reset();
+    for (i = 0u; i < 10u; i++) pin_emit(100u + i);
+    asx_trace_reset();
+    ASSERT_EQ(asx_trace_digest(), PIN_SEED);
+    for (i = 0u; i < 3u; i++) pin_emit(i);
+    ASSERT_EQ(asx_trace_digest(), three);
+
+    /* continuity check against the persisted trace, digest read first by it */
+    asx_trace_reset();
+    for (i = 0u; i < n; i++) pin_emit(i);
+    ASSERT_EQ(asx_trace_continuity_check(g_long_trace_buf, written), ASX_OK);
 }
 
 /* RB1 at scale: 100k events, far past the ring. Identical runs digest
@@ -1346,9 +1504,12 @@ int main(void) {
     RUN_TEST(trace_digest_covers_events_beyond_capacity);
     RUN_TEST(trace_digest_within_capacity_matches_fold_of_events);
     RUN_TEST(trace_digest_is_fnv1a_over_le_event_fields);
+    RUN_TEST(trace_digest_pinned_values_for_long_sequence);
+    RUN_TEST(trace_digest_reads_at_ring_boundaries_match_reference);
     RUN_TEST(trace_kind_totals_exact_beyond_capacity);
     RUN_TEST(trace_truncated_export_roundtrip_and_continuity);
     RUN_TEST(trace_import_rejects_inconsistent_truncation);
+    RUN_TEST(trace_digest_lazy_fold_agrees_with_export_verify_and_reset);
     RUN_TEST(trace_digest_100k_events_stable_and_perturbation_sensitive);
     RUN_TEST(trace_runtime_swarm_digest_and_replay_see_perturbation_beyond_ring);
     RUN_TEST(trace_digest_sensitive_to_aux);
