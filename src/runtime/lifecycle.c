@@ -244,7 +244,7 @@ asx_status asx_region_slot_lookup(asx_region_id id, asx_region_slot **out) {
     if (!asx_handle_is_valid(id)) return ASX_E_NOT_FOUND;
 
     tag = asx_handle_type_tag(id);
-    if (tag != ASX_TYPE_REGION) return ASX_E_NOT_FOUND;
+    if (tag != ASX_TYPE_REGION || !asx_kernel_owns(id)) return ASX_E_NOT_FOUND;
 
     slot_idx = asx_handle_slot(id);
     if (slot_idx >= ASX_MAX_REGIONS) return ASX_E_NOT_FOUND;
@@ -264,7 +264,7 @@ asx_status asx_task_slot_lookup(asx_task_id id, asx_task_slot **out) {
     if (!asx_handle_is_valid(id)) return ASX_E_NOT_FOUND;
 
     tag = asx_handle_type_tag(id);
-    if (tag != ASX_TYPE_TASK) return ASX_E_NOT_FOUND;
+    if (tag != ASX_TYPE_TASK || !asx_kernel_owns(id)) return ASX_E_NOT_FOUND;
 
     slot_idx = asx_handle_slot(id);
     if (slot_idx >= ASX_MAX_TASKS) return ASX_E_NOT_FOUND;
@@ -327,7 +327,7 @@ static void *asx_region_capture_alloc(asx_region_slot *region, uint32_t size,
 
 asx_task_id asx_task_handle_for_slot(uint32_t slot_idx) {
     const asx_task_slot *t = &g_tasks[slot_idx];
-    return asx_handle_pack(ASX_TYPE_TASK, (uint16_t)(1u << (unsigned)t->state),
+    return asx_handle_mint(ASX_TYPE_TASK, (uint16_t)(1u << (unsigned)t->state),
                            asx_handle_pack_index(t->generation, (uint16_t)slot_idx));
 }
 
@@ -572,7 +572,7 @@ static void obligation_note_held(asx_obligation_slot *o) {
 static int obligation_leak_apply(uint32_t idx, asx_leak_response policy) {
     asx_obligation_slot *o = &g_obligations[idx];
     asx_obligation_id oid =
-        asx_handle_pack(ASX_TYPE_OBLIGATION, (uint16_t)(1u << (unsigned)ASX_OBLIGATION_RESERVED),
+        asx_handle_mint(ASX_TYPE_OBLIGATION, (uint16_t)(1u << (unsigned)ASX_OBLIGATION_RESERVED),
                         asx_handle_pack_index(o->generation, (uint16_t)idx));
     o->counted = 0;
     obligation_note_held(o);
@@ -770,7 +770,7 @@ void asx_region_settle_internal(asx_region_id rid) {
 }
 
 asx_region_id asx_region_handle_for_slot(uint32_t slot_idx) {
-    return asx_handle_pack(ASX_TYPE_REGION, (uint16_t)(1u << (unsigned)ASX_REGION_OPEN),
+    return asx_handle_mint(ASX_TYPE_REGION, (uint16_t)(1u << (unsigned)ASX_REGION_OPEN),
                            asx_handle_pack_index(g_regions[slot_idx].generation,
                                                  (uint16_t)slot_idx));
 }
@@ -919,7 +919,7 @@ static asx_status region_open_with_parent(asx_region_id parent, asx_region_id *o
      * with it: their handles become stale together with the region's. */
     if (reclaim) {
         asx_region_release_records(
-            asx_handle_pack(ASX_TYPE_REGION, (uint16_t)(1u << (unsigned)ASX_REGION_OPEN),
+            asx_handle_mint(ASX_TYPE_REGION, (uint16_t)(1u << (unsigned)ASX_REGION_OPEN),
                             asx_handle_pack_index(g_regions[idx].generation, (uint16_t)idx)));
         g_regions[idx].generation++;
     } else {
@@ -958,7 +958,7 @@ static asx_status region_open_with_parent(asx_region_id parent, asx_region_id *o
 
     if (idx >= g_region_count) { g_region_count = idx + 1; }
 
-    *out_id = asx_handle_pack(ASX_TYPE_REGION, (uint16_t)(1u << (unsigned)ASX_REGION_OPEN),
+    *out_id = asx_handle_mint(ASX_TYPE_REGION, (uint16_t)(1u << (unsigned)ASX_REGION_OPEN),
                               asx_handle_pack_index(g_regions[idx].generation, (uint16_t)idx));
 
     (void)asx_event_emit(ASX_EVENT_REGION_OPEN, *out_id, 0u, ASX_OK);
@@ -1433,7 +1433,7 @@ static asx_status task_spawn_impl(asx_region_id region, asx_task_poll_fn poll_fn
     /* A parallel run in progress admits the task to its lanes (bd-9kll.4.11). */
     asx_parallel_task_admitted_internal((uint32_t)idx);
 
-    *out_id = asx_handle_pack(ASX_TYPE_TASK, (uint16_t)(1u << (unsigned)ASX_TASK_CREATED),
+    *out_id = asx_handle_mint(ASX_TYPE_TASK, (uint16_t)(1u << (unsigned)ASX_TASK_CREATED),
                               asx_handle_pack_index(g_tasks[idx].generation, (uint16_t)idx));
 
     (void)asx_event_emit(ASX_EVENT_TASK_SPAWN, *out_id, (uint64_t)region, ASX_OK);
@@ -1678,7 +1678,7 @@ asx_status asx_obligation_slot_lookup(asx_obligation_id id, asx_obligation_slot 
     if (!asx_handle_is_valid(id)) return ASX_E_NOT_FOUND;
 
     tag = asx_handle_type_tag(id);
-    if (tag != ASX_TYPE_OBLIGATION) return ASX_E_NOT_FOUND;
+    if (tag != ASX_TYPE_OBLIGATION || !asx_kernel_owns(id)) return ASX_E_NOT_FOUND;
 
     slot_idx = asx_handle_slot(id);
     if (slot_idx >= ASX_MAX_OBLIGATIONS) return ASX_E_NOT_FOUND;
@@ -1714,7 +1714,7 @@ static int obligation_posting(void) {
 }
 
 static asx_obligation_id obligation_handle(uint32_t idx) {
-    return asx_handle_pack(ASX_TYPE_OBLIGATION, (uint16_t)(1u << (unsigned)ASX_OBLIGATION_RESERVED),
+    return asx_handle_mint(ASX_TYPE_OBLIGATION, (uint16_t)(1u << (unsigned)ASX_OBLIGATION_RESERVED),
                            asx_handle_pack_index(g_obligations[idx].generation, (uint16_t)idx));
 }
 

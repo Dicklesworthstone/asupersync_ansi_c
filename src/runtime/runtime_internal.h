@@ -349,6 +349,21 @@ typedef struct asx_kernel_storage {
  * (resource.c). */
 extern asx_kernel_storage g_kernel_static;
 
+/* Runtime tag of the kernel bound now (K18): stamped on every handle it
+ * issues, and every slot lookup refuses a handle carrying another. Tag 0
+ * is the first runtime; nothing binds another yet. */
+extern uint16_t g_kernel_tag;
+
+static inline int asx_kernel_owns(uint64_t handle) {
+    return asx_handle_runtime_tag(handle) == g_kernel_tag;
+}
+
+/* asx_handle_pack for a handle this kernel issues (same length, so a call
+ * site changes by its name only). */
+static inline uint64_t asx_handle_mint(uint16_t type_tag, uint16_t state_mask, uint32_t index) {
+    return asx_handle_with_runtime_tag(asx_handle_pack(type_tag, state_mask, index), g_kernel_tag);
+}
+
 extern asx_region_slot *g_regions;
 extern uint32_t g_region_count;
 extern uint32_t g_region_live;

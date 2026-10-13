@@ -31,6 +31,10 @@
 
 asx_kernel_storage g_kernel_static;
 
+/* The runtime tag of the bound kernel: always the first runtime's, 0, until
+ * a second runtime may be live. */
+uint16_t g_kernel_tag;
+
 typedef struct {
     char pad;
     asx_kernel_storage value;
@@ -65,6 +69,7 @@ void asx_kernel_bind_internal(void *storage) {
     g_regions = block->regions;
     g_tasks = block->tasks;
     g_obligations = block->obligations;
+    g_kernel_tag = 0u;
 }
 
 /* A raw reset is an explicit teardown: it ends a binding to a caller's

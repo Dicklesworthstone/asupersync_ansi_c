@@ -193,6 +193,61 @@ TEST(unjoined_task_keeps_closed_region_slot) {
     ASSERT_NE(asx_handle_generation(third), asx_handle_generation(first));
 }
 
+/* K18: a handle names the runtime that issued it. One carrying another
+ * runtime's tag is not found by any lookup, even though its slot and
+ * generation are exactly those of a live entity, so it cannot resolve
+ * through a coincident slot of the runtime that did not issue it. */
+TEST(handle_of_another_runtime_is_not_found_through_a_coincident_slot) {
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_obligation_id oid;
+    asx_region_id foreign_region;
+    asx_task_id foreign_task;
+    asx_obligation_id foreign_obligation;
+    asx_region_state rstate;
+    asx_task_state tstate;
+    asx_obligation_state ostate;
+    asx_region_id child;
+    asx_task_id other;
+    asx_obligation_id extra;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, noop_poll, NULL, &tid), ASX_OK);
+    ASSERT_EQ(asx_obligation_reserve_ex(rid, ASX_OBLIGATION_KIND_GENERIC, tid, &oid), ASX_OK);
+
+    /* What this runtime issues carries its own tag. */
+    ASSERT_EQ(asx_handle_runtime_tag(rid), (uint16_t)0);
+    ASSERT_EQ(asx_handle_runtime_tag(tid), (uint16_t)0);
+    ASSERT_EQ(asx_handle_runtime_tag(oid), (uint16_t)0);
+
+    /* The same handles with another runtime's tag differ only in the tag. */
+    foreign_region = asx_handle_with_runtime_tag(rid, 1u);
+    foreign_task = asx_handle_with_runtime_tag(tid, 1u);
+    foreign_obligation = asx_handle_with_runtime_tag(oid, 1u);
+    ASSERT_NE(foreign_region, rid);
+    ASSERT_EQ(asx_handle_slot(foreign_region), asx_handle_slot(rid));
+    ASSERT_EQ(asx_handle_generation(foreign_region), asx_handle_generation(rid));
+
+    ASSERT_EQ(asx_region_get_state(foreign_region, &rstate), ASX_E_NOT_FOUND);
+    ASSERT_EQ(asx_task_get_state(foreign_task, &tstate), ASX_E_NOT_FOUND);
+    ASSERT_EQ(asx_obligation_get_state(foreign_obligation, &ostate), ASX_E_NOT_FOUND);
+
+    /* Used as the target of an operation, it is refused and creates nothing. */
+    ASSERT_EQ(asx_task_spawn(foreign_region, noop_poll, NULL, &other), ASX_E_NOT_FOUND);
+    ASSERT_EQ(asx_region_open_child(foreign_region, &child), ASX_E_NOT_FOUND);
+    ASSERT_EQ(asx_obligation_reserve_ex(rid, ASX_OBLIGATION_KIND_GENERIC, foreign_task, &extra),
+              ASX_E_NOT_FOUND);
+    ASSERT_EQ(asx_obligation_commit(foreign_obligation), ASX_E_NOT_FOUND);
+
+    /* The runtime's own handles are untouched by all of it. */
+    ASSERT_EQ(asx_region_get_state(rid, &rstate), ASX_OK);
+    ASSERT_EQ(rstate, ASX_REGION_OPEN);
+    ASSERT_EQ(asx_task_get_state(tid, &tstate), ASX_OK);
+    ASSERT_EQ(asx_obligation_get_state(oid, &ostate), ASX_OK);
+    ASSERT_EQ(ostate, ASX_OBLIGATION_RESERVED);
+}
+
 int main(void) {
     fprintf(stderr, "=== test_handle_generation ===\n");
     RUN_TEST(handle_pack_index_roundtrip);
@@ -206,6 +261,7 @@ int main(void) {
     RUN_TEST(task_handle_has_generation_zero);
     RUN_TEST(task_lookup_validates_generation);
     RUN_TEST(unjoined_task_keeps_closed_region_slot);
+    RUN_TEST(handle_of_another_runtime_is_not_found_through_a_coincident_slot);
     TEST_REPORT();
     return test_failures;
 }

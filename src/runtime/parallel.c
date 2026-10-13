@@ -906,7 +906,7 @@ static void parallel_promote_cancelled(void) {
             if (parallel_cancel_requested(slot_idx)) {
                 const asx_task_slot *t = &g_tasks[slot_idx];
                 asx_task_id tid =
-                    asx_handle_pack(ASX_TYPE_TASK, (uint16_t)(1u << (unsigned)t->state),
+                    asx_handle_mint(ASX_TYPE_TASK, (uint16_t)(1u << (unsigned)t->state),
                                     asx_handle_pack_index(t->generation, slot_idx));
                 /* On success the task left this lane at `pos`: the next one
                  * now sits there. A full cancel lane leaves it be. */
@@ -1193,7 +1193,7 @@ void asx_parallel_task_admitted_internal(uint32_t slot_idx) {
         return;
     }
 
-    l->tasks[l->count] = asx_handle_pack(ASX_TYPE_TASK, (uint16_t)(1u << (unsigned)t->state),
+    l->tasks[l->count] = asx_handle_mint(ASX_TYPE_TASK, (uint16_t)(1u << (unsigned)t->state),
                                          asx_handle_pack_index(t->generation, (uint16_t)slot_idx));
     l->count++;
     parallel_note_assignment((uint16_t)slot_idx, lc);
@@ -1240,7 +1240,7 @@ static asx_status parallel_run_impl(asx_region_id region, asx_budget *budget) {
             if (t->region != region) continue;
             if (asx_task_is_terminal(t->state)) continue;
 
-            tid = asx_handle_pack(ASX_TYPE_TASK, (uint16_t)(1u << (unsigned)t->state),
+            tid = asx_handle_mint(ASX_TYPE_TASK, (uint16_t)(1u << (unsigned)t->state),
                                   asx_handle_pack_index(t->generation, (uint16_t)i));
 
             /* Classify by cancel state */
@@ -1384,7 +1384,7 @@ static asx_status parallel_run_impl(asx_region_id region, asx_budget *budget) {
                 }
 
                 /* Refresh handle from live slot to avoid stale state masks. */
-                tid = asx_handle_pack(ASX_TYPE_TASK, (uint16_t)(1u << (unsigned)t->state),
+                tid = asx_handle_mint(ASX_TYPE_TASK, (uint16_t)(1u << (unsigned)t->state),
                                       asx_handle_pack_index(t->generation, slot_idx));
                 lane->tasks[j] = tid;
                 worker_idx = parallel_select_worker((asx_lane_class)li, tid);

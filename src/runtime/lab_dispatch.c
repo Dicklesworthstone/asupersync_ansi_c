@@ -443,7 +443,7 @@ void asx_lab_record_dispatch_internal(uint32_t slot, uint16_t task_gen, int canc
         asx_dispatch_record *d = &g_lab_rec[g_lab_rec_n];
         d->task = g_tasks[slot].generation == task_gen
                       ? asx_task_handle_for_slot(slot)
-                      : asx_handle_pack(ASX_TYPE_TASK, 0u,
+                      : asx_handle_mint(ASX_TYPE_TASK, 0u,
                                         asx_handle_pack_index(task_gen, (uint16_t)slot));
         d->step = step;
         d->at = at;
