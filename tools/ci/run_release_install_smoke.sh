@@ -367,13 +367,36 @@ if [ ! -s "${PREFIX_DIR}/lib/libasx.a" ] || [ ! -f "${PREFIX_DIR}/include/asx/as
 fi
 pass_step "install_from_artifact" "install lib/include from extracted artifact to $PREFIX_DIR"
 
+# The consumer is compiled for the build identity the artifact declares. The
+# runtime refuses a program whose headers were built for another identity
+# (profile, codec, determinism, debug or release) than the library with
+# ASX_E_CONFIG_MISMATCH, so a consumer compiled without the artifact's macros
+# fails at the first init call. The release builder records the profile, the
+# codec and the determinism in the provenance; a release build is -DNDEBUG.
+BUILD_PROFILE="$(jq -r '.build.profile // ""' "$PROVENANCE_PATH")"
+BUILD_CODEC="$(jq -r '.build.codec // ""' "$PROVENANCE_PATH")"
+BUILD_DETERMINISM="$(jq -r 'if .build.deterministic == true then "1" elif .build.deterministic == false then "0" else "" end' "$PROVENANCE_PATH")"
+if [ -z "$BUILD_PROFILE" ] || [ -z "$BUILD_CODEC" ] || [ -z "$BUILD_DETERMINISM" ]; then
+    fail_step "provenance_build_identity" "jq .build $PROVENANCE_PATH" "provenance does not record the build profile, codec and determinism" "$ACTUAL_SHA"
+fi
+CONSUMER_DEFS="-DNDEBUG -DASX_PROFILE_${BUILD_PROFILE} -DASX_CODEC_${BUILD_CODEC} -DASX_DETERMINISTIC=${BUILD_DETERMINISM}"
+pass_step "provenance_build_identity" "jq .build $PROVENANCE_PATH: $CONSUMER_DEFS"
+
 cat >"$QUICKSTART_SRC" <<'C_EOF'
 #include <asx/asx.h>
+#include <stdio.h>
 
 static asx_status noop_poll(void *user_data, asx_task_id self) {
     (void)user_data;
     (void)self;
     return ASX_OK;
+}
+
+/* Say which call failed and with what status: ASX_E_CONFIG_MISMATCH here means
+ * the program was compiled for another build identity than the library. */
+static int fail(const char *call, asx_status st) {
+    fprintf(stderr, "quickstart: %s failed: %s\n", call, asx_status_name(st));
+    return 1;
 }
 
 int main(void) {
@@ -385,34 +408,40 @@ int main(void) {
     asx_budget budget;
     asx_status st;
 
-    asx_runtime_config_init(&cfg);
+    st = asx_runtime_config_init(&cfg);
+    if (st != ASX_OK) return fail("asx_runtime_config_init", st);
     st = asx_runtime_hooks_init(&hooks);
-    if (st != ASX_OK) return 1;
+    if (st != ASX_OK) return fail("asx_runtime_hooks_init", st);
 
     st = asx_runtime_init(&rt, &cfg, &hooks);
-    if (st != ASX_OK) return 1;
+    if (st != ASX_OK) return fail("asx_runtime_init", st);
 
     st = asx_region_open(&rid);
     if (st != ASX_OK) {
         asx_runtime_shutdown(&rt);
-        return 1;
+        return fail("asx_region_open", st);
     }
 
     st = asx_task_spawn(rid, noop_poll, NULL, &tid);
     if (st != ASX_OK) {
         asx_runtime_shutdown(&rt);
-        return 1;
+        return fail("asx_task_spawn", st);
     }
 
     budget = asx_budget_from_polls(64u);
     st = asx_scheduler_run(rid, &budget);
     asx_runtime_shutdown(&rt);
-    return st == ASX_OK ? 0 : 2;
+    if (st != ASX_OK) {
+        (void)fail("asx_scheduler_run", st);
+        return 2;
+    }
+    return 0;
 }
 C_EOF
 
-COMPILE_CMD="$CC_BIN -std=c99 -Wall -Wextra -Wpedantic -Werror -I${PREFIX_DIR}/include -o ${QUICKSTART_BIN} ${QUICKSTART_SRC} ${PREFIX_DIR}/lib/libasx.a"
-if ! $CC_BIN -std=c99 -Wall -Wextra -Wpedantic -Werror \
+COMPILE_CMD="$CC_BIN -std=c99 -Wall -Wextra -Wpedantic -Werror ${CONSUMER_DEFS} -I${PREFIX_DIR}/include -o ${QUICKSTART_BIN} ${QUICKSTART_SRC} ${PREFIX_DIR}/lib/libasx.a"
+# shellcheck disable=SC2086 # CONSUMER_DEFS is a list of -D options
+if ! $CC_BIN -std=c99 -Wall -Wextra -Wpedantic -Werror $CONSUMER_DEFS \
     -I"${PREFIX_DIR}/include" \
     -o "$QUICKSTART_BIN" \
     "$QUICKSTART_SRC" \
@@ -421,8 +450,9 @@ if ! $CC_BIN -std=c99 -Wall -Wextra -Wpedantic -Werror \
 fi
 pass_step "quickstart_compile" "$COMPILE_CMD"
 
-if ! "$QUICKSTART_BIN"; then
-    fail_step "quickstart_run" "$QUICKSTART_BIN" "README quickstart binary failed" "$ACTUAL_SHA"
+# The program's own words go into the diagnostic: it names the call and status.
+if ! QUICKSTART_OUT="$("$QUICKSTART_BIN" 2>&1)"; then
+    fail_step "quickstart_run" "$QUICKSTART_BIN" "README quickstart binary failed: ${QUICKSTART_OUT:-no output}" "$ACTUAL_SHA"
 fi
 pass_step "quickstart_run" "$QUICKSTART_BIN"
 
@@ -441,12 +471,27 @@ int main(void) {
     asx_doctor_report report;
     asx_status st;
 
-    asx_runtime_config_init(&cfg);
-    if (asx_runtime_hooks_init(&hooks) != ASX_OK) return 1;
-    if (asx_runtime_init(&rt, &cfg, &hooks) != ASX_OK) return 1;
+    st = asx_runtime_config_init(&cfg);
+    if (st != ASX_OK) {
+        fprintf(stderr, "doctor: asx_runtime_config_init failed: %s\n", asx_status_name(st));
+        return 1;
+    }
+    st = asx_runtime_hooks_init(&hooks);
+    if (st != ASX_OK) {
+        fprintf(stderr, "doctor: asx_runtime_hooks_init failed: %s\n", asx_status_name(st));
+        return 1;
+    }
+    st = asx_runtime_init(&rt, &cfg, &hooks);
+    if (st != ASX_OK) {
+        fprintf(stderr, "doctor: asx_runtime_init failed: %s\n", asx_status_name(st));
+        return 1;
+    }
     st = asx_doctor_run(&rt, &report);
     asx_runtime_shutdown(&rt);
-    if (st != ASX_OK) return 2;
+    if (st != ASX_OK) {
+        fprintf(stderr, "doctor: asx_doctor_run failed: %s\n", asx_status_name(st));
+        return 2;
+    }
     printf("doctor: checks=%u pass=%u warn=%u fail=%u skip=%u\n", (unsigned)report.check_count,
            (unsigned)report.pass_count, (unsigned)report.warn_count, (unsigned)report.fail_count,
            (unsigned)report.skip_count);
@@ -454,8 +499,9 @@ int main(void) {
 }
 C_EOF
 
-DOCTOR_COMPILE_CMD="$CC_BIN -std=c99 -Wall -Wextra -Wpedantic -Werror -I${PREFIX_DIR}/include -o ${DOCTOR_BIN} ${DOCTOR_SRC} ${PREFIX_DIR}/lib/libasx.a"
-if ! $CC_BIN -std=c99 -Wall -Wextra -Wpedantic -Werror \
+DOCTOR_COMPILE_CMD="$CC_BIN -std=c99 -Wall -Wextra -Wpedantic -Werror ${CONSUMER_DEFS} -I${PREFIX_DIR}/include -o ${DOCTOR_BIN} ${DOCTOR_SRC} ${PREFIX_DIR}/lib/libasx.a"
+# shellcheck disable=SC2086 # CONSUMER_DEFS is a list of -D options
+if ! $CC_BIN -std=c99 -Wall -Wextra -Wpedantic -Werror $CONSUMER_DEFS \
     -I"${PREFIX_DIR}/include" \
     -o "$DOCTOR_BIN" \
     "$DOCTOR_SRC" \
@@ -464,8 +510,8 @@ if ! $CC_BIN -std=c99 -Wall -Wextra -Wpedantic -Werror \
 fi
 pass_step "doctor_compile" "$DOCTOR_COMPILE_CMD"
 
-if ! "$DOCTOR_BIN"; then
-    fail_step "doctor_run" "$DOCTOR_BIN" "doctor probe reported an unhealthy runtime or failed" "$ACTUAL_SHA"
+if ! DOCTOR_OUT="$("$DOCTOR_BIN" 2>&1)"; then
+    fail_step "doctor_run" "$DOCTOR_BIN" "doctor probe reported an unhealthy runtime or failed: ${DOCTOR_OUT:-no output}" "$ACTUAL_SHA"
 fi
 pass_step "doctor_run" "$DOCTOR_BIN"
 

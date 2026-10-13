@@ -556,6 +556,26 @@ if [ "${ASX_RELEASE_E2E:-0}" = "1" ]; then
             "$E2E"/staging/*/release_install_smoke_report.json >/dev/null 2>&1
         verdict "real_candidate_report_records_consumer_and_doctor_steps" "0" "$?"
 
+        # The same consumer compiled without the artifact's build identity (no
+        # -DNDEBUG, no codec macro) is refused by the library, and says which
+        # call and which status: a user in that state must not see an exit
+        # code and nothing else.
+        STAGE=""
+        for STAGE in "$E2E"/staging/release-install-smoke-*/; do break; done
+        mismatch_out=""
+        if "${CC:-cc}" -std=c99 -I"${STAGE}prefix/include" -o "$E2E/mismatch_consumer" \
+            "${STAGE}build/readme_quickstart.c" "${STAGE}prefix/lib/libasx.a" >/dev/null 2>&1; then
+            mismatch_out="$("$E2E/mismatch_consumer" 2>&1)"
+            mismatch_rc=$?
+        else
+            mismatch_rc=99
+        fi
+        verdict "real_candidate_consumer_without_the_build_identity_is_refused" "1" "$mismatch_rc"
+        case "$mismatch_out" in
+            *ASX_E_CONFIG_MISMATCH*) verdict "real_candidate_refusal_names_the_status" "0" "0" ;;
+            *) verdict "real_candidate_refusal_names_the_status" "0" "1" "$mismatch_out" ;;
+        esac
+
         for variant in archive checksum provenance; do
             mkdir -p "$E2E/corrupt-$variant"
             cp "$REAL"/* "$E2E/corrupt-$variant/"

@@ -268,6 +268,17 @@ make release-artifacts RELEASE_VERSION=0.1.0 RELEASE_TARGET=linux-x86_64 PROFILE
 make release-artifacts RELEASE_VERSION=0.1.0 RELEASE_TARGET=source RELEASE_KIND=source
 ```
 
+A binary artifact is a release build (`-O2 -DNDEBUG`) of the profile, codec and
+determinism recorded under `build` in its `.provenance.json` (above: CORE,
+`BIN`, deterministic). A program that links its `libasx.a` must be compiled for
+the same identity: `-DNDEBUG -DASX_CODEC_BIN` for these artifacts (add
+`-DASX_PROFILE_<profile>` and `-DASX_DETERMINISTIC=<0|1>` when they are not the
+header defaults). A mismatch is refused, not tolerated: the checked
+initializers (`asx_runtime_config_init`, `asx_runtime_hooks_init`,
+`asx_runtime_init`) return `ASX_E_CONFIG_MISMATCH`, so print the status of each
+(`asx_status_name`). `make release-install-smoke` compiles its consumer from the
+provenance against the unpacked artifact.
+
 ### 3) Cross-Compile for Embedded Targets
 
 What CI runs: the library, the unit suite and the Rust-fixture replay, built with
