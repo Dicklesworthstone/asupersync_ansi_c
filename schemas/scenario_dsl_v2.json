@@ -17,7 +17,8 @@
     "seed": {"$ref": "#/$defs/u64"},
     "lab": {
       "type": "object", "required": ["max_steps"], "additionalProperties": false,
-      "properties": {"panic_on_leak": {"type": "boolean"}, "max_steps": {"type": "integer", "minimum": 1}}
+      "properties": {"panic_on_leak": {"type": "boolean"}, "max_steps": {"type": "integer", "minimum": 1},
+                     "futurelock_max_idle_steps": {"type": "integer", "minimum": 1}}
     },
     "requires": {"type": "array", "uniqueItems": true, "items": {"enum": ["unbounded_queue"]}},
     "regions": {"type": "array", "items": {
@@ -47,6 +48,7 @@
     }},
     "expect": {"oneOf": [
       {"type": "object", "required": ["kind"], "additionalProperties": false, "properties": {"kind": {"const": "ok"}}},
+      {"type": "object", "required": ["kind"], "additionalProperties": false, "properties": {"kind": {"const": "futurelock"}}},
       {"type": "object", "required": ["kind", "error"], "additionalProperties": false, "properties": {
         "kind": {"const": "must_fail"},
         "error": {"type": "object", "required": ["task", "step", "status"], "additionalProperties": false, "properties": {

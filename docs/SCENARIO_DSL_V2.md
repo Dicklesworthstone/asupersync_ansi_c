@@ -65,6 +65,14 @@ Companion files:
     instead of aborting.
   - `max_steps` is the total step budget. Exceeding it is a **harness
     failure**, never an expected result.
+  - `futurelock_max_idle_steps` (optional, at least 1) maps to
+    `LabConfig::futurelock_max_idle_steps` (`lab/config.rs:143`) and switches
+    `panic_on_futurelock` off for the run, so Rust's `FuturelockDetected`
+    events are compared instead of aborting it. In C it is
+    `asx_lab_set_futurelock_check`. Without it the run keeps Rust's defaults
+    (threshold 10000, panic on), a futurelock is a harness failure, and the
+    C lab runs no check (`VOCABULARY_EXCLUSIONS.md`). §5 says what the
+    scenario then expects.
 - **`requires`** (optional) lists capabilities the scenario needs that a
   C profile may forbid; the only one is `"unbounded_queue"`, for a scenario
   that declares an unbounded mpsc channel (§3.6, DEC-008). Rust ignores it.
@@ -76,11 +84,12 @@ Companion files:
   error, a declared capability the profile allows runs, and a scenario that
   uses an unbounded channel without declaring it fails in a forbidding
   profile like any other refused creation.
-- **`expect`** is either `{"kind":"ok"}` or
+- **`expect`** is `{"kind":"ok"}`, `{"kind":"futurelock"}` or
   `{"kind":"must_fail","error":{"task","step","status"}}`. `must_fail`
   asserts that the named step of the named task returns that status (§5).
   It is how the forbidden-behaviour catalog (`docs/FORBIDDEN_BEHAVIOR_CATALOG.md`)
-  is covered.
+  is covered. `futurelock` asserts that the run reports at least one
+  futurelock, and needs `lab.futurelock_max_idle_steps` (§5).
 
 Every name in a scenario must be unique, and every name becomes the entity's
 canonical name in the vocabulary (`CANONICAL_VOCABULARY_V2.md` §2).
@@ -790,6 +799,25 @@ The status names come from `CANONICAL_VOCABULARY_V2.md` §5. Typical uses:
 - reserve in a closed region: `ASX_E_REGION_CLOSED`;
 - send on a closed channel: `ASX_E_DISCONNECTED`;
 - reserve over a region limit: `ASX_E_ADMISSION_LIMIT`.
+
+### Futurelock scenarios
+
+`{"kind":"futurelock"}` with `lab.futurelock_max_idle_steps` asserts that
+the run reports a futurelock: a task that holds a pending obligation and has
+not been polled for more than that many steps (Rust's lab,
+`src/lab/runtime.rs:5612`). The reports are the run's `futurelock.detected`
+events (`CANONICAL_VOCABULARY_V2.md` §3), one per violating task at every
+step it stays violating, and they are compared like any other event. A
+scenario that declares the knob and expects `ok` asserts the opposite: no
+report at all. Declaring `futurelock` without the knob is invalid, and both
+harnesses refuse it.
+
+Because the same report repeats at every following step, a scenario should
+end soon after the idle task is polled again, as the deliberate scenarios
+do: one task holds an obligation and parks, a second keeps the lab stepping
+and then wakes the first, which commits and completes. A holder that parks
+for good ends the run only at the 1000-step stuck bound, with a report at
+each of those steps.
 
 ## 6. What DSL v2 cannot express, and why
 
