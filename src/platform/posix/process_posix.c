@@ -127,10 +127,13 @@ static proc_plan g_plan;
 
 /* Native calls that ran their real implementation (fork, waitpid, read,
  * write, kill, close). A replay serves them from the journal and leaves
- * this where it was. */
-static uint32_t g_real_calls;
+ * this where it was. Atomic as the network adapter's is: a blocking job may
+ * reach a native call beside the runtime thread. */
+static asx_atomic_u32 g_real_calls;
 
-uint32_t asx_native_process_real_calls(void) { return g_real_calls; }
+static void real_call(void) { (void)asx_atomic_u32_fetch_add(&g_real_calls, 1u); }
+
+uint32_t asx_native_process_real_calls(void) { return asx_atomic_u32_load(&g_real_calls); }
 
 /* The journal's name for a process (RP1): the handle spawn returned, as one
  * u64 (native slot bit set, then generation); a replay's child answers to
@@ -213,7 +216,7 @@ static int proc_pipe(int fds[2]) {
 static void proc_close_quiet(int *fd) {
     if (*fd >= 0) {
         if (!asx_replay_fd_is_virtual(*fd)) {
-            g_real_calls++;
+            real_call();
             (void)close(*fd);
         }
         *fd = -1;
@@ -309,7 +312,7 @@ static int proc_try_reap(native_proc *p) {
         proc_replay_reaped(p, (uint32_t)ASX_PROCESS_EXITED, -1, 0);
         return 1;
     }
-    g_real_calls++;
+    real_call();
     do { r = waitpid(p->pid, &status, WNOHANG); } while (r < 0 && errno == EINTR);
     if (r == p->pid) {
         proc_record_status(p, status);
@@ -348,7 +351,7 @@ static void proc_reap_blocking(native_proc *p) {
         proc_replay_reaped(p, (uint32_t)ASX_PROCESS_EXITED, -1, 0); /* not our process */
         return;
     }
-    g_real_calls++;
+    real_call();
     do { r = waitpid(p->pid, &status, 0); } while (r < 0 && errno == EINTR);
     if (r == p->pid) {
         proc_record_status(p, status);
@@ -828,7 +831,7 @@ asx_status asx_native_process_spawn(const asx_process_command *cmd, asx_process_
         hash = proc_command_hash(cmd);
         if (asx_replay_active()) return native_replay_spawn(cmd, hash, out);
     }
-    g_real_calls++;
+    real_call();
     st = native_process_spawn_impl(cmd, out);
     if (out != NULL) {
         uint64_t id = 0u;
@@ -877,7 +880,7 @@ static asx_status proc_send(asx_process_handle h, int sig) {
      * stranger; after reaping there is nothing left to signal. */
     if (p->reaped) return ASX_OK;
     if (asx_replay_active() || p->jid != 0u) return ASX_OK; /* no process to signal */
-    g_real_calls++;
+    real_call();
     if (kill(p->pid, sig) != 0 && errno != ESRCH) return proc_errno_status(errno);
     return ASX_OK;
 }
@@ -935,7 +938,7 @@ asx_status asx_native_process_stdin_write(asx_process_handle h, const uint8_t *s
         }
         return st;
     }
-    g_real_calls++;
+    real_call();
 
     /* Keep a broken pipe from raising SIGPIPE: block it, and consume the
      * one this write generated (a SIGPIPE already pending is left alone). */
@@ -1002,7 +1005,7 @@ static asx_status proc_read(native_proc *p, int which, uint8_t *dst, uint32_t ca
         }
         return st;
     }
-    g_real_calls++;
+    real_call();
     do { n = read(f->fd, dst, (size_t)cap); } while (n < 0 && errno == EINTR);
     if (n > 0) {
         *out_read = (uint32_t)n;
@@ -1145,7 +1148,7 @@ static void proc_release(native_proc *p) {
     if (!proc_try_reap(p)) {
         if (p->kill_on_drop) {
             if (!asx_replay_active()) {
-                g_real_calls++;
+                real_call();
                 (void)kill(p->pid, SIGKILL);
             }
             proc_reap_blocking(p);

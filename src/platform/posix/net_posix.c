@@ -82,10 +82,14 @@ typedef struct {
 static native_sock g_socks[ASX_NATIVE_MAX_SOCKETS];
 
 /* Native calls that ran their real implementation. A replay serves every
- * call from the journal and leaves this where it was. */
-static uint32_t g_real_calls;
+ * call from the journal and leaves this where it was. A name resolution
+ * runs on the blocking pool, several jobs at once and beside the runtime
+ * thread, so the count is atomic. */
+static asx_atomic_u32 g_real_calls;
 
-uint32_t asx_native_net_real_calls(void) { return g_real_calls; }
+static void real_call(void) { (void)asx_atomic_u32_fetch_add(&g_real_calls, 1u); }
+
+uint32_t asx_native_net_real_calls(void) { return asx_atomic_u32_load(&g_real_calls); }
 
 static native_sock *native_lookup(asx_native_handle h, native_kind kind);
 
@@ -160,7 +164,7 @@ static void native_free(native_sock *s) {
     uint32_t gen = s->generation;
     if (s->registered) asx_io_deregister(&s->token);
     if (s->fd >= 0 && !asx_replay_fd_is_virtual(s->fd)) {
-        g_real_calls++;
+        real_call();
         (void)close(s->fd);
     }
     memset(s, 0, sizeof(*s));
@@ -393,7 +397,7 @@ asx_status asx_native_tcp_listen(const asx_socket_addr *addr, asx_native_handle 
     if (addr == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
     native_journal_addr(addr, &want);
     if (asx_replay_active()) return native_replay_bind(NATIVE_LISTENER, &want, out);
-    g_real_calls++;
+    real_call();
     st = native_tcp_listen_impl(addr, out);
     s = st == ASX_OK ? native_lookup(*out, NATIVE_LISTENER) : NULL;
     native_journal_addr(s != NULL ? &s->local : NULL, &local);
@@ -476,7 +480,7 @@ asx_status asx_native_tcp_accept(asx_native_handle listener, asx_native_handle *
         if (out == NULL) return ASX_E_INVALID_ARGUMENT;
         return native_replay_accept(listener, out, peer);
     }
-    g_real_calls++;
+    real_call();
     memset(&got, 0, sizeof(got));
     st = native_tcp_accept_impl(listener, out, &got);
     if (peer != NULL && st == ASX_OK) *peer = got;
@@ -550,7 +554,7 @@ asx_status asx_native_tcp_connect(const asx_socket_addr *addr, asx_native_handle
     if (addr == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
     native_journal_addr(addr, &rec);
     if (asx_replay_active()) return native_replay_connect(&rec, addr, out);
-    g_real_calls++;
+    real_call();
     st = native_tcp_connect_impl(addr, out);
     s = st == ASX_OK ? native_lookup(*out, NATIVE_STREAM) : NULL;
     native_journal_addr(s != NULL ? &s->local : NULL, &rec_local);
@@ -598,7 +602,7 @@ asx_status asx_native_tcp_read(asx_native_handle stream, uint8_t *dst, uint32_t 
         }
         return st;
     }
-    g_real_calls++;
+    real_call();
     st = native_tcp_read_impl(stream, dst, cap, out_read);
     if (out_read != NULL) {
         asx_journal_note_net_read(native_journal_id(stream), cap, (int32_t)st, dst, *out_read);
@@ -646,7 +650,7 @@ asx_status asx_native_tcp_write(asx_native_handle stream, const uint8_t *src, ui
         }
         return st;
     }
-    g_real_calls++;
+    real_call();
     st = native_tcp_write_impl(stream, src, len, out_written);
     if (out_written != NULL) {
         asx_journal_note_net_write(native_journal_id(stream), len, (int32_t)st, *out_written);
@@ -673,7 +677,7 @@ asx_status asx_native_tcp_shutdown_write(asx_native_handle stream) {
     if (asx_replay_active()) {
         return native_replay_ctl(ASX_JOURNAL_NET_CTL_SHUTDOWN_WRITE, stream);
     }
-    g_real_calls++;
+    real_call();
     s = native_lookup(stream, NATIVE_STREAM);
     if (s == NULL) {
         st = ASX_E_INVALID_ARGUMENT;
@@ -688,7 +692,7 @@ asx_status asx_native_tcp_set_nodelay(asx_native_handle stream, int enabled) {
     int v = enabled ? 1 : 0;
     asx_status st = ASX_OK;
     if (asx_replay_active()) return native_replay_ctl(ASX_JOURNAL_NET_CTL_NODELAY, stream);
-    g_real_calls++;
+    real_call();
     s = native_lookup(stream, NATIVE_STREAM);
     if (s == NULL) {
         st = ASX_E_INVALID_ARGUMENT;
@@ -735,7 +739,7 @@ asx_status asx_native_udp_bind(const asx_socket_addr *addr, asx_native_handle *o
     if (addr == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
     native_journal_addr(addr, &want);
     if (asx_replay_active()) return native_replay_bind(NATIVE_UDP, &want, out);
-    g_real_calls++;
+    real_call();
     st = native_udp_bind_impl(addr, out);
     s = st == ASX_OK ? native_lookup(*out, NATIVE_UDP) : NULL;
     native_journal_addr(s != NULL ? &s->local : NULL, &local);
@@ -759,7 +763,7 @@ asx_status asx_native_udp_connect(asx_native_handle sock, const asx_socket_addr 
         }
         return st;
     }
-    g_real_calls++;
+    real_call();
     s = native_lookup(sock, NATIVE_UDP);
     if (s == NULL || peer == NULL) {
         st = ASX_E_INVALID_ARGUMENT;
@@ -816,7 +820,7 @@ asx_status asx_native_udp_send(asx_native_handle sock, const uint8_t *src, uint3
         if (st == ASX_E_PENDING) st = native_replay_wait(sock, NATIVE_UDP, ASX_IO_WRITABLE, st);
         return st;
     }
-    g_real_calls++;
+    real_call();
     st = native_udp_send_impl(sock, src, len, to, out_written);
     if (out_written != NULL) {
         asx_journal_note_udp_send(native_journal_id(sock), len, (int32_t)st, *out_written);
@@ -864,7 +868,7 @@ asx_status asx_native_udp_recv(asx_native_handle sock, uint8_t *dst, uint32_t ca
         if (st == ASX_E_PENDING) st = native_replay_wait(sock, NATIVE_UDP, ASX_IO_READABLE, st);
         return st;
     }
-    g_real_calls++;
+    real_call();
     memset(&got, 0, sizeof(got));
     st = native_udp_recv_impl(sock, dst, cap, out_read, &got);
     if (from != NULL && st == ASX_OK) *from = got;
@@ -976,7 +980,7 @@ static asx_status native_resolve_common(const char *host, const asx_resolve_opti
             return (asx_status)recorded;
         }
     }
-    g_real_calls++;
+    real_call();
     st = native_resolve_impl(host, opts, out);
     if (out != NULL && host != NULL && opts != NULL) {
         n = out->count < ASX_RESOLVE_MAX_RESULTS ? out->count : (uint32_t)ASX_RESOLVE_MAX_RESULTS;
