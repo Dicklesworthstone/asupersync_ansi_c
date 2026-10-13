@@ -694,9 +694,10 @@ void asx_task_on_complete_internal(asx_task_slot *task, asx_region_slot *region)
     }
     asx_task_timer_disarm_internal(task);
     /* Drop captured servers and remaining broadcast credits; pass on any wake or grant held. */
-    asx_broadcast_task_finished_internal(asx_task_handle_for_slot(k, (uint32_t)(task - k->tasks)));
-    asx_actor_task_finished(asx_task_handle_for_slot(k, (uint32_t)(task - k->tasks)));
-    asx_wait_task_finished(asx_task_handle_for_slot(k, (uint32_t)(task - k->tasks)));
+    asx_task_id tid = asx_task_handle_for_slot(k, (uint32_t)(task - k->tasks));
+    asx_broadcast_task_finished_internal(tid);
+    asx_actor_task_finished(tid);
+    asx_wait_task_finished(tid);
     asx_task_join_detach_internal(task);
     asx_task_join_wake_waiters_internal(task);
     task->parked = 0;
@@ -711,8 +712,7 @@ void asx_task_on_complete_internal(asx_task_slot *task, asx_region_slot *region)
     }
     if (region != NULL && region->task_count > 0u) region->task_count--;
     /* Watch effects dispatch after the join waiters (lab/runtime.rs:5010). */
-    asx_watches_task_finished(asx_task_handle_for_slot(k, (uint32_t)(task - k->tasks)),
-                              &record_outcome, obligation_clock(k));
+    asx_watches_task_finished(tid, &record_outcome, obligation_clock(k));
     if (task->detached) { asx_task_slot_release(k, (uint32_t)(task - k->tasks)); }
 }
 
@@ -741,12 +741,13 @@ uint32_t asx_region_subtree_internal(asx_region_id root, uint32_t *out_slots, ui
     asx_kernel *k = asx_kernel_of(root);
     asx_region_slot *r;
     uint32_t top = 0;
-    uint32_t count = 0;
-    uint32_t i;
+    uint32_t count = 0, i;
 
     if (out_slots == NULL || max == 0u) return 0u;
     if (asx_region_slot_lookup(root, &r) != ASX_OK) return 0u;
     if (max > ASX_MAX_REGIONS) max = ASX_MAX_REGIONS;
+    out_slots[0] = asx_handle_slot(root); /* a leaf region's subtree is this alone */
+    if (r->child_count == 0u) return 1u;
 
     /* Rust's cancel_request order (state.rs:7647-7652, :7904-7931): a
      * depth-first walk with a stack, children pushed in insertion order
@@ -760,8 +761,7 @@ uint32_t asx_region_subtree_internal(asx_region_id root, uint32_t *out_slots, ui
     while (top > 0u && count < max) {
         ASX_CHECKPOINT_WAIVER("bounded: each live region is pushed once, top <= ASX_MAX_REGIONS");
         asx_region_slot *cur;
-        uint32_t depth;
-        uint32_t c;
+        uint32_t depth, c;
         top--;
         depth = g_subtree_stack_depth[top];
         out_slots[count] = g_subtree_stack[top];

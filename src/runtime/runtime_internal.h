@@ -28,6 +28,18 @@
 #undef ASX_INTERNAL_TRACE_FAMILY_ACCESS
 #include <asx/runtime/runtime.h>
 
+/* A function the compiler must not fold into its caller: a cold path kept
+ * out of a hot function's frame. The attribute where the compiler has one,
+ * an ordinary function where it has not (the code is the same either way;
+ * only where its frame is placed differs). Written before `static`. */
+#if defined(__GNUC__) || defined(__clang__)
+#define ASX_NOINLINE __attribute__((noinline))
+#elif defined(_MSC_VER)
+#define ASX_NOINLINE __declspec(noinline)
+#else
+#define ASX_NOINLINE
+#endif
+
 /* -------------------------------------------------------------------
  * Arena slot types (walking skeleton: fixed-size)
  * ------------------------------------------------------------------- */
@@ -831,7 +843,10 @@ void asx_task_apply_cleanup_budget_internal(asx_task_slot *t);
  * one-task-per-step dispatch model, on when asx_scheduler_use_lab_dispatch
  * was called (off after asx_runtime_reset). */
 void asx_lab_dispatch_reset_internal(void);
-int asx_lab_dispatch_active(void);
+/* The flag is lab_dispatch.c's; the scheduler, a spawn and a completion each
+ * ask it, so the answer is a load and not a call. */
+extern int g_lab_active;
+static inline int asx_lab_dispatch_active(void) { return g_lab_active; }
 int asx_lab_dispatch_overflowed(void);
 uint64_t asx_lab_rng_next(void);
 uint64_t asx_lab_step_draw_internal(void); /* the draw, then check_futurelocks (LR:4507-4508) */

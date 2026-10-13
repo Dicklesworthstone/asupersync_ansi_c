@@ -56,7 +56,7 @@ typedef struct {
     uint32_t n;
 } lab_lane;
 
-static int g_lab_active = 0;
+int g_lab_active = 0; /* read through asx_lab_dispatch_active (runtime_internal.h) */
 static uint64_t g_lab_rng = 0;
 
 /* Lab dispatch is one runtime's: its queues name task slots by index and
@@ -430,7 +430,7 @@ int asx_task_random_u64_internal(asx_task_id self, uint64_t *out) {
     return asx_kernel_random_u64(asx_kernel_of_or_scope(self), out) == ASX_OK;
 }
 
-int asx_lab_dispatch_active(void) { return g_lab_active; }
+/* asx_lab_dispatch_active is runtime_internal.h's: an inline read of g_lab_active. */
 
 uint64_t asx_lab_step_begin_internal(void) { return ++g_lab_steps; }
 

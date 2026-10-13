@@ -763,6 +763,7 @@ static asx_status sched_complete(asx_task_slot *t, asx_task_id tid, asx_region_s
                                  uint32_t round) {
     asx_task_state from;
     asx_region_id region = t->region;
+    asx_kernel *k = asx_kernel_of(tid);
     asx_status st = asx_task_complete_state_internal(t, tid, &from);
     if (st != ASX_OK) return st;
     /* The outcome carries the Cx's reason (fuzz findings gen-145-163,
@@ -770,14 +771,14 @@ static asx_status sched_complete(asx_task_slot *t, asx_task_id tid, asx_region_s
     asx_task_complete_cx_reason_internal(t);
     if (asx_lab_dispatch_active()) asx_lab_task_retired_internal(t);
     if (t->cancel_pending) sched_cancel_phase_complete(t);
-    asx_trace_emit_internal(asx_kernel_of(tid), ASX_TRACE_TASK_TRANSITION, (uint64_t)tid,
+    asx_trace_emit_internal(k, ASX_TRACE_TASK_TRANSITION, (uint64_t)tid,
                             asx_trace_task_transition_aux(from, ASX_TASK_COMPLETED));
     t->outcome = asx_outcome_make(severity);
     asx_task_on_complete_internal(t, rslot);
     sched_emit(ev, tid, round);
-    asx_trace_emit_internal(asx_kernel_of(tid), ASX_TRACE_SCHED_COMPLETE, (uint64_t)tid, round);
+    asx_trace_emit_internal(k, ASX_TRACE_SCHED_COMPLETE, (uint64_t)tid, round);
     asx_region_settle_internal(region);
-    return asx_runtime_take_pending_fault_internal(asx_kernel_of(region));
+    return asx_runtime_take_pending_fault_internal(k);
 }
 
 /* Enforce a task's budget before polling it: deadline -> DEADLINE cancel,

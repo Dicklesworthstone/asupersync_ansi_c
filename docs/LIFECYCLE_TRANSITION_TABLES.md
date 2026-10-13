@@ -209,7 +209,7 @@ Completed         .        .        .           .           .           .
 
 ### 2.4 Task Poll Contract
 
-C has no `ASX_POLL_*` codes (the first extraction named some). A C poll function (`asx_task_poll_fn`, `include/asx/runtime/runtime.h:63`) returns an `asx_status`; the scheduler maps it in `sched_poll_slot` (`src/runtime/scheduler.c:1066`). Rust's equivalent is the `Poll` of the task's future plus the panic catch at the poll boundary.
+C has no `ASX_POLL_*` codes (the first extraction named some). A C poll function (`asx_task_poll_fn`, `include/asx/runtime/runtime.h:63`) returns an `asx_status`; the scheduler maps it in `sched_poll_slot` (`src/runtime/scheduler.c:1067`). Rust's equivalent is the `Poll` of the task's future plus the panic catch at the poll boundary.
 
 | Poll Return | Meaning | State Transition |
 |------------|---------|-----------------|
@@ -594,7 +594,7 @@ For deterministic scheduling and replay. The first extraction gave the plan's ke
 | Sweep round (C `asx_scheduler_run`, no lab dispatch) | lane first (cancel lane while the streak is below 16, then the timed lane, then ready), then within the cancel lane its cleanup budget's priority and within the ready lane the budget's priority, higher first, then task slot index; the timed lane by deadline, then the order the timers fired in | Ascending slot index within one priority. Cancel lane: a task with a materialized cancel request (`sweep_build`, `src/runtime/scheduler.c:1625`), by cleanup priority 200..255. Timed lane: a task a due wake timer woke at the start of the round (`asx_sweep_timer_woke_internal`, `src/runtime/scheduler.c:1496`), earliest deadline first, then arming order, as Rust's `TimedEntry` (`src/runtime/scheduler/priority.rs:61-75`); it has no priority and goes ahead of every ready task (Rust's timed entries have none, `three_lane.rs:8262`). After 16 cancel-lane polls in a row a timed task, else a ready one, goes next (`sweep_walk_next`, `src/runtime/scheduler.c:1832`; Rust `cancel_streak`, `three_lane.rs:6930-7110`). A request a poll raises is in the cancel lane at once in Rust: a task it cancels that the round has not polled is queued (`asx_sweep_cancel_woke_internal`, `src/runtime/scheduler.c:1475`) and goes ahead of the rest of the timed lane, after the round's cancel entries, by cleanup priority and then request order; a ready task keeps its place in the ready lane. The sweep has no wake order, so slot index stands in for it; a round with one budget priority, no cancel request and no due timer is the slot order it has always been. Rust feeds its timed lane from no non-test code at `5e60b1c4c` (`inject_timed`, `three_lane.rs:3109`, and `schedule_local_timed`, `:8246`, have no caller outside tests; `spawn` and `wake` enter the ready lane); the sweep feeds it from its wake timers. `tests/unit/runtime/test_scheduler.c`; `make bench-sched-ab` for its cost (`bd-9kll.4.6`) |
 | Timer wheel | Rust: 1 ms tick, then insertion order within a wheel slot (a cascade from a higher level can put an earlier-registered timer after later ones). C lab: `(1 ms tick, registration)` (`src/runtime/scheduler.c:269`); C native task timers: `(exact deadline, arm sequence)` (`src/runtime/scheduler.c:101`) | Ascending (earlier = fires first). Same-tick ordering is recorded in `bd-9kll.7.1`; see `docs/CHANNEL_TIMER_SEMANTICS.md` |
 | Cancel propagation | Parents before descendants; sibling order differs between the engines (§4.9 item 2) | Deterministic tree walk order in each engine |
-| Event journal | C: monotonic trace `sequence` (`src/runtime/trace.c:230`) | Strictly monotonic per runtime. The conformance oracle compares the Foata-canonical trace, not raw order (C_REFINEMENT_MAP supplementary row "§1.8 independence / Foata") |
+| Event journal | C: monotonic trace `sequence` (`src/runtime/trace.c:249`) | Strictly monotonic per runtime. The conformance oracle compares the Foata-canonical trace, not raw order (C_REFINEMENT_MAP supplementary row "§1.8 independence / Foata") |
 
 ---
 
@@ -664,7 +664,7 @@ The Expected Result column gives C's current status (checked directly against `s
 
 ### 8.2 Resource Exhaustion Forbidden Behaviors
 
-These rows describe C's fixed-capacity resource plane; Rust allocates and has no counterpart. They were not re-verified in this pass, except: a full C lab lane makes the lab step fail with `ASX_E_RESOURCE_EXHAUSTED` (`src/runtime/scheduler.c:1267`), and a full `src/time/timer_wheel.c` table returns `ASX_E_RESOURCE_EXHAUSTED`.
+These rows describe C's fixed-capacity resource plane; Rust allocates and has no counterpart. They were not re-verified in this pass, except: a full C lab lane makes the lab step fail with `ASX_E_RESOURCE_EXHAUSTED` (`src/runtime/scheduler.c:1268`), and a full `src/time/timer_wheel.c` table returns `ASX_E_RESOURCE_EXHAUSTED`.
 
 | ID | Forbidden Behavior | Expected Result | Fixture Category |
 |----|-------------------|-----------------|------------------|

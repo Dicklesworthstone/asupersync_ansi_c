@@ -211,9 +211,28 @@ static void trace_unlock(asx_trace_state *t) {
 #endif
 }
 
+/* The observer's turn for the event in `e`, called with the lock held and
+ * returning with it held. Kept out of trace_record so that the common
+ * emit, which has no observer, is a leaf with no frame of its own: the
+ * copy of the event and the observer's call are all that needed one, and a
+ * build with stack protection guards a frame that holds an array. */
+ASX_NOINLINE static void trace_notify(asx_trace_state *t, const asx_trace_event *e,
+                                      const asx_trace_payload *payload) {
+    static const asx_trace_payload none = {0};
+    /* Only an observed event is copied. The observer runs outside the
+     * lock: one that emits records its own events. */
+    asx_trace_event copy = *e;
+    asx_trace_observer_fn observer = t->observer;
+    void *observer_ctx = t->observer_ctx;
+    t->observing = 1;
+    trace_unlock(t);
+    observer(observer_ctx, &copy, payload != NULL ? payload : &none);
+    trace_lock(t);
+    t->observing = 0;
+}
+
 static void trace_record(asx_trace_state *t, asx_trace_event_kind kind, uint64_t entity_id,
                          uint64_t aux, const asx_trace_payload *payload) {
-    static const asx_trace_payload none = {0};
     asx_trace_event *e;
     uint32_t slot;
 
@@ -233,18 +252,7 @@ static void trace_record(asx_trace_state *t, asx_trace_event_kind kind, uint64_t
     e->aux = aux;
     if ((uint32_t)kind < ASX_TRACE_KIND_SLOTS) t->kind_totals[(uint32_t)kind]++;
     t->emitted++;
-    if (t->observer != NULL && !t->observing) {
-        /* Only an observed event is copied. The observer runs outside the
-         * lock: one that emits records its own events. */
-        asx_trace_event copy = *e;
-        asx_trace_observer_fn observer = t->observer;
-        void *observer_ctx = t->observer_ctx;
-        t->observing = 1;
-        trace_unlock(t);
-        observer(observer_ctx, &copy, payload != NULL ? payload : &none);
-        trace_lock(t);
-        t->observing = 0;
-    }
+    if (t->observer != NULL && !t->observing) trace_notify(t, e, payload);
     trace_unlock(t);
 }
 
