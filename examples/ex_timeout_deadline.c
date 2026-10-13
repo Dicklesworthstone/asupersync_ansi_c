@@ -22,6 +22,9 @@
 static int g_pass = 0;
 static int g_fail = 0;
 
+/* A zeroed runtime object names the library's static kernel (tag 0). */
+static asx_runtime g_rt;
+
 #define SCENARIO_BEGIN(id)                                                                         \
     do {                                                                                           \
         const char *_scenario_id = (id);                                                           \
@@ -58,7 +61,7 @@ static int g_fail = 0;
 static void scenario_timer_expire(void) {
     SCENARIO_BEGIN("timeout.timer_register_expire");
 
-    asx_timer_wheel *wheel = asx_timer_wheel_global();
+    asx_timer_wheel *wheel = asx_timer_wheel_global(&g_rt);
     asx_timer_wheel_reset(wheel);
 
     int marker = 0;
@@ -84,7 +87,7 @@ static void scenario_timer_expire(void) {
 static void scenario_timer_cancel(void) {
     SCENARIO_BEGIN("timeout.timer_cancel");
 
-    asx_timer_wheel *wheel = asx_timer_wheel_global();
+    asx_timer_wheel *wheel = asx_timer_wheel_global(&g_rt);
     asx_timer_wheel_reset(wheel);
 
     int marker = 0;

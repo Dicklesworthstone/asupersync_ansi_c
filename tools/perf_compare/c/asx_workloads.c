@@ -321,7 +321,7 @@ int asx_perf_cancel_latency(uint64_t n, uint64_t *out_ns, uint64_t *out_ops) {
  * Rust's counterpart is TimerWheel::register and TimerWheel::cancel. The
  * wheel's own storage is what is exercised (no task, no clock hook). */
 int asx_perf_timer_churn(uint64_t n, uint64_t *out_ns, uint64_t *out_ops) {
-    asx_timer_wheel *wheel = asx_timer_wheel_global();
+    asx_timer_wheel *wheel = asx_timer_wheel_global(&g_rt);
     asx_timer_handle handles[PERF_TIMER_BATCH];
     uint64_t total = 0u;
     uint64_t done = 0u;

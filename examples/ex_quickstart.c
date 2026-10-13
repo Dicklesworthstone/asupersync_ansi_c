@@ -301,10 +301,11 @@ static void scenario_runtime_builder_local_blocking_deadline(void) {
                    "blocking_result_status");
     SCENARIO_CHECK(blocking_result == 42u, "blocking_result_value");
 
-    asx_timer_wheel_reset(asx_timer_wheel_global());
+    asx_timer_wheel_reset(asx_timer_wheel_global(&runtime));
     SCENARIO_CHECK(asx_deadline_init(&deadline, 5u) == ASX_OK, "deadline_init");
-    SCENARIO_CHECK(asx_deadline_arm(&deadline, &deadline_marker) == ASX_OK, "deadline_arm");
-    fired = asx_timer_collect_expired(asx_timer_wheel_global(), 6u, wakers, 1u);
+    SCENARIO_CHECK(asx_deadline_arm(&runtime, &deadline, &deadline_marker) == ASX_OK,
+                   "deadline_arm");
+    fired = asx_timer_collect_expired(asx_timer_wheel_global(&runtime), 6u, wakers, 1u);
     SCENARIO_CHECK(fired == 1u, "deadline_fired");
     SCENARIO_CHECK(wakers[0] == &deadline_marker, "deadline_marker");
     SCENARIO_CHECK(asx_deadline_is_expired_at(&deadline, 6u), "deadline_expired");
