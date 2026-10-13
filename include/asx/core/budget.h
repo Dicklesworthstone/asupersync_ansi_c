@@ -129,17 +129,21 @@ typedef struct {
 /* No explicit envelope in any dimension (Rust CapabilityBudget::UNSPECIFIED). */
 ASX_API asx_capability_budget asx_capability_budget_unspecified(void);
 
-/* Builders (Rust with_memory_bytes, with_cpu_units, with_io_bytes,
- * with_cleanup_budget, with_artifact_bytes): return `b` with that envelope
- * set. */
+/* Builder (Rust with_memory_bytes): returns `b` with the memory envelope set. */
 ASX_API asx_capability_budget asx_capability_budget_with_memory_bytes(asx_capability_budget b,
                                                                       uint64_t bytes);
+/* Builder (Rust with_cpu_units): returns `b` with the CPU envelope set. */
 ASX_API asx_capability_budget asx_capability_budget_with_cpu_units(asx_capability_budget b,
                                                                    uint64_t units);
+/* Builder (Rust with_io_bytes): returns `b` with the I/O envelope set. */
 ASX_API asx_capability_budget asx_capability_budget_with_io_bytes(asx_capability_budget b,
                                                                   uint64_t bytes);
+/* Builder (Rust with_cleanup_budget): returns `b` with the cleanup budget
+ * set. */
 ASX_API asx_capability_budget asx_capability_budget_with_cleanup_budget(asx_capability_budget b,
                                                                         const asx_budget *cleanup);
+/* Builder (Rust with_artifact_bytes): returns `b` with the artifact envelope
+ * set. */
 ASX_API asx_capability_budget asx_capability_budget_with_artifact_bytes(asx_capability_budget b,
                                                                         uint64_t bytes);
 
