@@ -1085,31 +1085,37 @@ router workload: the run shows that the kernel gives the same digests on a
 32-bit Cortex-M4 and a RISC-V 32 core as on x86-64, and what that part of
 it costs there.
 
-**On musl, under qemu-user** (`make test-musl-qemu`, measured at `21e13b0` on
+**On musl, under qemu-user** (`make test-musl-qemu`, measured at `c860b02` on
 worker B; static binaries built by `zig cc` 0.14.1 (clang 19.1.7) against the
-musl 1.2.5 sources it carries, `-O2 -DNDEBUG --gc-sections`, EMBEDDED_ROUTER;
-run by qemu-user 10.2.1; not OpenWrt's own toolchain and not a device). The
-targets are a big-endian MIPS32r2 (o32, soft float: the ABI and endianness of
-OpenWrt's `mips_24kc`) and aarch64. The conformance runner replays the same
-331 fixtures and every line equals the host's on class 2, and on class 1
-except the same 18 fixtures; a one-byte corruption of one fixture is
-caught. The footprint a router application pays is the kernel-only static
-app (`tools/musl/kernel_min.c`: one region, one task, one channel, linked
-against the `ASX_KERNEL_ONLY` sources with no interpreter; its text includes
-the musl libc it pulls in, stdio among it). Bytes:
+musl 1.2.5 sources it carries, `-Os -DNDEBUG --gc-sections` (`MUSL_OPT`),
+EMBEDDED_ROUTER; run by qemu-user 10.2.1; not OpenWrt's own toolchain and not
+a device). The targets are a big-endian MIPS32r2 (o32, soft float: the ABI
+and endianness of OpenWrt's `mips_24kc`) and aarch64. The conformance runner
+replays the same 331 fixtures and every line equals the host's on class 2,
+and on class 1 except the same 18 fixtures; a one-byte corruption of one
+fixture is caught. The footprint a router application pays is the kernel-only
+static app (`tools/musl/kernel_min.c`: one region, one task, one channel,
+linked against the `ASX_KERNEL_ONLY` sources with no interpreter, writing
+with `write(2)`: a `printf` in it alone cost 20 KiB of musl's formatter and
+soft-float helpers). Bytes, flash = text + data; the LTO columns are
+`MUSL_LTO=-flto` (whole program at once), which the CI job holds to the same
+digests:
 
-| Target, class | kernel_min text | data | bss | Runner text | Runner bss |
-|---|---|---|---|---|---|
-| mips (BE), R1 | 171,860 | 240 | 136,608 | 633,344 | 33,229,428 |
-| mips (BE), R2 | 173,496 | 240 | 687,344 | 636,336 | 34,410,020 |
-| aarch64, R1 | 126,012 | 380 | 146,664 | 478,596 | 33,361,132 |
-| aarch64, R2 | 124,632 | 380 | 720,296 | 476,356 | 34,633,484 |
+| Target, class | Flash, -Os | bss | Flash, -Os -flto | bss, LTO | Runner text | Runner bss |
+|---|---|---|---|---|---|---|
+| mips (BE), R1 | 122,776 | 135,576 | 50,120 | 75,608 | 503,904 | 33,229,428 |
+| mips (BE), R2 | 125,736 | 686,312 | 52,424 | 448,104 | 508,248 | 34,410,020 |
+| aarch64, R1 | 90,332 | 148,688 | 37,488 | 82,928 | 394,948 | 33,362,860 |
+| aarch64, R2 | 90,888 | 720,368 | 38,000 | 463,648 | 395,964 | 34,631,964 |
 
-The kernel-only app's flash is 168 KiB (mips) and 123 KiB (aarch64): over
-the 128 KiB target of EMBEDDED_ROUTER on mips, under it on aarch64, and under
-the 256 KiB hard threshold on both (it is a different figure from the
-kernel-only archive of the table above, which is a sum of objects, and from
-the quickstart). Its bss is 133 KiB at R1 and 671 KiB at R2 on mips. The
+The kernel-only app's flash on the mips router target is 120 KiB at R1 and
+123 KiB at R2: under the 128 KiB target of EMBEDDED_ROUTER (it was 168 KiB
+with `printf` at `-O2`: 172,100 B, then 151,524 B with `write(2)`, then
+122,776 B with `-Os`; `bd-dkfs`). aarch64 is 88 KiB. It is a different figure
+from the kernel-only archive of the table above, which is a sum of objects,
+and from the quickstart. In an attribution build of the same app at mips R1
+(122,704 B of text, symbols kept), 102,283 are the kernel, 4,920 musl, 812 the app, 636 compiler runtime and 14,053 have
+no symbol (literals, tables). Its bss is 132 KiB at R1 and 670 KiB at R2. The
 runner's bss is the interpreter's static buffers. No device has run this:
 `bd-9kll.15.8`'s physical-device half is open.
 

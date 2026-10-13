@@ -1503,6 +1503,15 @@ jobs:
           make -j4 test-musl-qemu FAIL_ON_MISSING_CROSS_TOOLCHAINS=1 FAIL_ON_MISSING_RUNNERS=1 \
             MUSL_ZIG="$RUNNER_TEMP/zig-venv/bin/python -m ziglang"
 
+      # The same lane compiled and linked as one program (-flto): the
+      # footprint option of bd-dkfs, whose figures the README cites, so its
+      # digests are held to the host's too.
+      - name: The same under whole-program LTO, digests still equal the host's
+        run: |
+          make -j4 test-musl-qemu BUILD_DIR=build-lto MUSL_LTO=-flto \
+            FAIL_ON_MISSING_CROSS_TOOLCHAINS=1 FAIL_ON_MISSING_RUNNERS=1 \
+            MUSL_ZIG="$RUNNER_TEMP/zig-venv/bin/python -m ziglang"
+
       - name: Upload footprint and replay output
         if: always()
         uses: actions/upload-artifact@v4
@@ -1514,6 +1523,7 @@ jobs:
             build/musl/*/qemu.txt
             build/musl/*/compare.txt
             build/musl/*/control-compare.txt
+            build-lto/musl/footprint.txt
           if-no-files-found: ignore
           retention-days: 14
 
