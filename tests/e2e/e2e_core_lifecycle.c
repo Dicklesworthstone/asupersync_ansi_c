@@ -310,6 +310,44 @@ static asx_status poll_cancel_aware(void *ud, asx_task_id self) {
     ASX_CO_END(&s->co);
 }
 
+/* Obligation probe: an obligation has a holder task, so it is reserved inside
+ * a poll and only that task's poll settles it. This task reserves one
+ * obligation, reads its state, then commits or aborts it. */
+typedef struct {
+    asx_region_id region;
+    int use_abort; /* settle by abort (else by commit) */
+    asx_obligation_id oid;
+    asx_status reserve_rc;
+    asx_status state_rc;
+    asx_obligation_state reserved_state;
+    asx_status settle_rc;
+} obligation_probe;
+
+static asx_status poll_obligation_probe(void *ud, asx_task_id self) {
+    obligation_probe *p = (obligation_probe *)ud;
+    (void)self;
+
+    p->reserve_rc = asx_obligation_reserve(p->region, &p->oid);
+    if (p->reserve_rc != ASX_OK) return ASX_OK;
+    p->state_rc = asx_obligation_get_state(p->oid, &p->reserved_state);
+    p->settle_rc = p->use_abort ? asx_obligation_abort(p->oid) : asx_obligation_commit(p->oid);
+    return ASX_OK;
+}
+
+/* Commit holder: commits, in its own poll, the obligation reserved on its
+ * behalf (asx_obligation_reserve_ex names it as the holder). */
+typedef struct {
+    asx_obligation_id oid;
+    asx_status commit_rc;
+} commit_holder_state;
+
+static asx_status poll_commit_holder(void *ud, asx_task_id self) {
+    commit_holder_state *h = (commit_holder_state *)ud;
+    (void)self;
+    h->commit_rc = asx_obligation_commit(h->oid);
+    return ASX_OK;
+}
+
 /* -------------------------------------------------------------------
  * Scenarios
  * ------------------------------------------------------------------- */
@@ -395,18 +433,31 @@ static void scenario_obligation_reserve_commit(void) {
     asx_runtime_reset();
 
     asx_region_id rid;
-    asx_obligation_id oid;
+    asx_task_id tid;
     asx_obligation_state os;
+    obligation_probe probe;
+    asx_budget budget = asx_budget_from_polls(10);
+
+    memset(&probe, 0, sizeof(probe));
+    probe.reserve_rc = ASX_E_INVALID_STATE; /* until the holder's poll runs */
+    probe.state_rc = ASX_E_INVALID_STATE;
+    probe.settle_rc = ASX_E_INVALID_STATE;
 
     SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
-    SCENARIO_CHECK(asx_obligation_reserve(rid, &oid) == ASX_OK, "obligation_reserve");
+    probe.region = rid;
+    SCENARIO_CHECK(asx_task_spawn(rid, poll_obligation_probe, &probe, &tid) == ASX_OK,
+                   "task_spawn");
+    SCENARIO_CHECK(asx_scheduler_run(rid, &budget) == ASX_OK, "scheduler_run");
 
-    SCENARIO_CHECK(asx_obligation_get_state(oid, &os) == ASX_OK && os == ASX_OBLIGATION_RESERVED,
+    SCENARIO_CHECK(probe.reserve_rc == ASX_OK, "obligation_reserve");
+
+    SCENARIO_CHECK(probe.state_rc == ASX_OK && probe.reserved_state == ASX_OBLIGATION_RESERVED,
                    "not RESERVED");
 
-    SCENARIO_CHECK(asx_obligation_commit(oid) == ASX_OK, "obligation_commit");
+    SCENARIO_CHECK(probe.settle_rc == ASX_OK, "obligation_commit");
 
-    SCENARIO_CHECK(asx_obligation_get_state(oid, &os) == ASX_OK && os == ASX_OBLIGATION_COMMITTED,
+    SCENARIO_CHECK(asx_obligation_get_state(probe.oid, &os) == ASX_OK &&
+                       os == ASX_OBLIGATION_COMMITTED,
                    "not COMMITTED");
 
     SCENARIO_END();
@@ -417,15 +468,29 @@ static void scenario_obligation_reserve_abort(void) {
     asx_runtime_reset();
 
     asx_region_id rid;
-    asx_obligation_id oid;
+    asx_task_id tid;
     asx_obligation_state os;
+    obligation_probe probe;
+    asx_budget budget = asx_budget_from_polls(10);
+
+    memset(&probe, 0, sizeof(probe));
+    probe.use_abort = 1;
+    probe.reserve_rc = ASX_E_INVALID_STATE; /* until the holder's poll runs */
+    probe.state_rc = ASX_E_INVALID_STATE;
+    probe.settle_rc = ASX_E_INVALID_STATE;
 
     SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
-    SCENARIO_CHECK(asx_obligation_reserve(rid, &oid) == ASX_OK, "obligation_reserve");
+    probe.region = rid;
+    SCENARIO_CHECK(asx_task_spawn(rid, poll_obligation_probe, &probe, &tid) == ASX_OK,
+                   "task_spawn");
+    SCENARIO_CHECK(asx_scheduler_run(rid, &budget) == ASX_OK, "scheduler_run");
 
-    SCENARIO_CHECK(asx_obligation_abort(oid) == ASX_OK, "obligation_abort");
+    SCENARIO_CHECK(probe.reserve_rc == ASX_OK, "obligation_reserve");
 
-    SCENARIO_CHECK(asx_obligation_get_state(oid, &os) == ASX_OK && os == ASX_OBLIGATION_ABORTED,
+    SCENARIO_CHECK(probe.settle_rc == ASX_OK, "obligation_abort");
+
+    SCENARIO_CHECK(asx_obligation_get_state(probe.oid, &os) == ASX_OK &&
+                       os == ASX_OBLIGATION_ABORTED,
                    "not ABORTED");
 
     SCENARIO_END();
@@ -822,12 +887,17 @@ static void scenario_drain_progress_snapshot(void) {
     asx_region_id rid;
     SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
 
-    /* Spawn two tasks and create one obligation */
+    /* Spawn two tasks and create one obligation: t1 is its holder and
+     * commits it in its own poll, which the drain below runs. */
     asx_task_id t1, t2;
-    asx_obligation_id oid;
-    SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &t1) == ASX_OK, "spawn_t1");
+    commit_holder_state holder;
+    holder.oid = ASX_INVALID_ID;
+    holder.commit_rc = ASX_E_INVALID_STATE; /* until t1's poll runs */
+    SCENARIO_CHECK(asx_task_spawn(rid, poll_commit_holder, &holder, &t1) == ASX_OK, "spawn_t1");
     SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &t2) == ASX_OK, "spawn_t2");
-    SCENARIO_CHECK(asx_obligation_reserve(rid, &oid) == ASX_OK, "reserve_obligation");
+    SCENARIO_CHECK(asx_obligation_reserve_ex(rid, ASX_OBLIGATION_KIND_GENERIC, t1, &holder.oid) ==
+                       ASX_OK,
+                   "reserve_obligation");
 
     /* Snapshot before drain: 2 live tasks, 1 reserved obligation */
     asx_drain_progress prog;
@@ -837,11 +907,10 @@ static void scenario_drain_progress_snapshot(void) {
     SCENARIO_CHECK(prog.obligations_total == 1, "obligations_total_1");
     SCENARIO_CHECK(prog.obligations_reserved == 1, "obligations_reserved_1");
 
-    /* Resolve obligation and drain */
-    SCENARIO_CHECK(asx_obligation_commit(oid) == ASX_OK, "commit_obligation");
-
+    /* Drain: t1 resolves its obligation when the drain polls it */
     asx_budget budget = asx_budget_from_polls(128);
     IGNORE_RC(asx_region_drain(rid, &budget));
+    SCENARIO_CHECK(holder.commit_rc == ASX_OK, "commit_obligation");
 
     /* Snapshot after drain */
     SCENARIO_CHECK(asx_region_drain_progress(rid, &prog) == ASX_OK, "drain_progress_after");
@@ -922,6 +991,12 @@ typedef struct {
     asx_task_id source;
     asx_task_id destination;
     asx_obligation_id obligation;
+    /* HOLDER_HANDOFF_FULL: an independent task of the destination region
+     * holds the region's one obligation credit until it is released. */
+    asx_task_id blocker_task;
+    asx_obligation_id blocker;
+    int blocker_release;
+    asx_status blocker_status;
     uint32_t initial_yields;
     int ready;
     int source_action;
@@ -1093,13 +1168,25 @@ static asx_status poll_holder_destination(void *data, asx_task_id self) {
     return c->failed ? ASX_E_INVALID_STATE : ASX_OK;
 }
 
+/* The independent holder behind the full destination quota: it parks until
+ * released, then aborts the credit it holds in its own poll. */
+static asx_status poll_holder_blocker(void *data, asx_task_id self) {
+    holder_case *c = (holder_case *)data;
+    asx_status st;
+    if (!c->blocker_release) {
+        st = asx_task_park(self);
+        return st == ASX_OK ? ASX_E_PENDING : st;
+    }
+    c->blocker_status = asx_obligation_abort(c->blocker);
+    return ASX_OK;
+}
+
 static void scenario_real_holders(const char *id, holder_case_kind kind) {
     SCENARIO_BEGIN(id);
     holder_case c;
     asx_lab_config cfg;
     asx_budget budget;
     asx_obligation_info info;
-    asx_obligation_id blocker = ASX_INVALID_ID;
     asx_region_limits limits = {ASX_REGION_UNLIMITED, ASX_REGION_UNLIMITED, 1u};
     asx_drain_progress progress;
     asx_outcome outcome;
@@ -1112,6 +1199,12 @@ static void scenario_real_holders(const char *id, holder_case_kind kind) {
     asx_lab_config_init(&cfg);
     cfg.seed = g_seed;
     cfg.max_polls = 128u;
+    /* The sweep scheduler, not the lab's default dispatch (bd-9kll.9.5):
+     * holder_operate reads each obligation trace event inside the holder's
+     * own poll, and lab dispatch posts obligation events to the end of the
+     * poll, as Rust drains them after it. The scenario checks ownership as
+     * a live host sees it. */
+    cfg.scheduler = ASX_LAB_SCHEDULER_SWEEP;
     SCENARIO_CHECK(asx_lab_init(&g_lab, &cfg) == ASX_OK, "seeded lab init");
     SCENARIO_CHECK(g_lab.config.seed == g_seed, "requested seed not applied to lab");
     SCENARIO_CHECK(asx_runtime_region_capacity() == (uint32_t)ASX_MAX_REGIONS &&
@@ -1132,7 +1225,12 @@ static void scenario_real_holders(const char *id, holder_case_kind kind) {
     SCENARIO_CHECK(asx_region_set_limits(c.destination_region, &limits) == ASX_OK,
                    "destination quota");
     if (kind == HOLDER_HANDOFF_FULL) {
-        SCENARIO_CHECK(asx_obligation_reserve(c.destination_region, &blocker) == ASX_OK,
+        c.blocker_status = ASX_E_INVALID_STATE; /* until the blocker aborts its credit */
+        SCENARIO_CHECK(asx_task_spawn(c.destination_region, poll_holder_blocker, &c,
+                                      &c.blocker_task) == ASX_OK,
+                       "spawn destination quota holder");
+        SCENARIO_CHECK(asx_obligation_reserve_ex(c.destination_region, ASX_OBLIGATION_KIND_GENERIC,
+                                                 c.blocker_task, &c.blocker) == ASX_OK,
                        "fill destination obligation quota");
     }
     if ((g_entropy_sample & 1u) != 0u) {
@@ -1178,7 +1276,12 @@ static void scenario_real_holders(const char *id, holder_case_kind kind) {
         SCENARIO_CHECK(asx_region_drain_progress(c.destination_region, &progress) == ASX_OK &&
                            progress.obligations_reserved == 1u,
                        "refusal must not consume destination quota");
-        SCENARIO_CHECK(asx_obligation_abort(blocker) == ASX_OK, "free destination quota");
+        c.blocker_release = 1;
+        SCENARIO_CHECK(asx_task_wake(c.blocker_task) == ASX_OK, "wake destination quota holder");
+        budget = asx_budget_from_polls(cfg.max_polls);
+        SCENARIO_CHECK(asx_lab_run(&g_lab, c.root, &budget) == ASX_E_WOULD_BLOCK && !c.failed,
+                       "quota holder run failed");
+        SCENARIO_CHECK(c.blocker_status == ASX_OK, "free destination quota");
         c.source_action = 2;
         SCENARIO_CHECK(asx_task_wake(c.source) == ASX_OK, "retry original holder after refusal");
         budget = asx_budget_from_polls(cfg.max_polls);

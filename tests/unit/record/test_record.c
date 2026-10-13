@@ -32,14 +32,23 @@ TEST(event_view_tracks_runtime_emissions) {
     teardown();
 }
 
+static asx_status poll_idle(void *user_data, asx_task_id self) {
+    (void)user_data;
+    return asx_task_park(self) == ASX_OK ? ASX_E_PENDING : ASX_E_INVALID_STATE;
+}
+
 TEST(summary_capture_reports_live_obligation_counts) {
     asx_region_id region;
+    asx_task_id holder;
     asx_obligation_id obligation;
     asx_record_summary summary;
 
     setup();
     ASSERT_EQ(asx_region_open(&region), ASX_OK);
-    ASSERT_EQ(asx_obligation_open(region, &obligation), ASX_OK);
+    /* An obligation is held by a task of its region. */
+    ASSERT_EQ(asx_task_spawn(region, poll_idle, NULL, &holder), ASX_OK);
+    ASSERT_EQ(asx_obligation_reserve_ex(region, ASX_OBLIGATION_KIND_GENERIC, holder, &obligation),
+              ASX_OK);
     ASSERT_EQ(asx_record_summary_capture(&summary), ASX_OK);
     ASSERT_EQ(summary.region_count, 1u);
     ASSERT_EQ(summary.obligation_count, 1u);

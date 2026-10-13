@@ -162,13 +162,17 @@ TEST(snapshot_capture_completed_task_preserves_outcome_severity) {
 TEST(snapshot_capture_with_obligation) {
     asx_runtime_snapshot snap;
     asx_region_id rid;
+    asx_task_id holder;
     asx_obligation_id oid;
     asx_status s;
 
     asx_runtime_reset();
     s = asx_region_open(&rid);
     ASSERT_EQ(s, ASX_OK);
-    s = asx_obligation_reserve(rid, &oid);
+    /* Held by a live task that is never polled. */
+    s = asx_task_spawn(rid, dummy_poll, NULL, &holder);
+    ASSERT_EQ(s, ASX_OK);
+    s = asx_obligation_reserve_ex(rid, ASX_OBLIGATION_KIND_GENERIC, holder, &oid);
     ASSERT_EQ(s, ASX_OK);
 
     s = asx_runtime_snapshot_capture(&snap);

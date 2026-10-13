@@ -68,6 +68,29 @@ static asx_status poll_complete(void *ud, asx_task_id self) {
     return ASX_OK;
 }
 
+/* Fills the obligation arena. An obligation has a holder task and is
+ * reserved inside its poll, so the fill runs as one task's poll: it reserves
+ * until the arena refuses, then parks, staying the live holder of everything
+ * it reserved (a holder that completed would leak them). */
+typedef struct {
+    asx_region_id region;
+    int reserved;
+    asx_status rc; /* the status that ended the fill */
+} fill_state;
+
+static asx_status poll_fill_obligations(void *ud, asx_task_id self) {
+    fill_state *f = (fill_state *)ud;
+    asx_obligation_id oid;
+
+    for (;;) {
+        f->rc = asx_obligation_reserve(f->region, &oid);
+        if (f->rc != ASX_OK) break;
+        f->reserved++;
+    }
+    if (asx_task_park(self) != ASX_OK) return ASX_E_INVALID_STATE;
+    return ASX_E_PENDING;
+}
+
 /* -------------------------------------------------------------------
  * Scenarios
  * ------------------------------------------------------------------- */
@@ -193,21 +216,22 @@ static void scenario_obligation_arena_exhaustion(void) {
     asx_runtime_reset();
 
     asx_region_id rid;
-    asx_obligation_id oid;
-    int reserved = 0;
-    asx_status rc;
+    asx_task_id tid;
+    fill_state fill;
+    asx_budget budget = asx_budget_from_polls(10);
 
     SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
 
-    /* Fill obligation arena to capacity */
-    for (;;) {
-        rc = asx_obligation_reserve(rid, &oid);
-        if (rc != ASX_OK) break;
-        reserved++;
-    }
+    /* Fill obligation arena to capacity: the holder task's poll reserves
+     * until the arena refuses, then parks (the run reports WOULD_BLOCK) */
+    memset(&fill, 0, sizeof(fill));
+    fill.region = rid;
+    fill.rc = ASX_E_INVALID_STATE; /* until the holder's poll runs */
+    SCENARIO_CHECK(asx_task_spawn(rid, poll_fill_obligations, &fill, &tid) == ASX_OK, "task_spawn");
+    IGNORE_RC(asx_scheduler_run(rid, &budget));
 
-    SCENARIO_CHECK(reserved > 0, "should reserve at least one obligation");
-    SCENARIO_CHECK(rc == ASX_E_RESOURCE_EXHAUSTED,
+    SCENARIO_CHECK(fill.reserved > 0, "should reserve at least one obligation");
+    SCENARIO_CHECK(fill.rc == ASX_E_RESOURCE_EXHAUSTED,
                    "expected RESOURCE_EXHAUSTED on obligation arena full");
 
     SCENARIO_END();

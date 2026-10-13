@@ -410,6 +410,7 @@ finish:
 
 static void scenario_obligation_reserve_exhaustion(pressure_case_result *result) {
     asx_region_id region;
+    asx_task_id holder = ASX_INVALID_ID;
     asx_obligation_id obligations[ASX_MAX_OBLIGATIONS];
     asx_obligation_id overflow = ASX_INVALID_ID;
     asx_runtime_snapshot before_snapshot;
@@ -427,8 +428,16 @@ static void scenario_obligation_reserve_exhaustion(pressure_case_result *result)
         result->diagnostic = "failed to open region";
         goto finish;
     }
+    /* Every obligation has a holder task; the host reserves on a named live
+     * task's behalf. The holder is never polled, so it neither settles nor
+     * leaks what the arena fills with. */
+    if (asx_task_spawn(region, poll_pending, NULL, &holder) != ASX_OK) {
+        result->diagnostic = "failed to spawn obligation holder";
+        goto finish;
+    }
     for (index = 0u; index < (uint32_t)ASX_MAX_OBLIGATIONS; index++) {
-        if (asx_obligation_reserve(region, &obligations[index]) != ASX_OK) {
+        if (asx_obligation_reserve_ex(region, ASX_OBLIGATION_KIND_GENERIC, holder,
+                                      &obligations[index]) != ASX_OK) {
             result->diagnostic = "failed to fill obligation arena";
             goto finish;
         }
@@ -439,7 +448,8 @@ static void scenario_obligation_reserve_exhaustion(pressure_case_result *result)
         goto finish;
     }
 
-    result->actual_status = asx_obligation_reserve(region, &overflow);
+    result->actual_status =
+        asx_obligation_reserve_ex(region, ASX_OBLIGATION_KIND_GENERIC, holder, &overflow);
 
     metrics_capture(&result->after);
     if (asx_runtime_snapshot_capture(&after_snapshot) != ASX_OK) {

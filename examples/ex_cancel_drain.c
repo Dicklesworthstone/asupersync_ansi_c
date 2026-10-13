@@ -72,6 +72,52 @@ static asx_status poll_cancel_aware(void *ud, asx_task_id self) {
 }
 
 /* -------------------------------------------------------------------
+ * Task: cancel-aware worker holding an obligation
+ *
+ * Reserves an obligation on its first poll, so the task is the
+ * obligation's holder, then polls until it observes cancellation. Only
+ * the holder's own poll can settle the obligation: the worker commits it
+ * once its work is released, and a cancellation that arrives first
+ * aborts it in cleanup. A task never completes with an obligation
+ * still reserved.
+ * ------------------------------------------------------------------- */
+
+typedef struct {
+    asx_region_id region;
+    asx_obligation_id oid;
+    int reserved;
+    int release; /* set by the host: the work is done, commit the obligation */
+    int settled;
+    asx_status reserve_status;
+    asx_status settle_status;
+} guarded_worker_state;
+
+static asx_status poll_guarded_worker(void *ud, asx_task_id self) {
+    guarded_worker_state *w = (guarded_worker_state *)ud;
+    asx_checkpoint_result cp;
+
+    if (!w->reserved) {
+        w->reserve_status = asx_obligation_reserve(w->region, &w->oid);
+        if (w->reserve_status != ASX_OK) return w->reserve_status;
+        w->reserved = 1;
+    }
+    if (w->release && !w->settled) {
+        w->settle_status = asx_obligation_commit(w->oid);
+        w->settled = 1;
+    }
+    if (asx_checkpoint(self, &cp) == ASX_OK && cp.cancelled) {
+        if (!w->settled) {
+            /* Cleanup: abort what is still held */
+            w->settle_status = asx_obligation_abort(w->oid);
+            w->settled = 1;
+        }
+        IGNORE_RC(asx_task_finalize(self));
+        return ASX_OK;
+    }
+    return ASX_E_PENDING;
+}
+
+/* -------------------------------------------------------------------
  * Scenario: cancel_drain.cooperative_shutdown
  *
  * A cancel-aware task is drained via region close. The task observes
@@ -128,21 +174,35 @@ static void scenario_quiescence_evidence(void) {
     asx_region_id rid;
     SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
 
-    /* Spawn task and create obligation */
+    /* Spawn the worker task; its first poll reserves the obligation */
     asx_task_id tid;
-    asx_obligation_id oid;
-    SCENARIO_CHECK(asx_task_spawn(rid, poll_cancel_aware, NULL, &tid) == ASX_OK, "spawn");
-    SCENARIO_CHECK(asx_obligation_reserve(rid, &oid) == ASX_OK, "reserve_obligation");
+    guarded_worker_state worker;
+    worker.region = rid;
+    worker.oid = ASX_INVALID_ID;
+    worker.reserved = 0;
+    worker.release = 0;
+    worker.settled = 0;
+    worker.reserve_status = ASX_E_INVALID_STATE;
+    worker.settle_status = ASX_E_INVALID_STATE;
+    SCENARIO_CHECK(asx_task_spawn(rid, poll_guarded_worker, &worker, &tid) == ASX_OK, "spawn");
+
+    asx_budget budget = asx_budget_from_polls(1);
+    IGNORE_RC(asx_scheduler_run(rid, &budget));
+    SCENARIO_CHECK(worker.reserve_status == ASX_OK, "reserve_obligation");
 
     /* Before drain: check detailed report shows not quiescent */
     asx_quiescence_report report;
     SCENARIO_CHECK(asx_quiescence_check_detailed(rid, &report) == ASX_OK, "report_before");
     SCENARIO_CHECK(report.quiescent == 0, "not_quiescent_before");
 
-    /* Resolve obligation and drain */
-    SCENARIO_CHECK(asx_obligation_commit(oid) == ASX_OK, "commit");
+    /* Resolve obligation: the holder commits it in its own poll */
+    worker.release = 1;
+    budget = asx_budget_from_polls(1);
+    IGNORE_RC(asx_scheduler_run(rid, &budget));
+    SCENARIO_CHECK(worker.settle_status == ASX_OK, "commit");
 
-    asx_budget budget = asx_budget_from_polls(64);
+    /* Drain */
+    budget = asx_budget_from_polls(64);
     SCENARIO_CHECK(asx_region_drain(rid, &budget) == ASX_OK, "drain_ok");
 
     /* After drain: all Q1-Q4 conditions should hold */

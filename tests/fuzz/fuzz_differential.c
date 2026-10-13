@@ -199,6 +199,28 @@ typedef struct {
 } fuzz_execution;
 
 /* ===================================================================
+ * Task state
+ *
+ * A held obligation is settled only from its holder's own poll; the host
+ * has no authority over it. The Commit and Abort ops therefore queue the
+ * settlement on the holder's state and the holder performs it on its next
+ * poll (fuzz_task_poll).
+ * =================================================================== */
+
+typedef enum {
+    FUZZ_SETTLE_NONE = 0,
+    FUZZ_SETTLE_COMMIT = 1,
+    FUZZ_SETTLE_ABORT = 2
+} fuzz_settle_kind;
+
+typedef struct {
+    uint32_t polls_remaining;
+    asx_co_state co;
+    fuzz_settle_kind settle; /* settlement queued for the next poll */
+    asx_obligation_id settle_id;
+} fuzz_task_state;
+
+/* ===================================================================
  * Handle tracking during execution
  * =================================================================== */
 
@@ -207,6 +229,7 @@ typedef struct {
     uint32_t region_count;
 
     asx_task_id tasks[FUZZ_MAX_TASKS];
+    fuzz_task_state *task_states[FUZZ_MAX_TASKS]; /* state behind tasks[i] */
     uint32_t task_count;
 
     asx_obligation_id obligations[FUZZ_MAX_OBLIGATIONS];
@@ -231,15 +254,25 @@ typedef struct {
  * This is embedded in the task's user_data as a counter.
  * =================================================================== */
 
-typedef struct {
-    uint32_t polls_remaining;
-    asx_co_state co;
-} fuzz_task_state;
+/* Every settlement a holder performed in its poll, folded into the
+ * execution digest (the op that queued it only saw the queueing). */
+static fuzz_hasher g_settle_hasher;
 
 static asx_status fuzz_task_poll(void *user_data, asx_task_id self) {
     fuzz_task_state *st = (fuzz_task_state *)user_data;
     (void)self;
 
+    if (st->settle != FUZZ_SETTLE_NONE) {
+        asx_status settled;
+
+        if (st->settle == FUZZ_SETTLE_COMMIT) {
+            settled = asx_obligation_commit(st->settle_id);
+        } else {
+            settled = asx_obligation_abort(st->settle_id);
+        }
+        fuzz_hasher_i32(&g_settle_hasher, (int32_t)settled);
+        st->settle = FUZZ_SETTLE_NONE;
+    }
     if (st->polls_remaining > 0u) {
         st->polls_remaining--;
         return ASX_E_PENDING;
@@ -257,10 +290,57 @@ static fuzz_task_state *fuzz_alloc_task_state(uint32_t polls) {
     st = &g_task_states[g_task_state_next++];
     st->polls_remaining = polls;
     st->co.line = 0u;
+    st->settle = FUZZ_SETTLE_NONE;
+    st->settle_id = ASX_INVALID_ID;
     return st;
 }
 
-static void fuzz_reset_task_states(void) { g_task_state_next = 0u; }
+static void fuzz_reset_task_states(void) {
+    g_task_state_next = 0u;
+    fuzz_hasher_init(&g_settle_hasher);
+}
+
+/* A live task of `region` to hold an obligation, scanning the tracked tasks
+ * from `start`: the host holds none itself. ASX_INVALID_ID when the region
+ * has none. */
+static asx_task_id fuzz_pick_holder(const fuzz_handle_state *hs, asx_region_id region,
+                                    uint32_t start) {
+    uint32_t n;
+
+    for (n = 0u; n < hs->task_count; n++) {
+        asx_task_id tid = hs->tasks[(start + n) % hs->task_count];
+        asx_region_id owner = ASX_INVALID_ID;
+        asx_task_state state;
+
+        if (asx_task_get_region(tid, &owner) == ASX_OK &&
+            asx_handle_index(owner) == asx_handle_index(region) &&
+            asx_task_get_state(tid, &state) == ASX_OK && state != ASX_TASK_COMPLETED) {
+            return tid;
+        }
+    }
+    return ASX_INVALID_ID;
+}
+
+/* Queue `kind` for `oid` on its holder's next poll. Returns 0 when it
+ * cannot be queued: the obligation is no longer Reserved, or its holder
+ * already has a settlement queued. */
+static int fuzz_queue_settle(fuzz_handle_state *hs, asx_obligation_id oid, fuzz_settle_kind kind) {
+    asx_obligation_info info;
+    uint32_t i;
+
+    if (asx_obligation_get_info(oid, &info) != ASX_OK || info.state != ASX_OBLIGATION_RESERVED) {
+        return 0;
+    }
+    for (i = 0u; i < hs->task_count; i++) {
+        if (hs->tasks[i] == info.holder) {
+            if (hs->task_states[i]->settle != FUZZ_SETTLE_NONE) return 0;
+            hs->task_states[i]->settle = kind;
+            hs->task_states[i]->settle_id = oid;
+            return 1;
+        }
+    }
+    return 0;
+}
 
 /* ===================================================================
  * Scenario generation
@@ -533,7 +613,10 @@ static void fuzz_execute(const fuzz_scenario *sc, fuzz_execution *exec) {
                 asx_task_id tid = ASX_INVALID_ID;
                 if (tst != NULL) {
                     st = asx_task_spawn(hs.regions[ridx], fuzz_task_poll, tst, &tid);
-                    if (st == ASX_OK) { hs.tasks[hs.task_count++] = tid; }
+                    if (st == ASX_OK) {
+                        hs.task_states[hs.task_count] = tst;
+                        hs.tasks[hs.task_count++] = tid;
+                    }
                 } else {
                     st = ASX_E_RESOURCE_EXHAUSTED;
                 }
@@ -558,7 +641,15 @@ static void fuzz_execute(const fuzz_scenario *sc, fuzz_execution *exec) {
             if (hs.region_count > 0u && hs.obligation_count < FUZZ_MAX_OBLIGATIONS) {
                 uint32_t ridx = op->idx_a % hs.region_count;
                 asx_obligation_id oid = ASX_INVALID_ID;
-                st = asx_obligation_reserve(hs.regions[ridx], &oid);
+                asx_task_id holder = fuzz_pick_holder(&hs, hs.regions[ridx], op->idx_b);
+                if (holder != ASX_INVALID_ID) {
+                    /* The host reserves on a live task's behalf. */
+                    st = asx_obligation_reserve_ex(hs.regions[ridx], ASX_OBLIGATION_KIND_GENERIC,
+                                                   holder, &oid);
+                } else {
+                    /* No task to hold it: the host's own reserve is refused. */
+                    st = asx_obligation_reserve(hs.regions[ridx], &oid);
+                }
                 if (st == ASX_OK) { hs.obligations[hs.obligation_count++] = oid; }
             } else {
                 st = ASX_E_NOT_FOUND;
@@ -568,8 +659,15 @@ static void fuzz_execute(const fuzz_scenario *sc, fuzz_execution *exec) {
 
         case FUZZ_OP_COMMIT_OBLIGATION: {
             if (hs.obligation_count > 0u) {
-                uint32_t oidx = op->idx_a % hs.obligation_count;
-                st = asx_obligation_commit(hs.obligations[oidx]);
+                asx_obligation_id oid = hs.obligations[op->idx_a % hs.obligation_count];
+                if (fuzz_queue_settle(&hs, oid, FUZZ_SETTLE_COMMIT)) {
+                    st = ASX_OK; /* its holder's next poll commits it */
+                } else {
+                    /* Not queueable (already resolved, or its holder has a
+                     * settlement queued): the host's own commit reports it
+                     * resolved or is refused. */
+                    st = asx_obligation_commit(oid);
+                }
             } else {
                 st = ASX_E_NOT_FOUND;
             }
@@ -578,8 +676,12 @@ static void fuzz_execute(const fuzz_scenario *sc, fuzz_execution *exec) {
 
         case FUZZ_OP_ABORT_OBLIGATION: {
             if (hs.obligation_count > 0u) {
-                uint32_t oidx = op->idx_a % hs.obligation_count;
-                st = asx_obligation_abort(hs.obligations[oidx]);
+                asx_obligation_id oid = hs.obligations[op->idx_a % hs.obligation_count];
+                if (fuzz_queue_settle(&hs, oid, FUZZ_SETTLE_ABORT)) {
+                    st = ASX_OK; /* its holder's next poll aborts it */
+                } else {
+                    st = asx_obligation_abort(oid);
+                }
             } else {
                 st = ASX_E_NOT_FOUND;
             }
@@ -755,6 +857,9 @@ static void fuzz_execute(const fuzz_scenario *sc, fuzz_execution *exec) {
             }
         }
     }
+
+    /* Settlements the holders performed in their polls */
+    fuzz_hasher_u64(&hasher, fuzz_hasher_finish(&g_settle_hasher));
 
     exec->digest = fuzz_hasher_finish(&hasher);
 }

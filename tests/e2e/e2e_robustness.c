@@ -62,6 +62,66 @@ static asx_status poll_complete(void *ud, asx_task_id self) {
     return ASX_OK;
 }
 
+/*
+ * Every obligation has a holder task: it is reserved inside a poll, and only
+ * that poll can settle it. The obligation scenarios below therefore run their
+ * obligation work as a task's poll and read what happened back from the state
+ * the poll fills in.
+ */
+
+/* Fills the obligation arena: reserves until it refuses, then parks so the
+ * task stays the live holder of everything it reserved. */
+typedef struct {
+    asx_region_id region;
+    uint32_t filled;
+    asx_status fill_rc;     /* first refusal inside the capacity, ASX_OK if none */
+    asx_status overflow_rc; /* the reserve past the capacity */
+} arena_fill_state;
+
+static asx_status poll_fill_obligations(void *ud, asx_task_id self) {
+    arena_fill_state *f = (arena_fill_state *)ud;
+    asx_obligation_id oid;
+    asx_status rc;
+    uint32_t i;
+
+    for (i = 0; i < ASX_MAX_OBLIGATIONS; i++) {
+        rc = asx_obligation_reserve(f->region, &oid);
+        if (rc != ASX_OK) {
+            f->fill_rc = rc;
+            break;
+        }
+        f->filled++;
+    }
+    f->overflow_rc = asx_obligation_reserve(f->region, &oid);
+    if (asx_task_park(self) != ASX_OK) return ASX_E_INVALID_STATE;
+    return ASX_E_PENDING;
+}
+
+/* Reserves one obligation and settles it twice by the same operation. */
+typedef struct {
+    asx_region_id region;
+    int use_abort; /* settle by abort (else by commit) */
+    asx_obligation_id oid;
+    asx_status reserve_rc;
+    asx_status first_rc;
+    asx_status second_rc;
+} double_settle_state;
+
+static asx_status settle_obligation(int use_abort, asx_obligation_id oid) {
+    return use_abort ? asx_obligation_abort(oid) : asx_obligation_commit(oid);
+}
+
+static asx_status poll_double_settle(void *ud, asx_task_id self) {
+    double_settle_state *d = (double_settle_state *)ud;
+    (void)self;
+
+    d->reserve_rc = asx_obligation_reserve(d->region, &d->oid);
+    if (d->reserve_rc != ASX_OK) return ASX_OK;
+    d->first_rc = settle_obligation(d->use_abort, d->oid);
+    d->second_rc = settle_obligation(d->use_abort, d->oid);
+    return ASX_OK;
+}
+
 /* -------------------------------------------------------------------
  * Scenario: Region arena exhaustion
  * ------------------------------------------------------------------- */
@@ -125,21 +185,25 @@ static void scenario_obligation_exhaustion(void) {
     asx_runtime_reset();
 
     asx_region_id rid;
-    asx_obligation_id oid;
-    uint32_t i;
-    asx_status rc;
+    asx_task_id tid;
+    arena_fill_state fill;
+    asx_budget budget = asx_budget_from_polls(10);
 
     SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
 
-    /* Fill obligation slots */
-    for (i = 0; i < ASX_MAX_OBLIGATIONS; i++) {
-        rc = asx_obligation_reserve(rid, &oid);
-        SCENARIO_CHECK(rc == ASX_OK, "obligation_reserve during fill");
-    }
+    memset(&fill, 0, sizeof(fill));
+    fill.region = rid;
+    fill.overflow_rc = ASX_E_INVALID_STATE; /* until the holder's poll runs */
 
-    /* Next reserve should fail */
-    rc = asx_obligation_reserve(rid, &oid);
-    SCENARIO_CHECK(rc == ASX_E_RESOURCE_EXHAUSTED,
+    /* The holder task fills the obligation slots in its poll, then one more
+     * reserve must fail; the holder parks, so it stays alive and nothing it
+     * reserved leaks. */
+    SCENARIO_CHECK(asx_task_spawn(rid, poll_fill_obligations, &fill, &tid) == ASX_OK, "task_spawn");
+    IGNORE_RC(asx_scheduler_run(rid, &budget));
+
+    SCENARIO_CHECK(fill.fill_rc == ASX_OK && fill.filled == (uint32_t)ASX_MAX_OBLIGATIONS,
+                   "obligation_reserve during fill");
+    SCENARIO_CHECK(fill.overflow_rc == ASX_E_RESOURCE_EXHAUSTED,
                    "expected RESOURCE_EXHAUSTED on obligation overflow");
 
     SCENARIO_END();
@@ -310,19 +374,31 @@ static void scenario_double_commit_rejected(void) {
     asx_runtime_reset();
 
     asx_region_id rid;
-    asx_obligation_id oid;
+    asx_task_id tid;
     asx_obligation_state os;
+    double_settle_state ds;
+    asx_budget budget = asx_budget_from_polls(10);
 
     SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
-    SCENARIO_CHECK(asx_obligation_reserve(rid, &oid) == ASX_OK, "reserve");
-    SCENARIO_CHECK(asx_obligation_commit(oid) == ASX_OK, "first_commit");
+
+    /* The holder task reserves, commits, then commits again in its poll */
+    memset(&ds, 0, sizeof(ds));
+    ds.region = rid;
+    ds.use_abort = 0;
+    ds.reserve_rc = ASX_E_INVALID_STATE; /* until the holder's poll runs */
+    ds.first_rc = ASX_E_INVALID_STATE;
+    SCENARIO_CHECK(asx_task_spawn(rid, poll_double_settle, &ds, &tid) == ASX_OK, "task_spawn");
+    SCENARIO_CHECK(asx_scheduler_run(rid, &budget) == ASX_OK, "scheduler_run");
+
+    SCENARIO_CHECK(ds.reserve_rc == ASX_OK, "reserve");
+    SCENARIO_CHECK(ds.first_rc == ASX_OK, "first_commit");
 
     /* Second commit should fail */
-    asx_status rc = asx_obligation_commit(oid);
-    SCENARIO_CHECK(rc != ASX_OK, "double commit should fail");
+    SCENARIO_CHECK(ds.second_rc != ASX_OK, "double commit should fail");
 
     /* State should remain COMMITTED */
-    SCENARIO_CHECK(asx_obligation_get_state(oid, &os) == ASX_OK && os == ASX_OBLIGATION_COMMITTED,
+    SCENARIO_CHECK(asx_obligation_get_state(ds.oid, &os) == ASX_OK &&
+                       os == ASX_OBLIGATION_COMMITTED,
                    "should stay COMMITTED");
 
     SCENARIO_END();
@@ -337,15 +413,26 @@ static void scenario_double_abort_rejected(void) {
     asx_runtime_reset();
 
     asx_region_id rid;
-    asx_obligation_id oid;
+    asx_task_id tid;
+    double_settle_state ds;
+    asx_budget budget = asx_budget_from_polls(10);
 
     SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
-    SCENARIO_CHECK(asx_obligation_reserve(rid, &oid) == ASX_OK, "reserve");
-    SCENARIO_CHECK(asx_obligation_abort(oid) == ASX_OK, "first_abort");
+
+    /* The holder task reserves, aborts, then aborts again in its poll */
+    memset(&ds, 0, sizeof(ds));
+    ds.region = rid;
+    ds.use_abort = 1;
+    ds.reserve_rc = ASX_E_INVALID_STATE; /* until the holder's poll runs */
+    ds.first_rc = ASX_E_INVALID_STATE;
+    SCENARIO_CHECK(asx_task_spawn(rid, poll_double_settle, &ds, &tid) == ASX_OK, "task_spawn");
+    SCENARIO_CHECK(asx_scheduler_run(rid, &budget) == ASX_OK, "scheduler_run");
+
+    SCENARIO_CHECK(ds.reserve_rc == ASX_OK, "reserve");
+    SCENARIO_CHECK(ds.first_rc == ASX_OK, "first_abort");
 
     /* Second abort should fail */
-    asx_status rc = asx_obligation_abort(oid);
-    SCENARIO_CHECK(rc != ASX_OK, "double abort should fail");
+    SCENARIO_CHECK(ds.second_rc != ASX_OK, "double abort should fail");
 
     SCENARIO_END();
 }

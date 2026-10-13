@@ -392,6 +392,24 @@ static int min_read_scenario_stdin(min_scenario *sc) {
 }
 
 /* ===================================================================
+ * Task state (same as fuzz harness)
+ *
+ * A held obligation is settled only from its holder's own poll; the host
+ * has no authority over it. The Commit and Abort ops therefore queue the
+ * settlement on the holder's state and the holder performs it on its next
+ * poll (min_task_poll).
+ * =================================================================== */
+
+typedef enum { MIN_SETTLE_NONE = 0, MIN_SETTLE_COMMIT = 1, MIN_SETTLE_ABORT = 2 } min_settle_kind;
+
+typedef struct {
+    uint32_t polls_remaining;
+    asx_co_state co;
+    min_settle_kind settle; /* settlement queued for the next poll */
+    asx_obligation_id settle_id;
+} min_task_state;
+
+/* ===================================================================
  * Handle tracking during execution (same as fuzz harness)
  * =================================================================== */
 
@@ -399,6 +417,7 @@ typedef struct {
     asx_region_id regions[MIN_MAX_REGIONS];
     uint32_t region_count;
     asx_task_id tasks[MIN_MAX_TASKS];
+    min_task_state *task_states[MIN_MAX_TASKS]; /* state behind tasks[i] */
     uint32_t task_count;
     asx_obligation_id obligations[MIN_MAX_OBLIGATIONS];
     uint32_t obligation_count;
@@ -415,14 +434,24 @@ typedef struct {
  * Task poll function
  * =================================================================== */
 
-typedef struct {
-    uint32_t polls_remaining;
-    asx_co_state co;
-} min_task_state;
+/* Every settlement a holder performed in its poll, folded into the
+ * execution digest (the op that queued it only saw the queueing). */
+static min_hasher g_min_settle_hasher;
 
 static asx_status min_task_poll(void *user_data, asx_task_id self) {
     min_task_state *st = (min_task_state *)user_data;
     (void)self;
+    if (st->settle != MIN_SETTLE_NONE) {
+        asx_status settled;
+
+        if (st->settle == MIN_SETTLE_COMMIT) {
+            settled = asx_obligation_commit(st->settle_id);
+        } else {
+            settled = asx_obligation_abort(st->settle_id);
+        }
+        min_hasher_i32(&g_min_settle_hasher, (int32_t)settled);
+        st->settle = MIN_SETTLE_NONE;
+    }
     if (st->polls_remaining > 0u) {
         st->polls_remaining--;
         return ASX_E_PENDING;
@@ -439,10 +468,57 @@ static min_task_state *min_alloc_task_state(uint32_t polls) {
     st = &g_min_task_states[g_min_task_state_next++];
     st->polls_remaining = polls;
     st->co.line = 0u;
+    st->settle = MIN_SETTLE_NONE;
+    st->settle_id = ASX_INVALID_ID;
     return st;
 }
 
-static void min_reset_task_states(void) { g_min_task_state_next = 0u; }
+static void min_reset_task_states(void) {
+    g_min_task_state_next = 0u;
+    min_hasher_init(&g_min_settle_hasher);
+}
+
+/* A live task of `region` to hold an obligation, scanning the tracked tasks
+ * from `start`: the host holds none itself. ASX_INVALID_ID when the region
+ * has none. */
+static asx_task_id min_pick_holder(const min_handle_state *hs, asx_region_id region,
+                                   uint32_t start) {
+    uint32_t n;
+
+    for (n = 0u; n < hs->task_count; n++) {
+        asx_task_id tid = hs->tasks[(start + n) % hs->task_count];
+        asx_region_id owner = ASX_INVALID_ID;
+        asx_task_state state;
+
+        if (asx_task_get_region(tid, &owner) == ASX_OK &&
+            asx_handle_index(owner) == asx_handle_index(region) &&
+            asx_task_get_state(tid, &state) == ASX_OK && state != ASX_TASK_COMPLETED) {
+            return tid;
+        }
+    }
+    return ASX_INVALID_ID;
+}
+
+/* Queue `kind` for `oid` on its holder's next poll. Returns 0 when it
+ * cannot be queued: the obligation is no longer Reserved, or its holder
+ * already has a settlement queued. */
+static int min_queue_settle(min_handle_state *hs, asx_obligation_id oid, min_settle_kind kind) {
+    asx_obligation_info info;
+    uint32_t i;
+
+    if (asx_obligation_get_info(oid, &info) != ASX_OK || info.state != ASX_OBLIGATION_RESERVED) {
+        return 0;
+    }
+    for (i = 0u; i < hs->task_count; i++) {
+        if (hs->tasks[i] == info.holder) {
+            if (hs->task_states[i]->settle != MIN_SETTLE_NONE) return 0;
+            hs->task_states[i]->settle = kind;
+            hs->task_states[i]->settle_id = oid;
+            return 1;
+        }
+    }
+    return 0;
+}
 
 /* ===================================================================
  * Scenario executor helpers
@@ -492,7 +568,10 @@ static asx_status min_execute_one_op(const min_op *op, min_handle_state *hs) {
             asx_task_id tid = ASX_INVALID_ID;
             if (tst != NULL) {
                 st = asx_task_spawn(hs->regions[ridx], min_task_poll, tst, &tid);
-                if (st == ASX_OK) hs->tasks[hs->task_count++] = tid;
+                if (st == ASX_OK) {
+                    hs->task_states[hs->task_count] = tst;
+                    hs->tasks[hs->task_count++] = tid;
+                }
             } else {
                 st = ASX_E_RESOURCE_EXHAUSTED;
             }
@@ -512,8 +591,16 @@ static asx_status min_execute_one_op(const min_op *op, min_handle_state *hs) {
     }
     case MIN_OP_RESERVE_OBLIGATION: {
         if (hs->region_count > 0u && hs->obligation_count < MIN_MAX_OBLIGATIONS) {
+            asx_region_id region = hs->regions[op->idx_a % hs->region_count];
             asx_obligation_id oid = ASX_INVALID_ID;
-            st = asx_obligation_reserve(hs->regions[op->idx_a % hs->region_count], &oid);
+            asx_task_id holder = min_pick_holder(hs, region, op->idx_b);
+            if (holder != ASX_INVALID_ID) {
+                /* The host reserves on a live task's behalf. */
+                st = asx_obligation_reserve_ex(region, ASX_OBLIGATION_KIND_GENERIC, holder, &oid);
+            } else {
+                /* No task to hold it: the host's own reserve is refused. */
+                st = asx_obligation_reserve(region, &oid);
+            }
             if (st == ASX_OK) hs->obligations[hs->obligation_count++] = oid;
         } else {
             st = ASX_E_NOT_FOUND;
@@ -522,7 +609,15 @@ static asx_status min_execute_one_op(const min_op *op, min_handle_state *hs) {
     }
     case MIN_OP_COMMIT_OBLIGATION: {
         if (hs->obligation_count > 0u) {
-            st = asx_obligation_commit(hs->obligations[op->idx_a % hs->obligation_count]);
+            asx_obligation_id oid = hs->obligations[op->idx_a % hs->obligation_count];
+            if (min_queue_settle(hs, oid, MIN_SETTLE_COMMIT)) {
+                st = ASX_OK; /* its holder's next poll commits it */
+            } else {
+                /* Not queueable (already resolved, or its holder has a
+                 * settlement queued): the host's own commit reports it
+                 * resolved or is refused. */
+                st = asx_obligation_commit(oid);
+            }
         } else {
             st = ASX_E_NOT_FOUND;
         }
@@ -530,7 +625,12 @@ static asx_status min_execute_one_op(const min_op *op, min_handle_state *hs) {
     }
     case MIN_OP_ABORT_OBLIGATION: {
         if (hs->obligation_count > 0u) {
-            st = asx_obligation_abort(hs->obligations[op->idx_a % hs->obligation_count]);
+            asx_obligation_id oid = hs->obligations[op->idx_a % hs->obligation_count];
+            if (min_queue_settle(hs, oid, MIN_SETTLE_ABORT)) {
+                st = ASX_OK; /* its holder's next poll aborts it */
+            } else {
+                st = asx_obligation_abort(oid);
+            }
         } else {
             st = ASX_E_NOT_FOUND;
         }
@@ -704,6 +804,9 @@ static uint64_t min_execute_digest(const min_scenario *sc) {
             }
         }
     }
+
+    /* Settlements the holders performed in their polls */
+    min_hasher_u64(&hasher, min_hasher_finish(&g_min_settle_hasher));
 
     return min_hasher_finish(&hasher);
 }

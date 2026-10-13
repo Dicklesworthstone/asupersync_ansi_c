@@ -1851,6 +1851,11 @@ static asx_status asx_obligation_reserve_impl(asx_region_id region, asx_obligati
     /* Only open regions can reserve obligations (Rust
      * ObligationAdmissionError::RegionClosed; vocabulary §5). */
     if (!asx_region_can_spawn(r->state)) return ASX_E_REGION_CLOSED;
+    /* Every obligation has a live holder task: Rust creates a token only
+     * through a task's Cx (create_obligation takes the holder's TaskId,
+     * state.rs:6130), so a reserve with no polled task has no authority
+     * to create one. Refused before anything is allocated or traced. */
+    if (holder_slot == NULL) return ASX_E_PERMISSION_DENIED;
     /* At its pending-obligation limit (Rust try_reserve_obligation): at
      * the call, unless a permit's post is admitted at the drain. */
     if ((checked || !posting) && r->limits.max_obligations != ASX_REGION_UNLIMITED &&
@@ -1866,8 +1871,7 @@ static asx_status asx_obligation_reserve_impl(asx_region_id region, asx_obligati
     g_obligations[idx].alive = 1;
     g_obligations[idx].kind = kind;
     g_obligations[idx].abort_reason = ASX_OBLIGATION_ABORT_NONE;
-    g_obligations[idx].next_held = ASX_SLOT_NONE;
-    g_obligations[idx].holder = ASX_INVALID_ID;
+    g_obligations[idx].holder = holder;
     g_obligations[idx].drop_fn = NULL;
     g_obligations[idx].drop_serial = 0u;
     g_obligations[idx].checked = checked ? 1u : 0u;
@@ -1875,12 +1879,9 @@ static asx_status asx_obligation_reserve_impl(asx_region_id region, asx_obligati
     g_obligations[idx].posts = 0;
     g_obligations[idx].reserved_at = 0u; /* stamped when the reserve is applied */
     g_obligations[idx].held_ns = 0u;
-    if (holder_slot != NULL) {
-        /* Link into the holder's held list (resolved at its completion). */
-        g_obligations[idx].holder = holder;
-        g_obligations[idx].next_held = holder_slot->first_held;
-        holder_slot->first_held = idx;
-    }
+    /* Link into the holder's held list (resolved at its completion). */
+    g_obligations[idx].next_held = holder_slot->first_held;
+    holder_slot->first_held = idx;
 
     *out_id = obligation_handle(idx);
     if (posting) {
@@ -1914,11 +1915,12 @@ static asx_status obligation_reserve_kind(asx_region_id region, asx_obligation_k
         (int)kind > (int)ASX_OBLIGATION_KIND_TRANSACTION) {
         return ASX_E_INVALID_ARGUMENT;
     }
-    if (holder != ASX_INVALID_ID) {
-        st = asx_task_slot_lookup(holder, &t);
-        if (st != ASX_OK) return st;
-        if (asx_task_is_terminal(t->state)) return ASX_E_INVALID_STATE;
-    }
+    /* The holder is named, never defaulted: an obligation with none is not
+     * representable (see asx_obligation_reserve_impl). */
+    if (holder == ASX_INVALID_ID) return ASX_E_INVALID_ARGUMENT;
+    st = asx_task_slot_lookup(holder, &t);
+    if (st != ASX_OK) return st;
+    if (asx_task_is_terminal(t->state)) return ASX_E_INVALID_STATE;
     return asx_obligation_reserve_impl(region, kind, t, holder, checked, out_id);
 }
 
@@ -1987,22 +1989,19 @@ asx_status asx_obligation_check_access_internal(asx_obligation_id id) {
     st = asx_region_slot_lookup(o->region, &region);
     if (st != ASX_OK) return st;
     if (region->state == ASX_REGION_CLOSED) return ASX_E_REGION_CLOSED;
-    if (current == ASX_INVALID_ID) {
-        return o->holder == ASX_INVALID_ID ? ASX_OK : ASX_E_PERMISSION_DENIED;
-    }
+    /* Every obligation has a holder, and only its poll settles it. */
+    if (current == ASX_INVALID_ID) return ASX_E_PERMISSION_DENIED;
     st = asx_task_slot_lookup(current, &caller);
     if (st != ASX_OK) return st;
     if (!caller->in_poll || asx_task_is_terminal(caller->state)) return ASX_E_INVALID_STATE;
     if (asx_handle_index(caller->region) != asx_handle_index(o->region)) {
         return ASX_E_PERMISSION_DENIED;
     }
-    if (o->holder != ASX_INVALID_ID) {
-        st = asx_task_slot_lookup(o->holder, &holder);
-        if (st != ASX_OK) return st;
-        /* State-rights bits may differ between the first and later polls;
-         * validated slot/generation identity supplies holder authority. */
-        if (holder != caller) return ASX_E_PERMISSION_DENIED;
-    }
+    st = asx_task_slot_lookup(o->holder, &holder);
+    if (st != ASX_OK) return st;
+    /* State-rights bits may differ between the first and later polls;
+     * validated slot/generation identity supplies holder authority. */
+    if (holder != caller) return ASX_E_PERMISSION_DENIED;
     return ASX_OK;
 }
 
@@ -2151,10 +2150,11 @@ asx_status asx_obligation_handoff(asx_obligation_id id, asx_task_id destination)
     if (st != ASX_OK) return st;
     st = asx_obligation_slot_lookup(id, &o);
     if (st != ASX_OK) return st;
-    /* Rust ObligationToken::try_transfer rejects legacy/unowned sources,
-     * a same holder, a cancelled destination, and closed destination
-     * admission (obligation_mailbox.rs:721-790; record/region.rs:555). */
-    if (!o->checked || o->holder == ASX_INVALID_ID) return ASX_E_INVALID_STATE;
+    /* Rust ObligationToken::try_transfer rejects legacy (unchecked)
+     * sources, a same holder, a cancelled destination, and closed
+     * destination admission (obligation_mailbox.rs:721-790;
+     * record/region.rs:555). */
+    if (!o->checked) return ASX_E_INVALID_STATE;
     st = asx_task_slot_lookup(destination, &target);
     if (st != ASX_OK) return st;
     if (asx_handle_index(destination) == asx_handle_index(o->holder)) {

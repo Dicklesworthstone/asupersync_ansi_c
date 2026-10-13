@@ -18,6 +18,7 @@
  */
 
 #include "test_harness.h"
+#include "test_task.h"
 #include <asx/asx.h>
 #include <asx/core/channel.h>
 #include <asx/core/resource.h>
@@ -48,6 +49,13 @@ static asx_status poll_pending(void *ud, asx_task_id self) {
     return ASX_E_PENDING;
 }
 
+/* Reserves a generic obligation held by a live task from the host, outside
+ * any poll. Only the holder's own poll could settle it, so tests that never
+ * run the holder leave it reserved without leaking. */
+static asx_status reserve_for(asx_region_id rid, asx_task_id holder, asx_obligation_id *oid) {
+    return asx_obligation_reserve_ex(rid, ASX_OBLIGATION_KIND_GENERIC, holder, oid);
+}
+
 /* ====================================================================
  * Cross-arena simultaneous exhaustion
  * ==================================================================== */
@@ -55,6 +63,7 @@ static asx_status poll_pending(void *ud, asx_task_id self) {
 TEST(cross_arena_task_and_obligation_both_exhausted) {
     asx_region_id rid;
     asx_task_id tid;
+    asx_task_id holder = ASX_INVALID_ID;
     asx_obligation_id oid;
     uint32_t i;
 
@@ -64,18 +73,18 @@ TEST(cross_arena_task_and_obligation_both_exhausted) {
     /* Fill all task slots */
     for (i = 0; i < ASX_MAX_TASKS; i++) {
         ASSERT_EQ(asx_task_spawn(rid, poll_ok, NULL, &tid), ASX_OK);
+        if (i == 0u) holder = tid;
     }
     ASSERT_EQ(asx_resource_remaining(ASX_RESOURCE_TASK), (uint32_t)0);
 
-    /* Fill all obligation slots */
-    for (i = 0; i < ASX_MAX_OBLIGATIONS; i++) {
-        ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_OK);
-    }
+    /* Fill all obligation slots; the task arena is full, so the first
+     * (never polled, hence live) task holds them all. */
+    for (i = 0; i < ASX_MAX_OBLIGATIONS; i++) { ASSERT_EQ(reserve_for(rid, holder, &oid), ASX_OK); }
     ASSERT_EQ(asx_resource_remaining(ASX_RESOURCE_OBLIGATION), (uint32_t)0);
 
     /* Both should fail independently with correct errors */
     ASSERT_EQ(asx_task_spawn(rid, poll_ok, NULL, &tid), ASX_E_RESOURCE_EXHAUSTED);
-    ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(reserve_for(rid, holder, &oid), ASX_E_RESOURCE_EXHAUSTED);
 
     /* State should be consistent */
     ASSERT_EQ(asx_resource_used(ASX_RESOURCE_TASK), (uint32_t)ASX_MAX_TASKS);
@@ -127,6 +136,7 @@ TEST(cross_arena_tasks_exhausted_regions_ok) {
 
 TEST(multi_region_obligation_competition) {
     asx_region_id r1, r2;
+    asx_task_id h1, h2;
     asx_obligation_id oid;
     uint32_t i;
     uint32_t half = ASX_MAX_OBLIGATIONS / 2u;
@@ -134,18 +144,21 @@ TEST(multi_region_obligation_competition) {
     reset_all();
     ASSERT_EQ(asx_region_open(&r1), ASX_OK);
     ASSERT_EQ(asx_region_open(&r2), ASX_OK);
+    /* Each region's obligations are held by a (never polled) task of it. */
+    ASSERT_EQ(asx_task_spawn(r1, poll_pending, NULL, &h1), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(r2, poll_pending, NULL, &h2), ASX_OK);
 
     /* Region 1 takes half the arena */
-    for (i = 0; i < half; i++) { ASSERT_EQ(asx_obligation_reserve(r1, &oid), ASX_OK); }
+    for (i = 0; i < half; i++) { ASSERT_EQ(reserve_for(r1, h1, &oid), ASX_OK); }
 
     /* Region 2 takes the other half */
     for (i = 0; i < ASX_MAX_OBLIGATIONS - half; i++) {
-        ASSERT_EQ(asx_obligation_reserve(r2, &oid), ASX_OK);
+        ASSERT_EQ(reserve_for(r2, h2, &oid), ASX_OK);
     }
 
     /* Both regions now fail on new reservations */
-    ASSERT_EQ(asx_obligation_reserve(r1, &oid), ASX_E_RESOURCE_EXHAUSTED);
-    ASSERT_EQ(asx_obligation_reserve(r2, &oid), ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(reserve_for(r1, h1, &oid), ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(reserve_for(r2, h2, &oid), ASX_E_RESOURCE_EXHAUSTED);
     ASSERT_EQ(asx_resource_used(ASX_RESOURCE_OBLIGATION), (uint32_t)ASX_MAX_OBLIGATIONS);
 }
 
@@ -460,14 +473,15 @@ TEST(capture_arena_independent_per_region) {
  * Obligation edge cases at exhaustion
  * ==================================================================== */
 
-TEST(obligation_exhaust_then_commit_no_free_slots) {
-    asx_region_id rid;
+/* The obligation tests below hold and settle their obligations as the single
+ * poll of a task of the region (only a holder's own poll can settle one) and
+ * resolve everything they still hold before it completes: a holder that
+ * finishes with an obligation reserved leaks it. */
+static void exhaust_then_commit_body(void *ctx) {
+    asx_region_id rid = *(asx_region_id *)ctx;
     asx_obligation_id oids[ASX_MAX_OBLIGATIONS];
     asx_obligation_id extra;
     uint32_t i;
-
-    reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
 
     /* Fill all slots */
     for (i = 0; i < ASX_MAX_OBLIGATIONS; i++) {
@@ -499,16 +513,23 @@ TEST(obligation_exhaust_then_commit_no_free_slots) {
         ASSERT_EQ(asx_obligation_get_state(extra, &s), ASX_OK);
         ASSERT_EQ(s, ASX_OBLIGATION_RESERVED);
     }
+
+    ASSERT_EQ(asx_obligation_commit(extra), ASX_OK);
 }
 
-TEST(obligation_exhaust_mixed_commit_abort) {
+TEST(obligation_exhaust_then_commit_no_free_slots) {
     asx_region_id rid;
-    asx_obligation_id oids[ASX_MAX_OBLIGATIONS];
-    asx_obligation_id extra;
-    uint32_t i;
 
     reset_all();
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(test_run_in_task(rid, exhaust_then_commit_body, &rid), ASX_OK);
+}
+
+static void exhaust_mixed_body(void *ctx) {
+    asx_region_id rid = *(asx_region_id *)ctx;
+    asx_obligation_id oids[ASX_MAX_OBLIGATIONS];
+    asx_obligation_id extra;
+    uint32_t i;
 
     /* Fill all slots */
     for (i = 0; i < ASX_MAX_OBLIGATIONS; i++) {
@@ -538,9 +559,19 @@ TEST(obligation_exhaust_mixed_commit_abort) {
     /* Both committed and aborted slots are reclaimable under pressure:
      * the arena can be refilled completely. */
     for (i = 0; i < ASX_MAX_OBLIGATIONS; i++) {
-        ASSERT_EQ(asx_obligation_reserve(rid, &extra), ASX_OK);
+        ASSERT_EQ(asx_obligation_reserve(rid, &oids[i]), ASX_OK);
     }
     ASSERT_EQ(asx_obligation_reserve(rid, &extra), ASX_E_RESOURCE_EXHAUSTED);
+
+    for (i = 0; i < ASX_MAX_OBLIGATIONS; i++) { ASSERT_EQ(asx_obligation_abort(oids[i]), ASX_OK); }
+}
+
+TEST(obligation_exhaust_mixed_commit_abort) {
+    asx_region_id rid;
+
+    reset_all();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(test_run_in_task(rid, exhaust_mixed_body, &rid), ASX_OK);
 }
 
 /* ====================================================================
@@ -625,17 +656,19 @@ TEST(determinism_obligation_exhaustion_twice) {
 
     for (run = 0; run < 2; run++) {
         asx_region_id rid;
+        asx_task_id holder;
         asx_obligation_id oid;
         uint32_t i;
 
         reset_all();
         ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+        ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &holder), ASX_OK);
 
         for (i = 0; i < ASX_MAX_OBLIGATIONS; i++) {
-            ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_OK);
+            ASSERT_EQ(reserve_for(rid, holder, &oid), ASX_OK);
         }
 
-        results[run] = asx_obligation_reserve(rid, &oid);
+        results[run] = reserve_for(rid, holder, &oid);
     }
 
     ASSERT_EQ(results[0], results[1]);
@@ -735,15 +768,12 @@ TEST(no_corruption_after_task_spawn_failure) {
     ASSERT_EQ(sev, ASX_OUTCOME_OK);
 }
 
-TEST(no_corruption_after_obligation_reserve_failure) {
-    asx_region_id rid;
+static void reserve_failure_body(void *ctx) {
+    asx_region_id rid = *(asx_region_id *)ctx;
     asx_obligation_id oids[ASX_MAX_OBLIGATIONS];
     asx_obligation_id extra;
     asx_obligation_state s;
     uint32_t i;
-
-    reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
 
     /* Fill obligation arena */
     for (i = 0; i < ASX_MAX_OBLIGATIONS; i++) {
@@ -761,11 +791,46 @@ TEST(no_corruption_after_obligation_reserve_failure) {
     ASSERT_EQ(asx_obligation_abort(oids[1]), ASX_OK);
     ASSERT_EQ(asx_obligation_get_state(oids[1], &s), ASX_OK);
     ASSERT_EQ(s, ASX_OBLIGATION_ABORTED);
+
+    for (i = 2; i < ASX_MAX_OBLIGATIONS; i++) { ASSERT_EQ(asx_obligation_commit(oids[i]), ASX_OK); }
+}
+
+TEST(no_corruption_after_obligation_reserve_failure) {
+    asx_region_id rid;
+
+    reset_all();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(test_run_in_task(rid, reserve_failure_body, &rid), ASX_OK);
 }
 
 /* ====================================================================
  * Region admission limits (Rust RegionLimits)
  * ==================================================================== */
+
+/* An obligation exists only through a task, so the obligation limit is
+ * probed from the poll of the region's single task: the second reservation
+ * is refused while the first is pending, and committing it frees the room. */
+typedef struct {
+    asx_region_id region;
+    asx_status first;
+    asx_status over_limit;
+    asx_status commit_first;
+    asx_status again;
+    asx_status commit_again;
+} obligation_limit_probe;
+
+static asx_status poll_obligation_limit(void *ud, asx_task_id self) {
+    obligation_limit_probe *p = (obligation_limit_probe *)ud;
+    asx_obligation_id o1 = ASX_INVALID_ID;
+    asx_obligation_id o2 = ASX_INVALID_ID;
+    (void)self;
+    p->first = asx_obligation_reserve(p->region, &o1);
+    p->over_limit = asx_obligation_reserve(p->region, &o2);
+    p->commit_first = p->first == ASX_OK ? asx_obligation_commit(o1) : p->first;
+    p->again = asx_obligation_reserve(p->region, &o2);
+    p->commit_again = p->again == ASX_OK ? asx_obligation_commit(o2) : p->again;
+    return ASX_OK;
+}
 
 /* Each limit caps live work: the admission past it is refused with
  * ASX_E_ADMISSION_LIMIT and changes nothing; finishing work frees room. */
@@ -776,8 +841,7 @@ TEST(region_limits_cap_live_tasks_children_and_obligations) {
     asx_region_limits limits;
     asx_task_id t1;
     asx_task_id t2;
-    asx_obligation_id o1;
-    asx_obligation_id o2;
+    obligation_limit_probe probe;
     asx_budget budget;
 
     reset_all();
@@ -792,20 +856,26 @@ TEST(region_limits_cap_live_tasks_children_and_obligations) {
     limits.max_obligations = 1u;
     ASSERT_EQ(asx_region_set_limits(rid, &limits), ASX_OK);
 
-    ASSERT_EQ(asx_task_spawn(rid, poll_ok, NULL, &t1), ASX_OK);
+    probe.region = rid;
+    probe.first = ASX_E_PENDING;
+    probe.over_limit = ASX_E_PENDING;
+    probe.commit_first = ASX_E_PENDING;
+    probe.again = ASX_E_PENDING;
+    probe.commit_again = ASX_E_PENDING;
+    ASSERT_EQ(asx_task_spawn(rid, poll_obligation_limit, &probe, &t1), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_ok, NULL, &t2), ASX_E_ADMISSION_LIMIT);
     ASSERT_EQ(asx_region_open_child(rid, &child), ASX_OK);
     ASSERT_EQ(asx_region_open_child(rid, &extra_child), ASX_E_ADMISSION_LIMIT);
-    ASSERT_EQ(asx_obligation_reserve(rid, &o1), ASX_OK);
-    ASSERT_EQ(asx_obligation_reserve(rid, &o2), ASX_E_ADMISSION_LIMIT);
 
     /* Completing the task and resolving the obligation free their room. */
     budget = asx_budget_from_polls(10);
     ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
+    ASSERT_EQ(probe.first, ASX_OK);
+    ASSERT_EQ(probe.over_limit, ASX_E_ADMISSION_LIMIT);
+    ASSERT_EQ(probe.commit_first, ASX_OK);
+    ASSERT_EQ(probe.again, ASX_OK);
+    ASSERT_EQ(probe.commit_again, ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_ok, NULL, &t2), ASX_OK);
-    ASSERT_EQ(asx_obligation_commit(o1), ASX_OK);
-    ASSERT_EQ(asx_obligation_reserve(rid, &o2), ASX_OK);
-    ASSERT_EQ(asx_obligation_commit(o2), ASX_OK);
 
     /* Unlimited again. */
     limits.max_tasks = ASX_REGION_UNLIMITED;

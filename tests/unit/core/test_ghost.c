@@ -12,9 +12,18 @@
 
 #include "../../../src/runtime/runtime_internal.h"
 #include "test_harness.h"
+#include "test_task.h"
 #include <asx/asx.h>
 #include <asx/core/ghost.h>
 #include <asx/runtime/runtime.h>
+
+/* A task that is only ever a holder: the tests that name it as one never
+ * poll it. */
+static asx_status noop_poll(void *user_data, asx_task_id self) {
+    (void)user_data;
+    (void)self;
+    return ASX_OK;
+}
 
 /* ---- Protocol monitor: region transitions ---- */
 
@@ -108,14 +117,17 @@ TEST(ghost_protocol_obligation_invalid_transition) {
     }
 }
 
-/* ---- Linearity monitor: double resolution ---- */
+/* ---- Linearity monitor: double resolution ----
+ *
+ * An obligation is reserved and settled by its holder task's own poll, so
+ * the bodies below run as the poll of a task of the region (test_task.h).
+ * A task resolves what it reserves before it returns: an obligation left
+ * reserved leaks when its holder completes. */
 
-TEST(ghost_linearity_double_commit) {
-    asx_region_id rid;
+static void double_commit_body(void *ctx) {
+    asx_region_id rid = *(asx_region_id *)ctx;
     asx_obligation_id oid;
-    asx_runtime_reset();
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
     ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_OK);
 
     /* First commit: valid */
@@ -123,18 +135,24 @@ TEST(ghost_linearity_double_commit) {
 
     /* Second commit: blocked by transition check, but ghost sees it */
     ASSERT_NE(asx_obligation_commit(oid), ASX_OK);
+}
+
+TEST(ghost_linearity_double_commit) {
+    asx_region_id rid;
+    asx_runtime_reset();
+
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(test_run_in_task(rid, double_commit_body, &rid), ASX_OK);
 
     /* Ghost should have recorded the protocol violation for the
      * second commit attempt (Committed -> Committed is invalid). */
     ASSERT_TRUE(asx_ghost_violation_count() >= (uint32_t)1);
 }
 
-TEST(ghost_linearity_double_abort) {
-    asx_region_id rid;
+static void double_abort_body(void *ctx) {
+    asx_region_id rid = *(asx_region_id *)ctx;
     asx_obligation_id oid;
-    asx_runtime_reset();
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
     ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_OK);
 
     /* First abort: valid */
@@ -142,21 +160,35 @@ TEST(ghost_linearity_double_abort) {
 
     /* Second abort: blocked, ghost records violation */
     ASSERT_NE(asx_obligation_abort(oid), ASX_OK);
+}
+
+TEST(ghost_linearity_double_abort) {
+    asx_region_id rid;
+    asx_runtime_reset();
+
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(test_run_in_task(rid, double_abort_body, &rid), ASX_OK);
 
     ASSERT_TRUE(asx_ghost_violation_count() >= (uint32_t)1);
 }
 
-TEST(ghost_linearity_commit_after_abort) {
-    asx_region_id rid;
+static void commit_after_abort_body(void *ctx) {
+    asx_region_id rid = *(asx_region_id *)ctx;
     asx_obligation_id oid;
-    asx_runtime_reset();
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
     ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_OK);
     ASSERT_EQ(asx_obligation_abort(oid), ASX_OK);
 
     /* Commit after abort: blocked, ghost records */
     ASSERT_NE(asx_obligation_commit(oid), ASX_OK);
+}
+
+TEST(ghost_linearity_commit_after_abort) {
+    asx_region_id rid;
+    asx_runtime_reset();
+
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(test_run_in_task(rid, commit_after_abort_body, &rid), ASX_OK);
     ASSERT_TRUE(asx_ghost_violation_count() >= (uint32_t)1);
 }
 
@@ -164,12 +196,16 @@ TEST(ghost_linearity_commit_after_abort) {
 
 TEST(ghost_linearity_leaked_obligation) {
     asx_region_id rid;
+    asx_task_id holder;
     asx_obligation_id oid;
     uint32_t leaks;
     asx_runtime_reset();
 
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
-    ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_OK);
+    /* The holder is live and never polled, so it neither resolves nor
+     * completes with the obligation before the monitor looks. */
+    ASSERT_EQ(asx_task_spawn(rid, noop_poll, NULL, &holder), ASX_OK);
+    ASSERT_EQ(asx_obligation_reserve_ex(rid, ASX_OBLIGATION_KIND_GENERIC, holder, &oid), ASX_OK);
 
     /* Don't resolve the obligation — it will be detected as a leak */
     leaks = asx_ghost_check_obligation_leaks(rid);
@@ -186,41 +222,53 @@ TEST(ghost_linearity_leaked_obligation) {
     }
 }
 
+static void reserve_and_commit_body(void *ctx) {
+    asx_region_id rid = *(asx_region_id *)ctx;
+    asx_obligation_id oid;
+
+    ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_OK);
+    ASSERT_EQ(asx_obligation_commit(oid), ASX_OK);
+}
+
 TEST(ghost_linearity_no_leak_after_commit) {
     asx_region_id rid;
-    asx_obligation_id oid;
     uint32_t leaks;
     asx_runtime_reset();
 
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
-    ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_OK);
-    ASSERT_EQ(asx_obligation_commit(oid), ASX_OK);
+    ASSERT_EQ(test_run_in_task(rid, reserve_and_commit_body, &rid), ASX_OK);
 
     leaks = asx_ghost_check_obligation_leaks(rid);
     ASSERT_EQ(leaks, (uint32_t)0);
+}
+
+static void reserve_and_abort_body(void *ctx) {
+    asx_region_id rid = *(asx_region_id *)ctx;
+    asx_obligation_id oid;
+
+    ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_OK);
+    ASSERT_EQ(asx_obligation_abort(oid), ASX_OK);
 }
 
 TEST(ghost_linearity_no_leak_after_abort) {
     asx_region_id rid;
-    asx_obligation_id oid;
     uint32_t leaks;
     asx_runtime_reset();
 
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
-    ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_OK);
-    ASSERT_EQ(asx_obligation_abort(oid), ASX_OK);
+    ASSERT_EQ(test_run_in_task(rid, reserve_and_abort_body, &rid), ASX_OK);
 
     leaks = asx_ghost_check_obligation_leaks(rid);
     ASSERT_EQ(leaks, (uint32_t)0);
 }
 
-TEST(ghost_linearity_multiple_obligations_mixed) {
-    asx_region_id rid;
+/* The monitor is asked while the holder is still polling, with o2 still
+ * unresolved; o2 is resolved afterwards, before the task completes. */
+static void multiple_mixed_body(void *ctx) {
+    asx_region_id rid = *(asx_region_id *)ctx;
     asx_obligation_id o1, o2, o3;
     uint32_t leaks;
-    asx_runtime_reset();
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
     ASSERT_EQ(asx_obligation_reserve(rid, &o1), ASX_OK);
     ASSERT_EQ(asx_obligation_reserve(rid, &o2), ASX_OK);
     ASSERT_EQ(asx_obligation_reserve(rid, &o3), ASX_OK);
@@ -231,6 +279,16 @@ TEST(ghost_linearity_multiple_obligations_mixed) {
 
     leaks = asx_ghost_check_obligation_leaks(rid);
     ASSERT_EQ(leaks, (uint32_t)1);
+
+    ASSERT_EQ(asx_obligation_abort(o2), ASX_OK);
+}
+
+TEST(ghost_linearity_multiple_obligations_mixed) {
+    asx_region_id rid;
+    asx_runtime_reset();
+
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(test_run_in_task(rid, multiple_mixed_body, &rid), ASX_OK);
 }
 
 /* ---- Ring buffer mechanics ---- */
@@ -339,20 +397,33 @@ TEST(ghost_integration_lifecycle_region_close) {
     ASSERT_EQ(asx_ghost_violation_count(), (uint32_t)0);
 }
 
+/* Reserves and returns without resolving: the obligation leaks when this
+ * task, its holder, completes. */
+static void reserve_and_complete_body(void *ctx) {
+    asx_region_id rid = *(asx_region_id *)ctx;
+    asx_obligation_id oid;
+
+    ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_OK);
+}
+
 TEST(ghost_integration_lifecycle_obligation_leak_on_drain) {
     asx_region_id rid;
-    asx_obligation_id oid;
     asx_budget budget;
     asx_runtime_reset();
-    /* LOG named: under the default PANIC the close fails instead. */
+    /* LOG named: under the default PANIC the leak is a fault instead. */
     asx_runtime_set_leak_policy_internal(ASX_LEAK_LOG, NULL);
 
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
-    ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_OK);
+    /* An obligation always has a live holder, so this one leaks when the
+     * holder completes, before any close. The ghost linearity monitor has
+     * not looked yet: it runs at the close. */
+    ASSERT_EQ(test_run_in_task(rid, reserve_and_complete_body, &rid), ASX_OK);
+    ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)1u);
+    ASSERT_EQ(asx_ghost_violation_count(), (uint32_t)0);
 
-    /* Drain without resolving the obligation: the close leak-audits it
-     * (Rust's Finalizing arm) and the ghost linearity monitor, run before
-     * the audit, records the leak. */
+    /* Drain: the ghost linearity monitor, run at the close before its
+     * audit (Rust's Finalizing arm), still sees the obligation unresolved
+     * and records the leak. */
     budget = asx_budget_infinite();
     ASSERT_EQ(asx_region_drain(rid, &budget), ASX_OK);
     ASSERT_TRUE(asx_ghost_violation_count() >= (uint32_t)1);

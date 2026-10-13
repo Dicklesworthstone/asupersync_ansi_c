@@ -9,6 +9,7 @@
  */
 
 #include "test_harness.h"
+#include "test_task.h"
 #include <asx/asx.h>
 #include <asx/core/resource.h>
 #include <asx/runtime/runtime.h>
@@ -179,14 +180,13 @@ TEST(resource_task_arena_exhaustion) {
 
 /* ---- Obligation arena exhaustion ---- */
 
-TEST(resource_obligation_arena_exhaustion) {
-    asx_region_id rid;
+/* An obligation is reserved, and settled, by its holder task's own poll, so
+ * the fill runs as the poll of a task of the region (test_task.h). */
+static void obligation_arena_exhaustion_body(void *ctx) {
+    asx_region_id rid = *(asx_region_id *)ctx;
     asx_obligation_id oids[ASX_MAX_OBLIGATIONS];
     asx_obligation_id overflow;
     uint32_t i;
-    asx_runtime_reset();
-
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
 
     /* Fill all obligation slots */
     for (i = 0; i < ASX_MAX_OBLIGATIONS; i++) {
@@ -199,6 +199,17 @@ TEST(resource_obligation_arena_exhaustion) {
 
     /* Counter should not have advanced */
     ASSERT_EQ(asx_resource_used(ASX_RESOURCE_OBLIGATION), (uint32_t)ASX_MAX_OBLIGATIONS);
+
+    /* Resolved before the task completes: one still reserved then leaks. */
+    for (i = 0; i < ASX_MAX_OBLIGATIONS; i++) { ASSERT_EQ(asx_obligation_commit(oids[i]), ASX_OK); }
+}
+
+TEST(resource_obligation_arena_exhaustion) {
+    asx_region_id rid;
+    asx_runtime_reset();
+
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(test_run_in_task(rid, obligation_arena_exhaustion_body, &rid), ASX_OK);
 }
 
 /* ---- Cleanup stack exhaustion ---- */

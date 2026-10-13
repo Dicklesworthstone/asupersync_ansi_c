@@ -10,6 +10,7 @@
 #include "../../../src/runtime/runtime_internal.h"
 #include "../../test_harness.h"
 #include "../../test_log.h"
+#include "../../test_task.h"
 #include <asx/asx.h>
 #include <asx/core/cancel.h>
 #include <asx/core/ghost.h>
@@ -2048,17 +2049,17 @@ TEST(budget_cancel_is_attributed_to_the_task_and_records_no_request) {
     ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_CANCEL_REQUEST), (uint64_t)0u);
 }
 
-TEST(obligation_abort_with_reason_records_it) {
-    asx_region_id rid;
+/* The obligations are held by the task that runs this, and only its poll
+ * can abort them. */
+static void abort_with_reason_body(void *ctx) {
+    asx_region_id rid = *(asx_region_id *)ctx;
+    asx_task_id self = asx_task_current();
     asx_obligation_id a;
     asx_obligation_id b;
     asx_obligation_info info;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
-    ASSERT_EQ(asx_obligation_reserve_ex(rid, ASX_OBLIGATION_KIND_LEASE, ASX_INVALID_ID, &a),
-              ASX_OK);
-    ASSERT_EQ(asx_obligation_reserve_ex(rid, ASX_OBLIGATION_KIND_ACK, ASX_INVALID_ID, &b), ASX_OK);
+    ASSERT_EQ(asx_obligation_reserve_ex(rid, ASX_OBLIGATION_KIND_LEASE, self, &a), ASX_OK);
+    ASSERT_EQ(asx_obligation_reserve_ex(rid, ASX_OBLIGATION_KIND_ACK, self, &b), ASX_OK);
     ASSERT_EQ(asx_obligation_abort_with_reason(a, ASX_OBLIGATION_ABORT_NONE),
               ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_obligation_abort_with_reason(a, (asx_obligation_abort_reason)4),
@@ -2069,6 +2070,14 @@ TEST(obligation_abort_with_reason_records_it) {
     ASSERT_EQ(asx_obligation_abort(b), ASX_OK);
     ASSERT_EQ(asx_obligation_get_info(b, &info), ASX_OK);
     ASSERT_EQ((int)info.abort_reason, (int)ASX_OBLIGATION_ABORT_EXPLICIT);
+}
+
+TEST(obligation_abort_with_reason_records_it) {
+    asx_region_id rid;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(test_run_in_task(rid, abort_with_reason_body, &rid), ASX_OK);
 }
 
 /* -------------------------------------------------------------------

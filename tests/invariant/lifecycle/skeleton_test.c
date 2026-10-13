@@ -16,6 +16,7 @@
 
 #include "runtime/runtime_internal.h"
 #include "test_harness.h"
+#include "test_task.h"
 #include <asx/asx.h>
 
 /* -------------------------------------------------------------------
@@ -262,26 +263,48 @@ TEST(region_drain_propagates_budget_exhaustion) {
     ASSERT_EQ(st, ASX_E_POLL_BUDGET_EXHAUSTED);
 }
 
+typedef struct {
+    asx_region_id region;
+    asx_obligation_id oid;
+} unresolved_ctx;
+
+/* Reserves an obligation and returns with it still Reserved, so the task
+ * completes holding it. */
+static void reserve_and_leave_reserved(void *ctx) {
+    unresolved_ctx *u = (unresolved_ctx *)ctx;
+    ASSERT_EQ(asx_obligation_reserve(u->region, &u->oid), ASX_OK);
+}
+
 TEST(region_drain_leak_audits_unresolved_obligations) {
     /* Rust's Finalizing arm leak-audits an obligation still Reserved once
-     * no task is left, then closes (runtime/state.rs:10266-10317): the
-     * drain closes the region and the obligation ends Leaked (LOG policy,
-     * named here: the default is PANIC, which fails the close instead),
-     * counted once. */
+     * no task is left, then closes (runtime/state.rs:10266-10317). Every
+     * obligation has a holder task, and the holder's completion leaks it
+     * before the region can finalize, so no public sequence reaches the
+     * audit itself: the holder completes with its obligation Reserved, and
+     * the drain then closes the region over a Leaked obligation (LOG
+     * policy, named here: the default is PANIC, which routes the leak
+     * through region containment instead), counted once. */
     asx_region_id rid;
-    asx_obligation_id oid;
     asx_obligation_state ostate;
     asx_region_state rstate;
     asx_budget budget;
     asx_status st;
     uint64_t leaks_before;
+    unresolved_ctx ctx;
 
     asx_runtime_set_leak_policy_internal(ASX_LEAK_LOG, NULL);
     leaks_before = asx_obligation_leak_count();
 
     st = asx_region_open(&rid);
     ASSERT_EQ(st, ASX_OK);
-    ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_OK);
+    ctx.region = rid;
+    ctx.oid = ASX_INVALID_ID;
+    ASSERT_EQ(test_run_in_task(rid, reserve_and_leave_reserved, &ctx), ASX_OK);
+
+    /* The holder's completion leaked it, once. */
+    ASSERT_EQ(asx_obligation_get_state(ctx.oid, &ostate), ASX_OK);
+    ASSERT_EQ(ostate, ASX_OBLIGATION_LEAKED);
+    ASSERT_EQ(asx_obligation_leak_count(), leaks_before + 1u);
 
     budget = asx_budget_infinite();
     st = asx_region_drain(rid, &budget);
@@ -290,12 +313,12 @@ TEST(region_drain_leak_audits_unresolved_obligations) {
     st = asx_region_get_state(rid, &rstate);
     ASSERT_EQ(st, ASX_OK);
     ASSERT_EQ(rstate, ASX_REGION_CLOSED);
-    ASSERT_EQ(asx_obligation_get_state(oid, &ostate), ASX_OK);
+    ASSERT_EQ(asx_obligation_get_state(ctx.oid, &ostate), ASX_OK);
     ASSERT_EQ(ostate, ASX_OBLIGATION_LEAKED);
     ASSERT_EQ(asx_obligation_leak_count(), leaks_before + 1u);
     /* A leaked obligation cannot be resolved afterwards (Rust
      * ObligationAlreadyResolved, runtime/obligation_table.rs:577). */
-    ASSERT_EQ(asx_obligation_abort(oid), ASX_E_OBLIGATION_ALREADY_RESOLVED);
+    ASSERT_EQ(asx_obligation_abort(ctx.oid), ASX_E_OBLIGATION_ALREADY_RESOLVED);
 }
 
 TEST(quiescence_after_drain) {

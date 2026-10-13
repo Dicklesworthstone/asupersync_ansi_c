@@ -25,6 +25,8 @@
 #include <asx/core/transition.h>
 #include <asx/runtime/runtime.h>
 
+#include "test_task.h"
+
 /* ------------------------------------------------------------------ */
 /* Budget helper                                                       */
 /* ------------------------------------------------------------------ */
@@ -308,9 +310,25 @@ TEST(ghost_kind_str_unknown) {
 /* Integration with Lifecycle Tests                                    */
 /* ================================================================== */
 
+/* An obligation is reserved and settled by the poll of its holder task. */
+static void reserve_commit_body(void *ctx) {
+    asx_region_id rid = *(asx_region_id *)ctx;
+    asx_obligation_id oid;
+
+    ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_OK);
+    ASSERT_EQ(asx_obligation_commit(oid), ASX_OK);
+}
+
+static void reserve_abort_body(void *ctx) {
+    asx_region_id rid = *(asx_region_id *)ctx;
+    asx_obligation_id oid;
+
+    ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_OK);
+    ASSERT_EQ(asx_obligation_abort(oid), ASX_OK);
+}
+
 TEST(ghost_lifecycle_legal_workflow) {
     asx_region_id rid;
-    asx_obligation_id oid;
     asx_budget budget;
 
     asx_runtime_reset();
@@ -319,8 +337,7 @@ TEST(ghost_lifecycle_legal_workflow) {
     /* Full legal workflow: open region, reserve obligation,
      * commit obligation, close region, drain */
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
-    ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_OK);
-    ASSERT_EQ(asx_obligation_commit(oid), ASX_OK);
+    ASSERT_EQ(test_run_in_task(rid, reserve_commit_body, &rid), ASX_OK);
 
     /* Ghost should have no violations for legal operations */
     ASSERT_EQ(asx_ghost_violation_count(), 0u);
@@ -335,14 +352,12 @@ TEST(ghost_lifecycle_legal_workflow) {
 
 TEST(ghost_lifecycle_obligation_abort) {
     asx_region_id rid;
-    asx_obligation_id oid;
 
     asx_runtime_reset();
     asx_ghost_reset();
 
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
-    ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_OK);
-    ASSERT_EQ(asx_obligation_abort(oid), ASX_OK);
+    ASSERT_EQ(test_run_in_task(rid, reserve_abort_body, &rid), ASX_OK);
 
     /* Abort is legal, no violations */
     ASSERT_EQ(asx_ghost_violation_count(), 0u);

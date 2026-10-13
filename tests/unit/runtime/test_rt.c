@@ -20,6 +20,7 @@
 
 #include "../../../src/runtime/runtime_internal.h"
 #include "../../test_harness.h"
+#include "../../test_task.h"
 #include <asx/asx.h>
 #include <asx/core/cleanup.h>
 #include <string.h>
@@ -349,10 +350,19 @@ TEST(init_generation_increments) {
     asx_runtime_shutdown(&b);
 }
 
+/* The task commits the obligation it holds in its own poll: only a holder's
+ * poll settles an obligation. */
+typedef struct {
+    int polls;
+    asx_obligation_id obligation;
+    asx_status commit;
+} preserved_task_state;
+
 static asx_status poll_preserved_task(void *data, asx_task_id self) {
-    int *polls = (int *)data;
+    preserved_task_state *state = (preserved_task_state *)data;
     (void)self;
-    (*polls)++;
+    state->polls++;
+    state->commit = asx_obligation_commit(state->obligation);
     return ASX_OK;
 }
 
@@ -366,14 +376,20 @@ TEST(conflicting_init_preserves_live_runtime_and_destination) {
     asx_obligation_state obligation_state;
     asx_budget run;
     asx_outcome outcome;
-    int polls = 0;
+    preserved_task_state state;
     asx_runtime_reset();
     make_valid_config(&cfg);
     make_valid_hooks(&hooks);
     MUST_OK(asx_runtime_init(&a, &cfg, &hooks));
     ASSERT_EQ(asx_region_open(&region), ASX_OK);
-    ASSERT_EQ(asx_task_spawn(region, poll_preserved_task, &polls, &task), ASX_OK);
-    ASSERT_EQ(asx_obligation_reserve(region, &obligation), ASX_OK);
+    state.polls = 0;
+    state.obligation = ASX_INVALID_ID;
+    state.commit = ASX_E_PENDING;
+    ASSERT_EQ(asx_task_spawn(region, poll_preserved_task, &state, &task), ASX_OK);
+    /* Held by the live, not yet polled task, which commits it when it runs. */
+    ASSERT_EQ(asx_obligation_reserve_ex(region, ASX_OBLIGATION_KIND_GENERIC, task, &obligation),
+              ASX_OK);
+    state.obligation = obligation;
     memset(&b, 0, sizeof(b));
     b.generation = 42u;
     memcpy(&before_a, &a, sizeof(a));
@@ -393,10 +409,12 @@ TEST(conflicting_init_preserves_live_runtime_and_destination) {
     ASSERT_TRUE(after_hooks.allocator.malloc_fn == hooks.allocator.malloc_fn);
     ASSERT_EQ(asx_obligation_get_state(obligation, &obligation_state), ASX_OK);
     ASSERT_EQ(obligation_state, ASX_OBLIGATION_RESERVED);
-    ASSERT_EQ(asx_obligation_commit(obligation), ASX_OK);
     run = asx_budget_from_polls(8u);
     ASSERT_EQ(asx_scheduler_run(region, &run), ASX_OK);
-    ASSERT_EQ(polls, 1);
+    ASSERT_EQ(state.polls, 1);
+    ASSERT_EQ(state.commit, ASX_OK);
+    ASSERT_EQ(asx_obligation_get_state(obligation, &obligation_state), ASX_OK);
+    ASSERT_EQ(obligation_state, ASX_OBLIGATION_COMMITTED);
     ASSERT_EQ(asx_task_get_outcome(task, &outcome), ASX_OK);
     ASSERT_EQ(asx_outcome_severity_of(&outcome), ASX_OUTCOME_OK);
     asx_runtime_shutdown(&a);
@@ -1183,14 +1201,23 @@ TEST(runtime_is_quiescent_true_with_completed_task_in_closed_region) {
 TEST(runtime_is_quiescent_false_with_pending_obligation) {
     asx_runtime rt;
     asx_region_id rid;
+    asx_task_id holder;
     asx_obligation_id oid;
     asx_region_slot *region = NULL;
+    asx_task_slot *holder_slot = NULL;
 
     MUST_OK(asx_runtime_init_default(&rt));
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
-    ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, dummy_poll, NULL, &holder), ASX_OK);
+    ASSERT_EQ(asx_obligation_reserve_ex(rid, ASX_OBLIGATION_KIND_GENERIC, holder, &oid), ASX_OK);
     ASSERT_EQ(asx_region_slot_lookup(rid, &region), ASX_OK);
     region->state = ASX_REGION_CLOSED;
+    /* A live holder alone would keep the runtime from quiescing. No public
+     * sequence leaves an obligation reserved once its holder is terminal,
+     * so the holder's slot is forced terminal to isolate the pending
+     * obligation, as the region's state is forced above. */
+    ASSERT_EQ(asx_task_slot_lookup(holder, &holder_slot), ASX_OK);
+    holder_slot->state = ASX_TASK_COMPLETED;
     ASSERT_FALSE(asx_runtime_is_quiescent(&rt));
     asx_runtime_shutdown(&rt);
 }
@@ -1402,10 +1429,25 @@ TEST(umbrella_runtime_lab_deadline_roundtrip) {
 /* Integration: init → use → shutdown round-trip                       */
 /* ------------------------------------------------------------------ */
 
+typedef struct {
+    const asx_runtime *rt;
+    asx_region_id region;
+} roundtrip_ctx;
+
+/* Reserve and commit an obligation, as a task's own poll. */
+static void roundtrip_reserve_commit(void *data) {
+    roundtrip_ctx *ctx = (roundtrip_ctx *)data;
+    asx_obligation_id oid;
+
+    ASSERT_EQ(asx_obligation_reserve(ctx->region, &oid), ASX_OK);
+    ASSERT_EQ(asx_runtime_obligation_count(ctx->rt), 1u);
+    ASSERT_EQ(asx_obligation_commit(oid), ASX_OK);
+}
+
 TEST(full_roundtrip) {
     asx_runtime rt;
     asx_region_id rid;
-    asx_obligation_id oid;
+    roundtrip_ctx ctx;
     asx_runtime_config cfg_out;
 
     ASSERT_EQ(asx_runtime_init_default(&rt), ASX_OK);
@@ -1416,9 +1458,9 @@ TEST(full_roundtrip) {
     ASSERT_EQ(asx_runtime_region_count(&rt), 1u);
 
     /* Reserve and commit obligation */
-    ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_OK);
-    ASSERT_EQ(asx_runtime_obligation_count(&rt), 1u);
-    ASSERT_EQ(asx_obligation_commit(oid), ASX_OK);
+    ctx.rt = &rt;
+    ctx.region = rid;
+    ASSERT_EQ(test_run_in_task(rid, roundtrip_reserve_commit, &ctx), ASX_OK);
 
     /* Query config */
     ASSERT_EQ(asx_runtime_get_config(&rt, &cfg_out), ASX_OK);

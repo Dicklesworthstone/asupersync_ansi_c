@@ -8,6 +8,7 @@
  */
 
 #include "../test_harness.h"
+#include "../test_task.h"
 #include <asx/asx.h>
 #include <asx/core/ghost.h>
 #include <asx/runtime/event.h>
@@ -147,6 +148,37 @@ TEST(double_close_and_finalize_fail_without_events) {
     guard_assert_no_semantic_mutation(&guard);
 }
 
+typedef struct {
+    asx_region_id region;
+    int commit; /* commit it (else abort it) */
+    asx_obligation_id obligation;
+} resolve_job;
+
+/* Reserve one obligation and resolve it, both as its holder's poll. */
+static void reserve_and_resolve(void *ctx) {
+    resolve_job *job = (resolve_job *)ctx;
+
+    ASSERT_EQ(asx_obligation_reserve(job->region, &job->obligation), ASX_OK);
+    if (job->commit) {
+        ASSERT_EQ(asx_obligation_commit(job->obligation), ASX_OK);
+    } else {
+        ASSERT_EQ(asx_obligation_abort(job->obligation), ASX_OK);
+    }
+}
+
+/* An obligation is reserved and settled only by its holder's poll: leave
+ * `*out` an already resolved obligation of `region`. */
+static void resolve_in_task(asx_region_id region, int commit, asx_obligation_id *out) {
+    resolve_job job;
+
+    *out = ASX_INVALID_ID;
+    job.region = region;
+    job.commit = commit;
+    job.obligation = ASX_INVALID_ID;
+    ASSERT_EQ(test_run_in_task(region, reserve_and_resolve, &job), ASX_OK);
+    *out = job.obligation;
+}
+
 TEST(obligation_illegal_transitions_fail_without_events) {
     misuse_guard guard;
     asx_region_id region;
@@ -154,27 +186,56 @@ TEST(obligation_illegal_transitions_fail_without_events) {
 
     reset_all();
     ASSERT_EQ(asx_region_open(&region), ASX_OK);
-    ASSERT_EQ(asx_obligation_reserve(region, &obligation), ASX_OK);
-    ASSERT_EQ(asx_obligation_commit(obligation), ASX_OK);
+    resolve_in_task(region, 1, &obligation);
     guard_capture(&guard);
     ASSERT_EQ(asx_obligation_commit(obligation), ASX_E_OBLIGATION_ALREADY_RESOLVED);
     guard_assert_no_semantic_mutation(&guard);
 
     reset_all();
     ASSERT_EQ(asx_region_open(&region), ASX_OK);
-    ASSERT_EQ(asx_obligation_reserve(region, &obligation), ASX_OK);
-    ASSERT_EQ(asx_obligation_commit(obligation), ASX_OK);
+    resolve_in_task(region, 1, &obligation);
     guard_capture(&guard);
     ASSERT_EQ(asx_obligation_abort(obligation), ASX_E_OBLIGATION_ALREADY_RESOLVED);
     guard_assert_no_semantic_mutation(&guard);
 
     reset_all();
     ASSERT_EQ(asx_region_open(&region), ASX_OK);
-    ASSERT_EQ(asx_obligation_reserve(region, &obligation), ASX_OK);
-    ASSERT_EQ(asx_obligation_abort(obligation), ASX_OK);
+    resolve_in_task(region, 0, &obligation);
     guard_capture(&guard);
     ASSERT_EQ(asx_obligation_commit(obligation), ASX_E_OBLIGATION_ALREADY_RESOLVED);
     ASSERT_EQ(asx_obligation_abort(obligation), ASX_E_OBLIGATION_ALREADY_RESOLVED);
+    guard_assert_no_semantic_mutation(&guard);
+}
+
+TEST(obligation_without_holder_authority_fails_without_events) {
+    misuse_guard guard;
+    asx_region_id region;
+    asx_task_id holder;
+    asx_obligation_id obligation;
+
+    /* The host holds no task, so a reserve outside a poll creates nothing,
+     * and a holder must be named. */
+    reset_all();
+    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    guard_capture(&guard);
+    ASSERT_EQ(asx_obligation_reserve(region, &obligation), ASX_E_PERMISSION_DENIED);
+    ASSERT_EQ(asx_obligation_reserve_ex(region, ASX_OBLIGATION_KIND_GENERIC, ASX_INVALID_ID,
+                                        &obligation),
+              ASX_E_INVALID_ARGUMENT);
+    guard_assert_no_semantic_mutation(&guard);
+
+    /* A held obligation is settled only from its holder's poll: the host,
+     * outside any poll, is refused (the holder is never polled here, so it
+     * neither settles nor leaks it). */
+    reset_all();
+    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(region, poll_pending, NULL, &holder), ASX_OK);
+    ASSERT_EQ(asx_obligation_reserve_ex(region, ASX_OBLIGATION_KIND_GENERIC, holder, &obligation),
+              ASX_OK);
+    guard_capture(&guard);
+    ASSERT_EQ(asx_obligation_commit(obligation), ASX_E_PERMISSION_DENIED);
+    ASSERT_EQ(asx_obligation_abort(obligation), ASX_E_PERMISSION_DENIED);
+    ASSERT_EQ(asx_obligation_drop(obligation), ASX_E_PERMISSION_DENIED);
     guard_assert_no_semantic_mutation(&guard);
 }
 
@@ -267,6 +328,7 @@ int main(void) {
     RUN_TEST(stale_region_handles_fail_without_events);
     RUN_TEST(double_close_and_finalize_fail_without_events);
     RUN_TEST(obligation_illegal_transitions_fail_without_events);
+    RUN_TEST(obligation_without_holder_authority_fails_without_events);
     RUN_TEST(channel_misuse_failures_are_exact_and_non_emitting);
     RUN_TEST(deadline_and_cancellation_misuse_are_exact_and_non_emitting);
 

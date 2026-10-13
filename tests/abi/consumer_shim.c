@@ -66,7 +66,11 @@ asx_status asx_abi_host_start(void) {
     if (st != ASX_OK) return st;
     st = asx_task_spawn(host_region, host_poll, NULL, &host_task);
     if (st != ASX_OK) return st;
-    return asx_obligation_reserve(host_region, &host_obligation);
+    /* An obligation always has a holder task, and only the holder's own poll
+     * settles it: the host, outside any poll, reserves with the not yet
+     * polled host_task named as holder, and host_poll aborts it. */
+    return asx_obligation_reserve_ex(host_region, ASX_OBLIGATION_KIND_GENERIC, host_task,
+                                     &host_obligation);
 }
 
 asx_status asx_abi_host_finish(void) {

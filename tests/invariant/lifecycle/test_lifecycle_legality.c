@@ -15,6 +15,7 @@
 
 #include "test_harness.h"
 #include "test_log.h"
+#include "test_task.h"
 #include <asx/asx.h>
 #include <asx/core/transition.h>
 #include <asx/runtime/runtime.h>
@@ -187,12 +188,13 @@ TEST(task_state_after_completion_is_completed) {
  * Obligation lifecycle legality
  * ------------------------------------------------------------------- */
 
-TEST(obligation_double_commit_rejected) {
-    asx_region_id rid;
+/* An obligation is reserved and settled only by its holder's poll (Rust
+ * creates a token only through a task), so each sequence below runs as the
+ * single poll of a task of the region. */
+static void body_double_commit(void *ctx) {
+    asx_region_id rid = *(asx_region_id *)ctx;
     asx_obligation_id oid;
 
-    reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
     ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_OK);
 
     ASSERT_EQ(asx_obligation_commit(oid), ASX_OK);
@@ -202,12 +204,10 @@ TEST(obligation_double_commit_rejected) {
     ASSERT_EQ(asx_obligation_commit(oid), ASX_E_OBLIGATION_ALREADY_RESOLVED);
 }
 
-TEST(obligation_commit_then_abort_rejected) {
-    asx_region_id rid;
+static void body_commit_then_abort(void *ctx) {
+    asx_region_id rid = *(asx_region_id *)ctx;
     asx_obligation_id oid;
 
-    reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
     ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_OK);
 
     ASSERT_EQ(asx_obligation_commit(oid), ASX_OK);
@@ -216,12 +216,10 @@ TEST(obligation_commit_then_abort_rejected) {
     ASSERT_EQ(asx_obligation_abort(oid), ASX_E_OBLIGATION_ALREADY_RESOLVED);
 }
 
-TEST(obligation_abort_then_commit_rejected) {
-    asx_region_id rid;
+static void body_abort_then_commit(void *ctx) {
+    asx_region_id rid = *(asx_region_id *)ctx;
     asx_obligation_id oid;
 
-    reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
     ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_OK);
 
     ASSERT_EQ(asx_obligation_abort(oid), ASX_OK);
@@ -230,12 +228,10 @@ TEST(obligation_abort_then_commit_rejected) {
     ASSERT_EQ(asx_obligation_commit(oid), ASX_E_OBLIGATION_ALREADY_RESOLVED);
 }
 
-TEST(obligation_double_abort_rejected) {
-    asx_region_id rid;
+static void body_double_abort(void *ctx) {
+    asx_region_id rid = *(asx_region_id *)ctx;
     asx_obligation_id oid;
 
-    reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
     ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_OK);
 
     ASSERT_EQ(asx_obligation_abort(oid), ASX_OK);
@@ -244,11 +240,89 @@ TEST(obligation_double_abort_rejected) {
     ASSERT_EQ(asx_obligation_abort(oid), ASX_E_OBLIGATION_ALREADY_RESOLVED);
 }
 
+TEST(obligation_double_commit_rejected) {
+    asx_region_id rid;
+
+    reset_all();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(test_run_in_task(rid, body_double_commit, &rid), ASX_OK);
+}
+
+TEST(obligation_commit_then_abort_rejected) {
+    asx_region_id rid;
+
+    reset_all();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(test_run_in_task(rid, body_commit_then_abort, &rid), ASX_OK);
+}
+
+TEST(obligation_abort_then_commit_rejected) {
+    asx_region_id rid;
+
+    reset_all();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(test_run_in_task(rid, body_abort_then_commit, &rid), ASX_OK);
+}
+
+TEST(obligation_double_abort_rejected) {
+    asx_region_id rid;
+
+    reset_all();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(test_run_in_task(rid, body_double_abort, &rid), ASX_OK);
+}
+
 TEST(obligation_invalid_handle_rejected) {
     reset_all();
 
     ASSERT_EQ(asx_obligation_commit(ASX_INVALID_ID), ASX_E_NOT_FOUND);
     ASSERT_EQ(asx_obligation_abort(ASX_INVALID_ID), ASX_E_NOT_FOUND);
+}
+
+typedef struct {
+    asx_obligation_id oid;
+    asx_status commit_status;
+} holder_commit;
+
+static asx_status poll_holder_commits(void *ud, asx_task_id self) {
+    holder_commit *hc = (holder_commit *)ud;
+    (void)self;
+    hc->commit_status = asx_obligation_commit(hc->oid);
+    return ASX_OK;
+}
+
+TEST(obligation_settled_only_from_holder_poll) {
+    asx_region_id rid;
+    asx_task_id holder;
+    asx_obligation_id oid;
+    asx_obligation_state state;
+    asx_budget budget;
+    holder_commit hc;
+
+    reset_all();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+
+    /* The host holds no task, so it cannot reserve: nothing is created. */
+    ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_E_PERMISSION_DENIED);
+
+    /* Reserved on a named live task's behalf, the obligation is that task's:
+     * the host, outside any poll, may neither commit nor abort it. */
+    hc.oid = ASX_INVALID_ID;
+    hc.commit_status = ASX_E_INVALID_STATE;
+    ASSERT_EQ(asx_task_spawn(rid, poll_holder_commits, &hc, &holder), ASX_OK);
+    ASSERT_EQ(asx_obligation_reserve_ex(rid, ASX_OBLIGATION_KIND_GENERIC, holder, &oid), ASX_OK);
+    hc.oid = oid;
+    ASSERT_EQ(asx_obligation_commit(oid), ASX_E_PERMISSION_DENIED);
+    ASSERT_EQ(asx_obligation_abort(oid), ASX_E_PERMISSION_DENIED);
+    ASSERT_EQ(asx_obligation_get_state(oid, &state), ASX_OK);
+    ASSERT_EQ(state, ASX_OBLIGATION_RESERVED);
+
+    /* Its holder's own poll settles it. */
+    budget = asx_budget_from_polls(10);
+    ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
+    ASSERT_EQ(hc.commit_status, ASX_OK);
+    ASSERT_EQ(asx_obligation_get_state(oid, &state), ASX_OK);
+    ASSERT_EQ(state, ASX_OBLIGATION_COMMITTED);
 }
 
 /* -------------------------------------------------------------------
@@ -300,6 +374,7 @@ int main(void) {
     RUN_TEST(obligation_abort_then_commit_rejected);
     RUN_TEST(obligation_double_abort_rejected);
     RUN_TEST(obligation_invalid_handle_rejected);
+    RUN_TEST(obligation_settled_only_from_holder_poll);
 
     /* Transition table checks */
     RUN_TEST(region_transition_open_to_closing_legal);

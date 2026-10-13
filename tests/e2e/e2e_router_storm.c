@@ -76,6 +76,46 @@ static asx_status poll_checkpoint_cooperative(void *ud, asx_task_id self) {
     return ASX_E_PENDING;
 }
 
+/* Obligation churn: an obligation is reserved and settled by its holder
+ * task's own poll, so the churn runs as the poll of one task. Every third
+ * obligation is aborted, the rest committed; the first unexpected status
+ * is recorded as the message of the failed step. */
+typedef struct {
+    asx_region_id region;
+    uint32_t committed;
+    const char *failure; /* NULL when every step behaved */
+} churn_state;
+
+static asx_status poll_obligation_churn(void *ud, asx_task_id self) {
+    churn_state *s = (churn_state *)ud;
+    uint32_t i;
+    (void)self;
+
+    for (i = 0; i < 20; i++) {
+        asx_obligation_id oid;
+        asx_status rc = asx_obligation_reserve(s->region, &oid);
+        if (rc == ASX_E_RESOURCE_EXHAUSTED) break;
+        if (rc != ASX_OK) {
+            s->failure = "obligation_reserve";
+            return ASX_OK;
+        }
+
+        if (i % 3 == 0) {
+            if (asx_obligation_abort(oid) != ASX_OK) {
+                s->failure = "obligation_abort";
+                return ASX_OK;
+            }
+        } else {
+            if (asx_obligation_commit(oid) != ASX_OK) {
+                s->failure = "obligation_commit";
+                return ASX_OK;
+            }
+            s->committed++;
+        }
+    }
+    return ASX_OK;
+}
+
 /* Yield-once poll */
 typedef struct {
     asx_co_state co;
@@ -206,25 +246,20 @@ static void scenario_obligation_churn(void) {
     asx_runtime_reset();
 
     asx_region_id rid;
+    asx_task_id tid;
+    churn_state churn;
+    asx_budget budget = asx_budget_from_polls(10);
     SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
 
-    /* Reserve and commit obligations in rapid cycles */
-    uint32_t committed = 0;
-    uint32_t i;
-    for (i = 0; i < 20; i++) {
-        asx_obligation_id oid;
-        asx_status rc = asx_obligation_reserve(rid, &oid);
-        if (rc == ASX_E_RESOURCE_EXHAUSTED) break;
-        SCENARIO_CHECK(rc == ASX_OK, "obligation_reserve");
-
-        if (i % 3 == 0) {
-            SCENARIO_CHECK(asx_obligation_abort(oid) == ASX_OK, "obligation_abort");
-        } else {
-            SCENARIO_CHECK(asx_obligation_commit(oid) == ASX_OK, "obligation_commit");
-            committed++;
-        }
-    }
-    SCENARIO_CHECK(committed > 0, "should commit at least one obligation");
+    /* Reserve and commit obligations in rapid cycles: the churn runs in the
+     * poll of the task that holds them */
+    memset(&churn, 0, sizeof(churn));
+    churn.region = rid;
+    SCENARIO_CHECK(asx_task_spawn(rid, poll_obligation_churn, &churn, &tid) == ASX_OK,
+                   "task_spawn");
+    SCENARIO_CHECK(asx_scheduler_run(rid, &budget) == ASX_OK, "scheduler_run");
+    SCENARIO_CHECK(churn.failure == NULL, churn.failure);
+    SCENARIO_CHECK(churn.committed > 0, "should commit at least one obligation");
 
     SCENARIO_END();
 }

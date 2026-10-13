@@ -57,6 +57,29 @@ static asx_status failing_poll(void *user_data, asx_task_id self) {
     return ASX_E_INVALID_STATE;
 }
 
+/* An obligation has a holder task: it is reserved and settled inside the
+ * holder's poll. This task reserves one obligation, reads its state, then
+ * commits it. */
+typedef struct {
+    asx_region_id region;
+    asx_obligation_id oid;
+    asx_status reserve_status;
+    asx_status state_status;
+    asx_obligation_state state;
+    asx_status commit_status;
+} obligation_ctx;
+
+static asx_status obligation_poll(void *user_data, asx_task_id self) {
+    obligation_ctx *ctx = (obligation_ctx *)user_data;
+    (void)self;
+
+    ctx->reserve_status = asx_obligation_reserve(ctx->region, &ctx->oid);
+    if (ctx->reserve_status != ASX_OK) return ASX_OK;
+    ctx->state_status = asx_obligation_get_state(ctx->oid, &ctx->state);
+    ctx->commit_status = asx_obligation_commit(ctx->oid);
+    return ASX_OK;
+}
+
 /* ------------------------------------------------------------------ */
 /* Cleanup tracking                                                    */
 /* ------------------------------------------------------------------ */
@@ -232,24 +255,38 @@ static void test_quiescence(void) {
 
 static void test_obligation(void) {
     asx_region_id rid;
-    asx_obligation_id oid;
+    asx_task_id tid;
     asx_obligation_state ostate;
     asx_status st;
+    asx_budget budget;
+    obligation_ctx ctx;
 
     st = asx_region_open(&rid);
     SMOKE_ASSERT_EQ(st, ASX_OK);
 
-    st = asx_obligation_reserve(rid, &oid);
+    /* A sentinel status until the holder's poll runs */
+    ctx.region = rid;
+    ctx.oid = ASX_INVALID_ID;
+    ctx.reserve_status = ASX_E_INVALID_STATE;
+    ctx.state_status = ASX_E_INVALID_STATE;
+    ctx.state = ASX_OBLIGATION_LEAKED;
+    ctx.commit_status = ASX_E_INVALID_STATE;
+
+    st = asx_task_spawn(rid, obligation_poll, &ctx, &tid);
     SMOKE_ASSERT_EQ(st, ASX_OK);
 
-    st = asx_obligation_get_state(oid, &ostate);
-    SMOKE_ASSERT_EQ(st, ASX_OK);
-    SMOKE_ASSERT_EQ(ostate, ASX_OBLIGATION_RESERVED);
-
-    st = asx_obligation_commit(oid);
+    budget = asx_budget_infinite();
+    st = asx_scheduler_run(rid, &budget);
     SMOKE_ASSERT_EQ(st, ASX_OK);
 
-    st = asx_obligation_get_state(oid, &ostate);
+    SMOKE_ASSERT_EQ(ctx.reserve_status, ASX_OK);
+
+    SMOKE_ASSERT_EQ(ctx.state_status, ASX_OK);
+    SMOKE_ASSERT_EQ(ctx.state, ASX_OBLIGATION_RESERVED);
+
+    SMOKE_ASSERT_EQ(ctx.commit_status, ASX_OK);
+
+    st = asx_obligation_get_state(ctx.oid, &ostate);
     SMOKE_ASSERT_EQ(st, ASX_OK);
     SMOKE_ASSERT_EQ(ostate, ASX_OBLIGATION_COMMITTED);
 }

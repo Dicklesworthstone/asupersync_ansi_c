@@ -21,6 +21,8 @@
 
 #if !defined(ASX_PROFILE_BROWSER) || ASX_HAS_BROWSER_TRACE
 
+#include "../../test_task.h"
+
 static asx_status poll_complete(void *data, asx_task_id self) {
     (void)data;
     (void)self;
@@ -434,7 +436,8 @@ TEST(snapshot_capture_uses_runtime_snapshot_entities) {
 
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
-    ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_OK);
+    /* Held by the live task, which is never polled. */
+    ASSERT_EQ(asx_obligation_reserve_ex(rid, ASX_OBLIGATION_KIND_GENERIC, tid, &oid), ASX_OK);
 #if ASX_HAS_NATIVE_IO_DRIVER
     if (asx_io_driver_is_initialized()) {
         ASSERT_EQ(asx_io_register(test_io_fd(42), ASX_IO_READABLE, &w, &tok), ASX_OK);
@@ -586,22 +589,30 @@ TEST(trace_continuity_check_match) {
     asx_replay_clear_reference();
 }
 
-TEST(trace_obligation_abort_emitted_by_runtime) {
-    asx_region_id rid;
+/* The abort is the poll of a task, the obligation's holder; the abort's event
+ * is the last one at that point, before the task's completion adds more. */
+static void reserve_abort_and_check_trace(void *ctx) {
+    asx_region_id rid = *(asx_region_id *)ctx;
     asx_obligation_id oid;
     asx_trace_event ev;
 
-    asx_runtime_reset();
-    asx_ghost_reset();
-    asx_trace_reset();
-
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
     ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_OK);
     ASSERT_EQ(asx_obligation_abort(oid), ASX_OK);
 
     ASSERT_TRUE(asx_trace_event_get(asx_trace_event_count() - 1u, &ev));
     ASSERT_EQ(ev.kind, ASX_TRACE_OBLIGATION_ABORT);
     ASSERT_EQ(ev.entity_id, (uint64_t)oid);
+}
+
+TEST(trace_obligation_abort_emitted_by_runtime) {
+    asx_region_id rid;
+
+    asx_runtime_reset();
+    asx_ghost_reset();
+    asx_trace_reset();
+
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(test_run_in_task(rid, reserve_abort_and_check_trace, &rid), ASX_OK);
 }
 
 TEST(trace_region_closed_emitted_by_drain) {

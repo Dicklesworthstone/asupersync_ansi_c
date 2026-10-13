@@ -23,6 +23,7 @@
  */
 
 #include "../../test_harness.h"
+#include "../../test_task.h"
 #include <asx/asx.h>
 #include <asx/core/ghost.h>
 #include <asx/core/transition.h>
@@ -302,24 +303,39 @@ TEST(spawn_on_closed_region_rejected) {
     ASSERT_EQ(asx_task_spawn(rid, noop_poll, NULL, &tid), ASX_E_REGION_CLOSED);
 }
 
-TEST(obligation_double_commit_rejected) {
-    asx_region_id rid;
+/* An obligation is reserved and settled by its holder task's own poll, so
+ * the obligation bodies below run as the poll of a task of the region
+ * (test_task.h). A task resolves what it reserves before it returns. */
+static void double_commit_body(void *ctx) {
+    asx_region_id rid = *(asx_region_id *)ctx;
     asx_obligation_id oid;
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
     ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_OK);
     ASSERT_EQ(asx_obligation_commit(oid), ASX_OK);
     ASSERT_EQ(asx_obligation_commit(oid), ASX_E_OBLIGATION_ALREADY_RESOLVED);
 }
 
-TEST(obligation_commit_then_abort_rejected) {
+TEST(obligation_double_commit_rejected) {
     asx_region_id rid;
-    asx_obligation_id oid;
 
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(test_run_in_task(rid, double_commit_body, &rid), ASX_OK);
+}
+
+static void commit_then_abort_body(void *ctx) {
+    asx_region_id rid = *(asx_region_id *)ctx;
+    asx_obligation_id oid;
+
     ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_OK);
     ASSERT_EQ(asx_obligation_commit(oid), ASX_OK);
     ASSERT_EQ(asx_obligation_abort(oid), ASX_E_OBLIGATION_ALREADY_RESOLVED);
+}
+
+TEST(obligation_commit_then_abort_rejected) {
+    asx_region_id rid;
+
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(test_run_in_task(rid, commit_then_abort_body, &rid), ASX_OK);
 }
 
 TEST(task_outcome_before_completion_rejected) {
@@ -351,13 +367,12 @@ TEST(ghost_records_illegal_region_transition) {
     ASSERT_TRUE(violations_after > violations_before);
 }
 
-TEST(ghost_records_obligation_double_resolution) {
-    asx_region_id rid;
+static void ghost_double_resolution_body(void *ctx) {
+    asx_region_id rid = *(asx_region_id *)ctx;
     asx_obligation_id oid;
     uint32_t violations_before;
     uint32_t violations_after;
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
     ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_OK);
     ASSERT_EQ(asx_obligation_commit(oid), ASX_OK);
 
@@ -366,6 +381,13 @@ TEST(ghost_records_obligation_double_resolution) {
     violations_after = asx_ghost_violation_count();
 
     ASSERT_TRUE(violations_after > violations_before);
+}
+
+TEST(ghost_records_obligation_double_resolution) {
+    asx_region_id rid;
+
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(test_run_in_task(rid, ghost_double_resolution_body, &rid), ASX_OK);
 }
 
 /* ==================================================================

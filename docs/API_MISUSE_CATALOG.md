@@ -82,6 +82,8 @@ records.
 | `asx_obligation_reserve(stale, &o)` | Stale region | ASX_E_STALE_HANDLE | test_safety_posture:stale_handle_obligation_reserve_after_recycle |
 | `asx_obligation_reserve(poisoned, &o)` | Poisoned region | ASX_E_REGION_POISONED | test_safety_posture:poison_blocks_obligation_reserve |
 | `asx_obligation_reserve(rid, NULL)` | NULL output | ASX_E_INVALID_ARGUMENT | test_safety_posture:null_out_pointers_rejected |
+| `asx_obligation_reserve(rid, &o)` outside a poll | No holder task: an obligation always has one | ASX_E_PERMISSION_DENIED; nothing allocated, counted or traced | test_budget_obligation:reserve_outside_a_poll_is_refused_and_creates_nothing |
+| `asx_obligation_reserve_ex(rid, kind, ASX_INVALID_ID, &o)` | Unowned obligation | ASX_E_INVALID_ARGUMENT; nothing allocated | test_budget_obligation:reserve_ex_validates_arguments |
 | `asx_obligation_commit(oid)` x2 | Double commit | ASX_E_OBLIGATION_ALREADY_RESOLVED | test_safety_posture:obligation_double_commit_rejected |
 | `asx_obligation_abort(committed)` | Abort after commit | ASX_E_OBLIGATION_ALREADY_RESOLVED | test_safety_posture:obligation_commit_then_abort_rejected |
 | `asx_obligation_commit/abort/drop(held)` | Host or another task presents the raw ID | ASX_E_PERMISSION_DENIED; ledger/counts/trace unchanged | test_budget_obligation:non_holder_cannot_resolve_an_obligation_but_its_owner_can, host_raw_resolution_of_a_held_credit_is_failure_atomic |

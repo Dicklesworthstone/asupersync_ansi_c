@@ -9,13 +9,29 @@
  */
 /* ASX_CHECKPOINT_WAIVER_FILE("vignette: no kernel loops") */
 
+#include "../test_task.h"
 #include <asx/asx.h>
 #include <stdio.h>
+
+typedef struct {
+    asx_region_id region;
+    asx_obligation_id obligation;
+    asx_status status;
+} obligation_job;
+
+/* An obligation is held by a task: it opens and settles one in its poll. */
+static void job_open_and_commit(void *ctx) {
+    obligation_job *job = (obligation_job *)ctx;
+
+    job->status = asx_obligation_open(job->region, &job->obligation);
+    if (job->status == ASX_OK) job->status = asx_obligation_resolve_commit(job->obligation);
+}
 
 static int scenario_session_link_roundtrip(void) {
     asx_region_id region;
     asx_session_link link;
     asx_session_link_summary summary;
+    obligation_job job;
     asx_obligation_id obligation;
     asx_obligation_record record;
     asx_record_summary rec_summary;
@@ -42,11 +58,16 @@ static int scenario_session_link_roundtrip(void) {
         return 1;
     }
 
-    st = asx_obligation_open(region, &obligation);
-    if (st != ASX_OK) {
-        printf("  FAIL: obligation_open returned %s\n", asx_status_str(st));
+    job.region = region;
+    job.obligation = ASX_INVALID_ID;
+    job.status = ASX_E_PENDING;
+    st = test_run_in_task(region, job_open_and_commit, &job);
+    if (st != ASX_OK || job.status != ASX_OK) {
+        printf("  FAIL: obligation open/commit task returned %s / %s\n", asx_status_str(st),
+               asx_status_str(job.status));
         return 1;
     }
+    obligation = job.obligation;
 
     st = asx_session_link_send_request(&link, 111u);
     if (st != ASX_OK) {
@@ -71,12 +92,6 @@ static int scenario_session_link_roundtrip(void) {
     if (st != ASX_OK || response != 222u) {
         printf("  FAIL: recv_response returned %s value=%llu\n", asx_status_str(st),
                (unsigned long long)response);
-        return 1;
-    }
-
-    st = asx_obligation_resolve_commit(obligation);
-    if (st != ASX_OK) {
-        printf("  FAIL: obligation_commit returned %s\n", asx_status_str(st));
         return 1;
     }
 

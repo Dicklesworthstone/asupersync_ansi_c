@@ -80,6 +80,87 @@ static asx_status poll_abort_obligation(void *ud, asx_task_id self) {
     ASX_CO_END(&s->co);
 }
 
+/*
+ * A task that walks one obligation through its states: reserve, query,
+ * commit, query, then a second commit that must be refused.
+ *
+ * ERGO: An obligation always has a holder, the task that reserved it, and
+ * only that task's poll can settle it. There is no unowned obligation, so
+ * this walk runs inside a task, not in main().
+ */
+typedef struct {
+    asx_region_id region;
+    int failed;
+} state_query_state;
+
+static asx_status poll_state_query(void *ud, asx_task_id self) {
+    state_query_state *s = (state_query_state *)ud;
+    asx_obligation_id obl;
+    asx_obligation_state ostate;
+    asx_status st;
+    (void)self;
+
+    st = asx_obligation_reserve(s->region, &obl);
+    if (st != ASX_OK) {
+        printf("  FAIL: obligation_reserve returned %s\n", asx_status_str(st));
+        s->failed = 1;
+        return ASX_OK;
+    }
+
+    /*
+     * ERGO: asx_obligation_get_state is consistent with region/task
+     * state queries. The pattern of (id, &out) is uniform across all
+     * entity types — good API consistency.
+     */
+    st = asx_obligation_get_state(obl, &ostate);
+    if (st != ASX_OK) {
+        s->failed = 1;
+        return ASX_OK;
+    }
+
+    if (ostate != ASX_OBLIGATION_RESERVED) {
+        printf("  FAIL: expected RESERVED, got %d\n", (int)ostate);
+        s->failed = 1;
+        return ASX_OK;
+    }
+    printf("  obligation state: %s\n", asx_obligation_state_str(ostate));
+
+    /* Commit and verify terminal state. */
+    st = asx_obligation_commit(obl);
+    if (st != ASX_OK) {
+        s->failed = 1;
+        return ASX_OK;
+    }
+
+    st = asx_obligation_get_state(obl, &ostate);
+    if (st != ASX_OK) {
+        s->failed = 1;
+        return ASX_OK;
+    }
+
+    if (ostate != ASX_OBLIGATION_COMMITTED) {
+        printf("  FAIL: expected COMMITTED, got %d\n", (int)ostate);
+        s->failed = 1;
+        return ASX_OK;
+    }
+    printf("  obligation state: %s\n", asx_obligation_state_str(ostate));
+
+    /*
+     * ERGO: Double-commit returns ASX_E_OBLIGATION_ALREADY_RESOLVED (Rust
+     * ObligationAlreadyResolved) — clear error for a linearity violation.
+     */
+    st = asx_obligation_commit(obl);
+    if (st != ASX_E_OBLIGATION_ALREADY_RESOLVED) {
+        printf("  FAIL: double commit should return OBLIGATION_ALREADY_RESOLVED, "
+               "got %s\n",
+               asx_status_str(st));
+        s->failed = 1;
+        return ASX_OK;
+    }
+    printf("  double-commit correctly returns: %s\n", asx_status_str(st));
+    return ASX_OK;
+}
+
 /* -------------------------------------------------------------------
  * Scenario 1: Happy path — reserve, commit, quiesce
  * ------------------------------------------------------------------- */
@@ -214,8 +295,9 @@ static int scenario_abort(void) {
 static int scenario_state_query(void) {
     asx_status st;
     asx_region_id region;
-    asx_obligation_id obl;
-    asx_obligation_state ostate;
+    asx_task_id task;
+    asx_budget budget;
+    state_query_state query;
 
     printf("--- scenario: obligation state query ---\n");
 
@@ -224,51 +306,22 @@ static int scenario_state_query(void) {
     st = asx_region_open(&region);
     if (st != ASX_OK) return 1;
 
-    st = asx_obligation_reserve(region, &obl);
+    query.region = region;
+    query.failed = 0;
+    st = asx_task_spawn(region, poll_state_query, &query, &task);
     if (st != ASX_OK) return 1;
 
-    /*
-     * ERGO: asx_obligation_get_state is consistent with region/task
-     * state queries. The pattern of (id, &out) is uniform across all
-     * entity types — good API consistency.
-     */
-    st = asx_obligation_get_state(obl, &ostate);
-    if (st != ASX_OK) return 1;
-
-    if (ostate != ASX_OBLIGATION_RESERVED) {
-        printf("  FAIL: expected RESERVED, got %d\n", (int)ostate);
+    /* The holder task walks the obligation through its states in one poll. */
+    budget = asx_budget_from_polls(10);
+    st = asx_scheduler_run(region, &budget);
+    if (st != ASX_OK) {
+        printf("  FAIL: scheduler_run returned %s\n", asx_status_str(st));
         return 1;
     }
-    printf("  obligation state: %s\n", asx_obligation_state_str(ostate));
-
-    /* Commit and verify terminal state. */
-    st = asx_obligation_commit(obl);
-    if (st != ASX_OK) return 1;
-
-    st = asx_obligation_get_state(obl, &ostate);
-    if (st != ASX_OK) return 1;
-
-    if (ostate != ASX_OBLIGATION_COMMITTED) {
-        printf("  FAIL: expected COMMITTED, got %d\n", (int)ostate);
-        return 1;
-    }
-    printf("  obligation state: %s\n", asx_obligation_state_str(ostate));
-
-    /*
-     * ERGO: Double-commit returns ASX_E_OBLIGATION_ALREADY_RESOLVED (Rust
-     * ObligationAlreadyResolved) — clear error for a linearity violation.
-     */
-    st = asx_obligation_commit(obl);
-    if (st != ASX_E_OBLIGATION_ALREADY_RESOLVED) {
-        printf("  FAIL: double commit should return OBLIGATION_ALREADY_RESOLVED, "
-               "got %s\n",
-               asx_status_str(st));
-        return 1;
-    }
-    printf("  double-commit correctly returns: %s\n", asx_status_str(st));
+    if (query.failed) return 1;
 
     /* Clean up the region. */
-    asx_budget budget = asx_budget_from_polls(10);
+    budget = asx_budget_from_polls(10);
     st = asx_region_drain(region, &budget);
     if (st != ASX_OK) {
         printf("  FAIL: drain returned %s\n", asx_status_str(st));

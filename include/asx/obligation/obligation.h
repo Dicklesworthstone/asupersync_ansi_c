@@ -25,6 +25,10 @@ typedef struct {
     asx_obligation_state state;
 } asx_obligation_record;
 
+/* Reserve a generic obligation held by the task being polled: it is
+ * asx_obligation_reserve, so outside a poll it returns
+ * ASX_E_PERMISSION_DENIED (an obligation always has a holder task). A host
+ * names its holder with asx_obligation_reserve_ex. */
 static inline ASX_MUST_USE asx_status asx_obligation_open(asx_region_id region,
                                                           asx_obligation_id *out_id) {
     return asx_obligation_reserve(region, out_id);

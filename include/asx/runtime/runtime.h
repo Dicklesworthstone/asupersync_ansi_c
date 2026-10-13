@@ -711,7 +711,7 @@ typedef struct asx_obligation_info {
     asx_obligation_state state;
     asx_obligation_kind kind;
     asx_region_id region;
-    asx_task_id holder; /* ASX_INVALID_ID if unowned */
+    asx_task_id holder; /* the task that holds it: every obligation has one */
     asx_obligation_abort_reason abort_reason;
     /* How long the obligation was held, in the runtime clock's nanoseconds:
      * from the moment its reserve was applied to the moment its commit,
@@ -722,11 +722,14 @@ typedef struct asx_obligation_info {
 } asx_obligation_info;
 
 /* Reserve an obligation with an explicit kind and holder task.
- * `holder` may be ASX_INVALID_ID (unowned) or a live task.
- * Returns ASX_OK, ASX_E_INVALID_ARGUMENT for NULL out_id / bad kind,
+ * `holder` must be a live task of `region`: an obligation always has one
+ * (Rust creates a token only through a task's Cx), and this is how the
+ * host, outside any poll, reserves on a task's behalf.
+ * Returns ASX_OK, ASX_E_INVALID_ARGUMENT for NULL out_id / bad kind /
+ *   holder ASX_INVALID_ID,
  *   ASX_E_NOT_FOUND / ASX_E_STALE_HANDLE for a bad region or holder,
- *   ASX_E_INVALID_STATE if the holder already completed, plus the region
- *   errors of asx_obligation_reserve.
+ *   ASX_E_INVALID_STATE if the holder already completed or belongs to
+ *   another region, plus the region errors of asx_obligation_reserve.
  *
  * This is Rust's checked registration (Cx::try_register_obligation_checked,
  * cx/cx.rs:1746): it is admitted against the region's max_obligations at
@@ -766,16 +769,23 @@ ASX_API uint64_t asx_obligation_leak_count(void);
 /* Reserve an obligation within a region. The obligation starts in
  * the RESERVED state and must eventually be committed or aborted.
  * Kind is GENERIC; the holder is the task currently being polled
- * (asx_task_current()), or none when called outside a poll.
+ * (asx_task_current()). Outside a poll there is no holder, and an
+ * obligation without one is refused, as Rust has no token without a task:
+ * a host reserves with asx_obligation_reserve_ex and a named holder.
  *
  * Preconditions: region must be OPEN and not poisoned; out_id must
- *   not be NULL.
+ *   not be NULL; called from a task's poll, the task being a task of
+ *   the region.
  * Postconditions: on success, *out_id holds a valid obligation handle
- *   in RESERVED state.
+ *   in RESERVED state, held by the polled task. A refusal creates
+ *   nothing: no slot, count, trace event or ghost record.
  * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if out_id is NULL,
  *   ASX_E_NOT_FOUND if region is invalid, ASX_E_STALE_HANDLE if
  *   generation mismatch, ASX_E_REGION_POISONED if poisoned,
  *   ASX_E_REGION_CLOSED if the region is not OPEN,
+ *   ASX_E_INVALID_STATE if the polled task belongs to another region,
+ *   ASX_E_PERMISSION_DENIED outside a poll (no holder),
+ *   ASX_E_ADMISSION_LIMIT at the region's max_obligations,
  *   ASX_E_RESOURCE_EXHAUSTED if the obligation arena is full.
  * Ownership: caller owns the obligation; must commit or abort.
  * Thread-safety: not thread-safe; single-threaded mode only.
@@ -787,9 +797,8 @@ ASX_API ASX_MUST_USE asx_status asx_obligation_reserve(asx_region_id region,
  *
  * Preconditions: id must be a valid obligation handle in RESERVED state.
  * A held obligation is resolved only from its holder's current scheduler
- * poll. An unowned obligation may be resolved by the host outside a poll
- * or by a current task of its owning region. A raw ID carries no authority
- * to resolve another holder's obligation.
+ * poll; the host, outside any poll, holds no authority over it. A raw ID
+ * carries no authority to resolve another holder's obligation.
  * A channel or semaphore credit bound to an owned permit must be settled
  * through that permit's send/abort/release/forget operation, even by the
  * holder. A genuine permit may move between tasks without reassigning its
@@ -824,7 +833,7 @@ ASX_API ASX_MUST_USE asx_status asx_obligation_abort(asx_obligation_id id);
  * Preserves the obligation ID/generation/kind and loses the old holder's
  * resolution authority immediately; every refusal leaves ownership intact.
  * Returns ASX_OK, lookup errors, ASX_E_PERMISSION_DENIED, _INVALID_STATE
- * for an unowned/unchecked source or completed destination, _INVALID_ARGUMENT
+ * for an unchecked source or completed destination, _INVALID_ARGUMENT
  * for the same holder, _CANCELLED, _REGION_CLOSED, _REGION_POISONED, or
  * _ADMISSION_LIMIT for a full destination region.
  * Thread-safety: not thread-safe; single-threaded mode only. */

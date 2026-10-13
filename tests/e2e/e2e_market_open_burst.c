@@ -64,6 +64,30 @@ static asx_status poll_complete(void *ud, asx_task_id self) {
     return ASX_OK;
 }
 
+/* Burst holder: an obligation is reserved and settled by its holder task's
+ * own poll, so each burst task reserves one obligation and commits or aborts
+ * it before it completes. */
+typedef struct {
+    asx_region_id region;
+    int commit; /* commit (else abort) the obligation */
+    asx_obligation_id oid;
+    asx_status reserve_rc;
+    asx_status settle_rc;
+    asx_status state_rc;
+    asx_obligation_state state;
+} burst_holder_state;
+
+static asx_status poll_burst_holder(void *ud, asx_task_id self) {
+    burst_holder_state *h = (burst_holder_state *)ud;
+    (void)self;
+
+    h->reserve_rc = asx_obligation_reserve(h->region, &h->oid);
+    if (h->reserve_rc != ASX_OK) return ASX_OK;
+    h->settle_rc = h->commit ? asx_obligation_commit(h->oid) : asx_obligation_abort(h->oid);
+    h->state_rc = asx_obligation_get_state(h->oid, &h->state);
+    return ASX_OK;
+}
+
 /* Yield-once poll */
 typedef struct {
     asx_co_state co;
@@ -128,30 +152,43 @@ static void scenario_burst_obligations(void) {
 
     asx_region_id rid;
     asx_task_id tid;
+    burst_holder_state holders[8];
+    uint32_t spawned = 0;
     uint32_t i;
 
     SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
 
-    /* Spawn tasks and reserve obligations in a tight burst */
+    /* Spawn tasks in a tight burst; each holds one obligation, reserved in
+     * its poll. Commit every other, abort the rest — tests linearity */
+    memset(holders, 0, sizeof(holders));
     for (i = 0; i < 8; i++) {
-        asx_status rc = asx_task_spawn(rid, poll_complete, NULL, &tid);
-        if (rc != ASX_OK) break;
+        asx_status rc;
 
-        asx_obligation_id oid;
-        rc = asx_obligation_reserve(rid, &oid);
-        if (rc == ASX_OK) {
-            /* Commit every other, abort the rest — tests linearity */
-            if (i % 2 == 0) {
-                SCENARIO_CHECK(asx_obligation_commit(oid) == ASX_OK, "obligation_commit");
-            } else {
-                SCENARIO_CHECK(asx_obligation_abort(oid) == ASX_OK, "obligation_abort");
-            }
-        }
+        holders[i].region = rid;
+        holders[i].commit = (i % 2 == 0);
+        holders[i].reserve_rc = ASX_E_INVALID_STATE; /* until the poll runs */
+        holders[i].settle_rc = ASX_E_INVALID_STATE;
+        holders[i].state_rc = ASX_E_INVALID_STATE;
+        rc = asx_task_spawn(rid, poll_burst_holder, &holders[i], &tid);
+        if (rc != ASX_OK) break;
+        spawned++;
     }
+    SCENARIO_CHECK(spawned > 0, "task_spawn");
 
     /* Drain all tasks */
     asx_budget budget = asx_budget_from_polls(200);
     IGNORE_RC(asx_scheduler_run(rid, &budget));
+
+    for (i = 0; i < spawned; i++) {
+        asx_obligation_state expected =
+            holders[i].commit ? ASX_OBLIGATION_COMMITTED : ASX_OBLIGATION_ABORTED;
+
+        SCENARIO_CHECK(holders[i].reserve_rc == ASX_OK, "obligation_reserve");
+        SCENARIO_CHECK(holders[i].settle_rc == ASX_OK,
+                       holders[i].commit ? "obligation_commit" : "obligation_abort");
+        SCENARIO_CHECK(holders[i].state_rc == ASX_OK && holders[i].state == expected,
+                       "obligation_final_state");
+    }
 
     SCENARIO_END();
 }

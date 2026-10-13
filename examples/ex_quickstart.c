@@ -132,16 +132,40 @@ static void scenario_region_task_drain(void) {
 }
 
 /* -------------------------------------------------------------------
- * Scenario: quickstart.obligation_protocol
+ * Task: obligation holder
  *
- * Demonstrates the obligation reserve/commit protocol that ensures
- * all outstanding work is accounted for before region close.
+ * An obligation always has a holder: the task that reserved it. This task
+ * reserves one obligation in its poll, keeps it outstanding across a yield,
+ * then commits it. Only the holder's own poll can commit or abort the
+ * obligation, and a task settles every obligation it reserved before it
+ * completes.
  * ------------------------------------------------------------------- */
 
-static asx_status poll_complete(void *ud, asx_task_id self) {
-    (void)ud;
+typedef struct {
+    asx_co_state co;
+    asx_region_id region;
+    asx_obligation_id oid;
+    asx_status reserve_status;
+    asx_status commit_status;
+} holder_state;
+
+static asx_status poll_holder(void *ud, asx_task_id self) {
+    holder_state *s = (holder_state *)ud;
     (void)self;
-    return ASX_OK;
+    ASX_CO_BEGIN(&s->co);
+
+    /* Reserve: the task being polled becomes the holder */
+    s->reserve_status = asx_obligation_reserve(s->region, &s->oid);
+    if (s->reserve_status != ASX_OK) return s->reserve_status;
+
+    /* The obligation stays outstanding while the task yields */
+    ASX_CO_YIELD(&s->co);
+
+    /* Commit the obligation (resolve it) before the task completes */
+    s->commit_status = asx_obligation_commit(s->oid);
+    if (s->commit_status != ASX_OK) return s->commit_status;
+
+    ASX_CO_END(&s->co);
 }
 
 typedef struct {
@@ -165,6 +189,15 @@ static uint64_t blocking_add_one(void *user_data) {
     return value + 1u;
 }
 
+/* -------------------------------------------------------------------
+ * Scenario: quickstart.obligation_protocol
+ *
+ * Demonstrates the obligation reserve/commit protocol that ensures
+ * all outstanding work is accounted for before region close: the
+ * holder task reserves an obligation in its poll and commits it in a
+ * later poll, and the region reaches quiescence only afterwards.
+ * ------------------------------------------------------------------- */
+
 static void scenario_obligation_protocol(void) {
     SCENARIO_BEGIN("quickstart.obligation_protocol");
 
@@ -173,19 +206,32 @@ static void scenario_obligation_protocol(void) {
     asx_region_id rid;
     SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
 
-    /* Reserve an obligation — must be resolved before quiescence */
-    asx_obligation_id oid;
-    SCENARIO_CHECK(asx_obligation_reserve(rid, &oid) == ASX_OK, "reserve");
-
-    /* Spawn a task that completes immediately */
+    /* Spawn the holder task: it reserves an obligation in its own poll */
     asx_task_id tid;
-    SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "spawn");
+    void *holder_raw = NULL;
+    SCENARIO_CHECK(asx_task_spawn_captured(rid, poll_holder, (uint32_t)sizeof(holder_state), NULL,
+                                           &tid, &holder_raw) == ASX_OK,
+                   "spawn");
+    holder_state *holder = (holder_state *)holder_raw;
+    holder->region = rid;
 
-    /* Commit the obligation (resolve it) */
-    SCENARIO_CHECK(asx_obligation_commit(oid) == ASX_OK, "commit");
+    /* First poll: the task reserves the obligation and yields. The
+     * obligation must be resolved before quiescence */
+    asx_budget budget = asx_budget_from_polls(1);
+    IGNORE_RC(asx_scheduler_run(rid, &budget));
+    asx_obligation_state ostate;
+    SCENARIO_CHECK(holder->reserve_status == ASX_OK, "reserve");
+    SCENARIO_CHECK(asx_obligation_get_state(holder->oid, &ostate) == ASX_OK &&
+                       ostate == ASX_OBLIGATION_RESERVED,
+                   "reserved");
+
+    /* Second poll: the holder commits the obligation (resolves it) */
+    budget = asx_budget_from_polls(64);
+    SCENARIO_CHECK(asx_scheduler_run(rid, &budget) == ASX_OK, "run_holder");
+    SCENARIO_CHECK(holder->commit_status == ASX_OK, "commit");
 
     /* Drain and verify quiescence */
-    asx_budget budget = asx_budget_from_polls(64);
+    budget = asx_budget_from_polls(64);
     SCENARIO_CHECK(asx_region_drain(rid, &budget) == ASX_OK, "drain");
     SCENARIO_CHECK(asx_quiescence_check(rid) == ASX_OK, "quiescent");
 
@@ -232,10 +278,8 @@ static void scenario_runtime_builder_local_blocking_deadline(void) {
                    "builder_budget");
     SCENARIO_CHECK(asx_runtime_builder_build(&builder, &runtime) == ASX_OK, "runtime_build");
     SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
-    SCENARIO_CHECK(asx_cx_init(&root_cx, rid, ASX_INVALID_ID, ASX_CAP_ALL) == ASX_OK,
-                   "root_cx");
-    SCENARIO_CHECK(asx_local_scope_init(&scope, rid, &root_cx, asx_budget_from_polls(8u)) ==
-                       ASX_OK,
+    SCENARIO_CHECK(asx_cx_init(&root_cx, rid, ASX_INVALID_ID, ASX_CAP_ALL) == ASX_OK, "root_cx");
+    SCENARIO_CHECK(asx_local_scope_init(&scope, rid, &root_cx, asx_budget_from_polls(8u)) == ASX_OK,
                    "local_scope_init");
     SCENARIO_CHECK(asx_local_scope_spawn_captured(&scope, poll_local_countdown,
                                                   (uint32_t)sizeof(*state), NULL, &handle,

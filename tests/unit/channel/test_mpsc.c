@@ -1272,6 +1272,36 @@ TEST(tracked_permit_moved_to_another_task_can_abort_without_reassigning_holder) 
     run_tracked_permit_misuse(1, 1);
 }
 
+/* The two probes of untracked_reserves_register_no_obligation. An obligation
+ * is reserved and settled by its holder's own poll, so the holder reserves
+ * the first probe and parks; the host's untracked channel operations run
+ * while it is parked; its next poll reserves the second probe and settles
+ * both. */
+typedef struct {
+    asx_obligation_id probe;
+    asx_obligation_id next;
+    asx_status probe_status;
+    asx_status next_status;
+    asx_status probe_commit;
+    asx_status next_commit;
+    uint32_t phase;
+} probe_holder;
+
+static asx_status poll_probe_holder(void *data, asx_task_id self) {
+    probe_holder *h = (probe_holder *)data;
+
+    if (h->phase == 0u) {
+        h->probe_status = asx_obligation_reserve(g_rid, &h->probe);
+        h->phase = 1u;
+        return asx_task_park(self) == ASX_OK ? ASX_E_PENDING : ASX_E_INVALID_STATE;
+    }
+    h->next_status = asx_obligation_reserve(g_rid, &h->next);
+    h->probe_commit = asx_obligation_commit(h->probe);
+    h->next_commit = asx_obligation_commit(h->next);
+    h->phase = 2u;
+    return ASX_OK;
+}
+
 TEST(untracked_reserves_register_no_obligation) {
     /* try_reserve (Rust try_reserve, mpsc.rs:749), the reserve inside send
      * (TransientReserve, :1186) and a Cx without a task stay untracked. */
@@ -1279,14 +1309,21 @@ TEST(untracked_reserves_register_no_obligation) {
     asx_send_permit p;
     asx_cx cx;
     asx_cx no_task;
-    asx_obligation_id probe;
-    asx_obligation_id next;
+    asx_task_id holder;
+    probe_holder h;
+    asx_budget budget = asx_budget_from_polls(8u);
     uint64_t v = 0;
     setup();
-    (void)cx_task(&cx);
+    memset(&h, 0, sizeof(h));
+    h.probe = ASX_INVALID_ID;
+    h.next = ASX_INVALID_ID;
+    /* The Cx names the parked holder: a live task, as the send needs. */
+    ASSERT_EQ(asx_task_spawn(g_rid, poll_probe_holder, &h, &holder), ASX_OK);
+    ASSERT_EQ(asx_cx_init(&cx, g_rid, holder, ASX_CAP_NONE), ASX_OK);
     asx_cx_init(&no_task, g_rid, ASX_INVALID_ID, ASX_CAP_NONE);
     ASSERT_EQ(asx_channel_create(g_rid, 4, &ch), ASX_OK);
-    ASSERT_EQ(asx_obligation_reserve(g_rid, &probe), ASX_OK);
+    ASSERT_EQ(asx_scheduler_run(g_rid, &budget), ASX_E_WOULD_BLOCK);
+    ASSERT_EQ(h.probe_status, ASX_OK);
 
     ASSERT_EQ(asx_channel_try_reserve(ch, &p), ASX_OK);
     ASSERT_EQ(p.obligation, ASX_INVALID_ID);
@@ -1297,10 +1334,14 @@ TEST(untracked_reserves_register_no_obligation) {
     ASSERT_EQ(asx_channel_send(ch, &cx, 3u), ASX_OK);
 
     /* No obligation was reserved between the two probes. */
-    ASSERT_EQ(asx_obligation_reserve(g_rid, &next), ASX_OK);
-    ASSERT_EQ(asx_handle_index(next), asx_handle_index(probe) + 1u);
-    ASSERT_EQ(asx_obligation_commit(probe), ASX_OK);
-    ASSERT_EQ(asx_obligation_commit(next), ASX_OK);
+    ASSERT_EQ(asx_task_wake(holder), ASX_OK);
+    budget = asx_budget_from_polls(8u);
+    ASSERT_EQ(asx_scheduler_run(g_rid, &budget), ASX_OK);
+    ASSERT_EQ(h.phase, 2u);
+    ASSERT_EQ(h.next_status, ASX_OK);
+    ASSERT_EQ(asx_handle_index(h.next), asx_handle_index(h.probe) + 1u);
+    ASSERT_EQ(h.probe_commit, ASX_OK);
+    ASSERT_EQ(h.next_commit, ASX_OK);
     ASSERT_EQ(asx_channel_recv(ch, NULL, &v), ASX_OK);
     ASSERT_EQ(v, 1u);
     ASSERT_EQ(asx_channel_recv(ch, NULL, &v), ASX_OK);

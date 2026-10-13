@@ -10,6 +10,7 @@
 
 #include "test_harness.h"
 #include "test_log.h"
+#include "test_task.h"
 #include <asx/asx.h>
 #include <asx/runtime/rt.h>
 #include <asx/runtime/runtime.h>
@@ -147,19 +148,25 @@ TEST(region_arena_full_exhaustion) {
 
 TEST(obligation_arena_full_exhaustion) {
     asx_region_id rid;
+    asx_task_id holder;
     asx_obligation_id oids[ASX_MAX_OBLIGATIONS];
     asx_obligation_id extra;
     uint32_t i;
 
     reset_all();
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    /* Every obligation has a holder task: a live one that is never polled
+     * holds them all, so none is settled or leaked. */
+    ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &holder), ASX_OK);
 
     for (i = 0; i < ASX_MAX_OBLIGATIONS; i++) {
-        ASSERT_EQ(asx_obligation_reserve(rid, &oids[i]), ASX_OK);
+        ASSERT_EQ(asx_obligation_reserve_ex(rid, ASX_OBLIGATION_KIND_GENERIC, holder, &oids[i]),
+                  ASX_OK);
     }
 
     /* Next obligation should fail */
-    ASSERT_EQ(asx_obligation_reserve(rid, &extra), ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(asx_obligation_reserve_ex(rid, ASX_OBLIGATION_KIND_GENERIC, holder, &extra),
+              ASX_E_RESOURCE_EXHAUSTED);
 }
 
 /* -------------------------------------------------------------------
@@ -514,13 +521,12 @@ TEST(trace_digest_deterministic_across_resets) {
  * Obligation churn
  * ------------------------------------------------------------------- */
 
-TEST(obligation_rapid_reserve_commit_cycle) {
-    asx_region_id rid;
+/* Obligations are held and settled by a task's own poll, so the obligation
+ * tests below run their reserve/settle sequences as the poll of one task. */
+static void reserve_commit_cycle_body(void *ctx) {
+    asx_region_id rid = *(asx_region_id *)ctx;
     asx_obligation_id oid;
     uint32_t i;
-
-    reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
 
     /* Rapidly reserve and commit far more obligations than the arena
      * holds: resolved slots are reclaimed, so the lifetime count is
@@ -529,6 +535,15 @@ TEST(obligation_rapid_reserve_commit_cycle) {
         ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_OK);
         ASSERT_EQ(asx_obligation_commit(oid), ASX_OK);
     }
+}
+
+TEST(obligation_rapid_reserve_commit_cycle) {
+    asx_region_id rid;
+
+    reset_all();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+
+    ASSERT_EQ(test_run_in_task(rid, reserve_commit_cycle_body, &rid), ASX_OK);
     ASSERT_TRUE(asx_resource_used(ASX_RESOURCE_OBLIGATION) <= (uint32_t)ASX_MAX_OBLIGATIONS);
 }
 
@@ -603,13 +618,10 @@ TEST(closed_region_tasks_reclaimed_under_pressure) {
 /* Up to 32 obligations, as many as the arena holds. */
 #define MIXED_OBLIGATIONS ((ASX_MAX_OBLIGATIONS) < 32 ? (ASX_MAX_OBLIGATIONS) : 32)
 
-TEST(obligation_mixed_commit_abort_pattern) {
-    asx_region_id rid;
+static void mixed_commit_abort_body(void *ctx) {
+    asx_region_id rid = *(asx_region_id *)ctx;
     asx_obligation_id oids[32];
     uint32_t i;
-
-    reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
 
     for (i = 0; i < MIXED_OBLIGATIONS; i++) {
         ASSERT_EQ(asx_obligation_reserve(rid, &oids[i]), ASX_OK);
@@ -634,6 +646,14 @@ TEST(obligation_mixed_commit_abort_pattern) {
             ASSERT_EQ(s, ASX_OBLIGATION_ABORTED);
         }
     }
+}
+
+TEST(obligation_mixed_commit_abort_pattern) {
+    asx_region_id rid;
+
+    reset_all();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(test_run_in_task(rid, mixed_commit_abort_body, &rid), ASX_OK);
 }
 
 /* -------------------------------------------------------------------
