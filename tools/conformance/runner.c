@@ -10,6 +10,14 @@
  *       dispatch order with the Rust capture, canonical byte for byte.
  *       Prints PASS/FAIL/ERROR per fixture and the first differences; exits
  *       1 unless every fixture passes.
+ *   asx-conformance replay <fixture.json>...
+ *       One line per fixture, "<scenario_id> <semantic_digest>
+ *       <projection_digest>", "SKIP <scenario_id>: ..." (the active profile
+ *       forbids a behavior the scenario requires, DEC-008) or "ERROR
+ *       <scenario_id>: <reason>": the C run alone, by the function the
+ *       wasm32 lane's entry calls over the same bytes (bd-9kll.15.4, make
+ *       test-wasm32-replay compares the two). Exits 1 if any fixture is an
+ *       ERROR line.
  *   asx-conformance self-test <fixture.json>
  *       Negative control: compare against the fixture with one expected
  *       trace event corrupted in memory. Exits 0 only if that is reported
@@ -1859,6 +1867,7 @@ static int usage(void) {
                     "       asx-conformance compare-sweep [--trace] [--known <file>] "
                     "<fixture.json>...\n"
                     "       asx-conformance schedule --out-dir <dir> <fixture.json>...\n"
+                    "       asx-conformance replay <fixture.json>...\n"
                     "       asx-conformance self-test <fixture.json>\n"
                     "       asx-conformance canon <cases.jsonl>\n"
                     "       asx-conformance constants <rust_kernel_constants.json>\n");
@@ -2135,6 +2144,35 @@ static int cmd_compare_sweep(int argc, char **argv) {
                : 1;
 }
 
+/* replay fixture.json...: one asx_conformance_replay_line per fixture, the
+ * function the wasm32 lane's entry calls, then a count line the lane's
+ * output must also end with. A file that cannot be read is an ERROR line
+ * too, so the two outputs differ exactly where the targets do. */
+static int cmd_replay(int argc, char **argv) {
+    unsigned failed = 0;
+    int i;
+    for (i = 2; i < argc; i++) {
+        FILE *f = fopen(argv[i], "rb");
+        size_t n;
+        if (f == NULL) {
+            fprintf(stdout, "ERROR ?: cannot open %s\n", argv[i]);
+            failed++;
+            continue;
+        }
+        n = fread(g_file, 1, FILE_CAP, f);
+        fclose(f);
+        if (n == FILE_CAP) {
+            fprintf(stdout, "ERROR ?: %s is larger than %u bytes\n", argv[i], FILE_CAP);
+            failed++;
+            continue;
+        }
+        if (asx_conformance_replay_line(g_file, n, g_a, BYTES_CAP) != ASX_OK) failed++;
+        fprintf(stdout, "%s\n", g_a);
+    }
+    fprintf(stdout, "replayed %d fixture(s), %u failed\n", argc - 2, failed);
+    return failed == 0u ? 0 : 1;
+}
+
 /* schedule --out-dir DIR fixture.json... (see schedule_one) */
 static int cmd_schedule(int argc, char **argv) {
     const char *dir = NULL;
@@ -2165,6 +2203,7 @@ int main(int argc, char **argv) {
     if (strcmp(argv[1], "constants") == 0 && argc == 3) return cmd_constants(argv[2]);
     if (strcmp(argv[1], "compare-sweep") == 0) return cmd_compare_sweep(argc, argv);
     if (strcmp(argv[1], "schedule") == 0) return cmd_schedule(argc, argv);
+    if (strcmp(argv[1], "replay") == 0) return cmd_replay(argc, argv);
     if (strcmp(argv[1], "self-test") == 0 && argc == 3) {
         cmp_result r = compare_one(argv[2], 1);
         if (r == CMP_FAIL) {

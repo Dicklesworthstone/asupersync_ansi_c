@@ -87,6 +87,28 @@ int asx_conformance_recorded_schedule(asx_forced_schedule *out);
  * message. NULL clears. `csv` must outlive the runs. */
 void asx_conformance_set_oracles(const char *csv);
 
+/* One asx.fixture.v2 document, from bytes to a result line, for a host with
+ * no file system: the `asx-conformance replay` command and the wasm32
+ * lane's entry (tools/wasm/wasm32_replay.c) both call it, so a difference
+ * between their outputs is a difference between targets. Parses
+ * text[0..len), runs the embedded scenario (asx_conformance_run) and writes
+ * to out, NUL-terminated and without a newline:
+ *
+ *   "<scenario_id> <semantic_digest> <projection_digest>"
+ *
+ * the digest of the run's observations, snapshot, trace and vocabulary, and
+ * the digest of the whole canonical projection (dispatches and schedule
+ * certificate included). The Rust capture's expectations are not consulted:
+ * this is the C run alone, the value to compare across targets. A scenario
+ * whose "requires" names a behavior the active profile forbids has nothing
+ * to prove there (DEC-008, asx_conformance_requirement_forbidden): the line
+ * is "SKIP <scenario_id>: the <profile> profile forbids <behavior>
+ * (DEC-008)" and the status is ASX_OK. On any failure the line is "ERROR
+ * <scenario_id or ?>: <reason>" and the status is not ASX_OK. Uses two JSON
+ * documents of its own, so it is not reentrant. */
+ASX_MUST_USE asx_status asx_conformance_replay_line(const char *text, size_t len, char *out,
+                                                    size_t out_cap);
+
 /* The vocabulary name ("<holder>/o<k>") the last run's projection gave the
  * obligation with this handle (a ghost violation's or a trace event's
  * entity), or NULL when the run never named it. The ghost-checked runner

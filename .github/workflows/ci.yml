@@ -1313,6 +1313,32 @@ jobs:
         run: make conformance CFLAGS=-m32 LDFLAGS=-m32 BUILD_DIR=build/m32
 
   # ---------------------------------------------------------------------------
+  # wasm32 — freestanding wasm32 modules and the v2 fixture replay under node
+  # (bd-9kll.15.4). The fixture replay is the oracle: every fixture's digest
+  # line on wasm32 must equal the native x86_64 one.
+  # ---------------------------------------------------------------------------
+  wasm32:
+    name: "wasm32 build + fixture replay"
+    runs-on: ubuntu-latest
+    needs: [check]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang and lld (the wasm32 target and wasm-ld)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang lld
+          clang --version
+          wasm-ld --version
+          node --version
+
+      - name: Build the wasm32 modules (core, freestanding, browser, browser-minimal)
+        run: make build-wasm32 FAIL_ON_MISSING_CROSS_TOOLCHAINS=1 FAIL_ON_MISSING_RUNNERS=1
+
+      - name: Replay the v2 fixtures under node, digest parity with x86_64
+        run: make test-wasm32-replay FAIL_ON_MISSING_RUNNERS=1
+
+  # ---------------------------------------------------------------------------
   # embedded-matrix — router-class cross-target builds + QEMU
   # ---------------------------------------------------------------------------
   embedded-matrix:

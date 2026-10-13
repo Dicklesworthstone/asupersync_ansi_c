@@ -534,6 +534,7 @@ From `.github/workflows/ci.yml`:
 | `cross-qemu` | PR, push | `check` | Yes |
 | `msvc` | PR, push | `check` | Yes |
 | `m32` | PR, push | `check` | Yes |
+| `wasm32` | PR, push | `check` | Yes (`make build-wasm32` and `make test-wasm32-replay`: the v2 fixtures replayed under node on CORE, FREESTANDING and BROWSER, digest lines identical to the native runner's) |
 | `embedded-matrix` | PR, push | `check` | Yes |
 | `size-report` | PR, push | `check` | Yes (builds and link closure; the sizes are observed, not gated) |
 | `gcc-analyzer` | PR, push | `check` | Yes |

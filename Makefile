@@ -603,7 +603,7 @@ E2E_VERTICAL_SCRIPTS := \
 .PHONY: release release-artifacts release-install-smoke bench
 .PHONY: build-gcc build-clang build-msvc build-32 build-64
 .PHONY: build-posix build-win32 build-parallel build-browser test-win32-hooks-build
-.PHONY: build-wasm32 wasm32-module
+.PHONY: build-wasm32 wasm32-module test-wasm32-replay
 .PHONY: build-embedded-mipsel build-embedded-armv7 build-embedded-aarch64
 .PHONY: cross-baremetal-arm-m4-free cross-baremetal-arm-m0-free
 .PHONY: cross-baremetal-riscv32-free cross-baremetal-riscv64-free
@@ -3062,12 +3062,74 @@ build-wasm32:
 		echo "[asx] build-wasm32: SKIP ($(WASM32_CC) with the wasm32 target and $(WASM32_LD) not found)"; \
 	fi
 
+# ---------------------------------------------------------------------------
+# test-wasm32-replay — the v2 fixtures under a wasm runtime (bd-9kll.15.4)
+#
+# The replay modules are the library with R3 arenas (the conformance
+# runner's) plus the entry tools/wasm/wasm32_replay.c, one per profile in
+# WASM32_REPLAY_VARIANTS (name:PROFILE; BROWSER minimal has no lab to run a
+# scenario). Each runs every fixtures/rust_reference_v2 fixture under node
+# (V8's WebAssembly); the native asx-conformance `replay` command runs the
+# same fixtures on this host; the outputs must be identical, so for every
+# fixture the C run's semantic digest and projection digest are the x86_64
+# CORE ones on every wasm32 profile, or the fixture fails the same way
+# (an ERROR line). The lane needs node >= 20; STRICT_GATES=1 makes its
+# absence a failure.
+# ---------------------------------------------------------------------------
+WASM32_REPLAY_DIR := $(WASM32_DIR)/replay
+WASM32_REPLAY_VARIANTS := core:CORE freestanding:FREESTANDING browser:BROWSER
+
+test-wasm32-replay: $(CONFORMANCE_RUNNER)
+	@echo "[asx] test-wasm32-replay: $(words $(CONFORMANCE_V2_FIXTURES)) fixture(s) on wasm32 ($(WASM32_REPLAY_VARIANTS)) vs the native runner..."
+	@if command -v $(WASM32_CC) >/dev/null 2>&1 && command -v $(WASM32_LD) >/dev/null 2>&1 && \
+	    $(WASM32_CC) --print-targets 2>/dev/null | grep -q wasm32 && \
+	    command -v $(WASM32_NODE) >/dev/null 2>&1; then \
+		mkdir -p $(WASM32_REPLAY_DIR) && \
+		$(TEST_EXEC) $(CONFORMANCE_RUNNER) replay $(CONFORMANCE_V2_FIXTURES) \
+		        > $(WASM32_REPLAY_DIR)/native.txt; \
+		rc=$$?; [ $$rc -le 1 ] || { echo "[asx] test-wasm32-replay: FAIL (native replay exit $$rc)"; exit 1; }; \
+		runs=$$(grep -c ' sha256:.* sha256:' $(WASM32_REPLAY_DIR)/native.txt); \
+		if [ "$$runs" -eq 0 ]; then \
+			echo "[asx] test-wasm32-replay: FAIL (no fixture produced a digest line: nothing compared)"; \
+			exit 1; \
+		fi; \
+		errs=$$(grep -c '^ERROR ' $(WASM32_REPLAY_DIR)/native.txt); \
+		for v in $(WASM32_REPLAY_VARIANTS); do \
+			name=$${v%%:*}; profile=$${v##*:}; \
+			dir=$(WASM32_DIR)/replay-$$name; \
+			$(MAKE) --no-print-directory wasm32-module PROFILE=$$profile RESOURCE_CLASS=3 \
+			        WASM32_VARIANT=replay-$$name WASM32_ENTRY=tools/wasm/wasm32_replay.c || exit 1; \
+			$(WASM32_NODE) tools/wasm/replay.js $$dir/asx.wasm $(CONFORMANCE_V2_FIXTURES) \
+			        > $$dir/wasm.txt; \
+			rc=$$?; [ $$rc -le 1 ] || { echo "[asx] test-wasm32-replay: FAIL ($$name: wasm replay exit $$rc)"; exit 1; }; \
+			sed -n 's/^SKIP \([^ :]*\):.*/\1 sha256:/p' $$dir/wasm.txt > $$dir/skipped.txt; \
+			grep -v -F -f $$dir/skipped.txt $(WASM32_REPLAY_DIR)/native.txt > $$dir/expected.txt; \
+			grep -v '^SKIP ' $$dir/wasm.txt > $$dir/got.txt; \
+			skips=$$(grep -c . $$dir/skipped.txt); \
+			if cmp -s $$dir/expected.txt $$dir/got.txt; then \
+				echo "[asx] test-wasm32-replay: $$name identical to x86_64 CORE ($$runs digest line(s) there, $$errs ERROR line(s), $$skips skipped as forbidden in the profile, DEC-008)"; \
+			else \
+				echo "[asx] test-wasm32-replay: FAIL ($$name differs from x86_64 CORE; first differences, < native, > wasm32):"; \
+				diff $$dir/expected.txt $$dir/got.txt | head -20; \
+				exit 1; \
+			fi; \
+		done; \
+		echo "[asx] test-wasm32-replay: PASS ($(words $(WASM32_REPLAY_VARIANTS)) wasm32 profile(s) x $(words $(CONFORMANCE_V2_FIXTURES)) fixture(s))"; \
+	elif [ "$(FAIL_ON_MISSING_RUNNERS)" = "1" ]; then \
+		echo "[asx] test-wasm32-replay: FAIL (clang with wasm32, wasm-ld and $(WASM32_NODE) are required; strict mode)"; \
+		exit 1; \
+	else \
+		echo "[asx] test-wasm32-replay: SKIP (clang with wasm32, wasm-ld or $(WASM32_NODE) not found)"; \
+	fi
+
 ifneq ($(WASM32_VARIANT),)
 WASM32_VARIANT_DEFS ?=
+WASM32_ENTRY ?=
 WASM32_OBJ_DIR := $(WASM32_DIR)/$(WASM32_VARIANT)/obj
 WASM32_MODULE := $(WASM32_DIR)/$(WASM32_VARIANT)/asx.wasm
 WASM32_SRC := $(filter-out $(CLI_SRC) $(CONSOLE_SRC),$(LIB_SRC))
-WASM32_OBJ := $(patsubst src/%.c,$(WASM32_OBJ_DIR)/%.o,$(WASM32_SRC)) $(WASM32_OBJ_DIR)/wasm32_libc.o
+WASM32_OBJ := $(patsubst src/%.c,$(WASM32_OBJ_DIR)/%.o,$(WASM32_SRC)) $(WASM32_OBJ_DIR)/wasm32_libc.o \
+              $(if $(WASM32_ENTRY),$(WASM32_OBJ_DIR)/entry.o)
 WASM32_CFLAGS := --target=wasm32 -ffreestanding $(STD_FLAGS) $(WARN_FLAGS) -O2 -DNDEBUG \
                  -ffunction-sections -fdata-sections \
                  $(INC_FLAGS) -I$(CURDIR)/src -isystem $(CURDIR)/tools/wasm/include \
@@ -3083,6 +3145,11 @@ $(WASM32_OBJ_DIR)/%.o: src/%.c
 $(WASM32_OBJ_DIR)/wasm32_libc.o: tools/wasm/wasm32_libc.c
 	@mkdir -p $(@D)
 	$(WASM32_CC) $(WASM32_CFLAGS) $(DEP_FLAGS) -fno-builtin -c $< -o $@
+
+# The variant's own entry (the replay module's tools/wasm/wasm32_replay.c).
+$(WASM32_OBJ_DIR)/entry.o: $(WASM32_ENTRY)
+	@mkdir -p $(@D)
+	$(WASM32_CC) $(WASM32_CFLAGS) $(DEP_FLAGS) -c $< -o $@
 
 $(WASM32_MODULE): $(WASM32_OBJ)
 	$(WASM32_LD) --no-entry --export-all --error-limit=0 -z stack-size=$(WASM32_STACK_BYTES) \

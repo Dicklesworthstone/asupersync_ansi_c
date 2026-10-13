@@ -6438,3 +6438,70 @@ int asx_conformance_requirement_forbidden(const asx_json_doc *in, uint32_t scena
     *out_name = first;
     return first != NULL;
 }
+
+/* The documents of asx_conformance_replay_line: a fixture and the run's
+ * projection, 2 MiB each, so they are file scope rather than on a stack. */
+static asx_json_doc g_replay_in;
+static asx_json_doc g_replay_out;
+
+static asx_status replay_line_error(char *out, size_t cap, const char *id, const char *what,
+                                    const char *detail, asx_status st) {
+    (void)snprintf(out, cap, "ERROR %s: %s%s%s", id != NULL ? id : "?", what,
+                   detail != NULL && detail[0] != '\0' ? ": " : "", detail != NULL ? detail : "");
+    return st;
+}
+
+asx_status asx_conformance_replay_line(const char *text, size_t len, char *out, size_t out_cap) {
+    char digest[ASX_CANON_DIGEST_LEN];
+    char error[512];
+    const char *id;
+    const char *semantic;
+    const char *behavior = NULL;
+    uint32_t root;
+    uint32_t scenario;
+    uint32_t run = ASX_JSON_NONE;
+    int forbidden;
+    asx_status st;
+
+    if (out == NULL || out_cap == 0u || (text == NULL && len != 0u)) return ASX_E_INVALID_ARGUMENT;
+    out[0] = '\0';
+    error[0] = '\0';
+    asx_json_doc_init(&g_replay_in);
+    st = asx_json_parse(&g_replay_in, text, len, &root);
+    if (st != ASX_OK) {
+        return replay_line_error(out, out_cap, NULL, "invalid JSON",
+                                 g_replay_in.error != NULL ? g_replay_in.error : "?", st);
+    }
+    id = asx_json_get_string(&g_replay_in, root, "scenario_id");
+    scenario = asx_json_get(&g_replay_in, root, "scenario");
+    if (id == NULL || scenario == ASX_JSON_NONE) {
+        return replay_line_error(out, out_cap, id, "not an asx.fixture.v2 file",
+                                 "scenario_id and scenario are required", ASX_E_INVALID_ARGUMENT);
+    }
+    forbidden = asx_conformance_requirement_forbidden(&g_replay_in, scenario, asx_profile_active(),
+                                                      &behavior);
+    if (forbidden < 0) {
+        return replay_line_error(out, out_cap, id,
+                                 "the scenario's \"requires\" is not a list of known requirements",
+                                 NULL, ASX_E_INVALID_ARGUMENT);
+    }
+    if (forbidden > 0) {
+        (void)snprintf(out, out_cap, "SKIP %s: the %s profile forbids %s (DEC-008)", id,
+                       asx_profile_name(asx_profile_active()), behavior);
+        return ASX_OK;
+    }
+    asx_json_doc_init(&g_replay_out);
+    st = asx_conformance_run(&g_replay_in, scenario, &g_replay_out, &run, error, sizeof(error));
+    if (st != ASX_OK) { return replay_line_error(out, out_cap, id, "C run failed", error, st); }
+    semantic = asx_json_get_string(&g_replay_out, run, "semantic_digest");
+    if (semantic == NULL) {
+        return replay_line_error(out, out_cap, id, "the projection has no semantic_digest", NULL,
+                                 ASX_E_INVALID_STATE);
+    }
+    st = asx_canon_digest(&g_replay_out, run, digest);
+    if (st != ASX_OK) {
+        return replay_line_error(out, out_cap, id, "the projection cannot be digested", NULL, st);
+    }
+    (void)snprintf(out, out_cap, "%s %s %s", id, semantic, digest);
+    return ASX_OK;
+}

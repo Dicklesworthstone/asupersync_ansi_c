@@ -536,13 +536,64 @@ int snprintf(char *buf, size_t cap, const char *fmt, ...) {
 /* ------------------------------------------------------------------ */
 
 #define SCAN_OK 1
+#define SCAN_MATCHED 2 /* a %% matched: nothing assigned */
 #define SCAN_MISMATCH 0
 #define SCAN_END (-1)
 
-/* One %[width][hh|h|l|ll]{s u d x} directive; *f is just past the '%'.
- * Returns SCAN_OK after an assignment, SCAN_END when the input ran out
- * before the conversion, SCAN_MISMATCH otherwise (a directive the library
- * does not use is a mismatch). */
+/* Whether c is in the scan set set[0..end) (ranges a-z, the ] first). */
+static int set_has(const char *set, const char *end, int invert, char c) {
+    const char *p = set;
+    int hit = 0;
+
+    while (p < end) {
+        if (p + 2 < end && p[1] == '-') {
+            if ((unsigned char)c >= (unsigned char)p[0] &&
+                (unsigned char)c <= (unsigned char)p[2]) {
+                hit = 1;
+            }
+            p += 3;
+        } else {
+            if (c == *p) hit = 1;
+            p++;
+        }
+    }
+    return hit != invert;
+}
+
+/* %[width][^]set]: the longest run (at most width) of characters in the
+ * set, at least one, no white space skipped; *f is just past the '['. */
+static int scan_set(const char **in, const char **f, va_list *ap, size_t width, int has_width) {
+    const char *set;
+    const char *end;
+    int invert = 0;
+    char *out;
+    size_t n = 0u;
+
+    if (**f == '^') {
+        invert = 1;
+        (*f)++;
+    }
+    set = *f;
+    if (**f == ']') (*f)++;
+    while (**f != '\0' && **f != ']') (*f)++;
+    if (**f != ']') return SCAN_MISMATCH;
+    end = *f;
+    (*f)++;
+    if (**in == '\0') return SCAN_END;
+    out = va_arg(*ap, char *);
+    while (**in != '\0' && set_has(set, end, invert, **in) && (!has_width || n < width)) {
+        out[n++] = **in;
+        (*in)++;
+    }
+    if (n == 0u) return SCAN_MISMATCH;
+    out[n] = '\0';
+    return SCAN_OK;
+}
+
+/* One %[width][hh|h|l|ll]{s [ u d x} directive; *f is just past the '%'.
+ * Returns SCAN_OK after an assignment, SCAN_MATCHED for %%, SCAN_END when
+ * the input ran out before the conversion, SCAN_MISMATCH otherwise (a
+ * directive the library does not use is a mismatch). */
 static int scan_directive(const char **in, const char **f, va_list *ap) {
     size_t width = 0u;
     int has_width = 0;
@@ -578,8 +629,9 @@ static int scan_directive(const char **in, const char **f, va_list *ap) {
         if (**in == '\0') return SCAN_END;
         if (**in != '%') return SCAN_MISMATCH;
         (*in)++;
-        return SCAN_OK;
+        return SCAN_MATCHED;
     }
+    if (conv == '[') return scan_set(in, f, ap, width, has_width);
     while (is_space((unsigned char)**in)) (*in)++;
     if (**in == '\0') return SCAN_END;
 
@@ -672,7 +724,11 @@ int sscanf(const char *str, const char *fmt, ...) {
         } else {
             f++;
             status = scan_directive(&in, &f, &ap);
-            if (status == SCAN_OK && f[-1] != '%') assigned++;
+            if (status == SCAN_OK) {
+                assigned++;
+            } else if (status == SCAN_MATCHED) {
+                status = SCAN_OK;
+            }
         }
     }
     va_end(ap);

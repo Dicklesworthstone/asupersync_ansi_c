@@ -899,7 +899,7 @@ it drifts from the headers or a new capacity macro is missing.
 | `ASX_PROFILE_HFT` | High-frequency trading | 16-worker cap; the overload catalog lists shed-oldest for it (advisory, see below); pairs with the HFT instrumentation module (latency histograms, jitter), which the application feeds |
 | `ASX_PROFILE_AUTOMOTIVE` | Safety-critical systems | 16-worker cap; the overload catalog lists backpressure for it (advisory, see below); pairs with the automotive instruments (deadline tracking, watchdog, degraded-mode audit, compliance gate), which the application feeds |
 | `ASX_PROFILE_PARALLEL` | Multi-core (planned) | Deterministic logical worker-lane scheduler (64-worker generic cap) that runs every lane on the calling thread; observe-only admission by default |
-| `ASX_PROFILE_BROWSER` | Browser/WebAssembly | Native-only surfaces compiled out, browser boundary diagnostics; builds and runs natively, and `make build-wasm32` links it as a wasm32 module that no wasm runtime has executed yet |
+| `ASX_PROFILE_BROWSER` | Browser/WebAssembly | Native-only surfaces compiled out, browser boundary diagnostics; builds and runs natively, links as a wasm32 module (`make build-wasm32`), and replays the v2 fixtures under node digest-identical to x86_64 (`make test-wasm32-replay`) |
 
 The overload policies named above are entries in a catalog (`src/runtime/overload_catalog.c`, "Per-Profile Overload Policies" below), not behavior of the scheduler: spawn and the scheduler never consult it, and a policy takes effect only where the application evaluates it through the vertical adapters. The one code path that reads the catalog's forbid mask is `asx_channel_create_unbounded`.
 
@@ -2434,7 +2434,7 @@ Wire format conventions: binary fixture codec uses big-endian (network byte orde
 
 ## WASM ABI Contract
 
-The ABI module (`include/asx/abi/wasm_abi.h`) defines type contracts for a future boundary between `asx` and a host environment (primarily WebAssembly). `make build-wasm32` compiles and links the library for wasm32, but the module exports the library's own functions and no wasm runtime has executed it (see Limitations), so nothing here has run under WebAssembly:
+The ABI module (`include/asx/abi/wasm_abi.h`) defines type contracts for a future boundary between `asx` and a host environment (primarily WebAssembly). `make build-wasm32` links the library for wasm32 and `make test-wasm32-replay` runs the conformance fixtures through it under node, but no host binds these types (the replay entry passes fixture bytes through plain linear memory), so this contract has not run under WebAssembly:
 
 **Feature flags** (8 bits defined in a `uint32_t`): deterministic mode, channels, timers, obligations, symbols, JSON codec, BIN codec, ghost monitors. Channels, timers, obligations and symbols are always set; the others follow the build. The host reads them from `asx_abi_version_current().feature_flags`.
 
@@ -2558,7 +2558,7 @@ verification, and risk documents, among them:
 
 ## CI Pipeline Architecture
 
-The primary CI workflow (`.github/workflows/ci.yml`) runs <!-- fact:ci_jobs -->16<!-- /fact --> top-level jobs on
+The primary CI workflow (`.github/workflows/ci.yml`) runs <!-- fact:ci_jobs -->17<!-- /fact --> top-level jobs on
 pushes and PRs:
 
 | Job | Runs |
@@ -2574,13 +2574,14 @@ pushes and PRs:
 | `sanitizers` | the unit suite under ASan+UBSan (deterministic and live POSIX) and TSan (live POSIX) |
 | `cross-qemu` | the unit suite and the Rust fixture replay, cross-compiled for mipsel, big-endian mips, armv7, aarch64 and riscv64 (Debian glibc, static) and run under QEMU user mode |
 | `m32` | the unit suite and the Rust fixture replay on 32-bit x86 |
+| `wasm32` | `make build-wasm32` (four freestanding wasm32 modules linked with wasm-ld) and `make test-wasm32-replay` (every v2 fixture under node on CORE, FREESTANDING and BROWSER, digest lines compared with the native runner's) |
 | `msvc` | the library and the unit suite built by MSVC (x64, `/W4 /WX /wd4100`, via CMake) and run with CTest, for CORE and WIN32 (deterministic builds) |
 | `embedded-matrix` | router-class cross builds with size and layout rows (built, not run) |
 | `size-report` | the release library and the kernel-only archive built for CORE and EMBEDDED_ROUTER, resource classes default and 1, each quickstart linked and the kernel archive's link closure checked; a build, link or closure failure fails the lane, the sizes are reported and not gated |
 | `gcc-analyzer` | GCC 15.2 `-fanalyzer` over `src/` in CORE and POSIX live; every diagnostic is fixed or carries a reasoned waiver (`docs/STATIC_ANALYSIS_TRIAGE.md`) |
 | `gate-scripts` | the integration tests and smoke lanes no other job runs: the fuzz gates' integration tests (counterexample replay, controls, minimizer pipeline, the harnesses under ASan+UBSan), the foundational contract evidence script, the combinator and actor-supervision harnesses, the POSIX adapter smoke, strict schema validation, the embedded portability proof, and the installer smoke |
 
-None of the <!-- fact:ci_jobs -->16<!-- /fact --> jobs is marked `continue-on-error`, so a failure in any of
+None of the <!-- fact:ci_jobs -->17<!-- /fact --> jobs is marked `continue-on-error`, so a failure in any of
 them fails the workflow. A nightly workflow (`nightly.yml`) runs the C fuzzer
 for 100K iterations, Rust-vs-C differential fuzzing on a new seed each day,
 the full e2e suite with the conformance and parity gates, and strict fixture
@@ -2694,7 +2695,7 @@ Check whether `asx_deadline_monitor_check()` is being called frequently enough i
 - WIN32 builds and passes its unit suite under MSVC in CI (deterministic builds), but has no native I/O: no sockets, no IOCP reactor (the reactor is a timed sleep), no blocking pool. See the win32 row of `docs/DEFERRED_STUBS_REGISTER.md` (`bd-v12u.3`).
 - TLS needs a provider, and none is built in. The core carries no cryptography: `asx_tls_connect` and `asx_tls_accept` refuse a configuration that names no `asx_tls_provider` (`ASX_E_HOOK_MISSING`), so nothing is sent in the clear under the name of TLS by default. The one provider in the tree, `asx_tls_null_provider()`, is a plaintext passthrough for tests and simulations: it performs no handshake, authenticates no peer and encrypts nothing, and a caller must select it with `asx_tls_config_set_provider`. A real TLS stack plugs in through the provider callbacks (handshake, read, write, shutdown, peer certificate); no such adapter ships yet (`bd-9kll.17.2`). Nothing else in the tree opens a TLS stream: the HTTP server and client speak plain TCP.
 - The database, QUIC, gRPC, messaging, distributed, transport and remote surfaces (`src/net/db.c`, `quic.c`, `grpc.c`, `messaging.c`, `distributed.c`, `src/transport/`, `src/remote/`) are deterministic in-memory models (DEC-010), listed under "Lab Models". They open no socket and speak no wire protocol: a database statement is refused (the model implements none), a QUIC connect stays in `HANDSHAKE` until an in-process accept pairs it, and a gRPC channel is a link between structures in the same process. A successful status means the model accepted the call, not that anything reached a database, broker or peer. Use them as test doubles for the API shapes, not as clients.
-- WebAssembly is built and validated, not run. `make build-wasm32` compiles the library for `wasm32` with clang `-ffreestanding` under the strict warning set and links four modules with `wasm-ld`, `build/wasm32/{core,freestanding,browser,browser-minimal}/asx.wasm`, each about 0.9 to 1.0 MB with every function exported and no imports. There is no sysroot: the lane supplies exactly the C library functions the library calls from `tools/wasm/wasm32_libc.c` (string and memory functions, `snprintf`, `sscanf`, `strtoul`, `strtoull`, `tolower`, and `malloc`, `realloc` and `free` over the static arena; `getenv` finds nothing), and `src/cli` and `src/console` are left out. Nothing runs the modules yet: no fixture has been replayed under a wasm runtime, so wasm32 digest parity with x86_64 is unproven, and there are no JavaScript bindings. `tools/ci/wasm32_oracle_probe.sh` (`docs/WASM32_ORACLE_EVALUATION.md`) predates the lane and CI does not run it.
+- WebAssembly runs the conformance fixtures, not an application. `make build-wasm32` compiles the library for `wasm32` with clang `-ffreestanding` under the strict warning set and links four modules with `wasm-ld`, `build/wasm32/{core,freestanding,browser,browser-minimal}/asx.wasm`, each about 0.9 to 1.0 MB with every function exported and no imports. There is no sysroot: the lane supplies exactly the C library functions the library calls from `tools/wasm/wasm32_libc.c` (string and memory functions, `snprintf`, `sscanf` with `%[`, `strtoul`, `strtoull`, `tolower`, and `malloc`, `realloc` and `free` over the static arena; `getenv` finds nothing), and `src/cli` and `src/console` are left out. `make test-wasm32-replay` runs every v2 fixture under node (V8) on CORE, FREESTANDING and BROWSER with the R3 arenas, and requires each fixture's semantic digest and projection digest to equal the x86_64 CORE runner's (`asx-conformance replay`); the two fixtures that require an unbounded queue are skipped on FREESTANDING and BROWSER, as `asx-conformance compare` skips them (DEC-008). BROWSER minimal has no lab and is link-validated only. The replay needs node 20 or later and is a CI job (`wasm32`). There are no JavaScript bindings: the replay entry exchanges fixture bytes and a result line through linear memory, and wasm32 has no live clock, socket or file: the scenarios run on the lab's virtual time. `tools/ci/wasm32_oracle_probe.sh` (`docs/WASM32_ORACLE_EVALUATION.md`) predates the lane and CI does not run it.
 - Rust parity covers what the DSL v2 scenarios can express (see `make conformance`). Networking, files, processes, HTTP and live builds are not compared with Rust, and `docs/SCENARIO_DSL_V2.md` §7 lists the open C-side gaps.
 - Deterministic guarantees assume matching scenario, profile, seed, and compatible runtime version.
 - The footprint targets are not met. On the build host the CORE kernel-only archive is 688 KiB of flash against a 64 KiB target (128 KiB hard), and a class changes the arenas, not the code (see "Measured footprint"). Nothing has been measured on a device.
