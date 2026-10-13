@@ -562,6 +562,146 @@ static void test_a_runtime_reset_forgets_monitors(void) {
     ASSERT(asx_monitor_count() == 0u, "the runtime reset reaches the monitors");
 }
 
+/* ------------------------------------------------------------------ */
+/* Monitor requests through the region-command lane (lab dispatch)     */
+/* ------------------------------------------------------------------ */
+
+static void run_lab(asx_region_id region) {
+    asx_budget b = asx_budget_from_polls(1000);
+    st_sink_ = asx_scheduler_run_until_idle(region, &b);
+    (void)st_sink_;
+}
+
+static int g_lane_go;
+
+/* Finishes once told to; parks until woken before that. */
+static asx_status gated_target_poll(void *user_data, asx_task_id self) {
+    (void)user_data;
+    if (g_lane_go) return ASX_OK;
+    MUST_OK(asx_task_park(self));
+    return ASX_E_PENDING;
+}
+
+typedef struct {
+    asx_task_id target;
+    asx_actor_handle server; /* to_server: the server holds the monitor */
+    int to_server;
+    int release_after_open; /* drop the monitor handle at once */
+    int await_down;         /* wait for the DOWN with asx_monitor_down_poll */
+    asx_monitor_ref ref;
+    asx_status open_st;
+    asx_status down_st;
+    asx_down down;
+    uint32_t polls;
+    int opened;
+} lane_watcher;
+
+static asx_status lane_watcher_poll(void *user_data, asx_task_id self) {
+    lane_watcher *w = (lane_watcher *)user_data;
+    asx_status st;
+    w->polls++;
+    if (!w->opened) {
+        st = w->to_server ? asx_monitor_open_server_poll(self, w->server, w->target, &w->ref)
+                          : asx_monitor_open_poll(self, w->target, &w->ref);
+        if (st == ASX_E_PENDING) return ASX_E_PENDING;
+        w->open_st = st;
+        w->opened = 1;
+        if (st != ASX_OK) return ASX_OK;
+        g_lane_go = 1;
+        MUST_OK(asx_task_wake(w->target));
+        if (w->release_after_open) {
+            asx_monitor_release(w->ref);
+            return ASX_OK;
+        }
+    }
+    if (!w->await_down) return ASX_OK;
+    st = asx_monitor_down_poll(self, NULL, w->ref, &w->down);
+    if (st == ASX_E_PENDING) return ASX_E_PENDING;
+    w->down_st = st;
+    return ASX_OK;
+}
+
+static asx_task_id spawn_with(asx_region_id region, asx_task_poll_fn poll, void *user_data) {
+    asx_task_id id = ASX_INVALID_ID;
+    MUST_OK(asx_task_spawn(region, poll, user_data, &id));
+    return id;
+}
+
+static void test_a_lane_request_takes_a_step_and_its_down_follows(void) {
+    lane_watcher w;
+    asx_task_id target;
+    setup();
+    g_lane_go = 0;
+    memset(&w, 0, sizeof(w));
+    w.await_down = 1;
+    MUST_OK(asx_scheduler_use_lab_dispatch(7u));
+    target = spawn_with(g_root, gated_target_poll, NULL);
+    w.target = target;
+    (void)spawn_with(g_root, lane_watcher_poll, &w);
+    run_lab(g_root);
+    ASSERT(w.open_st == ASX_OK && w.ref == 1u,
+           "the request was applied and returned its reference");
+    ASSERT(w.down_st == ASX_OK && w.down.ref == w.ref, "the DOWN was awaited");
+    ASSERT(asx_handle_index(w.down.monitored) == asx_handle_index(target), "for the target");
+    ASSERT(w.down.reason.severity == ASX_OUTCOME_OK, "Normal");
+    ASSERT(w.polls == 3u, "poll 1 queued the request and parked, poll 2 had the reference and "
+                          "waited, poll 3 had the DOWN");
+}
+
+static void test_a_lane_request_for_a_finished_task_is_not_found(void) {
+    lane_watcher w;
+    asx_task_id finished;
+    setup();
+    memset(&w, 0, sizeof(w));
+    MUST_OK(asx_scheduler_use_lab_dispatch(7u));
+    finished = spawn_with(g_root, finish_poll, NULL);
+    run_lab(g_root);
+    w.target = finished;
+    (void)spawn_with(g_idle, lane_watcher_poll, &w);
+    run_lab(g_idle);
+    ASSERT(w.opened && w.open_st == ASX_E_NOT_FOUND, "refused when the lane applies it");
+    ASSERT(asx_monitor_count() == 0u, "nothing was registered");
+}
+
+static void test_a_lane_request_for_a_server_reaches_its_handle_info(void) {
+    rec_state s;
+    asx_actor_handle h;
+    lane_watcher w;
+    asx_task_id target;
+    setup();
+    g_lane_go = 0;
+    memset(&w, 0, sizeof(w));
+    MUST_OK(asx_scheduler_use_lab_dispatch(7u));
+    h = spawn_server(&s);
+    target = spawn_with(g_root, gated_target_poll, NULL);
+    w.target = target;
+    w.server = h;
+    w.to_server = 1;
+    (void)spawn_with(g_root, lane_watcher_poll, &w);
+    run_lab(g_root);
+    ASSERT(w.open_st == ASX_OK, "the server's request was applied");
+    ASSERT(s.n == 1u && s.got[0].kind == ASX_ACTOR_INFO_DOWN && s.got[0].ref == w.ref,
+           "and its DOWN reached handle_info");
+}
+
+static void test_a_released_lane_monitor_never_fires(void) {
+    lane_watcher w;
+    asx_task_id target;
+    asx_down d;
+    setup();
+    g_lane_go = 0;
+    memset(&w, 0, sizeof(w));
+    w.release_after_open = 1;
+    MUST_OK(asx_scheduler_use_lab_dispatch(7u));
+    target = spawn_with(g_root, gated_target_poll, NULL);
+    w.target = target;
+    (void)spawn_with(g_root, lane_watcher_poll, &w);
+    run_lab(g_root);
+    ASSERT(w.open_st == ASX_OK, "it was established");
+    ASSERT(asx_monitor_count() == 0u, "and it is gone, fired or not, nothing is held");
+    ASSERT(asx_monitor_down(w.ref, &d) == ASX_E_NOT_FOUND, "released");
+}
+
 int main(void) {
     printf("test_monitor:\n");
 
@@ -589,6 +729,10 @@ int main(void) {
     RUN(test_the_runtime_fires_a_polled_monitor);
     RUN(test_a_watchers_completion_ends_its_monitors_silently);
     RUN(test_a_runtime_reset_forgets_monitors);
+    RUN(test_a_lane_request_takes_a_step_and_its_down_follows);
+    RUN(test_a_lane_request_for_a_finished_task_is_not_found);
+    RUN(test_a_lane_request_for_a_server_reaches_its_handle_info);
+    RUN(test_a_released_lane_monitor_never_fires);
 
     printf("\n  %d passed, %d failed\n", g_pass, g_fail);
     return g_fail > 0 ? 1 : 0;

@@ -88,9 +88,32 @@ ASX_API ASX_MUST_USE asx_status asx_monitor_establish_server(asx_actor_handle se
                                                              asx_task_id target,
                                                              asx_monitor_ref *out_ref);
 
-/* Remove a monitor (Rust demonitor, Monitor drop): no DOWN for it is
- * delivered afterwards. A reference that is unknown, already fired for a
- * server, or already removed is ignored.
+/* Cx::monitor (Rust MonitorOpening, monitor.rs:1090), polled by task
+ * `self` until it stops returning ASX_E_PENDING. Under the lab's dispatch
+ * the request is a command of the region-command lane: the first call
+ * queues it and parks the task, the next step's drain applies it
+ * (asx_monitor_establish's checks, and its statuses) and wakes the task,
+ * and the call after that returns the result with the reference in
+ * *out_ref. Without lab dispatch the request is applied at once.
+ * Thread-safety: not thread-safe; single-threaded mode only. */
+ASX_API ASX_MUST_USE asx_status asx_monitor_open_poll(asx_task_id self, asx_task_id target,
+                                                      asx_monitor_ref *out_ref);
+
+/* GenServerHandle::monitor (Rust ServerMonitorOpening, monitor.rs:1004): as
+ * asx_monitor_open_poll, for the server to hold the monitor; `self` is the
+ * task awaiting the opening (any task). The server's DOWN arrives in its
+ * handle_info.
+ * Thread-safety: not thread-safe; single-threaded mode only. */
+ASX_API ASX_MUST_USE asx_status asx_monitor_open_server_poll(asx_task_id self,
+                                                             asx_actor_handle server,
+                                                             asx_task_id target,
+                                                             asx_monitor_ref *out_ref);
+
+/* Remove a monitor (Rust GenServerHandle::demonitor): no DOWN for it is
+ * delivered afterwards. Under the lab's dispatch the removal is a command of
+ * the region-command lane, applied by the next drain; otherwise it is
+ * immediate. A reference that is unknown, already fired, or already removed
+ * is ignored.
  * Thread-safety: not thread-safe; single-threaded mode only. */
 ASX_API void asx_demonitor(asx_monitor_ref ref);
 
@@ -102,8 +125,19 @@ ASX_API void asx_demonitor(asx_monitor_ref ref);
  * Thread-safety: not thread-safe; single-threaded mode only. */
 ASX_API ASX_MUST_USE asx_status asx_monitor_down(asx_monitor_ref ref, asx_down *out_down);
 
-/* Release a monitor made with asx_monitor_establish (Rust drops the
- * Monitor): one still waiting is removed and never fires, one that fired
+/* Monitor::down, polled by task `self` until it stops returning
+ * ASX_E_PENDING: ASX_OK with *out_down once the monitored task has
+ * finished; ASX_E_CANCELLED if the task's `cx` is cancelled first (checked
+ * after the stored notice, as Rust's poll_notice does); otherwise the task
+ * parks and the exit wakes it. ASX_E_NOT_FOUND for a reference that is
+ * unknown, released, or a server's.
+ * Thread-safety: not thread-safe; single-threaded mode only. */
+ASX_API ASX_MUST_USE asx_status asx_monitor_down_poll(asx_task_id self, asx_cx *cx,
+                                                      asx_monitor_ref ref, asx_down *out_down);
+
+/* Release a monitor made with asx_monitor_establish or asx_monitor_open_poll
+ * (Rust drops the Monitor): one still waiting is removed, through the
+ * region-command lane under lab dispatch, and never fires, one that fired
  * frees its capacity. Unknown references are ignored.
  * Thread-safety: not thread-safe; single-threaded mode only. */
 ASX_API void asx_monitor_release(asx_monitor_ref ref);

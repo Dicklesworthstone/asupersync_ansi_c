@@ -9,14 +9,14 @@
 ![C99](https://img.shields.io/badge/C-C99-00599C)
 ![No external deps](https://img.shields.io/badge/dependencies-none-brightgreen)
 ![Deterministic replay](https://img.shields.io/badge/replay-deterministic-orange)
-![Public API declarations](https://img.shields.io/badge/public%20API-2%2C093%20declarations-blue)
-![C test programs](https://img.shields.io/badge/tests-227%20programs-brightgreen)
+![Public API declarations](https://img.shields.io/badge/public%20API-2%2C109%20declarations-blue)
+![C test programs](https://img.shields.io/badge/tests-228%20programs-brightgreen)
 ![9 profiles](https://img.shields.io/badge/profiles-9%20deployment%20targets-blue)
 [![License: MIT+Rider](https://img.shields.io/badge/License-MIT%2BOpenAI%2FAnthropic%20Rider-blue.svg)](./LICENSE)
 
 </div>
 
-Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->2,093<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->227<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
+Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->2,109<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->37<!-- /fact --> public header families, backed by <!-- fact:test_programs -->228<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
 
 <div align="center">
 <h3>Quick Source Build</h3>
@@ -59,7 +59,7 @@ The port targets asupersync commit `5e60b1c4c` (2026-10).
 
 | Feature | What It Gives You |
 |---|---|
-| **<!-- fact:api_declarations -->2,093<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> header families** | Async runtime API: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
+| **<!-- fact:api_declarations -->2,109<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->37<!-- /fact --> header families** | Async runtime API: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
 | **No external dependencies** | Pure C runtime core; ships into constrained and audited environments unchanged |
 | **Deterministic replay and trace hashing** | Deterministic builds replay a scenario exactly from its seed and input; trace digests let you diff behavior across builds, profiles, and codec modes |
 | **Structured cancellation with witness protocol** | 11 cancel kinds with severity lattice, witness phase tracking, and cleanup budgets (advisory as in Rust; an opt-in hard bound) |
@@ -69,7 +69,7 @@ The port targets asupersync commit `5e60b1c4c` (2026-10).
 | **<!-- fact:status_codes -->67<!-- /fact --> typed error codes with recovery guidance** | Each error has a category, recoverability class, recovery action, and backoff hints |
 | **Resource contracts instead of silent degradation** | Explicit memory/queue/timer ceilings with deterministic failure taxonomy per resource class (R1/R2/R3) |
 | **9 deployment profiles** | CORE, POSIX, WIN32, FREESTANDING, EMBEDDED_ROUTER, HFT, AUTOMOTIVE, PARALLEL, BROWSER |
-| **<!-- fact:test_programs -->227<!-- /fact --> tracked C test programs across 7 categories** | <!-- fact:test_unit -->165<!-- /fact --> unit, <!-- fact:test_e2e -->23<!-- /fact --> e2e, <!-- fact:test_invariant -->3<!-- /fact --> invariant, <!-- fact:test_vignettes -->12<!-- /fact --> vignette, <!-- fact:test_conformance -->6<!-- /fact --> conformance, <!-- fact:test_fuzz -->5<!-- /fact --> fuzz, and <!-- fact:test_formal -->13<!-- /fact --> formal files in the current tree |
+| **<!-- fact:test_programs -->228<!-- /fact --> tracked C test programs across 7 categories** | <!-- fact:test_unit -->166<!-- /fact --> unit, <!-- fact:test_e2e -->23<!-- /fact --> e2e, <!-- fact:test_invariant -->3<!-- /fact --> invariant, <!-- fact:test_vignettes -->12<!-- /fact --> vignette, <!-- fact:test_conformance -->6<!-- /fact --> conformance, <!-- fact:test_fuzz -->5<!-- /fact --> fuzz, and <!-- fact:test_formal -->13<!-- /fact --> formal files in the current tree |
 | **Cross-profile checks** | Profiles are meant to change limits and defaults, never semantics. `make profile-parity` executes every Rust-captured fixture under CORE, POSIX, FREESTANDING, EMBEDDED_ROUTER, HFT, AUTOMOTIVE, PARALLEL and BROWSER builds, each compared with the same Rust captures; CI also runs them under EMBEDDED_ROUTER on five ISAs (QEMU) and on 32-bit x86 |
 
 The current repository is library-first: it ships the static library, public
@@ -858,7 +858,7 @@ The tree holds <!-- fact:header_files -->128<!-- /fact --> public headers
 C sources (<!-- fact:sources_core -->19<!-- /fact --> in `core/`,
 <!-- fact:sources_runtime -->40<!-- /fact --> in `runtime/`,
 <!-- fact:sources_platform -->7<!-- /fact --> in `platform/`),
-<!-- fact:test_programs -->227<!-- /fact --> C test programs and
+<!-- fact:test_programs -->228<!-- /fact --> C test programs and
 <!-- fact:examples -->14<!-- /fact --> examples (`make lint-docs` checks these numbers
 against `tools/count_inventory.sh`).
 
@@ -909,14 +909,14 @@ make profile-parity
 
 ## Testing and Quality Gates
 
-`asx` currently ships with <!-- fact:test_programs -->227<!-- /fact --> tracked C test programs across 7 categories in
+`asx` currently ships with <!-- fact:test_programs -->228<!-- /fact --> tracked C test programs across 7 categories in
 the checked-in `tests/` tree. Individual assertion counts evolve over time; see
 `tests/TEST.md` for the current indexed suite inventory and per-suite case
 totals where tracked.
 
 | Category | Files | Coverage |
 |---|---|---|
-| **Unit tests** | <!-- fact:test_unit -->165<!-- /fact --> | Broad public API and subsystem coverage across the current tree |
+| **Unit tests** | <!-- fact:test_unit -->166<!-- /fact --> | Broad public API and subsystem coverage across the current tree |
 | **End-to-end scenarios** | <!-- fact:test_e2e -->23<!-- /fact --> | Core lifecycle, automotive, HFT, codec parity, continuity, network surfaces, POSIX adapter, HTTP server on real sockets (browser and CLI lanes are shell families) |
 | **Invariant tests** | <!-- fact:test_invariant -->3<!-- /fact --> | Lifecycle transition legality, quiescence, obligation linearity |
 | **API vignettes** | <!-- fact:test_vignettes -->12<!-- /fact --> | Ergonomics and usage pattern demonstrations |
@@ -1365,7 +1365,7 @@ GenServers are ported from Rust's `gen_server.rs`:
 - The phases run under budgets, as Rust's `PhaseBudgetGuard` does: init under `on_start_budget`, met with the task's own and restored afterwards less what init consumed; the drain and `terminate` under `on_stop_budget` (default 100 polls, Rust's `Budget::MINIMAL`), met with the task's and never loosening it. A server a task spawns in its own region inherits the spawner's budget; a task the host spawns has the infinite one.
 - `asx_actor_try_cast` follows the server's `cast_overflow_policy`. `REJECT` (the default) refuses a cast when the mailbox is full; `DROP_OLDEST` evicts the oldest queued cast and never a queued call, so no reply obligation is lost, and counts it (`asx_actor_evicted_count`; it traces `gen_server::cast_evicted_oldest` on the calling task). Both channel backends evict the same message.
 - A server can hold a name: `asx_name_registry` is a caller-owned, bounded table with name leases, and `asx_actor_spawn_named`, `asx_named_actor_release_name` and `asx_named_actor_abort_lease` are Rust's `spawn_named_gen_server` and `NamedGenServerHandle`. Only Rust's default collision policy is ported (a taken name is refused); the Wait and Replace policies, waiter grants, name watchers and reserve/commit permits are not.
-- `handle_info` receives two kinds of message. A user Info message (`asx_actor_send_info`, `asx_actor_try_info`) travels through the mailbox in arrival order with casts. System messages (DOWN, EXIT, TIMEOUT; `asx_actor_system_push`) go through a bounded lane outside the mailbox that the loop takes first, so a full mailbox never delays one; a stop serves what the lane holds before the mailbox, and a cancelled or failed server runs no handler for it. DOWN is produced by task monitors (`include/asx/monitor/monitor.h`: `asx_monitor_establish_server` registers one, `asx_monitor_task_finished` fires them by ascending reference as Rust's DownBatch does). The runtime calls it when a task completes. A monitor request is applied at once, where Rust applies it in the region-command lane (one scheduler step later), and the DSL has no monitor op yet; links and EXIT are not ported (bd-9kll.3.13).
+- `handle_info` receives two kinds of message. A user Info message (`asx_actor_send_info`, `asx_actor_try_info`) travels through the mailbox in arrival order with casts. System messages (DOWN, EXIT, TIMEOUT; `asx_actor_system_push`) go through a bounded lane outside the mailbox that the loop takes first, so a full mailbox never delays one; a stop serves what the lane holds before the mailbox, and a cancelled or failed server runs no handler for it. DOWN is produced by task monitors (`include/asx/monitor/monitor.h`: `asx_monitor_establish_server` registers one, `asx_monitor_task_finished` fires them by ascending reference as Rust's DownBatch does). The runtime calls it when a task completes. Under lab dispatch a monitor request (`asx_monitor_open_poll`, `asx_monitor_open_server_poll`) is a command of the region-command lane, applied by the next step as in Rust, and `asx_monitor_down_poll` waits for the DOWN; the DSL has no monitor op yet; links and EXIT are not ported (bd-9kll.3.13).
 
 A managed supervisor (Rust's `ManagedSupervisor` in `supervision.rs`) is a controller task that runs each child as a series of generations: every generation is a task in a region of its own, below the supervisor's region. A supervisor of n children therefore holds up to n + 1 regions and n + 1 tasks at once, which counts against `ASX_MAX_REGIONS` (4 in resource class R1). `asx_supervisor_spawn` takes the children's specs (a start function that returns the generation's body, a restart mode, dependencies on other children) and a config; `asx_supervisor_join` waits for the controller's report, and `asx_supervisor_abort` cancels the controller, which then drains every generation.
 
@@ -2489,7 +2489,7 @@ It has not been benchmarked against live builds here, and the two differ in more
 
 ### Can I embed this as a library without the CLI?
 
-Yes. The C API is first-class: <!-- fact:api_declarations -->2,093<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact -->
+Yes. The C API is first-class: <!-- fact:api_declarations -->2,109<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->37<!-- /fact -->
 public header families in the current `include/asx/` tree, and one umbrella
 `#include <asx/asx.h>`. The repository is library-first: `make install`
 installs only `libasx.a` and the headers. The `asx` CLI (`version`, `info`,

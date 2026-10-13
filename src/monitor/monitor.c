@@ -11,6 +11,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../runtime/runtime_internal.h"
 #include <asx/monitor/monitor.h>
 #include <asx/runtime/runtime.h>
 #include <string.h>
@@ -24,9 +25,11 @@ typedef enum {
 typedef struct {
     uint8_t state;
     uint8_t to_server; /* sink: a server's system lane, else the stored notice */
+    uint8_t released;  /* its handle is gone: fire without storing */
     asx_monitor_ref ref;
     asx_task_id watcher;
     asx_task_id monitored;
+    asx_task_id waiter; /* a task parked in asx_monitor_down_poll, else invalid */
     asx_actor_handle server;
     asx_down notice;
 } mon_entry;
@@ -96,12 +99,34 @@ asx_status asx_monitor_establish_server(asx_actor_handle server, asx_task_id tar
     return add_monitor(holder, target, &server, out_ref);
 }
 
-void asx_demonitor(asx_monitor_ref ref) {
+asx_status asx_monitor_apply_internal(uint64_t watcher, uint64_t target, int to_server,
+                                      uint32_t server_slot, uint32_t server_gen,
+                                      uint64_t *out_ref) {
+    if (to_server) {
+        asx_actor_handle server;
+        server.slot = server_slot;
+        server.generation = server_gen;
+        return asx_monitor_establish_server(server, target, out_ref);
+    }
+    return asx_monitor_establish(watcher, target, out_ref);
+}
+
+/* A fired monitor is no longer in Rust's set: removal ignores it, and the
+ * handle's drop frees what it holds (asx_monitor_release). */
+void asx_monitor_remove_internal(uint64_t ref) {
     mon_entry *e = find_ref(ref);
-    /* A fired monitor is no longer in Rust's set: demonitor ignores it and
-     * the handle's drop frees what it holds (asx_monitor_release). */
     if (e != NULL && e->state == MON_ACTIVE) memset(e, 0, sizeof(*e));
 }
+
+/* Rust applies a removal as a Demonitor command of the region-command lane
+ * (Monitor's Drop, GenServerHandle::demonitor). Without the lab's lane it
+ * is immediate, and so it is when the queue is full: nothing is lost. */
+static void request_removal(asx_monitor_ref ref) {
+    if (asx_lab_dispatch_active() && asx_lab_watch_demonitor_command(ref) == ASX_OK) return;
+    asx_monitor_remove_internal(ref);
+}
+
+void asx_demonitor(asx_monitor_ref ref) { request_removal(ref); }
 
 asx_status asx_monitor_down(asx_monitor_ref ref, asx_down *out_down) {
     const mon_entry *e = find_ref(ref);
@@ -114,7 +139,79 @@ asx_status asx_monitor_down(asx_monitor_ref ref, asx_down *out_down) {
 
 void asx_monitor_release(asx_monitor_ref ref) {
     mon_entry *e = find_ref(ref);
-    if (e != NULL && !e->to_server) memset(e, 0, sizeof(*e));
+    if (e == NULL || e->to_server) return;
+    if (e->state == MON_FIRED) {
+        memset(e, 0, sizeof(*e)); /* the notice was delivered: nothing to remove */
+        return;
+    }
+    /* Still waiting: it must not store a notice nobody will read, whether
+     * the removal is applied before the exit or after. */
+    e->released = 1u;
+    e->waiter = ASX_INVALID_ID;
+    request_removal(ref);
+}
+
+/* MonitorOpening / ServerMonitorOpening (monitor.rs:880, :1090): with the
+ * lab's lane the request is a command, applied by the next step's drain,
+ * and the task parks until its result is there; without it the request is
+ * applied at once. */
+static asx_status open_poll(asx_task_id self, asx_task_id target, const asx_actor_handle *server,
+                            asx_monitor_ref *out_ref) {
+    asx_task_slot *t;
+    asx_status st;
+
+    if (out_ref == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (!asx_lab_dispatch_active()) {
+        return server != NULL ? asx_monitor_establish_server(*server, target, out_ref)
+                              : asx_monitor_establish(self, target, out_ref);
+    }
+    st = asx_task_slot_lookup(self, &t);
+    if (st != ASX_OK) return st;
+    switch (t->region_wait) {
+    case ASX_REGION_WAIT_WATCHED:
+        t->region_wait = ASX_REGION_WAIT_NONE;
+        if (t->region_wait_status == ASX_OK) *out_ref = t->region_wait_region;
+        return t->region_wait_status;
+    case ASX_REGION_WAIT_WATCH: break;
+    case ASX_REGION_WAIT_NONE:
+        st = asx_lab_watch_monitor_command(t, target, server != NULL,
+                                           server != NULL ? server->slot : 0u,
+                                           server != NULL ? server->generation : 0u);
+        if (st != ASX_OK) return st;
+        t->region_wait = ASX_REGION_WAIT_WATCH;
+        break;
+    default: return ASX_E_INVALID_STATE; /* awaiting a region command of another kind */
+    }
+    if (t->in_poll) t->park_requested = 1;
+    return ASX_E_PENDING;
+}
+
+asx_status asx_monitor_open_poll(asx_task_id self, asx_task_id target, asx_monitor_ref *out_ref) {
+    return open_poll(self, target, NULL, out_ref);
+}
+
+asx_status asx_monitor_open_server_poll(asx_task_id self, asx_actor_handle server,
+                                        asx_task_id target, asx_monitor_ref *out_ref) {
+    return open_poll(self, target, &server, out_ref);
+}
+
+/* Monitor::down (monitor.rs:1170): the stored notice, else cancellation,
+ * else wait to be woken by the exit (poll_notice, :846). */
+asx_status asx_monitor_down_poll(asx_task_id self, asx_cx *cx, asx_monitor_ref ref,
+                                 asx_down *out_down) {
+    mon_entry *e = find_ref(ref);
+    asx_task_slot *t;
+    if (out_down == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (e == NULL || e->to_server || e->released) return ASX_E_NOT_FOUND;
+    if (e->state == MON_FIRED) {
+        *out_down = e->notice;
+        return ASX_OK;
+    }
+    if (cx != NULL && asx_cx_checkpoint(cx) != ASX_OK) return ASX_E_CANCELLED;
+    if (asx_task_slot_lookup(self, &t) != ASX_OK) return ASX_E_STALE_HANDLE;
+    e->waiter = self;
+    if (t->in_poll) t->park_requested = 1;
+    return ASX_E_PENDING;
 }
 
 /* The next monitor on `task` to fire: the lowest reference left. Every
@@ -162,9 +259,19 @@ void asx_monitor_task_finished(asx_task_id task, const asx_outcome *outcome, asx
             st = asx_actor_system_push(e->server, &msg);
             (void)st; /* DISCONNECTED: the server stopped, the message is dropped */
             memset(e, 0, sizeof(*e));
+        } else if (e->released) {
+            memset(e, 0, sizeof(*e)); /* nobody holds the handle: nothing to store */
         } else {
+            /* The notice is stored, and the task waiting for it wakes at
+             * this dispatch (WatchSlot::deliver, :803). */
+            asx_task_id waiter = e->waiter;
+            asx_task_slot *w;
             e->state = MON_FIRED;
             e->notice = down;
+            e->waiter = ASX_INVALID_ID;
+            if (waiter != ASX_INVALID_ID && asx_task_slot_lookup(waiter, &w) == ASX_OK) {
+                asx_task_wake_slot_internal(w);
+            }
         }
     }
 

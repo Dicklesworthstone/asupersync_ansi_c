@@ -199,7 +199,10 @@ typedef struct {
      * asx_region_close_poll; Rust's ChildRegionOpening and
      * RegionQuiescence): ASX_REGION_WAIT_*. An applied open leaves its
      * status and region here for the next poll; a close waits for CLOSED of
-     * region_wait_region. */
+     * region_wait_region. A monitor request (asx_monitor_open_poll, Rust's
+     * MonitorOpening) is a command of the same lane: an applied one leaves
+     * its status here and the monitor reference in region_wait_region (both
+     * are 64-bit ids). */
     uint8_t region_wait;
     asx_status region_wait_status;
     asx_region_id region_wait_region;
@@ -630,6 +633,22 @@ void asx_lab_cancel_batch_end(void);
 asx_status asx_lab_region_open_command(asx_task_slot *opener, asx_region_id parent,
                                        const asx_budget *budget);
 asx_status asx_lab_region_cancel_command(asx_region_id region, const asx_cancel_reason *reason);
+/* Rust RegionCommand::Watch (monitor.rs WatchCommand): a monitor request
+ * for `holder` (the opener's own task, or the GenServer whose slot and
+ * generation are given when `to_server`) on `target`, or the removal of the
+ * monitor `ref`. Applied in order with the other region commands; a request's
+ * result (status, reference) wakes its opener after the batch. Queueing
+ * fails with ASX_E_RESOURCE_EXHAUSTED when the queue is full. */
+asx_status asx_lab_watch_monitor_command(asx_task_slot *opener, asx_task_id target, int to_server,
+                                         uint32_t server_slot, uint32_t server_gen);
+asx_status asx_lab_watch_demonitor_command(uint64_t ref);
+/* The effect of an applied Watch command (monitor.c): register a monitor
+ * for `watcher`, or for the server (slot, generation) when `to_server`, on
+ * `target`; or remove the monitor `ref`. The statuses are
+ * asx_monitor_establish's. */
+asx_status asx_monitor_apply_internal(uint64_t watcher, uint64_t target, int to_server,
+                                      uint32_t server_slot, uint32_t server_gen, uint64_t *out_ref);
+void asx_monitor_remove_internal(uint64_t ref);
 int asx_lab_region_commands_pending(void);
 void asx_lab_drain_region_commands(void);
 /* drain_deferred_cancel_dispatches (LR:4219-4239): publish the cancel lane
@@ -651,7 +670,9 @@ enum {
     ASX_REGION_WAIT_NONE = 0,
     ASX_REGION_WAIT_OPEN,   /* open queued, not applied yet */
     ASX_REGION_WAIT_OPENED, /* open applied: region_wait_status/_region */
-    ASX_REGION_WAIT_CLOSE   /* close requested: waiting for CLOSED */
+    ASX_REGION_WAIT_CLOSE,  /* close requested: waiting for CLOSED */
+    ASX_REGION_WAIT_WATCH,  /* monitor request queued, not applied yet */
+    ASX_REGION_WAIT_WATCHED /* applied: region_wait_status, the ref in _region */
 };
 
 /* asx_region_open_child_poll for task `t` with the opener's inherited

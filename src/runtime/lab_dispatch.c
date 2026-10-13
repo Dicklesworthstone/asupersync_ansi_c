@@ -999,6 +999,41 @@ static void lab_cancel_region(asx_region_id region, const asx_cancel_reason *rea
     }
 }
 
+/* A Watch command (Rust RegionCommand::Watch) is a lab_region_cmd whose
+ * `cancel` field is one of these: the opener's slot and generation as for a
+ * Create, `region` the monitored task (a removal: the monitor reference),
+ * `principal_id` and `budget.poll_quota` a server's slot and generation. */
+#define LAB_CMD_MONITOR_TASK 2u
+#define LAB_CMD_MONITOR_SERVER 3u
+#define LAB_CMD_DEMONITOR 4u
+
+/* TaskWatches::apply (monitor.rs:1323) for one Watch command. A removal
+ * takes effect now. A request establishes only for an opener still waiting
+ * on it (Rust's abandoned slot is not established) and leaves its result on
+ * the opener for its next poll; the opener is recorded in `woken`, to wake
+ * once the batch is applied (watch_wakers, LR:4219). */
+static void lab_apply_watch(const lab_region_cmd *c, uint32_t *woken, uint32_t *n_woken) {
+    asx_task_slot *t;
+    uint64_t ref = 0;
+    asx_status st;
+
+    if (c->cancel == LAB_CMD_DEMONITOR) {
+        asx_monitor_remove_internal(c->region);
+        return;
+    }
+    t = &g_tasks[c->opener];
+    if (!t->alive || t->generation != c->opener_gen || t->region_wait != ASX_REGION_WAIT_WATCH) {
+        return;
+    }
+    st = asx_monitor_apply_internal(asx_task_handle_for_slot(c->opener), c->region,
+                                    c->cancel == LAB_CMD_MONITOR_SERVER, c->principal_id,
+                                    c->budget.poll_quota, &ref);
+    t->region_wait = ASX_REGION_WAIT_WATCHED;
+    t->region_wait_status = st;
+    t->region_wait_region = st == ASX_OK ? ref : ASX_INVALID_ID;
+    woken[(*n_woken)++] = c->opener;
+}
+
 /* drain_region_commands (LR:4135-4217): up to 8 commands in order. A
  * Cancel cancels its region now (a closed or gone region is left alone);
  * its tasks' cancel lane entries and wakes are deferred
@@ -1007,11 +1042,14 @@ static void lab_cancel_region(asx_region_id region, const asx_cancel_reason *rea
  * Create's result is published, waking its opener, after every command of
  * the batch is applied. A Create whose opener is gone still mints the
  * region, which then closes, as Rust's abandoned slot closes a region
- * minted for it (child_region.rs:264-275). */
+ * minted for it (child_region.rs:264-275). A Watch is applied in place
+ * (lab_apply_watch) and its opener wakes after the Creates' openers. */
 void asx_lab_drain_region_commands(void) {
     lab_region_cmd batch[LAB_REGION_BATCH];
     uint32_t opened[LAB_REGION_BATCH];
+    uint32_t watched[LAB_REGION_BATCH];
     uint32_t n_opened = 0;
+    uint32_t n_watched = 0;
     uint32_t n = g_lab_rcmd_n < LAB_REGION_BATCH ? g_lab_rcmd_n : LAB_REGION_BATCH;
     uint32_t i;
 
@@ -1030,6 +1068,10 @@ void asx_lab_drain_region_commands(void) {
         asx_region_id id = ASX_INVALID_ID;
         asx_status st;
         ASX_CHECKPOINT_WAIVER("bounded: n <= LAB_REGION_BATCH");
+        if (c->cancel >= LAB_CMD_MONITOR_TASK) {
+            lab_apply_watch(c, watched, &n_watched);
+            continue;
+        }
         if (c->cancel) {
             lab_cancel_region(c->region, &c->reason);
             continue;
@@ -1061,6 +1103,10 @@ void asx_lab_drain_region_commands(void) {
     for (i = 0; i < n_opened; i++) {
         ASX_CHECKPOINT_WAIVER("bounded: n_opened <= LAB_REGION_BATCH");
         asx_task_wake_slot_internal(&g_tasks[opened[i]]);
+    }
+    for (i = 0; i < n_watched; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: n_watched <= LAB_REGION_BATCH");
+        asx_task_wake_slot_internal(&g_tasks[watched[i]]);
     }
 }
 
@@ -1561,4 +1607,34 @@ const char *asx_forced_error_kind_name(asx_forced_error_kind kind) {
     case ASX_FORCED_E_CERTIFICATE_MISMATCH: return "certificate_mismatch";
     }
     return "unknown";
+}
+
+/* Watch commands (Rust RegionCommand::Watch with a WatchCommand::Monitor or
+ * Demonitor, monitor.rs:1198), queued in the region-command FIFO. A monitor
+ * request is the opener's own (`to_server` 0: its task holds the monitor)
+ * or a GenServer's, named by slot and generation. */
+asx_status asx_lab_watch_monitor_command(asx_task_slot *opener, asx_task_id target, int to_server,
+                                         uint32_t server_slot, uint32_t server_gen) {
+    lab_region_cmd *c;
+    if (g_lab_rcmd_n >= LAB_REGION_CMD_CAP) return ASX_E_RESOURCE_EXHAUSTED;
+    c = &g_lab_rcmd[g_lab_rcmd_n++];
+    memset(c, 0, sizeof(*c));
+    c->cancel = to_server ? LAB_CMD_MONITOR_SERVER : LAB_CMD_MONITOR_TASK;
+    c->opener = (uint32_t)(opener - g_tasks);
+    c->opener_gen = opener->generation;
+    c->region = target;
+    c->principal_id = server_slot;
+    c->budget.poll_quota = server_gen;
+    return ASX_OK;
+}
+
+asx_status asx_lab_watch_demonitor_command(uint64_t ref) {
+    lab_region_cmd *c;
+    if (g_lab_rcmd_n >= LAB_REGION_CMD_CAP) return ASX_E_RESOURCE_EXHAUSTED;
+    c = &g_lab_rcmd[g_lab_rcmd_n++];
+    memset(c, 0, sizeof(*c));
+    c->cancel = LAB_CMD_DEMONITOR;
+    c->opener = ASX_SLOT_NONE;
+    c->region = ref;
+    return ASX_OK;
 }
