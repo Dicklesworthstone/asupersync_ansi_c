@@ -99,7 +99,7 @@ CLASS_DEF := $(if $(RESOURCE_CLASS),-DASX_RESOURCE_CLASS=$(RESOURCE_CLASS),)
 # and sized that.
 # ---------------------------------------------------------------------------
 BENCH_GOALS := bench bench-json bench-build parallel-bench-json parallel-bench-gate slo-gate \
-               size-gate evidence-dashboard perf-compare
+               size-gate evidence-dashboard perf-compare perf-digest
 ifneq ($(filter $(BENCH_GOALS),$(MAKECMDGOALS)),)
 BUILD_TYPE ?= release
 endif
@@ -1690,6 +1690,45 @@ bench: bench-build
 	@echo "[asx] bench: complete"
 
 # ---------------------------------------------------------------------------
+# perf-digest — what the rolling digests cost, before and after (bd-o5zh).
+# tests/bench/bench_digest.c times the previous folds (copied into it) against
+# src/runtime/fnv_fold.h in one process, checks that the digests are
+# identical, and prints ns per spawn+run before and after (the library is
+# built -O2: this is a bench goal). Not part of `make test`: timings are
+# noisy on a shared machine. PERF_DIGEST_ARGS="--rounds N --runs N".
+#   make perf-digest
+#   rch exec -- make perf-digest
+# ---------------------------------------------------------------------------
+DIGEST_BENCH_SRC := tests/bench/bench_digest.c
+DIGEST_BENCH_BIN := $(BENCH_DIR)/bench_digest
+
+.PHONY: perf-digest
+
+$(DIGEST_BENCH_BIN): $(DIGEST_BENCH_SRC) src/runtime/fnv_fold.h $(LIB_A) | $(BENCH_DIR)
+	$(CC) $(BENCH_CFLAGS) -o $@ $< $(LIB_A) $(ALL_LDFLAGS)
+
+perf-digest: $(DIGEST_BENCH_BIN)
+	@echo "[asx] perf-digest: timing the rolling digests, before and after..."
+	@$(DIGEST_BENCH_BIN) $(PERF_DIGEST_ARGS)
+
+# ---------------------------------------------------------------------------
+# bench-journal-overhead — RP1's budget: an HTTP/1.1 keep-alive server with
+# the boundary journal off and on, at most 10% throughput loss (bd-9kll.11.1).
+# tests/bench/journal_overhead.sh builds its own live POSIX release library
+# (build/bench-journal) and tests/bench/bench_journal_http.c, runs the same
+# workload in every mode, interleaved, and prints requests/s, journal records
+# and bytes per request and the loss against no journal. Not part of
+# `make test`: timings are noisy on a shared machine.
+#   make bench-journal-overhead
+#   make bench-journal-overhead BENCH_JOURNAL_ARGS="--requests 50000 --rounds 9 --gate"
+#   rch exec -- make bench-journal-overhead
+# ---------------------------------------------------------------------------
+.PHONY: bench-journal-overhead
+bench-journal-overhead:
+	@chmod +x tests/bench/journal_overhead.sh 2>/dev/null || true
+	@BENCH_JOURNAL_ARGS="$(BENCH_JOURNAL_ARGS)" tests/bench/journal_overhead.sh
+
+# ---------------------------------------------------------------------------
 # test-ct-timing: dudect-style Welch t-test of asx_crypto_ct_equal and
 # asx_crypto_ct_is_zero (bd-9kll.16.5). Not part of `make test`: timing
 # statistics are noisy on shared machines. Exits 0 only if no leak is found
@@ -3019,6 +3058,8 @@ help:
 	@echo "  kernel-only-check  Fail if a kernel-only object needs a left-out module"
 	@echo "  size-report        Footprint per profile x class: objects, archive, linked quickstart"
 	@echo "  perf-compare       asx vs asupersync, same workloads, one process (needs cargo)"
+	@echo "  perf-digest        rolling-digest fold cost and ns per spawn+run, before and after"
+	@echo "  bench-journal-overhead  HTTP keep-alive throughput with the journal off and on (RP1 budget 10%)"
 	@echo "  release-artifacts  Build release tar.xz + checksum/signature/provenance bundles"
 	@echo "  release-install-smoke Install release tarball into a prefix and run README quickstart"
 	@echo "  install            Install to PREFIX (default /usr/local)"
