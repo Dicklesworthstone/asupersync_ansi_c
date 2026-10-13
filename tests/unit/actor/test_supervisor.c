@@ -79,6 +79,12 @@ typedef struct {
     uint64_t last_number;   /* the latest generation's number */
     uint32_t order;         /* g_order when it last started */
     asx_time started_at[8]; /* when each of the first eight started */
+    /* A registry and a name its generations look up at their first poll:
+     * how many of them found it held by their own task. */
+    asx_name_registry *probe;
+    const char *probe_name;
+    uint32_t probe_own;
+    uint32_t probe_other;
 } behaviour;
 
 typedef struct {
@@ -86,6 +92,7 @@ typedef struct {
     uint64_t number;
     uint32_t polls;
     asx_time wake_at; /* the end of its sleep, 0 before its first poll */
+    int probed;
 } body;
 
 static body g_bodies[128];
@@ -100,7 +107,17 @@ static asx_time now_ns(void) {
 
 static asx_status body_poll(void *user_data, asx_task_id self) {
     body *bd = (body *)user_data;
-    const behaviour *b = bd->b;
+    behaviour *b = bd->b;
+    if (b->probe != NULL && !bd->probed) {
+        asx_task_id holder = ASX_INVALID_ID;
+        bd->probed = 1;
+        if (asx_name_whereis(b->probe, b->probe_name, &holder) == ASX_OK &&
+            asx_handle_index(holder) == asx_handle_index(self)) {
+            b->probe_own++;
+        } else {
+            b->probe_other++;
+        }
+    }
     if (b->block) {
         asx_checkpoint_result cr;
         if (asx_checkpoint(self, &cr) == ASX_OK && cr.cancelled) {
@@ -165,6 +182,7 @@ typedef struct {
     asx_status join_st;
     int joined;
     asx_supervisor_report report;
+    asx_name_registry reg; /* the registry of the named children */
 } owner;
 
 static asx_status owner_poll(void *user_data, asx_task_id self) {
@@ -206,10 +224,20 @@ static void owner_init(owner *o, uint32_t max_restarts) {
     memset(o, 0, sizeof(*o));
     asx_supervisor_config_init(&o->cfg, "sup", max_restarts, 60000000000u);
     o->cfg.backoff.kind = ASX_RESTART_BACKOFF_NONE;
+    MUST_OK(asx_name_registry_init(&o->reg));
 }
 
 static void add_child(owner *o, const char *name, asx_child_restart restart, behaviour *b) {
     asx_child_spec_init(&o->specs[o->n++], name, restart, start_child, b);
+}
+
+/* A child that takes `reg_name` under `collision`, in the owner's registry. */
+static void add_named_child(owner *o, const char *name, asx_child_restart restart, behaviour *b,
+                            const char *reg_name, asx_name_collision collision) {
+    add_child(o, name, restart, b);
+    o->specs[o->n - 1u].registration_name = reg_name;
+    o->specs[o->n - 1u].registration_collision = collision;
+    o->cfg.registry = &o->reg;
 }
 
 /* Spawn the owner and run until nothing is runnable. */
@@ -557,6 +585,215 @@ static void test_a_bad_storm_threshold_is_refused(void) {
     ASSERT(asx_supervisor_spawn(&h, g_root, &cfg, &spec, 1) == ASX_E_INVALID_ARGUMENT, "infinite");
     cfg.storm_threshold = 0.5;
     ASSERT(asx_supervisor_spawn(&h, g_root, &cfg, &spec, 1) == ASX_OK, "a finite one is fine");
+}
+
+/* ------------------------------------------------------------------ */
+/* Name registration (supervision.rs:2117, managed_names.rs)           */
+/* ------------------------------------------------------------------ */
+
+/* A generation takes its name before its start function runs, holds it
+ * while it runs (its body finds the task that holds it is its own), and has
+ * given it up once it has been drained. */
+static void test_a_named_generation_holds_its_name_while_it_runs(void) {
+    owner o;
+    behaviour b;
+    NEEDS_CHILD_REGIONS(1);
+    setup();
+    memset(&b, 0, sizeof(b));
+    b.yields = 2;
+    b.result = ASX_OK;
+    owner_init(&o, 0);
+    b.probe = &o.reg;
+    b.probe_name = "svc";
+    add_named_child(&o, "worker", ASX_CHILD_TEMPORARY, &b, "svc", ASX_NAME_COLLISION_FAIL);
+    run_owner(&o);
+    ASSERT(o.spawn_st == ASX_OK && o.joined && o.report.outcome == ASX_OUTCOME_OK, "ran");
+    ASSERT(b.started == 1u && b.probe_own == 1u && b.probe_other == 0u,
+           "its body found the name held by its own task");
+    ASSERT(asx_name_registry_count(&o.reg) == 0u, "and the name is free once it was drained");
+}
+
+/* A permanent child is replaced after each end, and each successor finds the
+ * name free: the previous generation's release comes before its start. */
+static void test_a_named_child_takes_its_name_again_in_each_generation(void) {
+    owner o;
+    behaviour b;
+    NEEDS_CHILD_REGIONS(1);
+    setup();
+    memset(&b, 0, sizeof(b));
+    b.result = ASX_OK;
+    owner_init(&o, 2);
+    b.probe = &o.reg;
+    b.probe_name = "svc";
+    add_named_child(&o, "worker", ASX_CHILD_PERMANENT, &b, "svc", ASX_NAME_COLLISION_FAIL);
+    run_owner(&o);
+    ASSERT(o.joined && o.report.outcome == ASX_OUTCOME_OK, "no registration error");
+    ASSERT(b.started == 3u && o.report.restart_batches == 2u, "three generations");
+    ASSERT(b.probe_own == 3u && b.probe_other == 0u, "each held the name itself");
+    ASSERT(asx_name_registry_count(&o.reg) == 0u, "and none is left");
+}
+
+/* Fail: the second child's generation is refused, never runs its start
+ * function, ends Cancelled with the User reason Rust gives, and the
+ * supervisor stops with a Registration error naming it. */
+static void test_a_taken_name_stops_the_supervisor_with_a_registration_error(void) {
+    owner o;
+    behaviour holder;
+    behaviour refused;
+    const asx_supervisor_completion *c;
+    NEEDS_CHILD_REGIONS(2);
+    setup();
+    memset(&holder, 0, sizeof(holder));
+    memset(&refused, 0, sizeof(refused));
+    holder.block = 1;
+    refused.result = ASX_OK;
+    owner_init(&o, 3);
+    add_named_child(&o, "holder", ASX_CHILD_TEMPORARY, &holder, "svc", ASX_NAME_COLLISION_FAIL);
+    add_named_child(&o, "refused", ASX_CHILD_TEMPORARY, &refused, "svc", ASX_NAME_COLLISION_FAIL);
+    run_owner(&o);
+    ASSERT(o.joined && o.report.outcome == ASX_OUTCOME_ERR &&
+               o.report.error == ASX_SUPERVISOR_ERR_REGISTRATION && o.report.error_child == 1u,
+           "a Registration error for the second child");
+    ASSERT(o.report.error_status == ASX_E_NAME_CONFLICT, "NameTaken");
+    ASSERT(refused.started == 0u, "its start function never ran");
+    ASSERT(holder.started == 1u, "the holder started");
+    c = completion_of(&o, 1);
+    ASSERT(c != NULL && c->outcome == ASX_OUTCOME_CANCELLED &&
+               c->cancel_reason.kind == ASX_CANCEL_USER && c->cancel_reason.message != NULL &&
+               strcmp(c->cancel_reason.message, "managed child registration failed") == 0,
+           "the refused generation ended Cancelled with Rust's reason");
+    ASSERT(o.report.started == 1u, "only the holder counts as started");
+    ASSERT(asx_name_registry_count(&o.reg) == 0u, "both were drained and the name is free");
+}
+
+/* Replace: the replacer takes the name, and the displaced generation's task
+ * is cancelled with the User reason "managed supervisor name replaced". */
+static void test_replace_cancels_the_displaced_generation(void) {
+    owner o;
+    behaviour holder;
+    behaviour replacer;
+    const asx_supervisor_completion *c;
+    NEEDS_CHILD_REGIONS(2);
+    setup();
+    memset(&holder, 0, sizeof(holder));
+    memset(&replacer, 0, sizeof(replacer));
+    holder.block = 1;
+    replacer.yields = 2;
+    replacer.result = ASX_OK;
+    owner_init(&o, 3);
+    replacer.probe = &o.reg;
+    replacer.probe_name = "svc";
+    add_named_child(&o, "holder", ASX_CHILD_TEMPORARY, &holder, "svc", ASX_NAME_COLLISION_FAIL);
+    add_named_child(&o, "replacer", ASX_CHILD_TEMPORARY, &replacer, "svc",
+                    ASX_NAME_COLLISION_REPLACE);
+    run_owner(&o);
+    ASSERT(o.joined && o.report.outcome == ASX_OUTCOME_OK, "no error: Replace is not a refusal");
+    ASSERT(replacer.started == 1u && replacer.probe_own == 1u, "the replacer holds the name");
+    c = completion_of(&o, 0);
+    ASSERT(c != NULL && c->outcome == ASX_OUTCOME_CANCELLED && c->cancel_reason.message != NULL &&
+               strcmp(c->cancel_reason.message, "managed supervisor name replaced") == 0,
+           "the displaced generation was cancelled with the replacement's reason");
+    ASSERT(asx_name_registry_count(&o.reg) == 0u,
+           "the displaced lease freed nothing and the replacer's was released");
+}
+
+/* A task outside the supervisor that holds a name for a while: it takes
+ * `svc` at its first poll, and frees it, granting it on, 5 ms later. */
+typedef struct {
+    asx_name_registry *reg;
+    asx_name_lease lease;
+    asx_time free_at;
+    int registered;
+} outside_holder;
+
+static asx_status outside_holder_poll(void *user_data, asx_task_id self) {
+    outside_holder *x = (outside_holder *)user_data;
+    if (!x->registered) {
+        MUST_OK(asx_name_register(x->reg, "svc", self, g_owner_region, now_ns(), &x->lease, NULL));
+        x->registered = 1;
+        x->free_at = now_ns() + 5000000u;
+    }
+    if (asx_task_wait_until(self, x->free_at) == ASX_E_PENDING) return ASX_E_PENDING;
+    MUST_OK(asx_task_complete_timer(self));
+    MUST_OK(asx_name_unregister_and_grant(x->reg, "svc", self, now_ns()));
+    return ASX_OK;
+}
+
+/* Wait: the generation waits for a name another task holds, looking for its
+ * grant every millisecond, and starts after the holder frees it. (A sibling
+ * would never free it while the controller is still booting: it is drained
+ * after the boot, as in Rust.) */
+static void test_wait_starts_after_the_holder_frees_the_name(void) {
+    owner o;
+    behaviour waiter;
+    outside_holder x;
+    asx_task_id id = ASX_INVALID_ID;
+    NEEDS_CHILD_REGIONS(1);
+    setup();
+    memset(&waiter, 0, sizeof(waiter));
+    memset(&x, 0, sizeof(x));
+    waiter.result = ASX_OK;
+    owner_init(&o, 0);
+    x.reg = &o.reg;
+    waiter.probe = &o.reg;
+    waiter.probe_name = "svc";
+    add_named_child(&o, "waiter", ASX_CHILD_TEMPORARY, &waiter, "svc", ASX_NAME_COLLISION_WAIT);
+    /* Spawned first, so it holds the name before the supervisor asks. */
+    MUST_OK(asx_task_spawn(g_owner_region, outside_holder_poll, &x, &id));
+    run_owner(&o);
+    ASSERT(x.registered, "the outside task took the name");
+    ASSERT(o.joined && o.report.outcome == ASX_OUTCOME_OK, "no error");
+    ASSERT(waiter.started == 1u && waiter.probe_own == 1u, "the waiter started holding the name");
+    ASSERT(waiter.started_at[0] >= 5000000u, "not before the holder's 5 ms were over");
+    ASSERT(waiter.started_at[0] < 5000000u + 2000000u, "and within a grant check or two after");
+    ASSERT(asx_name_registry_count(&o.reg) == 0u && asx_name_waiter_count(&o.reg) == 0u,
+           "nothing is left in the registry");
+}
+
+
+/* A waiting generation is cancelled with the supervisor: it leaves the
+ * queue and never runs its start function. */
+static void test_a_waiting_generation_is_cancelled_with_the_supervisor(void) {
+    owner o;
+    behaviour holder;
+    behaviour waiter;
+    NEEDS_CHILD_REGIONS(2);
+    setup();
+    memset(&holder, 0, sizeof(holder));
+    memset(&waiter, 0, sizeof(waiter));
+    holder.block = 1;
+    waiter.result = ASX_OK;
+    owner_init(&o, 0);
+    o.abort_after = 40;
+    add_named_child(&o, "holder", ASX_CHILD_TEMPORARY, &holder, "svc", ASX_NAME_COLLISION_FAIL);
+    add_named_child(&o, "waiter", ASX_CHILD_TEMPORARY, &waiter, "svc", ASX_NAME_COLLISION_WAIT);
+    run_owner(&o);
+    ASSERT(o.joined, "the supervisor joined");
+    ASSERT(waiter.started == 0u, "the waiter never started");
+    ASSERT(asx_name_registry_count(&o.reg) == 0u && asx_name_waiter_count(&o.reg) == 0u,
+           "no name and no waiter remains");
+}
+
+/* The registry is required, and the policy checked, at spawn. */
+static void test_registration_needs_a_registry_and_a_known_policy(void) {
+    owner o;
+    behaviour b;
+    asx_supervisor_handle h;
+    setup();
+    memset(&b, 0, sizeof(b));
+    owner_init(&o, 1);
+    add_child(&o, "worker", ASX_CHILD_PERMANENT, &b);
+    o.specs[0].registration_name = "svc";
+    ASSERT(asx_supervisor_spawn(&h, g_root, &o.cfg, o.specs, o.n) == ASX_E_INVALID_ARGUMENT,
+           "a named child with no registry (UnsupportedRegistration)");
+    o.cfg.registry = &o.reg;
+    o.specs[0].registration_collision = (asx_name_collision)7;
+    ASSERT(asx_supervisor_spawn(&h, g_root, &o.cfg, o.specs, o.n) == ASX_E_INVALID_ARGUMENT,
+           "an unknown policy");
+    o.specs[0].registration_collision = ASX_NAME_COLLISION_FAIL;
+    o.specs[0].registration_name = "";
+    ASSERT(asx_supervisor_spawn(&h, g_root, &o.cfg, o.specs, o.n) == ASX_E_INVALID_ARGUMENT,
+           "an empty name");
 }
 
 /* Each generation lives 2 us, then fails; the fourth succeeds. One restart
@@ -1004,6 +1241,13 @@ int main(void) {
     RUN(test_a_storm_is_the_restarts_in_the_window);
     RUN(test_reset_counter_resets_the_intensity);
     RUN(test_a_bad_storm_threshold_is_refused);
+    RUN(test_a_named_generation_holds_its_name_while_it_runs);
+    RUN(test_a_named_child_takes_its_name_again_in_each_generation);
+    RUN(test_a_taken_name_stops_the_supervisor_with_a_registration_error);
+    RUN(test_replace_cancels_the_displaced_generation);
+    RUN(test_wait_starts_after_the_holder_frees_the_name);
+    RUN(test_a_waiting_generation_is_cancelled_with_the_supervisor);
+    RUN(test_registration_needs_a_registry_and_a_known_policy);
     RUN(test_restarts_age_out_of_the_window);
     RUN(test_cancelled_transient_child_is_not_restarted);
     RUN(test_a_body_returning_cancelled_is_not_an_error);

@@ -67,9 +67,24 @@
  * 1/alpha alert only at a batch whose intensity check has fired, at that
  * batch or before.
  *
+ * Name registration (Rust bind_managed_with_registry, :2117;
+ * supervision/managed_names.rs): a child spec may carry a name and a
+ * collision policy, and the config a registry. Each generation takes the
+ * name inside its own task, before its start function runs, in this order:
+ * a cancel check; register under the policy at the current time (Fail
+ * refuses a taken name; Replace displaces the holder, which is cancelled
+ * with the User reason "managed supervisor name replaced"; Wait enqueues a
+ * waiter whose deadline is the task's budget deadline); then a loop that
+ * checks the cancel, the lease, the deadline and its grant, and sleeps 1 ms
+ * between looks. A refusal (taken, deadline passed, the lease replaced) ends
+ * the generation Cancelled with the User reason "managed child registration
+ * failed" without running its start function, and the supervisor with
+ * ASX_SUPERVISOR_ERR_REGISTRATION. A generation gives its name up when it
+ * has been drained and its region closed, before a successor starts; the
+ * name then goes to the first waiter. The registry is not touched by
+ * anything else the supervisor does.
+ *
  * Not in the C model, with the reason for each:
- *   - name registration (Rust bind_managed_with_registry, :2117): the
- *     Registration error never occurs;
  *   - shared restart domains: Rust attaches one only from its dynamic
  *     supervisor (cx/dynamic_supervisor.rs; set_shared_restarts is
  *     pub(crate)), a separate module this port does not have, so the
@@ -100,6 +115,7 @@
 #ifndef ASX_ACTOR_SUPERVISOR_H
 #define ASX_ACTOR_SUPERVISOR_H
 
+#include <asx/actor/actor.h>
 #include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_ids.h>
@@ -205,10 +221,20 @@ typedef struct {
     uint32_t dep_count;
     uint8_t required;          /* a failed start stops the supervisor (default 1) */
     uint8_t start_immediately; /* started at boot (default 1) */
+    /* Name registration (Rust ChildSpec::registration,
+     * NameRegistrationPolicy::Register): each generation takes this name in
+     * the supervisor's registry (asx_supervisor_config.registry) with this
+     * collision policy, inside its own task and before its start function
+     * runs, and gives it up when it is drained. A generation that cannot
+     * (the name is taken under FAIL, its wait expired) never runs its start
+     * function and ends the supervisor with ASX_SUPERVISOR_ERR_REGISTRATION.
+     * NULL for none; copied; at most ASX_NAME_MAX_LEN characters. */
+    const char *registration_name;
+    asx_name_collision registration_collision;
 } asx_child_spec;
 
 /* A spec with Rust ChildSpec::new's defaults: no dependencies, required,
- * started at boot. */
+ * started at boot, not registered. */
 ASX_API void asx_child_spec_init(asx_child_spec *spec, const char *name, asx_child_restart restart,
                                  asx_child_start_fn start, void *user_data);
 
@@ -236,6 +262,12 @@ typedef struct {
      * None). A value that is negative, NaN or infinite is refused, as Rust's
      * InvalidStormThreshold is. */
     double storm_threshold;
+    /* The registry the children's registrations use (Rust
+     * bind_managed_with_registry): owned by the caller, shared with whoever
+     * else registers names in it, and alive as long as the supervisor.
+     * NULL when no child registers; a child that registers without one is
+     * refused, as Rust's UnsupportedRegistration is. */
+    asx_name_registry *registry;
 } asx_supervisor_config;
 
 /* A config with Rust SupervisionConfig::new's defaults: ONE_FOR_ONE,
@@ -257,7 +289,13 @@ typedef enum {
     ASX_SUPERVISOR_ERR_DEPENDENCY_UNAVAILABLE = 4, /* a dependency was not running */
     ASX_SUPERVISOR_ERR_RESTART_LIMIT = 5,          /* restart refused under ESCALATE */
     ASX_SUPERVISOR_ERR_GENERATION_EXHAUSTED = 6,   /* no generation number left */
-    ASX_SUPERVISOR_ERR_ESCALATION = 7              /* the escalation could not be queued */
+    ASX_SUPERVISOR_ERR_ESCALATION = 7,             /* the escalation could not be queued */
+    /* A named generation could not take its name (Rust Registration):
+     * error_child is the child, error_status the registry's refusal,
+     * ASX_E_NAME_CONFLICT (NameTaken), ASX_E_NOT_FOUND (the lease no longer
+     * owned the name) or ASX_E_TIMED_OUT (the wait's deadline passed). Its
+     * start function did not run. */
+    ASX_SUPERVISOR_ERR_REGISTRATION = 8
 } asx_supervisor_error;
 
 /* The latest generation of a child to end (Rust ManagedChildCompletion). */

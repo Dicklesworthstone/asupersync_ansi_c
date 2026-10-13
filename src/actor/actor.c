@@ -976,6 +976,14 @@ void asx_actor_op_drop(asx_actor_handle actor, asx_actor_op *op) {
 /* Names (cx/registry.rs NameRegistry and NameLease)                   */
 /* ------------------------------------------------------------------ */
 
+/* The same task or region: a handle carries its entity's state in its tag,
+ * so one entity appears under different values over its life; its identity
+ * is the type tag and the generation-tagged slot. */
+static int name_same(uint64_t a, uint64_t b) {
+    return asx_handle_type_tag(a) == asx_handle_type_tag(b) &&
+           asx_handle_index(a) == asx_handle_index(b);
+}
+
 /* The index of the entry holding `name`, or ASX_NAME_REGISTRY_CAPACITY. */
 static uint32_t name_index(const asx_name_registry *registry, const char *name) {
     uint32_t i;
@@ -1142,7 +1150,7 @@ asx_status asx_name_unregister(asx_name_registry *registry, const char *name, as
     if (registry == NULL || name == NULL) return ASX_E_INVALID_ARGUMENT;
     i = name_index(registry, name);
     if (i >= ASX_NAME_REGISTRY_CAPACITY) return ASX_E_NOT_FOUND;
-    if (registry->entries[i].holder != caller) return ASX_E_PERMISSION_DENIED;
+    if (!name_same(registry->entries[i].holder, caller)) return ASX_E_PERMISSION_DENIED;
     name_drop(registry, i);
     return ASX_OK;
 }
@@ -1200,7 +1208,7 @@ asx_status asx_name_unregister_owned(asx_name_registry *registry, const asx_name
     i = name_index(registry, lease->name);
     if (i >= ASX_NAME_REGISTRY_CAPACITY) return ASX_E_NOT_FOUND;
     e = &registry->entries[i];
-    if (e->holder != lease->holder || e->region != lease->region ||
+    if (!name_same(e->holder, lease->holder) || !name_same(e->region, lease->region) ||
         e->acquired_at != lease->acquired_at) {
         return ASX_E_PERMISSION_DENIED;
     }
@@ -1224,7 +1232,7 @@ asx_status asx_name_take_granted_for(asx_name_registry *registry, const char *na
     if (registry == NULL || name == NULL || out_lease == NULL) return ASX_E_INVALID_ARGUMENT;
     for (i = 0; i < ASX_NAME_REGISTRY_CAPACITY; i++) {
         const asx_name_grant *g = &registry->grants[i];
-        if (!g->in_use || g->holder != holder || g->region != region ||
+        if (!g->in_use || !name_same(g->holder, holder) || !name_same(g->region, region) ||
             strcmp(g->name, name) != 0) {
             continue;
         }
@@ -1244,7 +1252,7 @@ int asx_name_owns_lease(const asx_name_registry *registry, const asx_name_lease 
     i = name_index(registry, lease->name);
     if (i >= ASX_NAME_REGISTRY_CAPACITY) return 0;
     e = &registry->entries[i];
-    return e->holder == lease->holder && e->region == lease->region &&
+    return name_same(e->holder, lease->holder) && name_same(e->region, lease->region) &&
            e->acquired_at == lease->acquired_at;
 }
 
@@ -1255,7 +1263,8 @@ void asx_name_cancel_wait_for(asx_name_registry *registry, const char *name, asx
     if (registry == NULL || name == NULL) return;
     for (i = 0; i < ASX_NAME_REGISTRY_CAPACITY; i++) {
         asx_name_waiter *w = &registry->waiters[i];
-        if (w->in_use && w->holder == holder && w->region == region && strcmp(w->name, name) == 0) {
+        if (w->in_use && name_same(w->holder, holder) && name_same(w->region, region) &&
+            strcmp(w->name, name) == 0) {
             memset(w, 0, sizeof(*w));
         }
     }
@@ -1301,7 +1310,7 @@ static uint32_t name_cleanup(asx_name_registry *registry, int by_region, asx_reg
     for (i = 0; i < ASX_NAME_REGISTRY_CAPACITY; i++) {
         const asx_name_entry *e = &registry->entries[i];
         if (!e->in_use) continue;
-        if (by_region ? e->region != region : e->holder != task) continue;
+        if (!(by_region ? name_same(e->region, region) : name_same(e->holder, task))) continue;
         memcpy(freed[n], e->name, sizeof(freed[n]));
         order[n] = n;
         n++;
@@ -1309,13 +1318,13 @@ static uint32_t name_cleanup(asx_name_registry *registry, int by_region, asx_reg
     }
     for (i = 0; i < ASX_NAME_REGISTRY_CAPACITY; i++) {
         asx_name_grant *g = &registry->grants[i];
-        if (g->in_use && (by_region ? g->region == region : g->holder == task)) {
+        if (g->in_use && (by_region ? name_same(g->region, region) : name_same(g->holder, task))) {
             memset(g, 0, sizeof(*g));
         }
     }
     for (i = 0; i < ASX_NAME_REGISTRY_CAPACITY; i++) {
         asx_name_waiter *w = &registry->waiters[i];
-        if (w->in_use && (by_region ? w->region == region : w->holder == task)) {
+        if (w->in_use && (by_region ? name_same(w->region, region) : name_same(w->holder, task))) {
             memset(w, 0, sizeof(*w));
         }
     }

@@ -44,6 +44,10 @@ typedef struct {
     uint32_t dep_count;
     uint8_t required;
     uint8_t start_immediately;
+    /* NameRegistrationPolicy::Register. */
+    uint8_t has_registration;
+    asx_name_collision collision;
+    char reg_name[ASX_NAME_MAX_LEN + 1u];
 } sup_child;
 
 /* A running generation (Rust RunningChild, :2206-2216) and the state its
@@ -77,6 +81,20 @@ typedef struct {
     int constructed;
     asx_task_poll_fn body;
     void *body_data;
+    /* The generation's name (Rust GenerationName and its Ownership,
+     * managed_names.rs): taken in the generation's task before its start
+     * function, given up when it is drained. */
+    int reg_begun; /* acquire ran its first step */
+    int reg_done;  /* acquired, or failed: acquire is over */
+    int reg_lease; /* it holds `lease` */
+    asx_name_lease lease;
+    int reg_waiting;  /* enqueued as a waiter, no grant yet collected */
+    int reg_resolved; /* released (Ownership::resolved) */
+    asx_time reg_deadline;
+    int reg_timer; /* a grant-check timer is pending */
+    asx_time reg_check_at;
+    int reg_err_set; /* RegistrationFailure::Name, for the controller */
+    asx_status reg_err;
 } sup_gen;
 
 /* A child's latest ended generation, with its task's position in Rust's
@@ -142,7 +160,8 @@ typedef struct {
     uint64_t window_ns;
     asx_restart_backoff backoff;
     asx_supervisor_escalation escalation;
-    double storm_threshold; /* restarts per second, 0 for none */
+    double storm_threshold;      /* restarts per second, 0 for none */
+    asx_name_registry *registry; /* the children's, or NULL */
     int has_budget;
     asx_budget budget;
     uint32_t n;
@@ -483,6 +502,154 @@ static void gen_publish(sup_gen *g, asx_outcome_severity outcome, asx_status sta
     g->terminal_shutdown = g->shutdown_requested;
 }
 
+/* How long a waiting registration sleeps between looks at its grant
+ * (GRANT_CHECK_NANOS, managed_names.rs:19): 1 ms. */
+#define SUP_GRANT_CHECK_NS 1000000u
+
+typedef enum { ACQ_DONE, ACQ_FAILED, ACQ_PENDING } sup_acq;
+
+/* The generation's terminal when registration fails before its start
+ * function ran (:2661-2684): Cancelled with `reason`, published with the
+ * time, and the controller's start wait woken. */
+static sup_acq gen_acquire_failed(sup_gen *g, const asx_cancel_reason *reason) {
+    gen_publish(g, ASX_OUTCOME_CANCELLED, ASX_OK, NULL, reason);
+    gen_wake_waiter(g);
+    return ACQ_FAILED;
+}
+
+/* RegistrationFailure::Cancelled (check_cancel, :146): the task's cancel
+ * reason, else a User one. */
+static sup_acq gen_acquire_cancelled(sup_gen *g, asx_task_id self) {
+    asx_cancel_reason reason;
+    if (asx_task_get_cx_cancel_reason_internal(self, &reason) != ASX_OK) {
+        reason = asx_cancel_reason_default(ASX_CANCEL_USER, "named child cancelled before start");
+    }
+    return gen_acquire_failed(g, &reason);
+}
+
+/* RegistrationFailure::Name: the registry refused; the controller reports
+ * it (Registration), and the terminal is a User cancellation. */
+static sup_acq gen_acquire_refused(sup_gen *g, asx_status why) {
+    asx_cancel_reason reason =
+        asx_cancel_reason_default(ASX_CANCEL_USER, "managed child registration failed");
+    g->reg_err_set = 1;
+    g->reg_err = why;
+    return gen_acquire_failed(g, &reason);
+}
+
+/* GenerationName::acquire (managed_names.rs:75-143), run in the generation's
+ * task at its first poll and again after each grant-check timer: register
+ * under the child's policy; a displaced holder is cancelled through the
+ * handle lane; a waiter looks for its grant every millisecond (and
+ * observes its cancel then), until it holds the name, the wait's deadline
+ * passes (the task's budget deadline), or it is cancelled. */
+static sup_acq gen_acquire(sup_slot *s, uint32_t pos, asx_task_id self) {
+    sup_gen *g = &s->running[pos];
+    const sup_child *c = &s->children[pos];
+    asx_checkpoint_result cr;
+    asx_status st;
+    asx_time now;
+
+    if (g->reg_timer) {
+        /* The Sleep is still pending: a wake for another reason (a cancel)
+         * does not end it; the loop looks again when it fires. */
+        if (asx_task_wait_until(self, g->reg_check_at) == ASX_E_PENDING) return ACQ_PENDING;
+        st = asx_task_complete_timer(self);
+        (void)st;
+        g->reg_timer = 0;
+    }
+    for (;;) {
+        if (asx_checkpoint(self, &cr) == ASX_OK && cr.cancelled) {
+            return gen_acquire_cancelled(g, self);
+        }
+        if (!g->reg_begun) {
+            asx_budget b;
+            asx_name_registration got;
+            asx_task_id current = ASX_INVALID_ID;
+            g->reg_begun = 1;
+            g->reg_deadline = ASX_TIME_INFINITE;
+            if (asx_task_get_budget(self, &b) == ASX_OK) g->reg_deadline = b.deadline;
+            now = sup_now();
+            st = asx_name_register_with_policy(s->registry, c->reg_name, self, g->region, now,
+                                               c->collision, g->reg_deadline, &g->lease, &got,
+                                               &current);
+            if (st != ASX_OK) return gen_acquire_refused(g, st);
+            if (got.outcome == ASX_NAME_ENQUEUED) {
+                g->reg_waiting = 1;
+            } else {
+                g->reg_lease = 1;
+            }
+            if (got.outcome == ASX_NAME_REPLACED) {
+                /* Published through the gateway after the registry is
+                 * unlocked (:116-131): the displaced task is cancelled as a
+                 * handle's cancel is, and may already be gone. */
+                asx_cancel_reason why =
+                    asx_cancel_reason_default(ASX_CANCEL_USER, "managed supervisor name replaced");
+                st = asx_task_abort_request(got.displaced_holder, &why);
+                (void)st;
+            }
+            continue; /* Rust's loop checks the cancel again before its first look */
+        }
+        if (g->reg_lease) {
+            if (asx_name_owns_lease(s->registry, &g->lease)) {
+                g->reg_done = 1;
+                return ACQ_DONE;
+            }
+            return gen_acquire_refused(g, ASX_E_NOT_FOUND);
+        }
+        now = sup_now();
+        if (now >= g->reg_deadline) return gen_acquire_refused(g, ASX_E_TIMED_OUT);
+        {
+            asx_name_lease grant;
+            if (asx_name_take_granted_for(s->registry, c->reg_name, self, g->region, &grant) ==
+                ASX_OK) {
+                if (asx_name_owns_lease(s->registry, &grant)) {
+                    g->reg_waiting = 0;
+                    g->lease = grant;
+                    g->reg_lease = 1;
+                    g->reg_done = 1;
+                    return ACQ_DONE;
+                }
+                grant.active = 0; /* aborted: a replacement invalidated it */
+                return gen_acquire_refused(g, ASX_E_NOT_FOUND);
+            }
+        }
+        g->reg_check_at =
+            g->reg_deadline - now > SUP_GRANT_CHECK_NS ? now + SUP_GRANT_CHECK_NS : g->reg_deadline;
+        st = asx_task_wait_until(self, g->reg_check_at);
+        if (st == ASX_E_PENDING) {
+            g->reg_timer = 1;
+            return ACQ_PENDING;
+        }
+        st = asx_task_complete_timer(self);
+        (void)st;
+    }
+}
+
+/* GenerationName::release (:178-201), called once the generation's region
+ * has drained: free the entry its lease names (granting the name on), and
+ * resolve the lease; a lease that no longer owns the entry (a replacement
+ * won) is aborted without removing anything; a still-waiting registration
+ * leaves the queue, and an uncollected grant is passed on. */
+static void gen_release(sup_slot *s, uint32_t pos) {
+    sup_gen *g = &s->running[pos];
+    const sup_child *c = &s->children[pos];
+    asx_time now;
+    if (!c->has_registration || s->registry == NULL || !g->reg_begun || g->reg_resolved) return;
+    g->reg_resolved = 1;
+    now = sup_now();
+    if (g->reg_lease) {
+        asx_status st = asx_name_unregister_owned(s->registry, &g->lease, now);
+        (void)st; /* ok: the lease is released; refused: aborted */
+        g->lease.active = 0;
+        g->reg_lease = 0;
+    }
+    if (g->reg_waiting) {
+        asx_name_cancel_wait_for(s->registry, c->reg_name, g->identity_task, g->region, now);
+        g->reg_waiting = 0;
+    }
+}
+
 /* ASX_ANALYZER_WAIVER("callback signature: const user_data would need a function-pointer cast") */
 static asx_status gen_poll(void *user_data, asx_task_id self) {
     uint32_t code = (uint32_t)(uintptr_t)user_data;
@@ -499,6 +666,16 @@ static asx_status gen_poll(void *user_data, asx_task_id self) {
     g = &s->running[pos];
     /* A task its generation no longer owns has nothing to run. */
     if (!s->in_use || !g->present || !same_id(g->task, self) || g->has_terminal) return ASX_OK;
+    if (!g->constructed && s->children[pos].has_registration && !g->reg_done) {
+        /* The generation's identity is published before it takes its name
+         * (:2660); the factory has not run, and does not if it cannot. */
+        sup_acq acq;
+        g->has_identity = 1;
+        g->identity_task = self;
+        acq = gen_acquire(s, pos, self);
+        if (acq == ACQ_PENDING) return ASX_E_PENDING;
+        if (acq == ACQ_FAILED) return ASX_OK;
+    }
     if (!g->constructed) {
         asx_supervisor_generation id;
         g->constructed = 1;
@@ -739,7 +916,38 @@ static asx_status sub_open_root(sup_slot *s, asx_task_id self) {
     return ASX_OK;
 }
 
-enum { ST_BEGIN = 0, ST_OPEN, ST_CLOSE_CANCELLED, ST_WAIT, ST_AFTER };
+enum { ST_BEGIN = 0, ST_OPEN, ST_RETAIN, ST_SPAWN, ST_CLOSE_CANCELLED, ST_WAIT, ST_AFTER };
+
+/* ChildRegion::retain_until_finalized (child_region.rs:342): a sync
+ * finalizer registered on `region` through the region-command lane, which
+ * the controller waits for without being interrupted (recv_uninterruptible).
+ * The finalizer holds nothing: the generation's name is given up by
+ * gen_release when it has drained, and only an abandoned controller would
+ * leave it to the region's finalization (Rust drops the Arc there).
+ * Under lab dispatch the acknowledgement takes the drain of the next step,
+ * so a named generation costs the controller one more park than an unnamed
+ * one. Without the lab there is no lane and the finalizer is not
+ * registered (a task of another region cannot register one on a
+ * descendant, and it would do nothing). */
+static asx_status retain_poll(asx_task_id self, asx_region_id region) {
+    asx_task_slot *t;
+    asx_status st = asx_task_slot_lookup(self, &t);
+    if (st != ASX_OK) return st;
+    if (!asx_lab_dispatch_active()) return ASX_OK;
+    switch (t->region_wait) {
+    case ASX_REGION_WAIT_WATCHED:
+        t->region_wait = ASX_REGION_WAIT_NONE;
+        return t->region_wait_status;
+    case ASX_REGION_WAIT_WATCH: return ASX_E_PENDING;
+    case ASX_REGION_WAIT_NONE:
+        st = asx_lab_retain_command(t, region);
+        if (st != ASX_OK) return st;
+        t->region_wait = ASX_REGION_WAIT_WATCH;
+        return ASX_E_PENDING;
+    default: break;
+    }
+    return ASX_E_INVALID_STATE;
+}
 
 /* Controller::start (:2588-2831). */
 static asx_status sub_start(sup_slot *s, asx_task_id self) {
@@ -762,7 +970,6 @@ static asx_status sub_start(sup_slot *s, asx_task_id self) {
             break;
         case ST_OPEN: {
             asx_region_id r = ASX_INVALID_ID;
-            asx_task_id tid = ASX_INVALID_ID;
             asx_task_slot *ct;
             asx_budget inherited;
             /* Opened through the supervisor region's principal
@@ -781,6 +988,34 @@ static asx_status sub_start(sup_slot *s, asx_task_id self) {
                 s->sub_step = ST_CLOSE_CANCELLED;
                 break;
             }
+            s->sub_step = s->children[pos].has_registration ? ST_RETAIN : ST_SPAWN;
+            break;
+        }
+        case ST_RETAIN:
+            /* :2630-2643: the name is retained until the region is
+             * finalized, and a cancel seen after it closes the region. */
+            st = retain_poll(self, s->sub_region);
+            if (st == ASX_E_PENDING) {
+                park(self);
+                return st;
+            }
+            if (st != ASX_OK) {
+                /* The dropped ChildRegion requests its close. */
+                asx_status cs = asx_region_close_request(s->sub_region);
+                (void)cs;
+                set_err(s, ASX_SUPERVISOR_ERR_REGION, SUP_NONE, st);
+                return ASX_OK;
+            }
+            if (cancelled(s)) {
+                record_cancel(s);
+                s->sub_step = ST_CLOSE_CANCELLED;
+                break;
+            }
+            s->sub_step = ST_SPAWN;
+            break;
+        case ST_SPAWN: {
+            asx_region_id r = s->sub_region;
+            asx_task_id tid = ASX_INVALID_ID;
             st = asx_task_spawn(r, gen_poll, gen_code(s, pos), &tid);
             if (st != ASX_OK) {
                 /* Rust's spawn goes through the mailbox, and only its
@@ -838,6 +1073,13 @@ static asx_status sub_start(sup_slot *s, asx_task_id self) {
             return ASX_E_PENDING;
         }
         default: /* ST_AFTER */
+            /* The registration's refusal comes first (:2778-2806): the
+             * generation's factory was not invoked. */
+            if (g->reg_err_set) {
+                g->reg_err_set = 0;
+                set_err(s, ASX_SUPERVISOR_ERR_REGISTRATION, pos, g->reg_err);
+                return ASX_OK;
+            }
             if (cancelled(s)) {
                 record_cancel(s);
                 return ASX_OK;
@@ -891,6 +1133,9 @@ static asx_status sub_drain(sup_slot *s, asx_task_id self) {
                 set_err(s, ASX_SUPERVISOR_ERR_REGION, SUP_NONE, st);
                 return ASX_OK;
             }
+            /* After the region closed, before the trace and before any
+             * successor starts (:2865-2869). */
+            gen_release(s, pos);
             sup_trace(s, "drained", pos, &s->latest[pos].c.generation);
             return ASX_OK;
         }
@@ -1395,6 +1640,8 @@ void asx_child_spec_init(asx_child_spec *spec, const char *name, asx_child_resta
     spec->restart = restart;
     spec->required = 1;
     spec->start_immediately = 1;
+    spec->registration_name = NULL;
+    spec->registration_collision = ASX_NAME_COLLISION_FAIL;
 }
 
 asx_status asx_child_spec_depends_on(asx_child_spec *spec, uint32_t dep_index) {
@@ -1419,6 +1666,7 @@ void asx_supervisor_config_init(asx_supervisor_config *cfg, const char *name, ui
     cfg->escalation = ASX_ESCALATION_STOP;
     cfg->budget = NULL;
     cfg->storm_threshold = 0.0;
+    cfg->registry = NULL;
 }
 
 static int copy_name(char *dst, const char *src) {
@@ -1526,6 +1774,15 @@ asx_status asx_supervisor_spawn(asx_supervisor_handle *out, asx_region_id region
             children[i].dep_count > ASX_SUPERVISOR_MAX_DEPS) {
             return ASX_E_INVALID_ARGUMENT;
         }
+        if (children[i].registration_name != NULL) {
+            /* Registry-bearing specs need the registry (Rust's
+             * UnsupportedRegistration, :2171-2177). */
+            if (config->registry == NULL || children[i].registration_name[0] == '\0' ||
+                strlen(children[i].registration_name) > ASX_NAME_MAX_LEN ||
+                (unsigned)children[i].registration_collision > (unsigned)ASX_NAME_COLLISION_WAIT) {
+                return ASX_E_INVALID_ARGUMENT;
+            }
+        }
     }
     st = compile_children(children, child_count, order);
     if (st != ASX_OK) return st;
@@ -1567,6 +1824,7 @@ asx_status asx_supervisor_spawn(asx_supervisor_handle *out, asx_region_id region
     s->backoff = config->backoff;
     s->escalation = config->escalation;
     s->storm_threshold = config->storm_threshold;
+    s->registry = config->registry;
     s->has_budget = config->budget != NULL;
     if (config->budget != NULL) s->budget = *config->budget;
     s->n = child_count;
@@ -1581,6 +1839,11 @@ asx_status asx_supervisor_spawn(asx_supervisor_handle *out, asx_region_id region
         c->restart = spec->restart;
         c->required = spec->required;
         c->start_immediately = spec->start_immediately;
+        if (spec->registration_name != NULL) {
+            c->has_registration = 1u;
+            c->collision = spec->registration_collision;
+            memcpy(c->reg_name, spec->registration_name, strlen(spec->registration_name));
+        }
         c->dep_count = 0;
         for (j = 0; j < spec->dep_count; j++) {
             uint32_t m;

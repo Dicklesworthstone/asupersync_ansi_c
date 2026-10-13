@@ -1010,6 +1010,33 @@ static void lab_cancel_region(asx_region_id region, const asx_cancel_reason *rea
 #define LAB_CMD_LINK_TASK 5u   /* `budget.priority` is the holder's exit policy */
 #define LAB_CMD_LINK_SERVER 6u /* likewise; `principal_id`, `budget.poll_quota`: the server */
 #define LAB_CMD_UNLINK 7u
+/* RegionCommand::RegisterFinalizer (spawn_mailbox.rs:1624): `region` is the
+ * region whose sync finalizer is registered; the opener waits for the
+ * acknowledgement as for a Watch (retain_until_finalized, child_region.rs:342). */
+#define LAB_CMD_RETAIN 8u
+
+/* The finalizer a retained value leaves: Rust's closure drops the value, and
+ * a C holder resolves its own, so this has nothing to do. */
+static void lab_retained_noop(void *unused) { (void)unused; }
+
+/* RegisterRegionFinalizer::apply (:1640): the finalizer is registered while
+ * the region is open (a closing, closed or unknown region refuses it), and
+ * the acknowledgement is left on the opener, recorded in `woken`, which wakes
+ * once the batch is applied (finalizer_publications, LR:4210). The
+ * registration happens whether or not the opener still waits. */
+static void lab_apply_retain(const lab_region_cmd *c, uint32_t *woken, uint32_t *n_woken) {
+    asx_task_slot *t;
+    asx_status st = asx_region_defer_sync(c->region, lab_retained_noop, NULL);
+
+    t = &g_tasks[c->opener];
+    if (!t->alive || t->generation != c->opener_gen || t->region_wait != ASX_REGION_WAIT_WATCH) {
+        return;
+    }
+    t->region_wait = ASX_REGION_WAIT_WATCHED;
+    t->region_wait_status = st;
+    t->region_wait_region = ASX_INVALID_ID;
+    woken[(*n_woken)++] = c->opener;
+}
 
 /* TaskWatches::apply (monitor.rs:1323) for one Watch command. A removal
  * takes effect now. A request establishes only for an opener still waiting
@@ -1061,8 +1088,10 @@ static void lab_apply_watch(const lab_region_cmd *c, uint32_t *woken, uint32_t *
 void asx_lab_drain_region_commands(void) {
     lab_region_cmd batch[LAB_REGION_BATCH];
     uint32_t opened[LAB_REGION_BATCH];
+    uint32_t retained[LAB_REGION_BATCH];
     uint32_t watched[LAB_REGION_BATCH];
     uint32_t n_opened = 0;
+    uint32_t n_retained = 0;
     uint32_t n_watched = 0;
     uint32_t n = g_lab_rcmd_n < LAB_REGION_BATCH ? g_lab_rcmd_n : LAB_REGION_BATCH;
     uint32_t i;
@@ -1082,6 +1111,10 @@ void asx_lab_drain_region_commands(void) {
         asx_region_id id = ASX_INVALID_ID;
         asx_status st;
         ASX_CHECKPOINT_WAIVER("bounded: n <= LAB_REGION_BATCH");
+        if (c->cancel == LAB_CMD_RETAIN) {
+            lab_apply_retain(c, retained, &n_retained);
+            continue;
+        }
         if (c->cancel >= LAB_CMD_MONITOR_TASK) {
             lab_apply_watch(c, watched, &n_watched);
             continue;
@@ -1117,6 +1150,10 @@ void asx_lab_drain_region_commands(void) {
     for (i = 0; i < n_opened; i++) {
         ASX_CHECKPOINT_WAIVER("bounded: n_opened <= LAB_REGION_BATCH");
         asx_task_wake_slot_internal(&g_tasks[opened[i]]);
+    }
+    for (i = 0; i < n_retained; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: n_retained <= LAB_REGION_BATCH");
+        asx_task_wake_slot_internal(&g_tasks[retained[i]]);
     }
     for (i = 0; i < n_watched; i++) {
         ASX_CHECKPOINT_WAIVER("bounded: n_watched <= LAB_REGION_BATCH");
@@ -1678,6 +1715,21 @@ asx_status asx_lab_watch_unlink_command(uint64_t ref) {
     c->cancel = LAB_CMD_UNLINK;
     c->opener = ASX_SLOT_NONE;
     c->region = ref;
+    return ASX_OK;
+}
+
+/* RegionCommand::RegisterFinalizer for `region` (ChildRegion::
+ * retain_until_finalized, child_region.rs:342): the opener's own, which
+ * waits for the acknowledgement. */
+asx_status asx_lab_retain_command(asx_task_slot *opener, asx_region_id region) {
+    lab_region_cmd *c;
+    if (g_lab_rcmd_n >= LAB_REGION_CMD_CAP) return ASX_E_RESOURCE_EXHAUSTED;
+    c = &g_lab_rcmd[g_lab_rcmd_n++];
+    memset(c, 0, sizeof(*c));
+    c->cancel = LAB_CMD_RETAIN;
+    c->opener = (uint32_t)(opener - g_tasks);
+    c->opener_gen = opener->generation;
+    c->region = region;
     return ASX_OK;
 }
 

@@ -743,6 +743,11 @@ void asx_link_remove_internal(uint64_t ref);
 asx_status asx_lab_watch_link_command(asx_task_slot *opener, asx_task_id peer, int to_server,
                                       uint32_t server_slot, uint32_t server_gen, uint32_t policy);
 asx_status asx_lab_watch_unlink_command(uint64_t ref);
+/* RegionCommand::RegisterFinalizer for `region`, the opener's own: queued in
+ * the region-command FIFO; the opener's region_wait goes WATCH -> WATCHED
+ * with the registration's status when the drain applies it
+ * (ChildRegion::retain_until_finalized). */
+asx_status asx_lab_retain_command(asx_task_slot *opener, asx_region_id region);
 /* Rust's TaskId ordering key for a task (arena index, then generation) under
  * lab dispatch, its slot and generation otherwise: the order Rust sorts a
  * batch of actions on tasks by. */
