@@ -1257,7 +1257,7 @@ static void scenario_real_holders(const char *id, holder_case_kind kind) {
                        asx_handle_index(info.holder) == asx_handle_index(c.source) &&
                        info.region == c.source_region,
                    "source should own the checked credit");
-    leaks = asx_obligation_leak_count();
+    leaks = asx_obligation_leak_count(&g_lab.rt);
     if (kind == HOLDER_RAW_GUARD) {
         c.destination_action = 1;
         SCENARIO_CHECK(asx_task_wake(c.destination) == ASX_OK, "wake wrong live caller");
@@ -1313,7 +1313,7 @@ static void scenario_real_holders(const char *id, holder_case_kind kind) {
                        info.state == (kind == HOLDER_HANDOFF_CANCEL ? ASX_OBLIGATION_ABORTED
                                                                     : ASX_OBLIGATION_COMMITTED),
                    "final obligation state");
-    SCENARIO_CHECK(asx_obligation_leak_count() == leaks, "ownership work must not leak");
+    SCENARIO_CHECK(asx_obligation_leak_count(&g_lab.rt) == leaks, "ownership work must not leak");
     SCENARIO_CHECK(obligation_events(c.obligation, ASX_TRACE_OBLIGATION_COMMIT) ==
                            (kind == HOLDER_HANDOFF_CANCEL ? 0u : 1u) &&
                        obligation_events(c.obligation, ASX_TRACE_OBLIGATION_ABORT) ==

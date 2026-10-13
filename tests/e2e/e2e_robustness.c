@@ -449,15 +449,15 @@ static void scenario_resource_query_accuracy(void) {
     uint32_t cap = asx_resource_capacity(ASX_RESOURCE_REGION);
     SCENARIO_CHECK(cap == ASX_MAX_REGIONS, "region capacity mismatch");
 
-    uint32_t used_before = asx_resource_used(ASX_RESOURCE_REGION);
+    uint32_t used_before = asx_resource_used(test_runtime(), ASX_RESOURCE_REGION);
 
     asx_region_id rid;
     SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
 
-    uint32_t used_after = asx_resource_used(ASX_RESOURCE_REGION);
+    uint32_t used_after = asx_resource_used(test_runtime(), ASX_RESOURCE_REGION);
     SCENARIO_CHECK(used_after == used_before + 1, "used count should increment");
 
-    uint32_t remaining = asx_resource_remaining(ASX_RESOURCE_REGION);
+    uint32_t remaining = asx_resource_remaining(test_runtime(), ASX_RESOURCE_REGION);
     SCENARIO_CHECK(remaining == cap - used_after, "remaining mismatch");
 
     SCENARIO_END();
@@ -597,7 +597,7 @@ static void scenario_capture_arena_rollback(void) {
     }
 
     /* Verify task count is unchanged (rollback) */
-    uint32_t tasks_used = asx_resource_used(ASX_RESOURCE_TASK);
+    uint32_t tasks_used = asx_resource_used(test_runtime(), ASX_RESOURCE_TASK);
     SCENARIO_CHECK(tasks_used == 0, "task count should be 0 after rollback");
 
     SCENARIO_END();
