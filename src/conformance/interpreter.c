@@ -6,11 +6,10 @@
  * Contracts: docs/SCENARIO_DSL_V2.md (execution model, per-step C APIs) and
  * docs/CANONICAL_VOCABULARY_V2.md (projection, snapshot, observations).
  *
- * Every event comes from the runtime's own trace stream (a trace observer),
- * never from the interpreter: an interpreter that emitted events would test
- * itself. Where the C runtime cannot express a step yet (a gap listed in
- * DSL §7), the step fails the run with that gap named, so a missing
- * capability is never mistaken for parity.
+ * Every event comes from the runtime's own trace stream (a trace observer), never from the
+ * interpreter: an interpreter that emitted events would test itself. Where the C runtime cannot
+ * express a step yet (a gap listed in DSL §7), the step fails the run with that gap named, so a
+ * missing capability is never mistaken for parity.
  *
  * SPDX-License-Identifier: MIT
  */
@@ -26,6 +25,7 @@
 #include <asx/core/oneshot.h>
 #include <asx/core/watch.h>
 #include <asx/cx/cx.h>
+#include <asx/runtime/overload_catalog.h>
 #include <asx/runtime/rt.h>
 #include <asx/runtime/runtime.h>
 #include <asx/runtime/task_group.h>
@@ -1770,8 +1770,8 @@ static int exec_channel_wait(it_task *t, uint32_t step, uint32_t idx, const char
     }
     if (strcmp(op, "closed") == 0) {
         it_channel *c = owned_sender(t, ch, IT_CH_MPSC);
-        if (c == NULL) {
-            it_fail_task(t, idx, "closed needs an owned sender");
+        if (c == NULL || asx_channel_is_unbounded(c->id)) {
+            it_fail_task(t, idx, "closed needs an owned sender of a bounded channel");
             *out = STEP_END;
             return 1;
         }
@@ -3459,12 +3459,12 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
         uint64_t v = 0;
         uint64_t oldest = 0;
         int evicted = 0;
-        if (c == NULL || !asx_json_u64(g_in, asx_json_get(g_in, step, "value"), &v)) {
-            it_fail_task(t, idx, "send_evict_oldest needs an owned sender and a value");
+        if (c == NULL || asx_channel_is_unbounded(c->id) ||
+            !asx_json_u64(g_in, asx_json_get(g_in, step, "value"), &v)) {
+            it_fail_task(t, idx, "send_evict_oldest needs an owned bounded sender and a value");
             return STEP_END;
         }
-        /* tx.send_evict_oldest(v) (mpsc.rs:872): never parks; the value is
-         * the evicted message, if any. */
+        /* tx.send_evict_oldest(v) (mpsc.rs:872): never parks; observes the evicted one, if any. */
         st = asx_channel_send_evict_oldest(c->id, v, &evicted, &oldest);
         observe(t, idx, label, status_node(st),
                 st == ASX_OK && evicted ? asx_json_new_u64(g_out, oldest) : ASX_JSON_NONE);
@@ -4497,8 +4497,15 @@ static void setup_channels(uint32_t scenario, asx_region_id root) {
             return;
         }
         if (strcmp(type, "mpsc") == 0) {
+            int unbounded = 0;
             c->type = IT_CH_MPSC;
-            if (asx_json_u64(g_in, asx_json_get(g_in, d, "capacity"), &n) && n <= UINT32_MAX) {
+            if (asx_json_bool(g_in, asx_json_get(g_in, d, "unbounded"), &unbounded) && unbounded) {
+                /* Rust's unbounded_channel (DSL 3.6). A profile whose overload catalog forbids
+                 * unbounded queues refuses it with ASX_E_PERMISSION_DENIED (DEC-008); the
+                 * scenario declares "requires" and the runner skips it there. */
+                st = asx_channel_create_unbounded(root, &c->id);
+            } else if (asx_json_u64(g_in, asx_json_get(g_in, d, "capacity"), &n) &&
+                       n <= UINT32_MAX) {
                 st = asx_channel_create(root, (uint32_t)n, &c->id);
             }
         } else if (strcmp(type, "oneshot") == 0) {
@@ -4521,6 +4528,10 @@ static void setup_channels(uint32_t scenario, asx_region_id root) {
             for (k = 1; st == ASX_OK && k < c->n_receivers; k++) {
                 st = asx_watch_subscribe(&c->watch, &c->receivers[k].watch);
             }
+        }
+        if (st == ASX_E_PERMISSION_DENIED) {
+            it_fail("the profile forbids this channel (an unbounded queue, DEC-008)", name);
+            return;
         }
         if (st != ASX_OK) {
             it_fail("cannot create channel (unknown type or bad parameters)", name);
@@ -5628,4 +5639,39 @@ const char *asx_conformance_obligation_name(uint64_t entity_id) {
         if (same_entity(g_obl_names[i].id, entity_id)) return &g_text[g_obl_names[i].name_off];
     }
     return NULL;
+}
+
+/* The requirement names a scenario's "requires" may carry (DSL section 1),
+ * each with the overload-catalog behavior whose prohibition leaves a
+ * profile unable to run it. */
+static const struct {
+    const char *name;
+    uint32_t forbidden;
+} g_requirement_names[] = {{"unbounded_queue", ASX_FORBID_UNBOUNDED_QUEUE}};
+
+#define IT_REQUIREMENTS (sizeof(g_requirement_names) / sizeof(g_requirement_names[0]))
+
+int asx_conformance_requirement_forbidden(const asx_json_doc *in, uint32_t scenario,
+                                          asx_profile_id profile, const char **out_name) {
+    const asx_overload_catalog_entry *entry = NULL;
+    const char *first = NULL;
+    uint32_t list = asx_json_get(in, scenario, "requires");
+    uint32_t i;
+    *out_name = NULL;
+    if (asx_overload_catalog_get(profile, &entry) != ASX_OK) return -1;
+    if (list == ASX_JSON_NONE) return 0;
+    if (asx_json_type_of(in, list) != ASX_JSON_ARRAY) return -1;
+    for (i = 0; i < asx_json_count(in, list); i++) {
+        const char *want = asx_json_string(in, asx_json_item(in, list, i));
+        size_t k;
+        for (k = 0; want != NULL && k < IT_REQUIREMENTS; k++) {
+            if (strcmp(want, g_requirement_names[k].name) == 0) break;
+        }
+        if (want == NULL || k == IT_REQUIREMENTS) return -1;
+        if (first == NULL && (entry->forbidden & g_requirement_names[k].forbidden) != 0u) {
+            first = g_requirement_names[k].name;
+        }
+    }
+    *out_name = first;
+    return first != NULL;
 }

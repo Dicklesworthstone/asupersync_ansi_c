@@ -19,6 +19,7 @@
       "type": "object", "required": ["max_steps"], "additionalProperties": false,
       "properties": {"panic_on_leak": {"type": "boolean"}, "max_steps": {"type": "integer", "minimum": 1}}
     },
+    "requires": {"type": "array", "uniqueItems": true, "items": {"enum": ["unbounded_queue"]}},
     "regions": {"type": "array", "items": {
       "type": "object", "required": ["name", "parent", "budget"], "additionalProperties": false,
       "properties": {
@@ -96,6 +97,9 @@
     "channel_decl": {"oneOf": [
       {"type": "object", "required": ["name", "type", "capacity", "sender", "receiver"], "additionalProperties": false,
        "properties": {"name": {"$ref": "#/$defs/name"}, "type": {"const": "mpsc"}, "capacity": {"type": "integer", "minimum": 1},
+                      "sender": {"$ref": "#/$defs/name"}, "senders": {"type": "array", "maxItems": 7, "uniqueItems": true, "items": {"$ref": "#/$defs/name"}}, "receiver": {"$ref": "#/$defs/name"}}},
+      {"type": "object", "required": ["name", "type", "unbounded", "sender", "receiver"], "additionalProperties": false,
+       "properties": {"name": {"$ref": "#/$defs/name"}, "type": {"const": "mpsc"}, "unbounded": {"const": true},
                       "sender": {"$ref": "#/$defs/name"}, "senders": {"type": "array", "maxItems": 7, "uniqueItems": true, "items": {"$ref": "#/$defs/name"}}, "receiver": {"$ref": "#/$defs/name"}}},
       {"type": "object", "required": ["name", "type", "sender", "receiver"], "additionalProperties": false,
        "properties": {"name": {"$ref": "#/$defs/name"}, "type": {"const": "oneshot"},

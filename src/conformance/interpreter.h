@@ -14,6 +14,8 @@
 
 #include "json.h"
 
+#include <asx/runtime/profile_compat.h>
+
 #define ASX_INTERNAL_TRACE_FAMILY_ACCESS 1
 #include <asx/runtime/lab.h>
 #undef ASX_INTERNAL_TRACE_FAMILY_ACCESS
@@ -67,5 +69,18 @@ void asx_conformance_force_schedule(const asx_forced_schedule *schedule, const c
  * entity), or NULL when the run never named it. The ghost-checked runner
  * uses it to ask whether Rust's trace expects that obligation to leak. */
 const char *asx_conformance_obligation_name(uint64_t entity_id);
+
+/* Whether the scenario object `scenario` of `in` declares a requirement
+ * ("requires": ["unbounded_queue"], DSL section 1) that `profile` forbids,
+ * so a run in that profile has nothing to prove and the runner skips it
+ * (DEC-008). The requirement names map to the overload catalog's forbidden
+ * behaviors: "unbounded_queue" to ASX_FORBID_UNBOUNDED_QUEUE. Returns 1
+ * and sets *out_name to the first such requirement; 0 and *out_name NULL
+ * when the scenario declares none or the profile allows every one it does;
+ * -1 (*out_name NULL) for a "requires" that is not an array of known
+ * requirement names, or an unknown profile: a declaration the interpreter
+ * cannot honor is an error, never a skip. *out_name points into `in`. */
+int asx_conformance_requirement_forbidden(const asx_json_doc *in, uint32_t scenario,
+                                          asx_profile_id profile, const char **out_name);
 
 #endif /* ASX_CONFORMANCE_INTERPRETER_H */

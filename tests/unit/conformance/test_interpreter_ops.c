@@ -34,6 +34,12 @@ static asx_status run_text(const char *text, uint32_t *root) {
     return asx_conformance_run(&g_in, scenario, &g_out, root, g_error, sizeof(g_error));
 }
 
+/* Parse `text` into g_in, the scenario object's node in *root. */
+static asx_status parse_only(const char *text, uint32_t *root) {
+    asx_json_doc_init(&g_in);
+    return asx_json_parse(&g_in, text, strlen(text), root);
+}
+
 #define SCENARIO_HEAD                                                                              \
     "{\"schema\":\"asx.scenario.v2\",\"id\":\"unit-ops-001\",\"description\":\"d\","               \
     "\"unit\":\"timers\",\"rules\":[\"inv.determinism.replayable\"],\"seed\":42,"                  \
@@ -76,6 +82,99 @@ TEST(the_interval_delay_queue_and_watch_steps_are_dispatched) {
     ASSERT_EQ(asx_json_count(&g_out, obs), 19u);
 }
 
+/* An unbounded mpsc channel (DSL 3.6, DEC-008): seven sends and no consumer
+ * running, none waiting for capacity. A profile that forbids unbounded
+ * queues refuses the channel instead, which the run reports closed; the
+ * scenario declares what it needs, so the runner skips it there. */
+TEST(an_unbounded_channel_runs_where_the_profile_allows_it) {
+    static const char text[] = SCENARIO_HEAD
+        "\"requires\":[\"unbounded_queue\"],"
+        "\"channels\":[{\"name\":\"ch.q\",\"type\":\"mpsc\",\"unbounded\":true,"
+        "\"sender\":\"t.p\",\"receiver\":\"t.c\"}],\"sync\":[],"
+        "\"tasks\":[{\"name\":\"t.p\",\"region\":\"r.main\",\"budget\":null,\"program\":["
+        "{\"op\":\"send\",\"channel\":\"ch.q\",\"value\":1},"
+        "{\"op\":\"send\",\"channel\":\"ch.q\",\"value\":2},"
+        "{\"op\":\"send\",\"channel\":\"ch.q\",\"value\":3},"
+        "{\"op\":\"send\",\"channel\":\"ch.q\",\"value\":4},"
+        "{\"op\":\"send\",\"channel\":\"ch.q\",\"value\":5},"
+        "{\"op\":\"send\",\"channel\":\"ch.q\",\"value\":6},"
+        "{\"op\":\"close_sender\",\"channel\":\"ch.q\"}]},"
+        "{\"name\":\"t.c\",\"region\":\"r.main\",\"budget\":null,\"program\":["
+        "{\"op\":\"sleep\",\"ns\":100},"
+        "{\"op\":\"recv\",\"channel\":\"ch.q\"},{\"op\":\"recv\",\"channel\":\"ch.q\"},"
+        "{\"op\":\"recv\",\"channel\":\"ch.q\"},{\"op\":\"recv\",\"channel\":\"ch.q\"},"
+        "{\"op\":\"recv\",\"channel\":\"ch.q\"},{\"op\":\"recv\",\"channel\":\"ch.q\"},"
+        "{\"op\":\"recv\",\"channel\":\"ch.q\"}]}],"
+        "\"script\":[],\"expect\":{\"kind\":\"ok\"}}";
+    uint32_t scenario = 0;
+    uint32_t root = 0;
+    const char *name = NULL;
+    int forbidden;
+    asx_status st;
+
+    /* The runner's own question, asked first: does this build's profile
+     * forbid what the scenario declares? */
+    ASSERT_EQ(parse_only(text, &scenario), ASX_OK);
+    forbidden = asx_conformance_requirement_forbidden(&g_in, scenario, asx_profile_active(), &name);
+    ASSERT_TRUE(forbidden == 0 || forbidden == 1);
+    st = run_text(text, &root);
+    if (forbidden == 1) {
+        ASSERT_TRUE(st != ASX_OK);
+        ASSERT_TRUE(strstr(g_error, "forbids this channel") != NULL);
+        return;
+    }
+    ASSERT_EQ(st, ASX_OK);
+    ASSERT_EQ(asx_json_count(&g_out, asx_json_get(&g_out, root, "observations")), 15u);
+}
+
+/* What the runner skips: a requirement the scenario declares and the
+ * profile's overload catalog forbids (ASX_FORBID_UNBOUNDED_QUEUE), nothing
+ * else. */
+TEST(a_skip_needs_a_declared_requirement_the_profile_forbids) {
+    static const char declared[] = "{\"requires\":[\"unbounded_queue\"]}";
+    static const char undeclared[] = "{\"lab\":{\"max_steps\":1}}";
+    static const char empty[] = "{\"requires\":[]}";
+    static const char unknown[] = "{\"requires\":[\"warp_drive\"]}";
+    static const char not_a_list[] = "{\"requires\":\"unbounded_queue\"}";
+    static const asx_profile_id forbids[] = {ASX_PROFILE_ID_FREESTANDING,
+                                             ASX_PROFILE_ID_EMBEDDED_ROUTER, ASX_PROFILE_ID_HFT,
+                                             ASX_PROFILE_ID_BROWSER};
+    static const asx_profile_id allows[] = {ASX_PROFILE_ID_CORE, ASX_PROFILE_ID_POSIX,
+                                            ASX_PROFILE_ID_WIN32, ASX_PROFILE_ID_AUTOMOTIVE,
+                                            ASX_PROFILE_ID_PARALLEL};
+    uint32_t root = 0;
+    const char *name = NULL;
+    size_t i;
+
+    for (i = 0; i < sizeof(forbids) / sizeof(forbids[0]); i++) {
+        ASSERT_EQ(parse_only(declared, &root), ASX_OK);
+        ASSERT_EQ(asx_conformance_requirement_forbidden(&g_in, root, forbids[i], &name), 1);
+        ASSERT_TRUE(name != NULL);
+        ASSERT_STR_EQ(name, "unbounded_queue");
+        /* A profile that forbids it, a scenario that does not declare it:
+         * not skipped, so the refused channel fails the run. */
+        ASSERT_EQ(parse_only(undeclared, &root), ASX_OK);
+        ASSERT_EQ(asx_conformance_requirement_forbidden(&g_in, root, forbids[i], &name), 0);
+        ASSERT_TRUE(name == NULL);
+        ASSERT_EQ(parse_only(empty, &root), ASX_OK);
+        ASSERT_EQ(asx_conformance_requirement_forbidden(&g_in, root, forbids[i], &name), 0);
+    }
+    for (i = 0; i < sizeof(allows) / sizeof(allows[0]); i++) {
+        /* A declared requirement the profile allows must run. */
+        ASSERT_EQ(parse_only(declared, &root), ASX_OK);
+        ASSERT_EQ(asx_conformance_requirement_forbidden(&g_in, root, allows[i], &name), 0);
+        ASSERT_TRUE(name == NULL);
+    }
+    /* An unknown or malformed declaration is an error in every profile. */
+    for (i = 0; i < (size_t)ASX_PROFILE_ID_COUNT; i++) {
+        ASSERT_EQ(parse_only(unknown, &root), ASX_OK);
+        ASSERT_EQ(asx_conformance_requirement_forbidden(&g_in, root, (asx_profile_id)i, &name), -1);
+        ASSERT_TRUE(name == NULL);
+        ASSERT_EQ(parse_only(not_a_list, &root), ASX_OK);
+        ASSERT_EQ(asx_conformance_requirement_forbidden(&g_in, root, (asx_profile_id)i, &name), -1);
+    }
+}
+
 /* A step the interpreter has no handler for still fails closed, so the
  * count above means something. */
 TEST(an_unknown_step_fails_the_run_closed) {
@@ -92,6 +191,8 @@ TEST(an_unknown_step_fails_the_run_closed) {
 int main(void) {
     fprintf(stderr, "=== test_interpreter_ops ===\n");
     RUN_TEST(the_interval_delay_queue_and_watch_steps_are_dispatched);
+    RUN_TEST(an_unbounded_channel_runs_where_the_profile_allows_it);
+    RUN_TEST(a_skip_needs_a_declared_requirement_the_profile_forbids);
     RUN_TEST(an_unknown_step_fails_the_run_closed);
     TEST_REPORT();
     return test_failures;

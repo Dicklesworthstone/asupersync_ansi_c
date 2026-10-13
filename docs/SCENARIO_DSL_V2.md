@@ -65,6 +65,17 @@ Companion files:
     instead of aborting.
   - `max_steps` is the total step budget. Exceeding it is a **harness
     failure**, never an expected result.
+- **`requires`** (optional) lists capabilities the scenario needs that a
+  C profile may forbid; the only one is `"unbounded_queue"`, for a scenario
+  that declares an unbounded mpsc channel (§3.6, DEC-008). Rust ignores it.
+  A C profile whose overload catalog forbids that capability
+  (`ASX_FORBID_UNBOUNDED_QUEUE`: FREESTANDING, EMBEDDED_ROUTER, HFT and
+  BROWSER) does not run the scenario: the runner skips it and counts it in
+  `skipped_forbidden` of its summary. A skip is legal only for a capability
+  the scenario declares and that the profile forbids; an unknown name is an
+  error, a declared capability the profile allows runs, and a scenario that
+  uses an unbounded channel without declaring it fails in a forbidding
+  profile like any other refused creation.
 - **`expect`** is either `{"kind":"ok"}` or
   `{"kind":"must_fail","error":{"task","step","status"}}`. `must_fail`
   asserts that the named step of the named task returns that status (§5).
@@ -408,6 +419,18 @@ identity, `asx_channel_close_sender` for the declared sender); the sender side c
 ```json
 {"name": "ch.jobs", "type": "mpsc", "capacity": 2, "sender": "t.a", "senders": ["t.b"], "receiver": "t.r"}
 ```
+
+An mpsc channel may be unbounded instead of having a `capacity`:
+`{"name": "ch.q", "type": "mpsc", "unbounded": true, "sender": "t.p",
+"receiver": "t.c"}` (and `senders` as above). Rust: `mpsc::unbounded_channel()`,
+which is `channel(usize::MAX)`, so every mpsc step below applies and a send
+never waits. C: `asx_channel_create_unbounded`, bounded only by the arena
+(`ASX_CHANNEL_MAX_CAPACITY` messages; a scenario queues fewer: running out
+reports `ASX_E_RESOURCE_EXHAUSTED`, which Rust cannot return, so the compare
+fails). `send_evict_oldest`
+and `closed` do not exist on Rust's `UnboundedSender`, so they are harness
+errors on such a channel. A scenario declaring one lists
+`"requires": ["unbounded_queue"]` (§1).
 
 | op | Fields | Rust | C | Blocks | Cancel |
 |---|---|---|---|---|---|
