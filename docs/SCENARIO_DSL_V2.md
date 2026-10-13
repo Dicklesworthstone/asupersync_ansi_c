@@ -268,7 +268,7 @@ observes `ASX_E_NOT_FOUND`: the abort consumed the token.
 | `sleep` | `ns` | `time::sleep(cx.now(), Duration::from_nanos(ns)).await` (`time/sleep.rs:1182`) | `asx_task_wait_until(self, now + ns)` | until virtual time ≥ now+ns | If the kind is neither `Timeout` nor `Deadline` and the task is unmasked, the step checkpoints (acknowledging) and completes early with `ASX_OK`. If it is first polled after the cancel, it takes one extra scheduler trip (`sleep.rs:789-812`). Otherwise it keeps sleeping. |
 | `sleep_until` | `at_ns` | `time::sleep_until(Time::from_nanos(at_ns)).await` (`sleep.rs:1203`) | `asx_task_wait_until(self, at_ns)` | until virtual time ≥ at_ns | as `sleep` |
 | `trace` | `message` | `cx.trace(message)` (`cx.rs:3362`) | `asx_trace_user(self, message)`: vocabulary `user.trace` | no | ignored |
-| `return` | `outcome`: `{"tag":"ok"}`, `{"tag":"err","status":S}` or `{"tag":"panicked","message":M}` | body returns `Outcome::Ok(())` / `Outcome::Err(code)`, or `panic!(M)` | poll function completes with the outcome; panicked through `asx_task_panic(self, M)` | no | The cancellation-wins rule above applies. |
+| `return` | `outcome`: `{"tag":"ok"}`, `{"tag":"err","status":S}` or `{"tag":"panicked","message":M}` | body returns `Body::Ok` / `Body::Err(code)` (a value), or `panic!(M)`; a supervised child's factory returns `Outcome::Ok(())` / `Outcome::Err(code)` itself, as does a group member's | poll function completes with the outcome; panicked through `asx_task_panic(self, M)` | no | The cancellation-wins rule above applies. **An `err` return of a declared task or a `spawn`ed child is a value, not an error exit**: Rust completes the task `Ok` (`run_state_task_to_terminal`, `state.rs:94-129`) and its handle's join yields the error, so the task's monitors and links see a normal exit (`DownReason::from_task_outcome`, `monitor.rs:136`). C ends such a task Ok too and keeps the status as the program's value (`it_task.value_err`), reported as the outcome `err`; a supervised child's, a group member's and a race wrapper's `err` is a runtime error. A scenario that needs an abnormal exit for a watcher uses `panicked`, a cancellation, or a supervised child. |
 
 ### 3.2 Masking
 
@@ -630,6 +630,13 @@ task parks, the next step's drain applies the request (eight commands per
 step, with the region opens and cancels), and the task wakes with the result.
 A DOWN is fired by the exit itself: monitors on the task leave the set by
 ascending reference (DOWN-ORDER) and the task's own monitors end silently.
+The reason is the task's runtime outcome: a declared task's or a spawned
+child's `err` return is a value, so its exit is `normal` (§3.1, `return`);
+`error` is a supervised child's runtime error. A handle dropped before its
+DOWN was delivered queues a Demonitor command (`Monitor::drop`,
+`monitor.rs:1133`), so a watcher that exits while still waiting leaves one
+for the lane: a no-op when applied, but the step that drains it is a lab step
+of its own, and the dispatch numbers after it shift by one.
 
 | op | Fields | Rust | C | Observation |
 |---|---|---|---|---|

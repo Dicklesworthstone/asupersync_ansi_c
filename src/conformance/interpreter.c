@@ -168,6 +168,9 @@ typedef struct {
     int supervised;
     /* A region finalizer's task (DSL §1, Region finalizers). */
     int finalizer;
+    /* The status of a plain task's `return err`: Rust's body value, which
+     * the runtime completes Ok (body_is_value); ASX_OK when none. */
+    asx_status value_err;
     /* Projection of the task's sleep timers (vocabulary §2: "<task>/tm<k>"). */
     uint32_t timers;         /* timers registered so far (k of the latest) */
     uint32_t timer_name_off; /* name of the latest, in g_text */
@@ -659,9 +662,24 @@ static uint32_t reason_node(const it_reason *r) {
     return o;
 }
 
+/* Whether the program's `return` is the task's value rather than its
+ * outcome. A declared task's and a `spawn`ed child's future returns the
+ * body, which the runtime publishes to the task's handle and completes the
+ * task Ok whatever it was (run_state_task_to_terminal, state.rs:94-129;
+ * only a panic or a cancel makes it anything else): an `err` return is a
+ * value that join yields, and the task's monitors and links see a normal
+ * exit (DownReason::from_task_outcome, monitor.rs:136). A group member, a
+ * supervised generation and a race wrapper return an Outcome, so their
+ * `err` is a runtime error. */
+static int body_is_value(const it_task *t) {
+    return !t->group_member && !t->supervised && !t->supervisor && !t->server && !t->finalizer &&
+           !t->race_wrapper;
+}
+
 /* Vocabulary §4 outcome of a completed task whose slot is still held. */
 static uint32_t outcome_node(asx_task_id id) {
     asx_outcome outcome;
+    const it_task *plain = task_by_id(id);
     uint32_t o;
     if (asx_task_get_outcome(id, &outcome) != ASX_OK) {
         it_fail("outcome of a completed task is unreadable", NULL);
@@ -669,7 +687,15 @@ static uint32_t outcome_node(asx_task_id id) {
     }
     o = asx_json_new_object(g_out);
     switch (outcome.severity) {
-    case ASX_OUTCOME_OK: asx_json_set(g_out, o, "tag", asx_json_new_string(g_out, "ok")); break;
+    case ASX_OUTCOME_OK:
+        if (plain != NULL && body_is_value(plain) && plain->value_err != ASX_OK) {
+            /* The value is Err(status): Rust's join gives Ok(Body::Err). */
+            asx_json_set(g_out, o, "tag", asx_json_new_string(g_out, "err"));
+            asx_json_set(g_out, o, "status", status_node(plain->value_err));
+        } else {
+            asx_json_set(g_out, o, "tag", asx_json_new_string(g_out, "ok"));
+        }
+        break;
     case ASX_OUTCOME_ERR: {
         asx_status err = ASX_OK;
         if (asx_task_get_error(id, &err) != ASX_OK) it_fail("task error is unreadable", NULL);
@@ -4233,7 +4259,11 @@ static step_result exec_step(it_task *t, asx_task_id self, uint32_t step, uint32
                              "a supervised child returns Cancelled with tag cancelled, not err");
                 return STEP_END;
             }
-            t->end = err;
+            if (body_is_value(t)) {
+                t->value_err = err; /* completes Ok; outcome_node reports it */
+            } else {
+                t->end = err;
+            }
         } else if (strcmp(tag, "cancelled") == 0) {
             /* The factory future's Outcome::Cancelled(reason): only a
              * supervised generation's body has one (DSL 3.8). The body ends
