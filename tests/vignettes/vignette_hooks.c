@@ -217,14 +217,14 @@ static int scenario_hook_usage(void) {
      * function pointers directly — the runtime handles dispatch and
      * error checking (ASX_E_HOOK_MISSING when the hook family is absent).
      */
-    st = asx_runtime_now_ns(&now);
+    st = asx_runtime_now_ns(test_runtime(), &now);
     if (st != ASX_OK) {
         printf("  FAIL: runtime_now_ns returned %s\n", asx_status_str(st));
         return 1;
     }
     printf("  clock read: %llu ns\n", (unsigned long long)now);
 
-    st = asx_runtime_random_u64(&rval);
+    st = asx_runtime_random_u64(test_runtime(), &rval);
     if (st != ASX_OK) {
         printf("  FAIL: runtime_random_u64 returned %s\n", asx_status_str(st));
         return 1;
