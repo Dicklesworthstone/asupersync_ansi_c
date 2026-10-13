@@ -28,9 +28,28 @@ mkdir -p "$WORK" "$LOG_DIR"
 failures=0
 
 log_case() {
-    # case expected observed status detail
-    printf '{"ts":"%s","run_id":"%s","layer":"gates","suite":"rust_constants","test":"%s","expected":"%s","observed":"%s","status":"%s","detail":"%s"}\n' \
-        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$RUN_ID" "$1" "$2" "$3" "$4" "$5" >>"$LOG"
+    # case expected observed status detail. json.dumps escapes what the
+    # expected regexes carry (backslashes, quotes); printf '%s' wrote them raw
+    # and left most records invalid JSON.
+    python3 - "$RUN_ID" "$1" "$2" "$3" "$4" "$5" >>"$LOG" <<'PY'
+import datetime
+import json
+import sys
+
+run_id, test, expected, observed, status, detail = sys.argv[1:]
+row = {
+    "ts": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "run_id": run_id,
+    "layer": "gates",
+    "suite": "rust_constants",
+    "test": test,
+    "expected": expected,
+    "observed": observed,
+    "status": status,
+    "detail": detail,
+}
+print(json.dumps(row, separators=(",", ":")))
+PY
 }
 
 if ! make --no-print-directory -C "$REPO_ROOT" conformance-runner >"$WORK/build.log" 2>&1; then
@@ -103,6 +122,29 @@ run_case constant_missing_from_document_fails nonzero \
 edit wrong_schema.json '.schema = "asx.something_else.v1"'
 run_case wrong_schema_fails nonzero 'not an asx\.rust_kernel_constants\.v1 document' \
     "$WORK/wrong_schema.json"
+
+# This run's records must be valid JSON (log_case once wrote the expected
+# regexes raw, backslashes and all): one record per case, each parseable.
+if python3 - "$LOG" "$RUN_ID" >"$WORK/jsonl.log" 2>&1 <<'PY'
+import json
+import sys
+
+prefix = '"run_id":' + json.dumps(sys.argv[2])
+with open(sys.argv[1]) as stream:
+    rows = [json.loads(line) for line in stream if prefix in line]
+if len(rows) != 8:
+    raise ValueError(f"expected 8 records for this run, got {len(rows)}")
+if any(row["suite"] != "rust_constants" or row["run_id"] != sys.argv[2] for row in rows):
+    raise ValueError("a record does not belong to this run")
+print("all 8 records of this run are valid JSON")
+PY
+then
+    echo "  PASS: current_run_jsonl_is_valid (8 records)"
+else
+    cat "$WORK/jsonl.log" >&2
+    echo "  FAIL: current_run_jsonl_is_valid (log $WORK/jsonl.log)"
+    failures=$((failures + 1))
+fi
 
 echo ""
 if [ "$failures" -eq 0 ]; then
