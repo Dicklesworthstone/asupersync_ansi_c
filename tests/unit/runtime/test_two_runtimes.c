@@ -215,10 +215,192 @@ TEST(a_second_runtime_is_refused_by_name_while_a_shared_subsystem_is_in_use) {
     two_block_free(&blk);
 }
 
+/* ------------------------------------------------------------------ */
+/* Test (d): an interleaved run is each runtime's run alone            */
+/* ------------------------------------------------------------------ */
+
+/* One runtime's script: ten calls, each one logged by its status. Region
+ * open, a child region, three tasks (one reserves and commits an obligation,
+ * one in the child reserves and aborts one, one completes), two scheduler
+ * runs, closes, a last run. No cancel, no channel: nothing that still is
+ * process-wide. */
+#define SCRIPT_STEPS 10u
+
+typedef struct {
+    asx_region_id region;
+    int abort_it;
+    asx_status reserve_st;
+    asx_status settle_st;
+} script_job;
+
+typedef struct {
+    asx_runtime *rt;
+    asx_region_id root;
+    asx_region_id child;
+    asx_task_id tid[3];
+    script_job commit_job;
+    script_job abort_job;
+    asx_status log[SCRIPT_STEPS];
+    uint64_t digest;  /* the runtime's trace digest at the end */
+    uint64_t emitted; /* and the events it emitted */
+    uint32_t regions;
+    uint32_t tasks;
+    uint32_t obligations;
+} script;
+
+static asx_status obligation_poll(void *user_data, asx_task_id self) {
+    script_job *j = (script_job *)user_data;
+    asx_obligation_id ob;
+    (void)self;
+    j->reserve_st = asx_obligation_reserve(j->region, &ob);
+    if (j->reserve_st == ASX_OK) {
+        j->settle_st = j->abort_it ? asx_obligation_abort(ob) : asx_obligation_commit(ob);
+    }
+    return ASX_OK;
+}
+
+static void script_step(script *s, uint32_t step) {
+    asx_budget run;
+    asx_status st;
+
+    switch (step) {
+    case 0u: st = asx_region_open(s->rt, &s->root); break;
+    case 1u: st = asx_region_open_child(s->root, &s->child); break;
+    case 2u:
+        s->commit_job.region = s->root;
+        s->commit_job.abort_it = 0;
+        st = asx_task_spawn(s->root, obligation_poll, &s->commit_job, &s->tid[0]);
+        break;
+    case 3u:
+        s->abort_job.region = s->child;
+        s->abort_job.abort_it = 1;
+        st = asx_task_spawn(s->child, obligation_poll, &s->abort_job, &s->tid[1]);
+        break;
+    case 4u: st = asx_task_spawn(s->root, done_poll, NULL, &s->tid[2]); break;
+    case 5u:
+        run = asx_budget_from_polls(2u);
+        st = asx_scheduler_run(s->root, &run);
+        break;
+    case 6u:
+        run = asx_budget_from_polls(8u);
+        st = asx_scheduler_run(s->root, &run);
+        break;
+    case 7u: st = asx_region_close(s->child); break;
+    case 8u: st = asx_region_close(s->root); break;
+    default:
+        run = asx_budget_from_polls(8u);
+        st = asx_scheduler_run(s->root, &run);
+        break;
+    }
+    s->log[step] = st;
+}
+
+static void script_collect(script *s) {
+    const asx_kernel *k = asx_kernel_for_tag(s->rt->tag);
+    s->digest = asx_trace_digest_internal(g_kernels[s->rt->tag]);
+    s->emitted = asx_trace_emitted_total_internal(k);
+    s->regions = asx_runtime_region_count(s->rt);
+    s->tasks = asx_runtime_task_count(s->rt);
+    s->obligations = asx_runtime_obligation_count(s->rt);
+}
+
+/* Both runtimes are initialized (a on the library's block, b on its own);
+ * `which` 0 runs both scripts step for step, 1 only a's, 2 only b's. */
+static int run_phase(int which, script *sa, script *sb) {
+    asx_runtime a;
+    asx_runtime b;
+    asx_runtime_config cfg_a;
+    asx_runtime_config cfg_b;
+    asx_runtime_hooks hooks;
+    two_block blk;
+    uint32_t i;
+
+    memset(sa, 0, sizeof(*sa));
+    memset(sb, 0, sizeof(*sb));
+    memset(&a, 0, sizeof(a));
+    memset(&b, 0, sizeof(b));
+    asx_runtime_reset(&a);
+    if (!two_block_make(&blk)) return 0;
+    asx_runtime_config_init(&cfg_a);
+    asx_runtime_hooks_init(&hooks);
+    cfg_b = cfg_a;
+    cfg_b.storage = blk.block;
+    cfg_b.storage_size = blk.size;
+    if (asx_runtime_init(&a, &cfg_a, &hooks) != ASX_OK) return 0;
+    if (asx_runtime_init(&b, &cfg_b, &hooks) != ASX_OK) return 0;
+    sa->rt = &a;
+    sb->rt = &b;
+
+    for (i = 0u; i < SCRIPT_STEPS; i++) {
+        if (which != 2) script_step(sa, i);
+        if (which != 1) script_step(sb, i);
+    }
+    if (which != 2) script_collect(sa);
+    if (which != 1) script_collect(sb);
+
+    asx_runtime_shutdown(&b);
+    asx_runtime_shutdown(&a);
+    two_block_free(&blk);
+    return 1;
+}
+
+static void script_expect_equal(const script *inter, const script *solo, uint32_t *differ) {
+    uint32_t i;
+    for (i = 0u; i < SCRIPT_STEPS; i++) {
+        if (inter->log[i] != solo->log[i]) *differ += 1u;
+    }
+    if (inter->digest != solo->digest) *differ += 1u;
+    if (inter->emitted != solo->emitted) *differ += 1u;
+    if (inter->regions != solo->regions) *differ += 1u;
+    if (inter->tasks != solo->tasks) *differ += 1u;
+    if (inter->obligations != solo->obligations) *differ += 1u;
+    if (inter->commit_job.reserve_st != solo->commit_job.reserve_st) *differ += 1u;
+    if (inter->commit_job.settle_st != solo->commit_job.settle_st) *differ += 1u;
+    if (inter->abort_job.reserve_st != solo->abort_job.reserve_st) *differ += 1u;
+    if (inter->abort_job.settle_st != solo->abort_job.settle_st) *differ += 1u;
+}
+
+TEST(an_interleaved_run_of_two_runtimes_is_each_runtime_run_alone) {
+    script a_inter;
+    script b_inter;
+    script a_solo;
+    script b_solo;
+    script idle;
+    uint32_t differ = 0u;
+    uint32_t i;
+
+    ASSERT_TRUE(run_phase(0, &a_inter, &b_inter));
+    ASSERT_TRUE(run_phase(1, &a_solo, &idle));
+    ASSERT_TRUE(run_phase(2, &idle, &b_solo));
+
+    /* The script ran, in its own runtime: the setup calls are accepted and
+     * each runtime's trace saw events. */
+    for (i = 0u; i < 5u; i++) {
+        ASSERT_EQ(a_inter.log[i], ASX_OK);
+        ASSERT_EQ(b_inter.log[i], ASX_OK);
+    }
+    ASSERT_TRUE(a_inter.emitted > 0u);
+    ASSERT_TRUE(b_inter.emitted > 0u);
+    ASSERT_EQ(asx_handle_runtime_tag(a_inter.root), (uint16_t)0u);
+    ASSERT_EQ(asx_handle_runtime_tag(b_inter.root), (uint16_t)1u);
+    ASSERT_EQ(a_inter.commit_job.settle_st, ASX_OK);
+    ASSERT_EQ(b_inter.commit_job.settle_st, ASX_OK);
+    ASSERT_EQ(a_inter.abort_job.settle_st, ASX_OK);
+    ASSERT_EQ(b_inter.abort_job.settle_st, ASX_OK);
+
+    /* Isolation: with the other runtime interleaved step for step, each
+     * runtime's statuses, trace digest, event count and counts are what its
+     * run alone gave. */
+    script_expect_equal(&a_inter, &a_solo, &differ);
+    script_expect_equal(&b_inter, &b_solo, &differ);
+    ASSERT_EQ(differ, 0u);
+}
+
 #else /* the cases below are reported SKIP by RUN_TEST_IF */
 
 TEST(two_runtimes_have_independent_regions_tasks_and_quiescence) {}
 TEST(a_second_runtime_is_refused_by_name_while_a_shared_subsystem_is_in_use) {}
+TEST(an_interleaved_run_of_two_runtimes_is_each_runtime_run_alone) {}
 
 #endif
 
@@ -228,6 +410,8 @@ int main(void) {
                 "needs ASX_MAX_RUNTIMES >= 2 and a deterministic build");
     RUN_TEST_IF(TWO_RUNTIMES_RUN,
                 a_second_runtime_is_refused_by_name_while_a_shared_subsystem_is_in_use,
+                "needs ASX_MAX_RUNTIMES >= 2 and a deterministic build");
+    RUN_TEST_IF(TWO_RUNTIMES_RUN, an_interleaved_run_of_two_runtimes_is_each_runtime_run_alone,
                 "needs ASX_MAX_RUNTIMES >= 2 and a deterministic build");
     TEST_REPORT();
     return test_failures;
