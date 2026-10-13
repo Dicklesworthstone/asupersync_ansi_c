@@ -20,6 +20,7 @@
 /* ASX_CHECKPOINT_WAIVER_FILE("Litmus test — memory model verification only") */
 
 #include "../../test_harness.h"
+#include "../../test_runtime.h"
 #include <asx/asx.h>
 #include <asx/platform/atomics.h>
 #include <limits.h>
@@ -510,7 +511,7 @@ typedef enum {
 } litmus_queue_slot_state;
 
 static void litmus_runtime_reset(void) {
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_parallel_reset();
     asx_trace_reset();
 }
@@ -810,7 +811,7 @@ TEST(litmus_parallel_commit_sequence_worker_sum) {
     litmus_runtime_reset();
     cfg = litmus_parallel_config(4u, ASX_FAIRNESS_ROUND_ROBIN);
     ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, litmus_pending_n, &c1, &t1), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, litmus_pending_n, &c2, &t2), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, litmus_pending_n, &c3, &t3), ASX_OK);
@@ -849,7 +850,7 @@ TEST(litmus_parallel_budget_exhaustion_draining) {
     litmus_runtime_reset();
     cfg = litmus_parallel_config(2u, ASX_FAIRNESS_ROUND_ROBIN);
     ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, litmus_pending_forever, NULL, &tid), ASX_OK);
 
     budget = asx_budget_from_polls(1u);

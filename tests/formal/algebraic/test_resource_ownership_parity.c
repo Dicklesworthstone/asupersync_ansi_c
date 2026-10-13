@@ -14,6 +14,7 @@
  */
 
 #include "../../test_harness.h"
+#include "../../test_runtime.h"
 #include <asx/asx.h>
 #include <asx/core/ghost.h>
 #include <asx/core/resource.h>
@@ -50,7 +51,7 @@ TEST(resource_snapshot_capacity_equals_sum) {
     asx_resource_kind kinds[] = {ASX_RESOURCE_REGION, ASX_RESOURCE_TASK, ASX_RESOURCE_OBLIGATION};
     unsigned i;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     for (i = 0; i < 3; i++) {
         asx_resource_snapshot snap;
@@ -63,10 +64,10 @@ TEST(resource_snapshot_after_allocation) {
     asx_region_id rid;
     asx_resource_snapshot before, after;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     ASSERT_EQ(asx_resource_snapshot_get(ASX_RESOURCE_REGION, &before), ASX_OK);
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_resource_snapshot_get(ASX_RESOURCE_REGION, &after), ASX_OK);
 
     ASSERT_EQ(after.used, before.used + 1);
@@ -88,7 +89,7 @@ TEST(resource_queries_consistent) {
     asx_resource_kind kinds[] = {ASX_RESOURCE_REGION, ASX_RESOURCE_TASK, ASX_RESOURCE_OBLIGATION};
     unsigned i;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     for (i = 0; i < 3; i++) {
         uint32_t cap = asx_resource_capacity(kinds[i]);
@@ -106,7 +107,7 @@ TEST(admission_idempotent) {
     /* Admission is a pure query — calling twice gives same result */
     asx_status s1, s2;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     s1 = asx_resource_admit(ASX_RESOURCE_REGION, 1);
     s2 = asx_resource_admit(ASX_RESOURCE_REGION, 1);
@@ -115,19 +116,19 @@ TEST(admission_idempotent) {
 }
 
 TEST(admission_rejects_zero_count) {
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_resource_admit(ASX_RESOURCE_REGION, 0), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(admission_rejects_unknown_kind) {
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_resource_admit((asx_resource_kind)99, 1), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(admission_rejects_over_capacity) {
     uint32_t cap;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     cap = asx_resource_capacity(ASX_RESOURCE_REGION);
     ASSERT_EQ(asx_resource_admit(ASX_RESOURCE_REGION, cap + 1), ASX_E_RESOURCE_EXHAUSTED);
@@ -139,12 +140,12 @@ TEST(admission_tracks_allocation) {
     uint32_t cap;
     asx_status s;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     cap = asx_resource_capacity(ASX_RESOURCE_REGION);
     ASSERT_EQ(asx_resource_admit(ASX_RESOURCE_REGION, cap), ASX_OK);
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     /* Now one slot used — can't admit full capacity */
     s = asx_resource_admit(ASX_RESOURCE_REGION, cap);
     ASSERT_EQ(s, ASX_E_RESOURCE_EXHAUSTED);
@@ -161,9 +162,9 @@ TEST(error_ledger_task_isolation) {
     asx_region_id rid;
     asx_task_id t1, t2;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_always_pending, NULL, &t1), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_always_pending, NULL, &t2), ASX_OK);
 
@@ -179,9 +180,9 @@ TEST(error_ledger_bind_switch) {
     asx_region_id rid;
     asx_task_id t1, t2;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_always_pending, NULL, &t1), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_always_pending, NULL, &t2), ASX_OK);
 
@@ -198,9 +199,9 @@ TEST(error_ledger_overflow_deterministic) {
     asx_task_id tid;
     uint32_t i;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_always_pending, NULL, &tid), ASX_OK);
 
     for (i = 0; i < 20; i++) {
@@ -218,9 +219,9 @@ TEST(error_ledger_entry_fields) {
     asx_task_id tid;
     asx_error_ledger_entry entry;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_always_pending, NULL, &tid), ASX_OK);
 
     asx_error_ledger_record_for_task(tid, ASX_E_INVALID_ARGUMENT, "my_op", "myfile.c", 42);
@@ -241,7 +242,7 @@ TEST(error_ledger_entry_fields) {
 TEST(ghost_borrow_shared_allows_multiple) {
     uint64_t entity = 0x1234;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
 
     ASSERT_EQ(asx_ghost_borrow_shared(entity), 1u);
@@ -253,7 +254,7 @@ TEST(ghost_borrow_shared_allows_multiple) {
 TEST(ghost_borrow_exclusive_rejects_during_shared) {
     uint64_t entity = 0x5678;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
 
     asx_ghost_borrow_shared(entity);
@@ -266,7 +267,7 @@ TEST(ghost_borrow_exclusive_rejects_during_shared) {
 TEST(ghost_borrow_shared_rejects_during_exclusive) {
     uint64_t entity = 0xABCD;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
 
     ASSERT_TRUE(asx_ghost_borrow_exclusive(entity));
@@ -278,7 +279,7 @@ TEST(ghost_borrow_shared_rejects_during_exclusive) {
 TEST(ghost_borrow_release_all_reclaims_slot) {
     uint64_t entity = 0xDEAD;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
 
     asx_ghost_borrow_shared(entity);
@@ -292,7 +293,7 @@ TEST(ghost_borrow_release_all_reclaims_slot) {
 TEST(ghost_borrow_exclusive_after_full_release_succeeds) {
     uint64_t entity = 0xBEEF;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
 
     asx_ghost_borrow_shared(entity);
@@ -313,9 +314,9 @@ TEST(checkpoint_non_cancelled_returns_clean) {
     asx_checkpoint_result cr;
     asx_budget budget;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_always_pending, NULL, &tid), ASX_OK);
 
     /* Prime task to Running */
@@ -333,9 +334,9 @@ TEST(checkpoint_after_cancel_shows_cancelled) {
     asx_checkpoint_result cr;
     asx_budget budget;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_always_pending, NULL, &tid), ASX_OK);
 
     /* Prime to Running */
@@ -354,7 +355,7 @@ TEST(checkpoint_after_cancel_shows_cancelled) {
 
 TEST(checkpoint_invalid_task_returns_error) {
     asx_checkpoint_result cr;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_checkpoint(0xDEADu, &cr), ASX_E_NOT_FOUND);
 }
 
@@ -363,9 +364,9 @@ TEST(checkpoint_null_output_returns_error) {
     asx_task_id tid;
     asx_budget budget;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_always_pending, NULL, &tid), ASX_OK);
 
     budget = asx_budget_from_polls(1);
@@ -384,9 +385,9 @@ TEST(cancel_strengthen_upgrades_severity) {
     asx_checkpoint_result cr;
     asx_budget budget;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_always_pending, NULL, &tid), ASX_OK);
 
     budget = asx_budget_from_polls(1);
@@ -410,9 +411,9 @@ TEST(cancel_completed_task_is_noop) {
     asx_task_state state;
     asx_budget budget;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_checkpoint_then_complete, NULL, &tid), ASX_OK);
 
     /* Run: prime, cancel, complete */
@@ -440,19 +441,19 @@ TEST(resource_exhaustion_all_regions) {
     uint32_t i;
     asx_region_id extra;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     cap = asx_resource_capacity(ASX_RESOURCE_REGION);
     ASSERT_TRUE(cap <= 8);
 
-    for (i = 0; i < cap; i++) { ASSERT_EQ(asx_region_open(&rids[i]), ASX_OK); }
+    for (i = 0; i < cap; i++) { ASSERT_EQ(asx_region_open(test_runtime(), &rids[i]), ASX_OK); }
 
     /* All slots used */
     ASSERT_EQ(asx_resource_remaining(ASX_RESOURCE_REGION), 0u);
     ASSERT_EQ(asx_resource_used(ASX_RESOURCE_REGION), cap);
 
     /* Next allocation should fail */
-    ASSERT_EQ(asx_region_open(&extra), ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(asx_region_open(test_runtime(), &extra), ASX_E_RESOURCE_EXHAUSTED);
 }
 
 TEST(resource_kind_str_coverage) {
@@ -467,7 +468,7 @@ TEST(resource_kind_str_coverage) {
 /* ================================================================== */
 
 TEST(ghost_determinism_identical_runs_match) {
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
 
     /* Run 1 */
@@ -488,7 +489,7 @@ TEST(ghost_determinism_identical_runs_match) {
 TEST(ghost_determinism_different_runs_drift) {
     uint32_t drifts;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
 
     /* Run 1 */
@@ -510,7 +511,7 @@ TEST(ghost_determinism_different_runs_drift) {
 TEST(ghost_determinism_digest_stable) {
     uint64_t d1, d2;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
 
     asx_ghost_determinism_reset();
@@ -531,7 +532,7 @@ TEST(ghost_determinism_digest_stable) {
 /* ================================================================== */
 
 TEST(ghost_protocol_legal_region_transition_clean) {
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
 
     ASSERT_EQ(asx_ghost_check_region_transition(0x1234, ASX_REGION_OPEN, ASX_REGION_CLOSING),
@@ -540,7 +541,7 @@ TEST(ghost_protocol_legal_region_transition_clean) {
 }
 
 TEST(ghost_protocol_illegal_region_transition_records_violation) {
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
 
     ASSERT_EQ(asx_ghost_check_region_transition(0x1234, ASX_REGION_CLOSED, ASX_REGION_OPEN),
@@ -562,37 +563,37 @@ int main(void) {
     fprintf(stderr, "[formal] resource/ownership/task-context parity (bd-1eqo.15.2)\n");
 
     /* Resource snapshot invariants */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(resource_snapshot_capacity_equals_sum);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(resource_snapshot_after_allocation);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(resource_snapshot_invalid_kind);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(resource_snapshot_null_output);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(resource_queries_consistent);
 
     /* Admission gate */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(admission_idempotent);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(admission_rejects_zero_count);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(admission_rejects_unknown_kind);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(admission_rejects_over_capacity);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(admission_tracks_allocation);
 
     /* Error ledger */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(error_ledger_task_isolation);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(error_ledger_bind_switch);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(error_ledger_overflow_deterministic);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(error_ledger_entry_fields);
 
     /* Ghost borrow */
@@ -603,25 +604,25 @@ int main(void) {
     RUN_TEST(ghost_borrow_exclusive_after_full_release_succeeds);
 
     /* Checkpoint */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(checkpoint_non_cancelled_returns_clean);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(checkpoint_after_cancel_shows_cancelled);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(checkpoint_invalid_task_returns_error);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(checkpoint_null_output_returns_error);
 
     /* Cancel strengthen */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(cancel_strengthen_upgrades_severity);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(cancel_completed_task_is_noop);
 
     /* Resource exhaustion */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(resource_exhaustion_all_regions);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(resource_kind_str_coverage);
 
     /* Ghost determinism */

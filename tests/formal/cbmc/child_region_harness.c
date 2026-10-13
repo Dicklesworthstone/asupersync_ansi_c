@@ -22,6 +22,9 @@
 static int passes = 0;
 static int failures = 0;
 
+/* The harness's runtime object: zeroed, so the library's static kernel (tag 0). */
+static asx_runtime g_rt;
+
 static int parent_lists_child(const asx_region_slot *parent_slot, asx_region_id child) {
     uint32_t i;
 
@@ -87,8 +90,8 @@ int main(void) {
     ASSUME(open_count <= HARNESS_CHILDREN);
     ASSUME(close_count <= open_count);
 
-    asx_runtime_reset();
-    VERIFY(asx_region_open(&parent) == ASX_OK);
+    asx_runtime_reset(&g_rt);
+    VERIFY(asx_region_open(&g_rt, &parent) == ASX_OK);
     VERIFY(asx_region_slot_lookup(parent, &parent_slot) == ASX_OK);
 
     for (step = 0; step < open_count; step++) {
@@ -157,8 +160,8 @@ int main(void) {
         asx_region_slot *parent_slot = NULL;
         unsigned i;
 
-        asx_runtime_reset();
-        check(asx_region_open(&parent) == ASX_OK, "open parent", open_count, 0);
+        asx_runtime_reset(&g_rt);
+        check(asx_region_open(&g_rt, &parent) == ASX_OK, "open parent", open_count, 0);
         check(asx_region_slot_lookup(parent, &parent_slot) == ASX_OK, "lookup parent", open_count,
               0);
 

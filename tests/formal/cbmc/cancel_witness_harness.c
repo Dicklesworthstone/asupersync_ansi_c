@@ -22,6 +22,9 @@
 
 #define PHASE_COUNT 4
 
+/* The harness's runtime object: zeroed, so the library's static kernel (tag 0). */
+static asx_runtime g_rt;
+
 #ifdef CBMC
 
 int main(void) {
@@ -29,7 +32,7 @@ int main(void) {
     asx_cancel_reason reason = {ASX_CANCEL_USER, 0, 0, 1, "cbmc", NULL, 0};
     asx_cancel_phase current, target;
 
-    asx_runtime_reset();
+    asx_runtime_reset(&g_rt);
 
     /* Create witness — starts at REQUESTED */
     VERIFY(asx_cancel_witness_create(&w, 1, &reason) == ASX_OK);
@@ -84,7 +87,7 @@ int main(void) {
             asx_cancel_phase current_phase;
             unsigned step;
 
-            asx_runtime_reset();
+            asx_runtime_reset(&g_rt);
             check(asx_cancel_witness_create(&w, 1, &reason) == ASX_OK, "create ok");
 
             /* Advance to start_phase */
@@ -118,7 +121,7 @@ int main(void) {
         asx_cancel_reason reason = {ASX_CANCEL_USER, 0, 0, 1, "rel", NULL, 0};
         asx_cancel_phase p;
 
-        asx_runtime_reset();
+        asx_runtime_reset(&g_rt);
         check(asx_cancel_witness_create(&w, 1, &reason) == ASX_OK, "create for release");
         check(asx_cancel_witness_release(w) == ASX_OK, "release ok");
         check(asx_cancel_witness_advance(w, ASX_CANCEL_PHASE_CANCELLING) == ASX_E_NOT_FOUND,
