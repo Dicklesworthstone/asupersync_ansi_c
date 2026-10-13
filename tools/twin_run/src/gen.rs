@@ -53,7 +53,9 @@
 //! Supervisors (DSL §3.8): a task may spawn one supervisor of one to three
 //! children (any policy and restart modes, up to three restarts in a 1 s
 //! or 60 s window, sometimes escalating) and later join it, or leave it to
-//! the drop at its body's end, which aborts it.
+//! the drop at its body's end, which aborts it. A child sometimes ends in an
+//! err, a panic or (bd-9kll.8.7) `return cancelled`, and one in four creates
+//! names of its own (a spawned child, a server, a nested supervisor).
 //!
 //! Cancel storms (bd-9kll.4.10): one scenario in sixteen is not drawn from
 //! the stream above but is a storm, from a stream of its own (see
@@ -620,11 +622,16 @@ fn rich_child_program(rng: &mut Rng, runs_once: bool) -> Vec<Value> {
 ///
 /// Which children are rich is drawn from a stream derived from the main
 /// one's position without consuming it, so the main stream, and every
-/// scenario without a rich child, is what it was.
+/// scenario without a rich child, is what it was. So is which children end by
+/// returning `cancelled` (bd-9kll.8.7: the factory future's
+/// `Outcome::Cancelled`, which a transient child is not replaced for, a
+/// permanent one is): one in seven, from a stream of its own, as the last
+/// step of the child's own program, the only place the DSL defines it.
 fn supervise_step(rng: &mut Rng, name: &str) -> Value {
     let policy = *rng.pick(&["one_for_one", "one_for_all", "rest_for_one"]);
     let mut rich = Rng::new(rng.state ^ 0x5C09_ED07_A11E_0001);
     rich.quantum = rng.quantum;
+    let mut cancels = Rng::new(rng.state ^ 0xCA9C_E11E_D0C0_0001);
     let mut children = Vec::new();
     for i in 0..1 + rng.below(3) {
         let mut program = child_program(rng);
@@ -636,6 +643,17 @@ fn supervise_step(rng: &mut Rng, name: &str) -> Value {
         let mode = *rng.pick(&["permanent", "transient", "temporary"]);
         if rich.chance(25) {
             program = rich_child_program(&mut rich, mode == "temporary");
+        }
+        if cancels.chance(14) {
+            // Replace the program's own ending, if it has one: a step after
+            // a return never runs, so the returns it already ends with go.
+            while program
+                .last()
+                .is_some_and(|s| s.get("op") == Some(&json!("return")))
+            {
+                program.pop();
+            }
+            program.push(json!({"op": "return", "outcome": {"tag": "cancelled"}}));
         }
         children.push(json!({
             "name": format!("c{}", i + 1),
@@ -1081,4 +1099,94 @@ pub fn scenario(seed: u64, index: u64) -> Value {
         "script": script,
         "expect": {"kind": "ok"},
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// (`return cancelled` steps anywhere in `v`, those that are the last step
+    /// of a supervised child's own program).
+    fn cancelled_returns(v: &Value) -> (u32, u32) {
+        let is_cancelled_return = |s: &Value| {
+            s.get("op") == Some(&json!("return"))
+                && s.get("outcome").and_then(|o| o.get("tag")) == Some(&json!("cancelled"))
+        };
+        let mut any = 0;
+        let mut own = 0;
+        match v {
+            Value::Object(fields) => {
+                if is_cancelled_return(v) {
+                    any += 1;
+                }
+                if fields.get("op") == Some(&json!("supervise")) {
+                    for child in fields
+                        .get("children")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                    {
+                        let program = child.get("program").and_then(Value::as_array);
+                        if let Some(last) = program.and_then(|p| p.last()) {
+                            if is_cancelled_return(last) {
+                                own += 1;
+                            }
+                        }
+                    }
+                }
+                for field in fields.values() {
+                    let (a, o) = cancelled_returns(field);
+                    any += a;
+                    own += o;
+                }
+            }
+            Value::Array(items) => {
+                for item in items {
+                    let (a, o) = cancelled_returns(item);
+                    any += a;
+                    own += o;
+                }
+            }
+            _ => {}
+        }
+        (any, own)
+    }
+
+    /// bd-9kll.8.7: the generator emits `return cancelled`, only where the
+    /// DSL defines it (the last step of a supervised child's own program),
+    /// and does so deterministically.
+    #[test]
+    fn supervised_children_sometimes_return_cancelled_and_nowhere_else() {
+        let mut own_total = 0;
+        for index in 0..400 {
+            let scenario_value = scenario(1, index);
+            assert_eq!(
+                scenario_value,
+                scenario(1, index),
+                "scenario {index} is not a pure function of its seed"
+            );
+            let (any, own) = cancelled_returns(&scenario_value);
+            assert_eq!(
+                any, own,
+                "scenario {index} has a `return cancelled` outside a supervised child's own program"
+            );
+            own_total += own;
+        }
+        assert!(
+            own_total > 0,
+            "400 scenarios of seed 1 emitted no supervised child that returns cancelled"
+        );
+    }
+
+    /// The cancelled returns come from a stream of their own: a scenario
+    /// without a supervisor is what it was, step for step.
+    #[test]
+    fn a_scenario_without_a_supervisor_has_no_cancelled_return() {
+        for index in 0..100 {
+            let text = scenario(7, index).to_string();
+            if !text.contains("\"supervise\"") {
+                assert!(!text.contains("\"cancelled\""), "scenario {index}");
+            }
+        }
+    }
 }
