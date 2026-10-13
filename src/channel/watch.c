@@ -28,7 +28,11 @@ typedef struct {
     uint64_t value;
     uint64_t version; /* incremented on each send; 0 = initial value */
     uint32_t receiver_count;
-    asx_wait_queue waiters; /* tasks parked in poll_changed */
+    /* The clones in-flight wait_for calls hold (Rust's wait_for waits on
+     * `self.clone()`): counted by receiver_count()/is_closed, outside the
+     * receiver limit, since their owners already hold a receiver. */
+    uint32_t waiter_clones;
+    asx_wait_queue waiters; /* tasks parked in poll_changed / wait_for */
 } asx_watch_slot;
 
 /* ------------------------------------------------------------------ */
@@ -59,6 +63,7 @@ void asx_watch_reset(void) {
         g_slots[i].value = 0;
         g_slots[i].version = 0;
         g_slots[i].receiver_count = 0;
+        g_slots[i].waiter_clones = 0;
         watch_waiters_init(&g_slots[i]);
     }
     g_slot_count = 0;
@@ -81,7 +86,8 @@ asx_status asx_watch_create(uint64_t initial_value, asx_watch_sender *out_sender
         uint32_t i;
         for (i = 0; i < g_slot_count; i++) {
             /* ASX_CHECKPOINT_WAIVER("bounded slot search") */
-            if (!g_slots[i].sender_alive && g_slots[i].receiver_count == 0) {
+            if (!g_slots[i].sender_alive && g_slots[i].receiver_count == 0 &&
+                g_slots[i].waiter_clones == 0) {
                 idx = i;
                 break;
             }
@@ -101,6 +107,7 @@ asx_status asx_watch_create(uint64_t initial_value, asx_watch_sender *out_sender
      * it: only later sends count as changes (Rust channel/watch.rs). */
     s->version = 0;
     s->receiver_count = 1;
+    s->waiter_clones = 0;
     watch_waiters_init(s);
 
     out_sender->slot = idx;
@@ -130,6 +137,36 @@ asx_status asx_watch_subscribe(const asx_watch_sender *sender, asx_watch_receive
      * later changes (Rust Sender::subscribe). */
     out_receiver->last_seen_version = s->version;
 
+    return ASX_OK;
+}
+
+/* The slot a receiver handle names, or why it names none. */
+static asx_status watch_receiver_slot(const asx_watch_receiver *receiver, asx_watch_slot **out) {
+    asx_watch_slot *s;
+
+    if (receiver->slot >= g_slot_count) return ASX_E_NOT_FOUND;
+    s = &g_slots[receiver->slot];
+    if (s->generation != receiver->generation) return ASX_E_STALE_HANDLE;
+    *out = s;
+    return ASX_OK;
+}
+
+/* Rust's Receiver::clone (watch.rs:1057): the new receiver starts at the
+ * version this one has seen, not at the current one. */
+asx_status asx_watch_receiver_clone(const asx_watch_receiver *receiver,
+                                    asx_watch_receiver *out_receiver) {
+    asx_watch_slot *s;
+    asx_status st;
+
+    if (receiver == NULL || out_receiver == NULL) return ASX_E_INVALID_ARGUMENT;
+    st = watch_receiver_slot(receiver, &s);
+    if (st != ASX_OK) return st;
+    if (s->receiver_count >= ASX_WATCH_MAX_RECEIVERS) return ASX_E_RESOURCE_EXHAUSTED;
+
+    s->receiver_count++;
+    out_receiver->slot = receiver->slot;
+    out_receiver->generation = s->generation;
+    out_receiver->last_seen_version = receiver->last_seen_version;
     return ASX_OK;
 }
 
@@ -175,6 +212,30 @@ asx_status asx_watch_send(asx_watch_sender *sender, uint64_t value) {
     return ASX_OK;
 }
 
+/* Rust's send_modify (watch.rs:530): clone, apply, write back as one new
+ * version, whether or not the closure changed the value. */
+asx_status asx_watch_send_modify(asx_watch_sender *sender, asx_watch_modify_fn modify, void *ctx) {
+    asx_watch_slot *s;
+    uint64_t value;
+
+    if (sender == NULL || modify == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (sender->slot >= g_slot_count) return ASX_E_NOT_FOUND;
+
+    s = &g_slots[sender->slot];
+    if (s->generation != sender->generation) return ASX_E_STALE_HANDLE;
+    if (!s->sender_alive) return ASX_E_INVALID_STATE;
+
+    value = s->value;
+    modify(ctx, &value);
+    s->value = value;
+    s->version++;
+
+    asx_trace_emit(ASX_TRACE_CHANNEL_SEND, (uint64_t)sender->slot, value);
+    watch_wake_waiters(s);
+
+    return ASX_OK;
+}
+
 /* ------------------------------------------------------------------ */
 /* Receive                                                             */
 /* ------------------------------------------------------------------ */
@@ -192,6 +253,50 @@ asx_status asx_watch_recv(asx_watch_receiver *receiver, uint64_t *out_value) {
     receiver->last_seen_version = s->version;
 
     return ASX_OK;
+}
+
+/* Rust's borrow (watch.rs:904): the value, with the receiver's seen version
+ * left alone. */
+asx_status asx_watch_borrow(const asx_watch_receiver *receiver, uint64_t *out_value) {
+    asx_watch_slot *s;
+    asx_status st;
+
+    if (receiver == NULL || out_value == NULL) return ASX_E_INVALID_ARGUMENT;
+    st = watch_receiver_slot(receiver, &s);
+    if (st != ASX_OK) return st;
+
+    *out_value = s->value;
+    return ASX_OK;
+}
+
+/* Rust's mark_seen (watch.rs:961): the current version, whatever was read
+ * before. */
+asx_status asx_watch_mark_seen(asx_watch_receiver *receiver) {
+    asx_watch_slot *s;
+    asx_status st;
+
+    if (receiver == NULL) return ASX_E_INVALID_ARGUMENT;
+    st = watch_receiver_slot(receiver, &s);
+    if (st != ASX_OK) return st;
+
+    receiver->last_seen_version = s->version;
+    return ASX_OK;
+}
+
+int asx_watch_receiver_is_closed(const asx_watch_receiver *receiver) {
+    asx_watch_slot *s;
+
+    if (receiver == NULL || watch_receiver_slot(receiver, &s) != ASX_OK) return 1;
+    return !s->sender_alive;
+}
+
+int asx_watch_sender_is_closed(const asx_watch_sender *sender) {
+    const asx_watch_slot *s;
+
+    if (sender == NULL || sender->slot >= g_slot_count) return 1;
+    s = &g_slots[sender->slot];
+    if (s->generation != sender->generation) return 1;
+    return s->receiver_count + s->waiter_clones == 0u;
 }
 
 int asx_watch_has_changed(const asx_watch_receiver *receiver) {
@@ -250,6 +355,85 @@ asx_status asx_watch_poll_changed(asx_watch_receiver *receiver, asx_cx *cx) {
 }
 
 /* ------------------------------------------------------------------ */
+/* wait_for                                                            */
+/* ------------------------------------------------------------------ */
+
+/* One poll of the changed() wait wait_for opens on its clone (watch.rs:731),
+ * which has seen `wait->checked`: cancellation, then a newer version (the
+ * open wait ends: wait_for loops to the predicate), then the sender gone. */
+static asx_status watch_wait_poll(asx_watch_slot *s, asx_cx *cx, asx_watch_wait *wait) {
+    if (cx != NULL && asx_cx_checkpoint(cx) != ASX_OK) {
+        watch_trace(cx, "watch::changed cancelled");
+        return ASX_E_CANCELLED;
+    }
+    if (s->version != wait->checked) {
+        watch_trace(cx, "watch::changed received update");
+        wait->waiting = 0;
+        return ASX_OK;
+    }
+    if (!s->sender_alive) {
+        watch_trace(cx, "watch::changed sender dropped");
+        return ASX_E_DISCONNECTED;
+    }
+    (void)asx_wait_queue_park_current(&s->waiters);
+    return ASX_E_PENDING;
+}
+
+/* wait_for returns: its clone is dropped and the task leaves the wait line. */
+static void watch_wait_end(asx_watch_slot *s, asx_watch_wait *wait) {
+    if (wait->cloned && s->waiter_clones > 0u) s->waiter_clones--;
+    asx_wait_queue_leave_current(&s->waiters);
+    memset(wait, 0, sizeof(*wait));
+}
+
+/* Rust's async wait_for (watch.rs:858) as a poll. Its loop head tests the
+ * predicate on the current value under no cancellation check; a rejection
+ * opens changed() on a clone that has seen the rejected version. A poll
+ * resumes inside that wait, and a newer version returns to the loop head.
+ * After a rejection the clone has seen the current version, so its first
+ * poll cannot report a newer one: this takes at most two steps per call. */
+asx_status asx_watch_poll_wait_for(asx_watch_receiver *receiver, asx_cx *cx, asx_watch_wait *wait,
+                                   asx_watch_predicate_fn predicate, void *ctx,
+                                   uint64_t *out_value) {
+    asx_watch_slot *s;
+    asx_status st;
+
+    if (receiver == NULL || wait == NULL || predicate == NULL || out_value == NULL) {
+        return ASX_E_INVALID_ARGUMENT;
+    }
+    st = watch_receiver_slot(receiver, &s);
+    if (st != ASX_OK) return st;
+
+    if (wait->waiting) {
+        st = watch_wait_poll(s, cx, wait);
+        if (st == ASX_E_PENDING) return st;
+        if (st != ASX_OK) {
+            watch_wait_end(s, wait);
+            return st;
+        }
+    }
+
+    if (predicate(ctx, s->value)) {
+        receiver->last_seen_version = s->version;
+        *out_value = s->value;
+        watch_wait_end(s, wait);
+        return ASX_OK;
+    }
+
+    if (!wait->cloned) {
+        wait->cloned = 1;
+        s->waiter_clones++;
+    }
+    wait->checked = s->version;
+    wait->waiting = 1;
+    watch_trace(cx, "watch::changed starting wait");
+
+    st = watch_wait_poll(s, cx, wait);
+    if (st != ASX_E_PENDING) watch_wait_end(s, wait);
+    return st;
+}
+
+/* ------------------------------------------------------------------ */
 /* Query                                                               */
 /* ------------------------------------------------------------------ */
 
@@ -257,7 +441,7 @@ uint32_t asx_watch_receiver_count(const asx_watch_sender *sender) {
     if (sender == NULL) return 0;
     if (sender->slot >= g_slot_count) return 0;
     if (g_slots[sender->slot].generation != sender->generation) return 0;
-    return g_slots[sender->slot].receiver_count;
+    return g_slots[sender->slot].receiver_count + g_slots[sender->slot].waiter_clones;
 }
 
 int asx_watch_sender_is_alive(uint32_t slot, uint16_t generation) {

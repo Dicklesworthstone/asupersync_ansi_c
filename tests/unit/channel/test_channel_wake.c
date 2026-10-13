@@ -1450,6 +1450,67 @@ TEST(watch_changed_traces_each_rust_outcome) {
     ASSERT_TRUE(cap_user(5, tb, "watch::changed sender dropped"));
 }
 
+static int watch_at_least(void *ctx, uint64_t value) { return value >= *(const uint64_t *)ctx; }
+
+/* Receiver::wait_for (watch.rs:858): changed() is traced once per rejected
+ * value, the first check runs under no cancellation check, and the wait
+ * ends as changed() does. */
+TEST(watch_wait_for_traces_each_rust_outcome) {
+    asx_watch_sender tx;
+    asx_watch_receiver rb;
+    asx_watch_receiver rc;
+    asx_watch_receiver rd;
+    asx_watch_wait wb;
+    asx_watch_wait wc;
+    asx_watch_wait wd;
+    asx_cx b;
+    asx_cx c;
+    asx_cx d;
+    asx_task_id tb;
+    asx_task_id tc;
+    asx_task_id td;
+    uint64_t three = 3u;
+    uint64_t nine = 9u;
+    uint64_t v = 0;
+
+    ASSERT_TRUE(setup());
+    tb = cx_task(&b);
+    tc = cx_task(&c);
+    td = cx_task(&d);
+    ASSERT_EQ(asx_watch_create(0u, &tx, &rb), ASX_OK);
+    ASSERT_EQ(asx_watch_subscribe(&tx, &rc), ASX_OK);
+    ASSERT_EQ(asx_watch_subscribe(&tx, &rd), ASX_OK);
+    memset(&wb, 0, sizeof(wb));
+    memset(&wc, 0, sizeof(wc));
+    memset(&wd, 0, sizeof(wd));
+    ASSERT_EQ(asx_task_cancel(tc, ASX_CANCEL_USER), ASX_OK);
+    capture(1);
+    ASSERT_EQ(asx_watch_poll_wait_for(&rb, &b, &wb, watch_at_least, &three, &v), ASX_E_PENDING);
+    ASSERT_EQ(asx_watch_send(&tx, 1u), ASX_OK);
+    ASSERT_EQ(asx_watch_poll_wait_for(&rb, &b, &wb, watch_at_least, &three, &v), ASX_E_PENDING);
+    ASSERT_EQ(asx_watch_send(&tx, 3u), ASX_OK);
+    ASSERT_EQ(asx_watch_poll_wait_for(&rb, &b, &wb, watch_at_least, &three, &v), ASX_OK);
+    ASSERT_EQ(v, 3u);
+    /* A cancelled task whose value already matches is not cancelled ... */
+    ASSERT_EQ(asx_watch_poll_wait_for(&rc, &c, &wc, watch_at_least, &three, &v), ASX_OK);
+    ASSERT_EQ(v, 3u);
+    /* ... one whose value does not is: traced, receiver untouched. */
+    ASSERT_EQ(asx_watch_poll_wait_for(&rc, &c, &wc, watch_at_least, &nine, &v), ASX_E_CANCELLED);
+    ASSERT_EQ(asx_watch_poll_wait_for(&rd, &d, &wd, watch_at_least, &nine, &v), ASX_E_PENDING);
+    asx_watch_sender_drop(&tx);
+    ASSERT_EQ(asx_watch_poll_wait_for(&rd, &d, &wd, watch_at_least, &nine, &v), ASX_E_DISCONNECTED);
+    capture(0);
+    ASSERT_EQ(g_ncap, 8u);
+    ASSERT_TRUE(cap_user(0, tb, "watch::changed starting wait"));
+    ASSERT_TRUE(cap_user(1, tb, "watch::changed received update"));
+    ASSERT_TRUE(cap_user(2, tb, "watch::changed starting wait"));
+    ASSERT_TRUE(cap_user(3, tb, "watch::changed received update"));
+    ASSERT_TRUE(cap_user(4, tc, "watch::changed starting wait"));
+    ASSERT_TRUE(cap_user(5, tc, "watch::changed cancelled"));
+    ASSERT_TRUE(cap_user(6, td, "watch::changed starting wait"));
+    ASSERT_TRUE(cap_user(7, td, "watch::changed sender dropped"));
+}
+
 /* ===================================================================
  * Permits dropped with their holder task
  * =================================================================== */
@@ -1647,6 +1708,7 @@ int main(void) {
     RUN_TEST(broadcast_permit_commits_on_send_and_aborts_with_cancel_unsent);
     RUN_TEST(broadcast_recv_checks_cancel_first);
     RUN_TEST(watch_changed_traces_each_rust_outcome);
+    RUN_TEST(watch_wait_for_traces_each_rust_outcome);
 
     TEST_REPORT();
     return test_failures;
