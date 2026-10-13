@@ -15,6 +15,7 @@
  */
 
 #include "test_harness.h"
+#include "test_runtime.h"
 #include <asx/asx.h>
 #include <asx/core/budget.h>
 #include <asx/runtime/runtime.h>
@@ -166,10 +167,10 @@ TEST(co_basic_yield_and_complete) {
     asx_task_state tstate;
     asx_outcome outcome;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     ASSERT_EQ(asx_task_spawn_captured(rid, yield_n_poll, (uint32_t)sizeof(yield_n_state), test_dtor,
                                       &tid, &state_ptr),
@@ -204,10 +205,10 @@ TEST(co_multiple_yields) {
     asx_budget budget;
     asx_task_state tstate;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     ASSERT_EQ(asx_task_spawn_captured(rid, yield_n_poll, (uint32_t)sizeof(yield_n_state), test_dtor,
                                       &tid, &state_ptr),
@@ -236,10 +237,10 @@ TEST(co_immediate_completion) {
     asx_budget budget;
     asx_task_state tstate;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     ASSERT_EQ(asx_task_spawn_captured(rid, immediate_poll, (uint32_t)sizeof(immediate_state), NULL,
                                       &tid, &state_ptr),
@@ -264,10 +265,10 @@ TEST(co_budget_exhaustion_mid_coroutine) {
     asx_budget budget;
     asx_task_state tstate;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     ASSERT_EQ(asx_task_spawn_captured(rid, yield_n_poll, (uint32_t)sizeof(yield_n_state), test_dtor,
                                       &tid, &state_ptr),
@@ -304,10 +305,10 @@ TEST(co_resume_preserves_state) {
     asx_budget budget;
     asx_task_state tstate;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     ASSERT_EQ(asx_task_spawn_captured(rid, phased_poll, (uint32_t)sizeof(phased_state), NULL, &tid,
                                       &state_ptr),
@@ -344,11 +345,11 @@ TEST(co_captured_state_dtor_on_complete) {
     yield_n_state *s;
     asx_budget budget;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     reset_dtor_tracker();
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     ASSERT_EQ(asx_task_spawn_captured(rid, yield_n_poll, (uint32_t)sizeof(yield_n_state), test_dtor,
                                       &tid, &state_ptr),
@@ -376,10 +377,10 @@ TEST(co_error_produces_err_outcome) {
     asx_status run_st;
     asx_containment_policy policy;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     ASSERT_EQ(asx_task_spawn_captured(rid, failing_poll, (uint32_t)sizeof(failing_state), NULL,
                                       &tid, &state_ptr),
@@ -414,10 +415,10 @@ TEST(co_interleaved_tasks_deterministic) {
     phased_state *s1, *s2;
     asx_budget budget;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     /* Spawn two phased tasks */
     ASSERT_EQ(asx_task_spawn_captured(rid, phased_poll, (uint32_t)sizeof(phased_state), NULL, &tid1,
@@ -460,9 +461,9 @@ TEST(co_spawn_captured_null_args) {
     asx_task_id tid;
     void *state_ptr;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     /* NULL out_id */
     ASSERT_EQ(asx_task_spawn_captured(rid, yield_n_poll, (uint32_t)sizeof(yield_n_state), NULL,
@@ -489,10 +490,10 @@ TEST(co_spawn_captured_in_closed_region) {
     asx_task_id tid;
     void *state_ptr;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_region_close(rid), ASX_OK);
 
     /* Spawning in a closed region should fail */
@@ -510,9 +511,9 @@ TEST(co_captured_state_zero_initialized) {
     uint32_t i;
     int all_zero;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     ASSERT_EQ(asx_task_spawn_captured(rid, yield_n_poll, (uint32_t)sizeof(yield_n_state), NULL,
                                       &tid, &state_ptr),
@@ -548,9 +549,9 @@ TEST(co_capture_arena_exhaustion) {
      * it): two more spawns than its 1024-byte states can fill. */
     const uint32_t bound = (uint32_t)ASX_REGION_CAPTURE_ARENA_BYTES / 1024u + 2u;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     /* Exhaust the region's capture arena by spawning many tasks with large
      * state. Each state is 1024 bytes + alignment. */

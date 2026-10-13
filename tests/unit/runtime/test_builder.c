@@ -11,6 +11,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if !ASX_DETERMINISTIC
+#include "../../test_runtime.h"
+#endif
+
 #if !defined(_WIN32)
 extern int setenv(const char *name, const char *value, int overwrite);
 extern int unsetenv(const char *name);
@@ -405,7 +409,7 @@ TEST(builder_runtime_secure_draw_follows_the_profile) {
     asx_runtime rt;
     uint64_t v = BUILDER_SENTINEL;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_runtime_builder_init(&builder), ASX_OK);
     ASSERT_EQ(asx_runtime_builder_build(&builder, &rt), ASX_OK);
 #if defined(ASX_PROFILE_POSIX) || defined(ASX_PROFILE_WIN32)
@@ -428,7 +432,7 @@ TEST(builder_entropy_hooks_serve_secure_draws) {
     uint64_t seed = 456u;
     uint64_t v = 0u;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_runtime_builder_init(&builder), ASX_OK);
     memset(&entropy, 0, sizeof(entropy));
     entropy.ctx = &seed;
@@ -449,7 +453,7 @@ TEST(init_from_env_runtime_serves_secure_draws) {
     asx_runtime rt;
     uint64_t v = BUILDER_SENTINEL;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     clear_builder_test_env();
     ASSERT_EQ(asx_runtime_init_from_env(&rt, NULL), ASX_OK);
     ASSERT_EQ(asx_runtime_random_secure_u64(&v), ASX_OK);

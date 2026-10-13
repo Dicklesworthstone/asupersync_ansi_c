@@ -22,6 +22,7 @@
 #include <string.h>
 
 #if ASX_HAS_BLOCKING_SURFACE
+#include "../../test_runtime.h"
 static asx_status st_sink_;
 #if !ASX_DETERMINISTIC
 static void reset_hook_state(void);
@@ -34,7 +35,7 @@ static void reset_hook_state(void);
 
 static int setup(void) {
     asx_status st;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_waker_reset();
     asx_blocking_pool_reset();
     st = asx_blocking_pool_init();
@@ -58,7 +59,7 @@ static int setup(void) {
 
 static void teardown(void) {
     asx_blocking_pool_shutdown();
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 #if !ASX_DETERMINISTIC
     reset_hook_state();
 #endif
@@ -447,7 +448,7 @@ TEST(scheduler_wakes_task_parked_on_pool_job) {
 
     ASSERT_EQ(asx_runtime_init_default(&rt), ASX_OK);
     memset(&s, 0, sizeof(s));
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_pool_waiter, &s, &t), ASX_OK);
     MUST_OK(asx_runtime_now_ns(&t0));
     budget = asx_budget_from_polls(100);

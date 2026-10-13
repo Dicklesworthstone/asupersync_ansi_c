@@ -14,6 +14,7 @@
  */
 
 #include "../../test_harness.h"
+#include "../../test_runtime.h"
 #include <asx/asx.h>
 #include <asx/core/budget.h>
 #include <asx/core/cancel.h>
@@ -42,7 +43,7 @@ static asx_status poll_pending(void *data, asx_task_id self) {
 
 TEST(channel_create_invalid_region) {
     asx_channel_id cid;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_channel_reset();
 
     /* Channel slot lookup returns INVALID_ARGUMENT for bad handles */
@@ -53,20 +54,20 @@ TEST(channel_create_zero_capacity) {
     asx_region_id rid;
     asx_channel_id cid;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_channel_reset();
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_channel_create(rid, 0, &cid), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(channel_create_null_output) {
     asx_region_id rid;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_channel_reset();
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_channel_create(rid, 16, NULL), ASX_E_INVALID_ARGUMENT);
 }
 
@@ -74,10 +75,10 @@ TEST(channel_create_exceeds_max_capacity) {
     asx_region_id rid;
     asx_channel_id cid;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_channel_reset();
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_channel_create(rid, ASX_CHANNEL_MAX_CAPACITY + 1, &cid), ASX_E_INVALID_ARGUMENT);
 }
 
@@ -89,10 +90,10 @@ TEST(channel_double_close_sender) {
     asx_region_id rid;
     asx_channel_id cid;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_channel_reset();
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_channel_create(rid, 16, &cid), ASX_OK);
 
     ASSERT_EQ(asx_channel_close_sender(cid), ASX_OK);
@@ -104,10 +105,10 @@ TEST(channel_double_close_receiver) {
     asx_region_id rid;
     asx_channel_id cid;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_channel_reset();
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_channel_create(rid, 16, &cid), ASX_OK);
 
     ASSERT_EQ(asx_channel_close_receiver(cid), ASX_OK);
@@ -115,14 +116,14 @@ TEST(channel_double_close_receiver) {
 }
 
 TEST(channel_close_sender_invalid_handle) {
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_channel_reset();
 
     ASSERT_EQ(asx_channel_close_sender(ASX_INVALID_ID), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(channel_close_receiver_invalid_handle) {
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_channel_reset();
 
     ASSERT_EQ(asx_channel_close_receiver(ASX_INVALID_ID), ASX_E_INVALID_ARGUMENT);
@@ -137,10 +138,10 @@ TEST(channel_reserve_after_sender_close) {
     asx_channel_id cid;
     asx_send_permit permit;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_channel_reset();
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_channel_create(rid, 16, &cid), ASX_OK);
     ASSERT_EQ(asx_channel_close_sender(cid), ASX_OK);
 
@@ -153,10 +154,10 @@ TEST(channel_reserve_after_receiver_close) {
     asx_channel_id cid;
     asx_send_permit permit;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_channel_reset();
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_channel_create(rid, 16, &cid), ASX_OK);
     ASSERT_EQ(asx_channel_close_receiver(cid), ASX_OK);
 
@@ -166,7 +167,7 @@ TEST(channel_reserve_after_receiver_close) {
 
 TEST(channel_recv_invalid_handle) {
     uint64_t val;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_channel_reset();
 
     ASSERT_EQ(asx_channel_try_recv(ASX_INVALID_ID, &val), ASX_E_INVALID_ARGUMENT);
@@ -177,10 +178,10 @@ TEST(channel_recv_empty_open) {
     asx_channel_id cid;
     uint64_t val;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_channel_reset();
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_channel_create(rid, 16, &cid), ASX_OK);
 
     /* Recv on empty open channel → would block */
@@ -192,10 +193,10 @@ TEST(channel_recv_empty_sender_closed) {
     asx_channel_id cid;
     uint64_t val;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_channel_reset();
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_channel_create(rid, 16, &cid), ASX_OK);
     ASSERT_EQ(asx_channel_close_sender(cid), ASX_OK);
 
@@ -207,10 +208,10 @@ TEST(channel_get_state_null) {
     asx_region_id rid;
     asx_channel_id cid;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_channel_reset();
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_channel_create(rid, 16, &cid), ASX_OK);
 
     ASSERT_EQ(asx_channel_get_state(cid, NULL), ASX_E_INVALID_ARGUMENT);
@@ -220,10 +221,10 @@ TEST(channel_queue_len_null) {
     asx_region_id rid;
     asx_channel_id cid;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_channel_reset();
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_channel_create(rid, 16, &cid), ASX_OK);
 
     ASSERT_EQ(asx_channel_queue_len(cid, NULL), ASX_E_INVALID_ARGUMENT);
@@ -231,7 +232,7 @@ TEST(channel_queue_len_null) {
 
 TEST(channel_reserve_invalid_handle) {
     asx_send_permit permit;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_channel_reset();
 
     ASSERT_EQ(asx_channel_try_reserve(ASX_INVALID_ID, &permit), ASX_E_INVALID_ARGUMENT);
@@ -243,10 +244,10 @@ TEST(channel_capacity_exhaustion) {
     asx_send_permit permits[3];
     asx_send_permit overflow;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_channel_reset();
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     /* Capacity 2: can reserve 2, third fails */
     ASSERT_EQ(asx_channel_create(rid, 2, &cid), ASX_OK);
 
@@ -264,12 +265,12 @@ TEST(channel_capacity_exhaustion) {
  * =================================================================== */
 
 TEST(cancel_invalid_handle) {
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_task_cancel(ASX_INVALID_ID, ASX_CANCEL_USER), ASX_E_NOT_FOUND);
 }
 
 TEST(cancel_with_origin_invalid_handle) {
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_task_cancel_with_origin(ASX_INVALID_ID, ASX_CANCEL_USER, ASX_INVALID_ID,
                                           ASX_INVALID_ID),
               ASX_E_NOT_FOUND);
@@ -277,18 +278,18 @@ TEST(cancel_with_origin_invalid_handle) {
 
 TEST(checkpoint_invalid_handle) {
     asx_checkpoint_result cr;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_checkpoint(ASX_INVALID_ID, &cr), ASX_E_NOT_FOUND);
 }
 
 TEST(finalize_invalid_handle) {
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_task_finalize(ASX_INVALID_ID), ASX_E_NOT_FOUND);
 }
 
 TEST(cancel_phase_invalid_handle) {
     asx_cancel_phase phase;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_task_get_cancel_phase(ASX_INVALID_ID, &phase), ASX_E_NOT_FOUND);
 }
 
@@ -298,7 +299,7 @@ TEST(cancel_phase_invalid_handle) {
 
 TEST(scheduler_invalid_region) {
     asx_budget budget = asx_budget_from_polls(10);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_scheduler_run(ASX_INVALID_ID, &budget), ASX_E_NOT_FOUND);
 }
 
@@ -308,14 +309,14 @@ TEST(scheduler_invalid_region) {
 
 TEST(drain_invalid_region) {
     asx_budget budget = asx_budget_from_polls(10);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_region_drain(ASX_INVALID_ID, &budget), ASX_E_NOT_FOUND);
 }
 
 TEST(drain_null_budget) {
     asx_region_id rid;
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_region_drain(rid, NULL), ASX_E_INVALID_ARGUMENT);
 }
 
@@ -349,9 +350,9 @@ TEST(outcome_before_completion_rejected) {
     asx_outcome out;
     asx_budget budget;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
 
     /* Before any poll — task is Created */
@@ -373,9 +374,9 @@ TEST(task_arena_exhaustion) {
     asx_task_id overflow;
     uint32_t i;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     for (i = 0; i < ASX_MAX_TASKS; i++) {
         ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tids[i]), ASX_OK);
@@ -390,12 +391,14 @@ TEST(region_arena_exhaustion) {
     asx_region_id overflow;
     uint32_t i;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    for (i = 0; i < ASX_MAX_REGIONS; i++) { ASSERT_EQ(asx_region_open(&rids[i]), ASX_OK); }
+    for (i = 0; i < ASX_MAX_REGIONS; i++) {
+        ASSERT_EQ(asx_region_open(test_runtime(), &rids[i]), ASX_OK);
+    }
 
     /* One more should fail */
-    ASSERT_NE(asx_region_open(&overflow), ASX_OK);
+    ASSERT_NE(asx_region_open(test_runtime(), &overflow), ASX_OK);
 }
 
 /* ===================================================================
@@ -432,7 +435,7 @@ TEST(cancel_strengthen_equal_severity) {
  * =================================================================== */
 
 TEST(quiescence_check_invalid_region) {
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_quiescence_check(ASX_INVALID_ID), ASX_E_NOT_FOUND);
 }
 
@@ -441,9 +444,9 @@ TEST(quiescence_fails_before_drain) {
     asx_task_id tid;
     asx_budget budget;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
 
     /* Run one poll (task is Running but not done) */
@@ -462,7 +465,7 @@ TEST(misuse_errors_are_deterministic) {
     asx_task_id tid_out;
     asx_status s1, s2;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     /* Same invalid operation → same error code both times */
     s1 = asx_task_spawn(ASX_INVALID_ID, poll_pending, NULL, &tid_out);

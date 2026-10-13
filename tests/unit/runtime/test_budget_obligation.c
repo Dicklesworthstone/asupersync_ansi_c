@@ -148,7 +148,7 @@ TEST(non_holder_cannot_resolve_an_obligation_but_its_owner_can) {
     setup();
     memset(&p, 0, sizeof(p));
     p.owner_status = ASX_E_PENDING;
-    ASSERT_EQ(asx_region_open(&p.region), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &p.region), ASX_OK);
     ASSERT_EQ(asx_task_spawn(p.region, poll_authority_owner, &p, &p.owner), ASX_OK);
     ASSERT_EQ(asx_task_spawn(p.region, poll_authority_thief, &p, &thief), ASX_OK);
     run = asx_budget_from_polls(20u);
@@ -299,7 +299,7 @@ static void check_handoff(int different_region, int full_destination, int lab) {
     p.destination_status = ASX_E_PENDING;
     p.blocker = ASX_INVALID_ID;
     p.hold_blocker = full_destination;
-    ASSERT_EQ(asx_region_open(&root), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &root), ASX_OK);
     ASSERT_EQ(asx_region_open_child(root, &p.source_region), ASX_OK);
     if (different_region) {
         ASSERT_EQ(asx_region_open_child(root, &p.destination_region), ASX_OK);
@@ -584,7 +584,7 @@ static void run_handoff_refusal(handoff_refusal_kind kind, asx_status expected) 
     p.blocker_status = ASX_E_PENDING;
     if (kind == REFUSE_STALE_OBLIGATION) {
         arena_fill fill;
-        ASSERT_EQ(asx_region_open(&old_region), ASX_OK);
+        ASSERT_EQ(asx_region_open(&g_rt, &old_region), ASX_OK);
         /* Fill the arena with resolved records. The real owner's next
          * reservation reclaims and reuses slot zero without resetting. */
         fill.region = old_region;
@@ -593,7 +593,7 @@ static void run_handoff_refusal(handoff_refusal_kind kind, asx_status expected) 
         p.stale_obligation = fill.first;
         ASSERT_EQ(asx_runtime_obligation_count(&g_rt), ASX_MAX_OBLIGATIONS);
     }
-    ASSERT_EQ(asx_region_open(&root), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &root), ASX_OK);
     ASSERT_EQ(asx_region_open_child(root, &p.source_region), ASX_OK);
     ASSERT_EQ(asx_region_open_child(root, &p.destination_region), ASX_OK);
     if (kind == REFUSE_FULL_TARGET_QUOTA) {
@@ -718,7 +718,7 @@ TEST(host_raw_resolution_of_a_held_credit_is_failure_atomic) {
     setup();
     memset(&p, 0, sizeof(p));
     p.owner_status = ASX_E_PENDING;
-    ASSERT_EQ(asx_region_open(&p.region), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &p.region), ASX_OK);
     ASSERT_EQ(asx_task_spawn(p.region, poll_authority_owner, &p, &p.owner), ASX_OK);
     run = asx_budget_from_polls(8u);
     ASSERT_EQ(asx_scheduler_run(p.region, &run), ASX_E_WOULD_BLOCK);
@@ -765,8 +765,8 @@ TEST(task_raw_resolution_of_another_regions_credit_is_failure_atomic) {
     setup();
     memset(&p, 0, sizeof(p));
     p.holder_status = ASX_E_PENDING;
-    ASSERT_EQ(asx_region_open(&p.source_region), ASX_OK);
-    ASSERT_EQ(asx_region_open(&p.caller_region), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &p.source_region), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &p.caller_region), ASX_OK);
     ASSERT_EQ(asx_task_spawn(p.source_region, poll_wrong_region_holder, &p, &holder), ASX_OK);
     ASSERT_EQ(asx_obligation_reserve_ex(p.source_region, ASX_OBLIGATION_KIND_GENERIC, holder,
                                         &p.obligation),
@@ -827,7 +827,7 @@ TEST(handoff_uses_no_extra_slot_when_the_obligation_arena_is_full) {
     memset(&holder, 0, sizeof(holder));
     p.probe_full_arena = 1;
     p.blocker = ASX_INVALID_ID;
-    ASSERT_EQ(asx_region_open(&root), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &root), ASX_OK);
     ASSERT_EQ(asx_region_open_child(root, &p.source_region), ASX_OK);
     ASSERT_EQ(asx_region_open_child(root, &p.destination_region), ASX_OK);
     /* Spawned first, so its reservations fill the arena before the source
@@ -876,7 +876,7 @@ TEST(deadline_cancels_parked_task_on_virtual_time) {
     setup();
     memset(&p, 0, sizeof(p));
     p.park = 1;
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     tb = asx_budget_infinite();
     tb.deadline = asx_runtime_virtual_now() + 5u * MS;
     ASSERT_EQ(asx_task_spawn_with_budget(r, poll_probe, &p, &tb, &t), ASX_OK);
@@ -903,7 +903,7 @@ TEST(expired_deadline_cancels_before_first_poll) {
     setup();
     memset(&p, 0, sizeof(p));
     asx_runtime_virtual_advance(10u * MS);
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     tb = asx_budget_infinite();
     tb.deadline = 1u * MS;
     ASSERT_EQ(asx_task_spawn_with_budget(r, poll_probe, &p, &tb, &t), ASX_OK);
@@ -924,7 +924,7 @@ TEST(poll_quota_cancels_after_quota_polls) {
 
     setup();
     memset(&p, 0, sizeof(p));
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     tb = asx_budget_from_polls(3);
     ASSERT_EQ(asx_task_spawn_with_budget(r, poll_probe, &p, &tb, &t), ASX_OK);
     run = asx_budget_from_polls(100);
@@ -946,7 +946,7 @@ TEST(unbounded_poll_quota_is_not_consumed) {
     asx_budget left;
 
     setup();
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_complete, NULL, &t), ASX_OK);
     run = asx_budget_from_polls(100);
     ASSERT_EQ(asx_scheduler_run(r, &run), ASX_OK);
@@ -999,7 +999,7 @@ static void run_spent(spent_state *s, uint32_t quota) {
     setup();
     tb = asx_budget_from_polls(quota);
     run = asx_budget_from_polls(100);
-    st = asx_region_open(&r);
+    st = asx_region_open(&g_rt, &r);
     if (st == ASX_OK) st = asx_task_spawn_with_budget(r, poll_spent, s, &tb, &t);
     if (st == ASX_OK) st = asx_scheduler_run(r, &run);
     (void)st;
@@ -1058,7 +1058,7 @@ TEST(cost_quota_spent_to_zero_cancels_at_the_next_checkpoint) {
     setup();
     memset(&p, 0, sizeof(p));
     p.cost = 5u;
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     tb = asx_budget_infinite();
     tb.cost_quota = 10u;
     ASSERT_EQ(asx_task_spawn_with_budget(r, poll_probe, &p, &tb, &t), ASX_OK);
@@ -1080,7 +1080,7 @@ TEST(cost_charge_the_quota_cannot_cover_is_refused_and_cancels_nothing) {
     /* Rust's Budget::consume_cost (types/budget.rs:596-625): refused, the
      * quota unchanged, and no cancel (a later checkpoint finds 2, not 0). */
     setup();
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     tb = asx_budget_infinite();
     tb.cost_quota = 2u;
     ASSERT_EQ(asx_task_spawn_with_budget(r, poll_complete, NULL, &tb, &t), ASX_OK);
@@ -1142,7 +1142,7 @@ TEST(spawned_child_inherits_the_quota_until_the_cleanup_phase_starts) {
 
     setup();
     memset(&s, 0, sizeof(s));
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     s.region = r;
     tb = asx_budget_from_polls(5);
     ASSERT_EQ(asx_task_spawn_with_budget(r, poll_inheritor, &s, &tb, &t), ASX_OK);
@@ -1162,7 +1162,7 @@ TEST(cleanup_spawn_inherits_without_the_parents_cleanup_poll_quota) {
     setup();
     memset(&s, 0, sizeof(s));
     s.cleanup_only = 1;
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     s.region = r;
     tb = asx_budget_from_polls(5);
     ASSERT_EQ(asx_task_spawn_with_budget(r, poll_inheritor, &s, &tb, &t), ASX_OK);
@@ -1211,7 +1211,7 @@ TEST(nested_region_budgets_equal_their_meet) {
             asx_budget got_nested;
             asx_budget got_single;
             setup();
-            ASSERT_EQ(asx_region_open(&root), ASX_OK);
+            ASSERT_EQ(asx_region_open(&g_rt, &root), ASX_OK);
             ASSERT_EQ(asx_region_open_child_with_budget(root, &s[i], &outer), ASX_OK);
             ASSERT_EQ(asx_region_open_child_with_budget(outer, &s[j], &nested), ASX_OK);
             ASSERT_EQ(asx_region_open_child_with_budget(root, &met, &single), ASX_OK);
@@ -1260,7 +1260,7 @@ TEST(spawn_budget_from_a_task_keeps_its_priority_and_clamps_the_rest) {
 
     setup();
     memset(&s, 0, sizeof(s));
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     s.region = r;
     tb = asx_budget_new(); /* priority 128 */
     tb.deadline = asx_runtime_virtual_now() + 10u * MS;
@@ -1293,7 +1293,7 @@ TEST(budgets_tighten_down_the_region_tree) {
     asx_budget got;
 
     setup();
-    ASSERT_EQ(asx_region_open(&root), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &root), ASX_OK);
     ASSERT_EQ(asx_region_get_budget(root, &got), ASX_OK);
     ASSERT_EQ(got.deadline, ASX_TIME_INFINITE);
     ASSERT_EQ(got.poll_quota, UINT32_MAX);
@@ -1365,7 +1365,7 @@ TEST(region_deadline_bounds_tasks_spawned_into_it_from_a_task) {
     memset(&o, 0, sizeof(o));
     host_probe.park = 1;
     inner_probe.park = 1;
-    ASSERT_EQ(asx_region_open(&root), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &root), ASX_OK);
     b = asx_budget_new();
     b.deadline = asx_runtime_virtual_now() + 3u * MS;
 
@@ -1406,7 +1406,7 @@ TEST(reserve_ex_records_kind_and_holder) {
     asx_budget run;
 
     setup();
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_commit_existing, &o, &t), ASX_OK);
     ASSERT_EQ(asx_obligation_reserve_ex(r, ASX_OBLIGATION_KIND_SEND_PERMIT, t, &o), ASX_OK);
     ASSERT_EQ(asx_obligation_get_info(o, &info), ASX_OK);
@@ -1434,7 +1434,7 @@ TEST(reserve_ex_validates_arguments) {
     asx_budget run;
 
     setup();
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_obligation_reserve_ex(r, (asx_obligation_kind)99, ASX_INVALID_ID, &o),
               ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_obligation_reserve_ex(r, ASX_OBLIGATION_KIND_LEASE, ASX_INVALID_ID, NULL),
@@ -1486,8 +1486,8 @@ TEST(reserve_holder_must_belong_to_the_region) {
     asx_budget run;
 
     setup();
-    ASSERT_EQ(asx_region_open(&a), ASX_OK);
-    ASSERT_EQ(asx_region_open(&b), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &a), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &b), ASX_OK);
     ASSERT_EQ(asx_task_spawn(a, poll_commit_existing, &o, &t), ASX_OK);
     ASSERT_EQ(asx_obligation_reserve_ex(b, ASX_OBLIGATION_KIND_ACK, t, &o), ASX_E_INVALID_STATE);
     ASSERT_EQ(asx_obligation_reserve_ex(a, ASX_OBLIGATION_KIND_ACK, t, &o), ASX_OK);
@@ -1518,7 +1518,7 @@ TEST(reserve_outside_a_poll_is_refused_and_creates_nothing) {
     uint64_t digest_before;
 
     setup();
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     count_before = asx_runtime_obligation_count(&g_rt);
     emitted_before = asx_trace_emitted_total();
     digest_before = asx_trace_digest();
@@ -1548,7 +1548,7 @@ TEST(reserve_in_poll_binds_current_task_and_leaks_under_log) {
 
     ASSERT_EQ(setup_with_policy(ASX_LEAK_LOG, NULL), ASX_OK);
     memset(&s, 0, sizeof(s));
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     s.region = r;
     s.ob = ASX_INVALID_ID;
     ASSERT_EQ(asx_task_spawn(r, poll_reserver, &s, &t), ASX_OK);
@@ -1592,7 +1592,7 @@ TEST(drop_leaks_the_obligation_at_once_not_at_completion) {
 
     ASSERT_EQ(setup_with_policy(ASX_LEAK_LOG, NULL), ASX_OK);
     memset(&s, 0, sizeof(s));
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     s.region = r;
     ASSERT_EQ(asx_task_spawn(r, poll_dropper, &s, &t), ASX_OK);
     run = asx_budget_from_polls(10);
@@ -1615,7 +1615,7 @@ TEST(drop_under_recover_aborts_with_error) {
 
     ASSERT_EQ(setup_with_policy(ASX_LEAK_RECOVER, NULL), ASX_OK);
     memset(&s, 0, sizeof(s));
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     s.region = r;
     ASSERT_EQ(asx_task_spawn(r, poll_dropper, &s, &t), ASX_OK);
     run = asx_budget_from_polls(10);
@@ -1641,7 +1641,7 @@ TEST(drop_rejects_a_resolved_or_unknown_obligation) {
     asx_region_id r;
 
     setup();
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(test_run_in_task(r, drop_resolved_or_unknown, &r), ASX_OK);
     ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)0u);
 }
@@ -1656,7 +1656,7 @@ TEST(cancelled_holder_leaks_its_unresolved_obligation) {
     setup();
     memset(&s, 0, sizeof(s));
     s.park = 1;
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     s.region = r;
     s.ob = ASX_INVALID_ID;
     ASSERT_EQ(asx_task_spawn(r, poll_reserver, &s, &t), ASX_OK);
@@ -1685,7 +1685,7 @@ TEST(recover_policy_aborts_leaked_obligation) {
 
     ASSERT_EQ(setup_with_policy(ASX_LEAK_RECOVER, NULL), ASX_OK);
     memset(&s, 0, sizeof(s));
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     s.region = r;
     s.ob = ASX_INVALID_ID;
     ASSERT_EQ(asx_task_spawn(r, poll_reserver, &s, &t), ASX_OK);
@@ -1708,7 +1708,7 @@ TEST(panic_policy_routes_leak_through_containment) {
 
     ASSERT_EQ(setup_with_policy(ASX_LEAK_PANIC, NULL), ASX_OK);
     memset(&s, 0, sizeof(s));
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     s.region = r;
     s.ob = ASX_INVALID_ID;
     ASSERT_EQ(asx_task_spawn(r, poll_reserver, &s, &t), ASX_OK);
@@ -1742,7 +1742,7 @@ TEST(leak_escalation_switches_policy_at_threshold) {
     esc.escalate_to = ASX_LEAK_RECOVER;
     ASSERT_EQ(setup_with_policy(ASX_LEAK_SILENT, &esc), ASX_OK);
     memset(s, 0, sizeof(s));
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     for (i = 0; i < 3u; i++) {
         s[i].region = r;
         s[i].ob = ASX_INVALID_ID;
@@ -1782,7 +1782,7 @@ TEST(leak_escalation_threshold_zero_escalates_the_first_leak) {
         esc.escalate_to = ASX_LEAK_RECOVER;
         ASSERT_EQ(setup_with_policy(ASX_LEAK_SILENT, &esc), ASX_OK);
         memset(&s, 0, sizeof(s));
-        ASSERT_EQ(asx_region_open(&r), ASX_OK);
+        ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
         s.region = r;
         s.ob = ASX_INVALID_ID;
         ASSERT_EQ(asx_task_spawn(r, poll_reserver, &s, &t), ASX_OK);
@@ -1802,14 +1802,14 @@ TEST(runtime_reset_clears_leak_count) {
 
     setup();
     memset(&s, 0, sizeof(s));
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     s.region = r;
     s.ob = ASX_INVALID_ID;
     ASSERT_EQ(asx_task_spawn(r, poll_reserver, &s, &t), ASX_OK);
     run = asx_budget_from_polls(10);
     ASSERT_EQ(asx_scheduler_run(r, &run), ASX_OK);
     ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)1u);
-    asx_runtime_reset();
+    asx_runtime_reset(&g_rt);
     ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)0u);
 }
 
@@ -1850,7 +1850,7 @@ TEST(region_close_audit_leaks_obligations_still_reserved) {
     asx_budget run;
 
     ASSERT_EQ(setup_with_policy(ASX_LEAK_LOG, NULL), ASX_OK);
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     hold_reserved(r, 2u, ob);
     if (test_current_failed) return;
     ASSERT_EQ(asx_region_audit_leaks_internal(r), ASX_OK);
@@ -1880,7 +1880,7 @@ TEST(region_close_leak_audit_is_one_batch) {
     esc.threshold = 2u;
     esc.escalate_to = ASX_LEAK_RECOVER;
     ASSERT_EQ(setup_with_policy(ASX_LEAK_SILENT, &esc), ASX_OK);
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     hold_reserved(r, 2u, ob);
     if (test_current_failed) return;
     ASSERT_EQ(asx_region_audit_leaks_internal(r), ASX_OK);
@@ -1934,7 +1934,7 @@ TEST(leak_policy_matrix_follows_rusts_count_then_pick_rule) {
                     ASSERT_EQ(setup_with_policy(pairs[p].base, &esc), ASX_OK);
 
                     if (priors[c] > 0u) {
-                        ASSERT_EQ(asx_region_open(&prior_region), ASX_OK);
+                        ASSERT_EQ(asx_region_open(&g_rt, &prior_region), ASX_OK);
                         hold_reserved(prior_region, priors[c], ob);
                         if (test_current_failed) return;
                         ASSERT_EQ(asx_region_audit_leaks_internal(prior_region), ASX_OK);
@@ -1943,7 +1943,7 @@ TEST(leak_policy_matrix_follows_rusts_count_then_pick_rule) {
                         ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)priors[c]);
                     }
 
-                    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+                    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
                     hold_reserved(r, batches[b], ob);
                     if (test_current_failed) return;
                     ASSERT_EQ(asx_region_audit_leaks_internal(r), ASX_OK);
@@ -1979,7 +1979,7 @@ TEST(region_close_leak_audit_under_panic_fails_before_closing) {
     asx_budget run;
 
     ASSERT_EQ(setup_with_policy(ASX_LEAK_PANIC, NULL), ASX_OK);
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     hold_reserved(r, 1u, &a);
     if (test_current_failed) return;
     ASSERT_EQ(asx_region_audit_leaks_internal(r), ASX_E_UNRESOLVED_OBLIGATIONS);

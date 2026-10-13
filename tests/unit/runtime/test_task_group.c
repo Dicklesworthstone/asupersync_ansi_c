@@ -178,7 +178,7 @@ TEST(join_all_waits_for_every_member) {
     member_init(0, 3, ASX_OK);
     member_init(1, 1, ASX_OK);
     member_init(2, 2, ASX_OK);
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(spawn_group(r, ASX_TASK_GROUP_JOIN_ALL, 0, 3, &owner), ASX_OK);
     run = asx_budget_from_polls(200);
     ASSERT_EQ(asx_scheduler_run(r, &run), ASX_OK);
@@ -205,7 +205,7 @@ TEST(join_all_reports_most_severe_failure) {
     member_init(0, 1, ASX_OK);
     member_init(1, 2, ASX_E_DISCONNECTED);
     member_init(2, 3, ASX_OK);
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(spawn_group(r, ASX_TASK_GROUP_JOIN_ALL, 0, 3, &owner), ASX_OK);
     ASSERT_TRUE(run_until_owner_done(r));
     ASSERT_EQ(g_owner.result, ASX_E_DISCONNECTED);
@@ -222,7 +222,7 @@ TEST(empty_join_all_resolves_immediately) {
     asx_budget run;
 
     setup();
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(spawn_group(r, ASX_TASK_GROUP_JOIN_ALL, 0, 0, &owner), ASX_OK);
     run = asx_budget_from_polls(10);
     ASSERT_EQ(asx_scheduler_run(r, &run), ASX_OK);
@@ -248,7 +248,7 @@ TEST(race_cancels_and_drains_losers_before_resolving) {
     member_init(2, 0, ASX_OK);                 /* parks until cancelled */
     g_m[0].cleanup_polls = 3;
     g_m[2].cleanup_polls = 2;
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(spawn_group(r, ASX_TASK_GROUP_RACE, 0, 3, &owner), ASX_OK);
     run = asx_budget_from_polls(200);
     ASSERT_EQ(asx_scheduler_run(r, &run), ASX_OK);
@@ -284,7 +284,7 @@ TEST(race_winner_failure_is_group_result) {
     setup();
     member_init(0, 1, ASX_E_DISCONNECTED);
     member_init(1, 0, ASX_OK);
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(spawn_group(r, ASX_TASK_GROUP_RACE, 0, 2, &owner), ASX_OK);
     ASSERT_TRUE(run_until_owner_done(r));
     ASSERT_EQ(g_owner.result, ASX_E_DISCONNECTED);
@@ -305,7 +305,7 @@ TEST(race_loser_abort_uses_default_attribution) {
     asx_status status;
 
     setup();
-    ASSERT_EQ(asx_region_open(&root), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &root), ASX_OK);
     ASSERT_EQ(asx_region_open_child(root, &r), ASX_OK);
     member_init(0, 1, ASX_OK);
     member_init(1, 0, ASX_OK);
@@ -350,7 +350,7 @@ TEST(race_loser_abort_preserves_equal_severity_fail_fast) {
     asx_status status;
 
     setup();
-    ASSERT_EQ(asx_region_open(&root), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &root), ASX_OK);
     ASSERT_EQ(asx_region_open_child(root, &r), ASX_OK);
     member_init(0, 1, ASX_OK);
     member_init(1, 0, ASX_OK);
@@ -402,7 +402,7 @@ TEST(race_same_round_completion_picks_lowest_index) {
     member_init(0, 5, ASX_OK);
     member_init(1, 5, ASX_OK);
     member_init(2, 5, ASX_OK);
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(spawn_group(r, ASX_TASK_GROUP_RACE, 0, 3, &owner), ASX_OK);
     run = asx_budget_from_polls(200);
     ASSERT_EQ(asx_scheduler_run(r, &run), ASX_OK);
@@ -419,7 +419,7 @@ TEST(race_loser_obligations_are_leaked_before_resolve) {
     member_init(0, 1, ASX_OK);
     member_init(1, 0, ASX_OK);
     g_m[1].hold_obligation = 1;
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(spawn_group(r, ASX_TASK_GROUP_RACE, 0, 2, &owner), ASX_OK);
     run = asx_budget_from_polls(200);
     ASSERT_EQ(asx_scheduler_run(r, &run), ASX_OK);
@@ -468,7 +468,7 @@ TEST(first_ok_skips_failures) {
     member_init(0, 1, ASX_E_DISCONNECTED);
     member_init(1, 2, ASX_OK);
     member_init(2, 0, ASX_OK);
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(first_ok_group(r, 3, &owner), ASX_OK);
     ASSERT_TRUE(run_until_owner_done(r));
     ASSERT_EQ(g_owner.result, ASX_OK);
@@ -489,7 +489,7 @@ TEST(first_ok_runs_attempts_one_at_a_time) {
     setup();
     member_init(0, 5, ASX_E_DISCONNECTED);
     member_init(1, 1, ASX_OK);
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(first_ok_group(r, 2, &owner), ASX_OK);
     ASSERT_TRUE(run_until_owner_done(r));
     ASSERT_EQ(g_owner.result, ASX_OK);
@@ -508,7 +508,7 @@ TEST(first_ok_owner_cancel_reaches_the_running_attempt) {
     setup();
     member_init(0, 0, ASX_OK); /* parks until cancelled */
     member_init(1, 1, ASX_OK);
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(first_ok_group(r, 2, &owner), ASX_OK);
     run = asx_budget_from_polls(50);
     st = asx_scheduler_run(r, &run);
@@ -531,7 +531,7 @@ TEST(first_ok_api) {
     asx_task_group g;
 
     setup();
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_group_init(&g, ASX_TASK_GROUP_FIRST_OK, 0), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_member, &g_m[0], &t), ASX_OK);
     ASSERT_EQ(asx_task_group_add(&g, t), ASX_E_INVALID_STATE);
@@ -541,7 +541,7 @@ TEST(first_ok_api) {
     ASSERT_EQ(asx_task_group_add_attempt(&g, r, poll_member, &g_m[1]), ASX_E_INVALID_STATE);
 
     setup();
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(first_ok_group(r, 0, &owner), ASX_OK);
     ASSERT_TRUE(run_until_owner_done(r));
     ASSERT_EQ(g_owner.result, ASX_E_INVALID_ARGUMENT);
@@ -555,7 +555,7 @@ TEST(first_ok_fails_when_every_member_fails) {
     setup();
     member_init(0, 1, ASX_E_DISCONNECTED);
     member_init(1, 2, ASX_E_WOULD_BLOCK);
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(first_ok_group(r, 2, &owner), ASX_OK);
     ASSERT_TRUE(run_until_owner_done(r));
     ASSERT_EQ(g_owner.result, ASX_E_DISCONNECTED);
@@ -575,7 +575,7 @@ TEST(quorum_reached_drains_remaining_members) {
     member_init(1, 0, ASX_OK);
     member_init(2, 1, ASX_OK);
     member_init(3, 0, ASX_OK);
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(spawn_group(r, ASX_TASK_GROUP_QUORUM, 2, 4, &owner), ASX_OK);
     run = asx_budget_from_polls(200);
     ASSERT_EQ(asx_scheduler_run(r, &run), ASX_OK);
@@ -598,7 +598,7 @@ TEST(quorum_impossible_resolves_early) {
     member_init(1, 2, ASX_E_DISCONNECTED);
     member_init(2, 0, ASX_OK);
     member_init(3, 0, ASX_OK);
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     /* 3-of-4 is impossible after two failures. */
     ASSERT_EQ(spawn_group(r, ASX_TASK_GROUP_QUORUM, 3, 4, &owner), ASX_OK);
     ASSERT_TRUE(run_until_owner_done(r));
@@ -617,7 +617,7 @@ TEST(quorum_reports_a_panic_even_when_met) {
     member_init(0, 1, ASX_OK);
     g_m[0].panic = 1;
     member_init(1, 2, ASX_OK);
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(spawn_group(r, ASX_TASK_GROUP_QUORUM, 1, 2, &owner), ASX_OK);
     ASSERT_TRUE(run_until_owner_done(r));
     ASSERT_EQ(asx_task_group_ok_count(&g_owner.group), 1u);
@@ -634,7 +634,7 @@ TEST(quorum_owner_cancel_drains_with_the_owner_reason) {
     setup();
     member_init(0, 0, ASX_OK);
     member_init(1, 0, ASX_OK);
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(spawn_group(r, ASX_TASK_GROUP_QUORUM, 2, 2, &owner), ASX_OK);
     run = asx_budget_from_polls(50);
     ASSERT_EQ(asx_scheduler_run(r, &run), ASX_E_WOULD_BLOCK);
@@ -660,7 +660,7 @@ TEST(quorum_checkpoint_raises_the_owner_poll_quota) {
     member_init(0, 1, ASX_E_TIMED_OUT);
     member_init(1, 0, ASX_OK);
     member_init(2, 0, ASX_OK);
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     memset(&g_owner, 0, sizeof(g_owner));
     ASSERT_EQ(asx_task_group_init(&g_owner.group, ASX_TASK_GROUP_QUORUM, 1), ASX_OK);
     /* Poll 1 starts waiting; poll 2, woken by member 0's failure, takes
@@ -726,7 +726,7 @@ static asx_status run_refused_owner(int lab, refused_owner *o) {
     asx_status st;
     setup();
     st = lab ? asx_scheduler_use_lab_dispatch(3u) : ASX_OK;
-    if (st == ASX_OK) st = asx_region_open(&r);
+    if (st == ASX_OK) st = asx_region_open(&g_rt, &r);
     memset(o, 0, sizeof(*o));
     if (st == ASX_OK) st = asx_region_open_child(r, &o->closed);
     memset(&reason, 0, sizeof(reason));
@@ -787,7 +787,7 @@ TEST(quorum_rejects_invalid_threshold_after_draining) {
     setup();
     member_init(0, 0, ASX_OK);
     member_init(1, 0, ASX_OK);
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(spawn_group(r, ASX_TASK_GROUP_QUORUM, 3, 2, &owner), ASX_OK);
     run = asx_budget_from_polls(200);
     ASSERT_EQ(asx_scheduler_run(r, &run), ASX_OK);
@@ -814,7 +814,7 @@ TEST(owner_cancel_drains_race_members_with_the_owner_reason) {
     member_init(0, 0, ASX_OK);
     member_init(1, 0, ASX_OK);
     g_m[1].cleanup_polls = 2;
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(spawn_group(r, ASX_TASK_GROUP_RACE, 0, 2, &owner), ASX_OK);
     run = asx_budget_from_polls(200);
     ASSERT_EQ(asx_scheduler_run(r, &run), ASX_E_WOULD_BLOCK);
@@ -844,7 +844,7 @@ TEST(deadline_times_out_and_drains_members) {
     setup();
     member_init(0, 0, ASX_OK);
     member_init(1, 50, ASX_OK);
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(spawn_group(r, ASX_TASK_GROUP_RACE, 0, 2, &owner), ASX_OK);
     ASSERT_EQ(asx_task_group_set_deadline(&g_owner.group, asx_runtime_virtual_now() + 5u * MS),
               ASX_OK);
@@ -867,7 +867,7 @@ TEST(deadline_zero_is_due_at_once) {
     setup();
     member_init(0, 0, ASX_OK);
     member_init(1, 50, ASX_OK);
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(spawn_group(r, ASX_TASK_GROUP_RACE, 0, 2, &owner), ASX_OK);
     ASSERT_EQ(asx_task_group_set_deadline(&g_owner.group, 0u), ASX_OK);
     run = asx_budget_from_polls(200);
@@ -887,7 +887,7 @@ TEST(infinite_deadline_clears_the_deadline) {
     setup();
     member_init(0, 0, ASX_OK);
     member_init(1, 50, ASX_OK);
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(spawn_group(r, ASX_TASK_GROUP_RACE, 0, 2, &owner), ASX_OK);
     ASSERT_EQ(asx_task_group_set_deadline(&g_owner.group, asx_runtime_virtual_now() + 5u * MS),
               ASX_OK);
@@ -910,7 +910,7 @@ TEST(quorum_deadline_reports_threshold_timeout) {
     member_init(0, 1, ASX_OK);
     member_init(1, 0, ASX_OK);
     member_init(2, 0, ASX_OK);
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(spawn_group(r, ASX_TASK_GROUP_QUORUM, 2, 3, &owner), ASX_OK);
     ASSERT_EQ(asx_task_group_set_deadline(&g_owner.group, asx_runtime_virtual_now() + 5u * MS),
               ASX_OK);
@@ -928,7 +928,7 @@ TEST(explicit_group_cancel_drains_and_resolves_cancelled) {
     setup();
     member_init(0, 0, ASX_OK);
     member_init(1, 0, ASX_OK);
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(spawn_group(r, ASX_TASK_GROUP_JOIN_ALL, 0, 2, &owner), ASX_OK);
     run = asx_budget_from_polls(200);
     ASSERT_EQ(asx_scheduler_run(r, &run), ASX_E_WOULD_BLOCK);
@@ -969,7 +969,7 @@ TEST(group_api_validation) {
     ASSERT_EQ(asx_task_group_winner(&g), -1);
     ASSERT_EQ(asx_task_group_phase_of(&g), ASX_TASK_GROUP_COLLECTING);
 
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_member, &g_m[0], &t), ASX_OK);
     ASSERT_EQ(asx_task_group_add(&g, t), ASX_OK);
     ASSERT_EQ(asx_task_group_add(&g, t), ASX_E_ALREADY_EXISTS);
@@ -1014,7 +1014,7 @@ TEST(race_is_deterministic_across_runs) {
         member_init(1, 4, ASX_OK);
         member_init(2, 4, ASX_OK);
         g_m[0].cleanup_polls = 1;
-        ASSERT_EQ(asx_region_open(&r), ASX_OK);
+        ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
         ASSERT_EQ(spawn_group(r, ASX_TASK_GROUP_RACE, 0, 3, &owner), ASX_OK);
         run = asx_budget_from_polls(200);
         ASSERT_EQ(asx_scheduler_run(r, &run), ASX_OK);

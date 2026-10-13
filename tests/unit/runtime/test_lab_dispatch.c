@@ -107,7 +107,7 @@ TEST(ties_are_broken_by_the_step_value_in_generation_order) {
     ASSERT_EQ(setup(), ASX_OK);
     ASSERT_EQ(asx_scheduler_use_lab_dispatch(42u), ASX_OK);
     order_reset();
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_probe, &a, &t), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_probe, &b, &t), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_probe, &c, &t), ASX_OK);
@@ -145,7 +145,7 @@ TEST(host_tasks_draw_from_rust_detentropy_streams) {
 
     ASSERT_EQ(setup(), ASX_OK);
     ASSERT_EQ(asx_scheduler_use_lab_dispatch(10u), ASX_OK);
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     for (i = 0; i < 3u; i++) ASSERT_EQ(asx_task_spawn(r, poll_probe, &p, &t[i]), ASX_OK);
     for (i = 0; i < 3u; i++) {
         ASSERT_TRUE(entropy_draws(t[i], 2u, 3u, got));
@@ -154,7 +154,7 @@ TEST(host_tasks_draw_from_rust_detentropy_streams) {
 
     ASSERT_EQ(setup(), ASX_OK);
     ASSERT_EQ(asx_scheduler_use_lab_dispatch(42u), ASX_OK);
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     for (i = 0; i < 3u; i++) ASSERT_EQ(asx_task_spawn(r, poll_probe, &p, &t[i]), ASX_OK);
     for (i = 0; i < 3u; i++) {
         ASSERT_TRUE(entropy_draws(t[i], 3u, 2u, got));
@@ -182,7 +182,7 @@ TEST(completed_tasks_free_their_arena_index_for_the_next_task) {
     ASSERT_EQ(setup(), ASX_OK);
     ASSERT_EQ(asx_scheduler_use_lab_dispatch(42u), ASX_OK);
     order_reset();
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_probe, &pa, &a), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_probe, &pb, &b), ASX_OK);
     budget = asx_budget_from_polls(10);
@@ -202,7 +202,7 @@ TEST(completed_tasks_free_their_arena_index_for_the_next_task) {
     ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
 
     ASSERT_EQ(setup(), ASX_OK); /* no lab dispatch */
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_probe, &pb, &b), ASX_OK);
     ASSERT_EQ(asx_task_slot_lookup(b, &slot), ASX_OK);
     i = 7u;
@@ -223,7 +223,7 @@ TEST(cancel_lane_is_served_first) {
     ASSERT_EQ(setup(), ASX_OK);
     ASSERT_EQ(asx_scheduler_use_lab_dispatch(42u), ASX_OK);
     order_reset();
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_probe, &a, &ta), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_probe, &b, &tb), ASX_OK);
     ASSERT_EQ(asx_task_cancel(tb, ASX_CANCEL_USER), ASX_OK);
@@ -317,7 +317,7 @@ static void storm_setup(asx_region_id *r, asx_task_id *parkers, storm_task *task
     memset(g_storm_log, 0, sizeof(g_storm_log));
     g_storm_n = 0;
     asx_wait_queue_init(&g_storm_q, NULL);
-    ASSERT_EQ(asx_region_open(r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, r), ASX_OK);
     for (k = 0; k < STORM_PARKERS; k++) {
         tasks[k].name = (char)('a' + k);
         tasks[k].yields = 0u;
@@ -409,7 +409,7 @@ static int cap_picks_b(uint32_t n, uint64_t r) {
     uint32_t i;
 
     if (setup() != ASX_OK || asx_scheduler_use_lab_dispatch(42u) != ASX_OK) return -1;
-    if (asx_region_open(&reg) != ASX_OK) return -1;
+    if (asx_region_open(&g_rt, &reg) != ASX_OK) return -1;
     if (asx_task_spawn(reg, poll_probe, &pa, &ta) != ASX_OK) return -1;
     if (asx_task_spawn(reg, poll_probe, &pb, &tb) != ASX_OK) return -1;
     if (asx_task_slot_lookup(ta, &sa) != ASX_OK || asx_task_slot_lookup(tb, &sb) != ASX_OK) {
@@ -463,7 +463,7 @@ TEST(auto_advance_moves_the_clock_to_the_next_timer) {
     ASSERT_EQ(setup(), ASX_OK);
     ASSERT_EQ(asx_scheduler_use_lab_dispatch(7u), ASX_OK);
     memset(&s, 0, sizeof(s));
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_sleeper, &s, &t), ASX_OK);
     budget = asx_budget_from_polls(100);
     /* run_until_idle stops with the sleeper parked and the clock at 0. */
@@ -498,7 +498,7 @@ static asx_status quota_reason(int checkpoint, asx_region_id *out_root, asx_canc
     asx_outcome o;
     asx_status st = setup();
     if (st == ASX_OK) st = asx_scheduler_use_lab_dispatch(42u);
-    if (st == ASX_OK) st = asx_region_open(out_root);
+    if (st == ASX_OK) st = asx_region_open(&g_rt, out_root);
     memset(&q, 0, sizeof(q));
     q.checkpoint = checkpoint;
     tb = asx_budget_from_polls(1);
@@ -545,7 +545,7 @@ TEST(dispatch_records_carry_task_lane_step_and_time) {
     ASSERT_EQ(asx_scheduler_use_lab_dispatch(42u), ASX_OK);
     memset(rec, 0, sizeof(rec));
     asx_scheduler_record_dispatches(rec, 3u);
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_probe, &a, &ta), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_probe, &b, &tb), ASX_OK);
     run = asx_budget_from_polls(50);
@@ -578,7 +578,7 @@ static asx_status run_quota_probe(int checkpoint, quota_probe *q, asx_dispatch_r
     asx_status st = setup();
     if (st == ASX_OK) st = asx_scheduler_use_lab_dispatch(42u);
     asx_scheduler_record_dispatches(rec, cap);
-    if (st == ASX_OK) st = asx_region_open(&root);
+    if (st == ASX_OK) st = asx_region_open(&g_rt, &root);
     memset(q, 0, sizeof(*q));
     q->checkpoint = checkpoint;
     tb = asx_budget_from_polls(1);
@@ -641,7 +641,7 @@ static asx_status run_deadline_probe(deadline_probe *d, asx_dispatch_record *rec
     asx_status st = setup();
     if (st == ASX_OK) st = asx_scheduler_use_lab_dispatch(9u);
     asx_scheduler_record_dispatches(rec, cap);
-    if (st == ASX_OK) st = asx_region_open(&r);
+    if (st == ASX_OK) st = asx_region_open(&g_rt, &r);
     b.deadline = 100u;
     if (st == ASX_OK) st = asx_task_spawn_with_budget(r, poll_deadline_probe, d, &b, out_t);
     run = asx_budget_from_polls(50);
@@ -719,7 +719,7 @@ static asx_status run_opener(int lab, int spawn_kid, opener *o) {
     memset(o, 0, sizeof(*o));
     o->spawn_kid = spawn_kid;
     o->child = ASX_INVALID_ID;
-    if (st == ASX_OK) st = asx_region_open(&o->parent);
+    if (st == ASX_OK) st = asx_region_open(&g_rt, &o->parent);
     if (st == ASX_OK) st = asx_task_spawn(o->parent, poll_opener, o, &t);
     budget = asx_budget_from_polls(100);
     if (st == ASX_OK) st = asx_scheduler_run(o->parent, &budget);
@@ -825,7 +825,7 @@ static asx_status run_quota_owner(int lab, quota_owner *o) {
     if (st == ASX_OK && lab) st = asx_scheduler_use_lab_dispatch(42u);
     memset(o, 0, sizeof(*o));
     o->child = ASX_INVALID_ID;
-    if (st == ASX_OK) st = asx_region_open(&o->region);
+    if (st == ASX_OK) st = asx_region_open(&g_rt, &o->region);
     if (st == ASX_OK) {
         st = asx_task_spawn_with_budget(o->region, poll_quota_owner, o, &owner_budget, &t);
     }
@@ -882,7 +882,7 @@ TEST(region_cancel_request_applies_at_the_next_step) {
     ASSERT_EQ(setup(), ASX_OK);
     ASSERT_EQ(asx_scheduler_use_lab_dispatch(3u), ASX_OK);
     memset(&c, 0, sizeof(c));
-    ASSERT_EQ(asx_region_open(&root), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &root), ASX_OK);
     ASSERT_EQ(asx_region_open_child(root, &c.target), ASX_OK);
     ASSERT_EQ(asx_task_spawn(root, poll_canceller, &c, &t), ASX_OK);
     budget = asx_budget_from_polls(100);
@@ -903,7 +903,7 @@ TEST(region_command_queue_full_is_failure_atomic) {
 
     ASSERT_EQ(setup(), ASX_OK);
     ASSERT_EQ(asx_scheduler_use_lab_dispatch(5u), ASX_OK);
-    ASSERT_EQ(asx_region_open(&root), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &root), ASX_OK);
     ASSERT_EQ(asx_region_open_child(root, &child), ASX_OK);
     for (i = 0; i < (uint32_t)ASX_MAX_TASKS + (uint32_t)ASX_MAX_REGIONS; i++) {
         ASSERT_EQ(asx_region_close_request(child), ASX_OK);
@@ -960,7 +960,7 @@ static asx_status run_aborter(int lab, int spawn_child, int twice, aborter *a) {
     memset(a, 0, sizeof(*a));
     a->spawn_child = spawn_child;
     a->twice = twice;
-    if (st == ASX_OK) st = asx_region_open(&a->region);
+    if (st == ASX_OK) st = asx_region_open(&g_rt, &a->region);
     if (st == ASX_OK && !spawn_child) st = asx_task_spawn(a->region, poll_kid, NULL, &a->target);
     if (st == ASX_OK) st = asx_task_spawn(a->region, poll_aborter, a, &t);
     budget = asx_budget_from_polls(100);
@@ -1052,7 +1052,7 @@ TEST(spawn_refusal_reaches_a_join_at_the_next_step) {
     ASSERT_EQ(setup(), ASX_OK);
     ASSERT_EQ(asx_scheduler_use_lab_dispatch(5u), ASX_OK);
     asx_scheduler_record_dispatches(rec, 4u);
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     memset(&f, 0, sizeof(f));
     ASSERT_EQ(asx_region_open_child(r, &f.closed), ASX_OK);
     memset(&reason, 0, sizeof(reason));
@@ -1160,7 +1160,7 @@ TEST(a_timer_wakes_the_waker_it_was_armed_with) {
     ASSERT_EQ(setup(), ASX_OK);
     ASSERT_EQ(asx_scheduler_use_lab_dispatch(5u), ASX_OK);
     order_reset();
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_stale_sleeper, &s, &ts), ASX_OK);
     high.priority = 150u;
     ASSERT_EQ(asx_task_spawn_with_budget(r, poll_stale_sleeper, &m, &high, &tm), ASX_OK);
@@ -1235,7 +1235,7 @@ static asx_status poll_oblig_poster(void *ud, asx_task_id self) {
 
 static asx_status oblig_region(asx_region_id *r) {
     asx_region_limits limits;
-    asx_status st = asx_region_open(r);
+    asx_status st = asx_region_open(&g_rt, r);
     if (st != ASX_OK) return st;
     limits.max_tasks = ASX_REGION_UNLIMITED;
     limits.max_children = ASX_REGION_UNLIMITED;
@@ -1506,7 +1506,7 @@ TEST(spawn_limit_is_checked_at_the_next_step_admission) {
 
     ASSERT_EQ(setup(), ASX_OK);
     ASSERT_EQ(asx_scheduler_use_lab_dispatch(3u), ASX_OK);
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     memset(&a, 0, sizeof(a));
     a.into = r;
     a.spawns = 2u;
@@ -1551,7 +1551,7 @@ TEST(spawn_into_a_region_closed_before_admission_is_refused) {
 
     ASSERT_EQ(setup(), ASX_OK);
     ASSERT_EQ(asx_scheduler_use_lab_dispatch(3u), ASX_OK);
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_region_open_child(r, &c), ASX_OK);
     memset(&a, 0, sizeof(a));
     a.into = c;
@@ -1583,7 +1583,7 @@ TEST(deferred_cleanup_admission_preserves_finalizing_quota_exception) {
     admitter a;
     ASSERT_EQ(setup(), ASX_OK);
     ASSERT_EQ(asx_scheduler_use_lab_dispatch(3u), ASX_OK);
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_region_open_child(r, &c), ASX_OK);
     ASSERT_EQ(asx_region_get_limits(c, &limits), ASX_OK);
     limits.max_tasks = 0u;
@@ -1618,7 +1618,7 @@ TEST(use_lab_dispatch_requires_no_live_task) {
     probe a = {'A', 0u, 0};
 
     ASSERT_EQ(setup(), ASX_OK);
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_probe, &a, &t), ASX_OK);
     ASSERT_EQ(asx_scheduler_use_lab_dispatch(1u), ASX_E_INVALID_STATE);
     /* A runtime reset turns it off again. */
@@ -2017,7 +2017,7 @@ static asx_status fs_scene_build(fs_scene *sc) {
     sc->b.name = 'B';
     sc->b.yields = 1u;
     sc->c.name = 'C';
-    if (st == ASX_OK) st = asx_region_open(&sc->region);
+    if (st == ASX_OK) st = asx_region_open(&g_rt, &sc->region);
     if (st == ASX_OK) st = asx_task_spawn(sc->region, poll_probe, &sc->a, &sc->ta);
     if (st == ASX_OK) st = asx_task_spawn(sc->region, poll_probe, &sc->b, &sc->tb);
     if (st == ASX_OK) st = asx_task_spawn(sc->region, poll_probe, &sc->c, &sc->tc);
@@ -2105,7 +2105,7 @@ static asx_status ghost_scene(uint64_t seed, fs_scene *sc) {
     sc->b.name = 'B';
     sc->b.yields = 1u;
     sc->c.name = 'C';
-    if (st == ASX_OK) st = asx_region_open(&sc->region);
+    if (st == ASX_OK) st = asx_region_open(&g_rt, &sc->region);
     if (st == ASX_OK) st = asx_task_spawn(sc->region, poll_probe, &sc->a, &sc->ta);
     if (st == ASX_OK) st = asx_task_spawn(sc->region, poll_probe, &sc->b, &sc->tb);
     if (st == ASX_OK) st = asx_task_spawn(sc->region, poll_probe, &sc->c, &sc->tc);
@@ -2169,7 +2169,7 @@ TEST(forced_schedule_recording_follows_rust_arena_index_reuse) {
     ASSERT_EQ(setup(), ASX_OK);
     ASSERT_EQ(asx_scheduler_use_lab_dispatch(42u), ASX_OK);
     ASSERT_EQ(asx_lab_start_forced_schedule_recording(d, 4u), ASX_OK);
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_probe, &a, &t), ASX_OK);
     ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_probe, &b, &t), ASX_OK);
@@ -2405,7 +2405,7 @@ static asx_status sup_scene_build(sup_scene *sc) {
     memset(sc, 0, sizeof(*sc));
     if (st == ASX_OK) st = asx_scheduler_use_lab_dispatch(42u);
     asx_supervisor_reset();
-    if (st == ASX_OK) st = asx_region_open(&sc->root);
+    if (st == ASX_OK) st = asx_region_open(&g_rt, &sc->root);
     if (st == ASX_OK) st = asx_region_open_child(sc->root, &sc->owner_region);
     sc->owner.region = sc->owner_region;
     asx_supervisor_config_init(&sc->owner.cfg, "sup", 0u, 60000000000u);
@@ -2784,7 +2784,7 @@ TEST(a_run_that_would_block_names_both_tasks_of_a_channel_deadlock) {
     ASSERT_EQ(asx_scheduler_use_lab_dispatch(7u), ASX_OK);
     memset(&a, 0, sizeof(a));
     memset(&b, 0, sizeof(b));
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_channel_create(r, 2u, &ca), ASX_OK);
     ASSERT_EQ(asx_channel_create(r, 2u, &cb), ASX_OK);
     a.region = r;
@@ -2824,7 +2824,7 @@ TEST(a_stuck_joiner_names_the_task_it_awaits) {
 
     ASSERT_EQ(setup(), ASX_OK);
     ASSERT_EQ(asx_scheduler_use_lab_dispatch(3u), ASX_OK);
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_parks_forever, NULL, &target), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_joiner, &target, &joiner), ASX_OK);
 
@@ -2858,7 +2858,7 @@ TEST(a_parked_obligation_holder_is_a_futurelock_past_the_threshold) {
     memset(&h, 0, sizeof(h));
     memset(&k, 0, sizeof(k));
     order_reset();
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     h.region = r;
     h.park = 1;
     k.name = 'k';
@@ -2900,7 +2900,7 @@ TEST(a_task_polled_every_step_is_not_a_futurelock) {
     ASSERT_EQ(asx_scheduler_use_lab_dispatch(11u), ASX_OK);
     memset(&hp, 0, sizeof(hp));
     memset(&hs, 0, sizeof(hs));
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     hp.region = r;
     hp.park = 1;
     hs.region = r;
@@ -2928,7 +2928,7 @@ TEST(a_sleeper_that_wakes_is_neither_stuck_nor_futurelocked) {
     ASSERT_EQ(setup(), ASX_OK);
     ASSERT_EQ(asx_scheduler_use_lab_dispatch(7u), ASX_OK);
     memset(&s, 0, sizeof(s));
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_sleeper, &s, &t), ASX_OK);
     budget = asx_budget_from_polls(100);
     /* Before the timer fires the sleeper waits, but a timer will wake it. */
@@ -2949,7 +2949,7 @@ TEST(the_futurelock_check_needs_lab_dispatch_and_the_sweep_lists_parked_tasks) {
     asx_futurelock fl[2];
 
     ASSERT_EQ(setup(), ASX_OK);
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_parks_forever, NULL, &t), ASX_OK);
     budget = asx_budget_from_polls(100);
     ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_E_WOULD_BLOCK);
@@ -3052,7 +3052,7 @@ TEST(the_futurelock_check_reports_a_holder_at_every_step_it_stays_idle) {
     fl_begin();
     memset(&h, 0, sizeof(h));
     memset(&w, 0, sizeof(w));
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     h.region = r;
     ASSERT_EQ(asx_task_spawn(r, poll_rel_holder, &h, &th), ASX_OK);
     w.yields = 10u;
@@ -3100,7 +3100,7 @@ TEST(the_futurelock_check_reports_holders_in_task_id_order) {
     fl_begin();
     memset(&a, 0, sizeof(a));
     memset(&b, 0, sizeof(b));
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     a.region = r;
     b.region = r;
     ASSERT_EQ(asx_task_spawn(r, poll_rel_holder, &a, &ta), ASX_OK);
@@ -3143,7 +3143,7 @@ TEST(the_futurelock_check_is_silent_for_a_polled_holder_and_when_off) {
     ASSERT_EQ(asx_lab_set_futurelock_check(3u), ASX_OK);
     fl_begin();
     memset(&hs, 0, sizeof(hs));
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     hs.region = r;
     ASSERT_EQ(asx_task_spawn(r, poll_holder, &hs, &t), ASX_OK);
     budget = asx_budget_from_polls(40u);
@@ -3161,7 +3161,7 @@ TEST(the_futurelock_check_is_silent_for_a_polled_holder_and_when_off) {
         holder_state hp;
         asx_futurelock fl[2];
         memset(&hp, 0, sizeof(hp));
-        ASSERT_EQ(asx_region_open(&r), ASX_OK);
+        ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
         hp.region = r;
         hp.park = 1;
         ASSERT_EQ(asx_task_spawn(r, poll_holder, &hp, &t), ASX_OK);

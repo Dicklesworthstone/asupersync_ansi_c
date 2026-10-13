@@ -9,6 +9,7 @@
  */
 
 #include "../../test_harness.h"
+#include "../../test_runtime.h"
 #include <asx/asx.h>
 #include <asx/asx_config.h>
 #include <stdlib.h>
@@ -158,7 +159,7 @@ static asx_status static_arena_alloc_once(size_t request, size_t *used_out) {
     void *ptr = NULL;
     asx_status st;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     st = asx_static_arena_config_init(&cfg, memory, sizeof(memory), ASX_CLASS_R2);
     if (st != ASX_OK) return st;
     st = asx_static_arena_init(&arena, &cfg);
@@ -172,7 +173,7 @@ static asx_status static_arena_alloc_once(size_t request, size_t *used_out) {
 
     st = asx_runtime_alloc(request, &ptr);
     if (used_out != NULL) *used_out = asx_static_arena_used(&arena);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     return st;
 }
 
@@ -299,7 +300,7 @@ TEST(set_hooks_null_returns_error) {
 TEST(set_hooks_installs_and_get_retrieves) {
     const asx_runtime_hooks *retrieved;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(install_test_hooks(), ASX_OK);
 
     retrieved = asx_runtime_get_hooks();
@@ -310,11 +311,11 @@ TEST(set_hooks_installs_and_get_retrieves) {
 }
 
 TEST(runtime_reset_clears_installed_hooks) {
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(install_test_hooks(), ASX_OK);
     ASSERT_TRUE(asx_runtime_get_hooks() != NULL);
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_TRUE(asx_runtime_get_hooks() == NULL);
 }
 
@@ -326,17 +327,17 @@ TEST(default_entropy_restarts_with_the_runtime) {
     uint64_t again[3];
     uint32_t i;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
     ASSERT_EQ(asx_runtime_set_hooks(&hooks), ASX_OK);
     for (i = 0; i < 3u; i++) ASSERT_EQ(asx_runtime_random_u64(&first[i]), ASX_OK);
     ASSERT_TRUE(first[0] != first[1] && first[1] != first[2]);
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_runtime_set_hooks(&hooks), ASX_OK);
     for (i = 0; i < 3u; i++) ASSERT_EQ(asx_runtime_random_u64(&again[i]), ASX_OK);
     for (i = 0; i < 3u; i++) ASSERT_EQ(again[i], first[i]);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 }
 
 /* ------------------------------------------------------------------ */
@@ -344,7 +345,7 @@ TEST(default_entropy_restarts_with_the_runtime) {
 /* ------------------------------------------------------------------ */
 
 TEST(seal_without_hooks_returns_invalid_state) {
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     /* No hooks installed after reset */
     ASSERT_EQ(asx_runtime_seal_allocator(), ASX_E_INVALID_STATE);
 }
@@ -352,7 +353,7 @@ TEST(seal_without_hooks_returns_invalid_state) {
 TEST(seal_then_alloc_returns_sealed) {
     void *ptr = NULL;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(install_test_hooks(), ASX_OK);
     ASSERT_EQ(asx_runtime_seal_allocator(), ASX_OK);
     ASSERT_EQ(asx_runtime_alloc(64, &ptr), ASX_E_ALLOCATOR_SEALED);
@@ -362,14 +363,14 @@ TEST(seal_then_alloc_returns_sealed) {
 TEST(seal_then_realloc_returns_sealed) {
     void *ptr = NULL;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(install_test_hooks(), ASX_OK);
     ASSERT_EQ(asx_runtime_seal_allocator(), ASX_OK);
     ASSERT_EQ(asx_runtime_realloc(NULL, 64, &ptr), ASX_E_ALLOCATOR_SEALED);
 }
 
 TEST(double_seal_returns_invalid_state) {
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(install_test_hooks(), ASX_OK);
     ASSERT_EQ(asx_runtime_seal_allocator(), ASX_OK);
     ASSERT_EQ(asx_runtime_seal_allocator(), ASX_E_INVALID_STATE);
@@ -429,7 +430,7 @@ TEST(static_arena_allocates_from_static_span) {
     asx_runtime_hooks hooks;
     void *ptr = NULL;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_static_arena_config_init(&cfg, memory, sizeof(memory), ASX_CLASS_R2), ASX_OK);
     ASSERT_EQ(asx_static_arena_init(&arena, &cfg), ASX_OK);
     ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
@@ -451,7 +452,7 @@ TEST(static_arena_zero_size_allocation_uses_static_span) {
     asx_runtime_hooks hooks;
     void *ptr = NULL;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_static_arena_config_init(&cfg, memory, sizeof(memory), ASX_CLASS_R2), ASX_OK);
     ASSERT_EQ(asx_static_arena_init(&arena, &cfg), ASX_OK);
     ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
@@ -494,7 +495,7 @@ TEST(static_arena_exhaustion_is_failure_atomic) {
     void *too_large = NULL;
     size_t used_before;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_static_arena_config_init(&cfg, memory, sizeof(memory), ASX_CLASS_R2), ASX_OK);
     ASSERT_EQ(asx_static_arena_init(&arena, &cfg), ASX_OK);
     ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
@@ -518,7 +519,7 @@ TEST(static_arena_realloc_preserves_contents) {
     unsigned char *ptr = NULL;
     unsigned char *grown = NULL;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_static_arena_config_init(&cfg, memory, sizeof(memory), ASX_CLASS_R2), ASX_OK);
     ASSERT_EQ(asx_static_arena_init(&arena, &cfg), ASX_OK);
     ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
@@ -542,7 +543,7 @@ TEST(static_arena_seal_blocks_alloc_but_not_free) {
     void *ptr = NULL;
     void *after_seal = NULL;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_static_arena_config_init(&cfg, memory, sizeof(memory), ASX_CLASS_R2), ASX_OK);
     ASSERT_EQ(asx_static_arena_init(&arena, &cfg), ASX_OK);
     ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
@@ -563,7 +564,7 @@ TEST(static_arena_bind_can_install_presealed_hooks) {
     asx_runtime_hooks hooks;
     void *ptr = NULL;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_static_arena_config_init(&cfg, memory, sizeof(memory), ASX_CLASS_R2), ASX_OK);
     cfg.seal_after_init = 1u;
     ASSERT_EQ(asx_static_arena_init(&arena, &cfg), ASX_OK);
@@ -580,21 +581,21 @@ TEST(static_arena_bind_can_install_presealed_hooks) {
 /* ------------------------------------------------------------------ */
 
 TEST(alloc_null_out_returns_error) {
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(install_test_hooks(), ASX_OK);
     ASSERT_EQ(asx_runtime_alloc(64, NULL), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(alloc_no_hooks_returns_hook_missing) {
     void *ptr = NULL;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_runtime_alloc(64, &ptr), ASX_E_HOOK_MISSING);
 }
 
 TEST(alloc_dispatches_to_hook) {
     void *ptr = NULL;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     reset_counters();
     ASSERT_EQ(install_test_hooks(), ASX_OK);
     ASSERT_EQ(asx_runtime_alloc(64, &ptr), ASX_OK);
@@ -609,7 +610,7 @@ TEST(realloc_dispatches_to_hook) {
     void *ptr = NULL;
     void *ptr2 = NULL;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     reset_counters();
     ASSERT_EQ(install_test_hooks(), ASX_OK);
     ASSERT_EQ(asx_runtime_alloc(32, &ptr), ASX_OK);
@@ -621,14 +622,14 @@ TEST(realloc_dispatches_to_hook) {
 }
 
 TEST(free_no_hooks_returns_hook_missing) {
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_runtime_free(NULL), ASX_E_HOOK_MISSING);
 }
 
 TEST(free_dispatches_to_hook) {
     void *ptr = NULL;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     reset_counters();
     ASSERT_EQ(install_test_hooks(), ASX_OK);
     ASSERT_EQ(asx_runtime_alloc(64, &ptr), ASX_OK);
@@ -641,21 +642,21 @@ TEST(free_dispatches_to_hook) {
 /* ------------------------------------------------------------------ */
 
 TEST(now_ns_null_returns_error) {
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(install_test_hooks(), ASX_OK);
     ASSERT_EQ(asx_runtime_now_ns(NULL), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(now_ns_no_hooks_returns_hook_missing) {
     asx_time t;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_runtime_now_ns(&t), ASX_E_HOOK_MISSING);
 }
 
 TEST(now_ns_dispatches_by_build_mode) {
     asx_time t = 0;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     reset_counters();
     ASSERT_EQ(install_test_hooks(), ASX_OK);
 
@@ -675,14 +676,14 @@ TEST(now_ns_dispatches_by_build_mode) {
 /* ------------------------------------------------------------------ */
 
 TEST(random_u64_null_returns_error) {
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(install_test_hooks(), ASX_OK);
     ASSERT_EQ(asx_runtime_random_u64(NULL), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(random_u64_no_hooks_returns_hook_missing) {
     uint64_t v;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_runtime_random_u64(&v), ASX_E_HOOK_MISSING);
 }
 
@@ -690,7 +691,7 @@ TEST(random_u64_missing_entropy_stream_is_refused) {
     asx_runtime_hooks hooks;
     uint64_t v = 0;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
     hooks.entropy.random_u64_fn = NULL;
     hooks.deterministic_seeded_prng = 1;
@@ -707,7 +708,7 @@ TEST(random_u64_missing_entropy_stream_is_refused) {
 TEST(random_u64_dispatches_to_hook) {
     uint64_t v = 0;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     reset_counters();
     ASSERT_EQ(install_test_hooks(), ASX_OK);
 
@@ -752,7 +753,7 @@ static asx_status install_fallible_hooks(asx_status try_status) {
 TEST(random_u64_prefers_fallible_source) {
     uint64_t v = 0;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(install_fallible_hooks(ASX_OK), ASX_OK);
     ASSERT_EQ(asx_runtime_random_u64(&v), ASX_OK);
     ASSERT_EQ(v, (uint64_t)TRY_VALUE);
@@ -763,7 +764,7 @@ TEST(random_u64_prefers_fallible_source) {
 TEST(random_u64_reports_fallible_source_failure) {
     uint64_t v = SECURE_SENTINEL;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(install_fallible_hooks(ASX_E_RESOURCE_EXHAUSTED), ASX_OK);
     /* The source's own status reaches the caller, no value is invented,
      * and the infallible hook is not consulted as a stand-in. */
@@ -791,7 +792,7 @@ TEST(hooks_validate_treats_fallible_source_as_entropy) {
 TEST(secure_draw_rejects_null_and_missing_hooks) {
     uint64_t v = SECURE_SENTINEL;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_runtime_random_secure_u64(&v), ASX_E_HOOK_MISSING);
     ASSERT_EQ(v, (uint64_t)SECURE_SENTINEL);
     ASSERT_EQ(install_test_hooks(), ASX_OK);
@@ -801,7 +802,7 @@ TEST(secure_draw_rejects_null_and_missing_hooks) {
 TEST(secure_draw_serves_fallible_source) {
     uint64_t v = 0;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(install_fallible_hooks(ASX_OK), ASX_OK);
     ASSERT_EQ(asx_runtime_random_secure_u64(&v), ASX_OK);
     ASSERT_EQ(v, (uint64_t)TRY_VALUE);
@@ -811,7 +812,7 @@ TEST(secure_draw_serves_fallible_source) {
 TEST(secure_draw_reports_fallible_source_failure) {
     uint64_t v = SECURE_SENTINEL;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(install_fallible_hooks(ASX_E_HOOK_MISSING), ASX_OK);
     /* An OS source that failed is a status, never a guessable key. */
     ASSERT_EQ(asx_runtime_random_secure_u64(&v), ASX_E_HOOK_MISSING);
@@ -825,14 +826,14 @@ TEST(secure_draw_keeps_seeded_stream_in_deterministic_builds) {
     uint64_t general = 0;
     uint64_t secure = 0;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
     ASSERT_EQ(asx_runtime_set_hooks(&hooks), ASX_OK);
     ASSERT_EQ(asx_runtime_random_u64(&general), ASX_OK);
 
     /* The same default table, restarted: the secure draw is the first
      * value of the same seeded stream, which replay depends on. */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
     ASSERT_EQ(asx_runtime_set_hooks(&hooks), ASX_OK);
     ASSERT_EQ(asx_runtime_random_secure_u64(&secure), ASX_OK);
@@ -843,7 +844,7 @@ TEST(secure_draw_refuses_builtin_seeded_prng_in_live_builds) {
     asx_runtime_hooks hooks;
     uint64_t v = SECURE_SENTINEL;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
     ASSERT_EQ(asx_runtime_set_hooks(&hooks), ASX_OK);
 
@@ -861,7 +862,7 @@ TEST(secure_draw_refuses_when_no_source_in_live_builds) {
     asx_runtime_hooks hooks;
     uint64_t v = SECURE_SENTINEL;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
     hooks.entropy.random_u64_fn = NULL;
     ASSERT_EQ(asx_runtime_set_hooks(&hooks), ASX_OK);
@@ -872,7 +873,7 @@ TEST(secure_draw_refuses_when_no_source_in_live_builds) {
 TEST(secure_draw_serves_application_source_in_live_builds) {
     uint64_t v = 0;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     reset_counters();
     /* An application's own source (an infallible hook here, installed
      * over the defaults the way builder entropy hooks are) is its own to
@@ -887,7 +888,7 @@ TEST(default_init_security_draw_follows_the_profile_in_live_builds) {
     asx_runtime rt;
     uint64_t v = SECURE_SENTINEL;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_runtime_init_default(&rt), ASX_OK);
 #if defined(ASX_PROFILE_POSIX) || defined(ASX_PROFILE_WIN32)
     /* The live POSIX default installs the OS source; the live WIN32
@@ -910,21 +911,21 @@ TEST(default_init_security_draw_follows_the_profile_in_live_builds) {
 /* ------------------------------------------------------------------ */
 
 TEST(reactor_wait_null_returns_error) {
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(install_test_hooks(), ASX_OK);
     ASSERT_EQ(asx_runtime_reactor_wait(100, NULL, 0), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(reactor_wait_no_hooks_returns_hook_missing) {
     uint32_t ready = 0;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_runtime_reactor_wait(100, &ready, 0), ASX_E_HOOK_MISSING);
 }
 
 TEST(reactor_wait_dispatches_to_ghost_hook) {
     uint32_t ready = 0;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     reset_counters();
     ASSERT_EQ(install_test_hooks(), ASX_OK);
 
@@ -944,7 +945,7 @@ TEST(reactor_wait_prefers_native_hook_when_both_are_installed) {
     uint32_t ready = 0;
     asx_runtime_hooks hooks;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     reset_counters();
     ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
     hooks.reactor.wait_fn = test_native_reactor;
@@ -970,12 +971,12 @@ TEST(reactor_wait_prefers_native_hook_when_both_are_installed) {
 /* ------------------------------------------------------------------ */
 
 TEST(log_write_no_hooks_returns_hook_missing) {
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_runtime_log_write(1, "test"), ASX_E_HOOK_MISSING);
 }
 
 TEST(log_write_dispatches_to_hook) {
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     reset_counters();
     ASSERT_EQ(install_test_hooks(), ASX_OK);
 
@@ -988,7 +989,7 @@ TEST(log_write_dispatches_to_hook) {
 TEST(log_write_no_sink_is_silent) {
     asx_runtime_hooks hooks;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
     hooks.log.write_fn = NULL;
     ASSERT_EQ(asx_runtime_set_hooks(&hooks), ASX_OK);
@@ -1013,7 +1014,7 @@ TEST(fault_inject_none_kind_returns_error) {
 TEST(fault_inject_and_count) {
     asx_fault_injection fi;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_fault_clear(), ASX_OK);
     ASSERT_EQ(asx_fault_injection_count(), 0u);
 
@@ -1047,7 +1048,7 @@ TEST(fault_alloc_fail_triggers) {
     asx_fault_injection fi;
     void *ptr = NULL;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(install_test_hooks(), ASX_OK);
     ASSERT_EQ(asx_fault_clear(), ASX_OK);
 
@@ -1067,7 +1068,7 @@ TEST(fault_clock_skew_adds_offset) {
     asx_fault_injection fi;
     asx_time t = 0;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(install_test_hooks(), ASX_OK);
     ASSERT_EQ(asx_fault_clear(), ASX_OK);
 
@@ -1092,7 +1093,7 @@ TEST(fault_entropy_const_overrides) {
     asx_fault_injection fi;
     uint64_t v = 0;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(install_test_hooks(), ASX_OK);
     ASSERT_EQ(asx_fault_clear(), ASX_OK);
 
@@ -1193,118 +1194,118 @@ int main(void) {
 
     /* Hook install/retrieval */
     RUN_TEST(set_hooks_null_returns_error);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(set_hooks_installs_and_get_retrieves);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(runtime_reset_clears_installed_hooks);
     RUN_TEST(default_entropy_restarts_with_the_runtime);
 
     /* Allocator seal */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(seal_then_alloc_returns_sealed);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(seal_then_realloc_returns_sealed);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(double_seal_returns_invalid_state);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(static_arena_config_init_sets_resource_defaults);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(static_arena_rejects_invalid_config);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(static_arena_rejects_undersized_memory);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(static_arena_allocates_from_static_span);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(static_arena_zero_size_allocation_uses_static_span);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(static_arena_boundary_allocation_consumes_usable_span);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(static_arena_exhaustion_is_failure_atomic);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(static_arena_realloc_preserves_contents);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(static_arena_seal_blocks_alloc_but_not_free);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(static_arena_bind_can_install_presealed_hooks);
 
     /* Allocator dispatch */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(alloc_null_out_returns_error);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(alloc_dispatches_to_hook);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(realloc_dispatches_to_hook);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(free_dispatches_to_hook);
 
     /* Clock dispatch */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(now_ns_null_returns_error);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(now_ns_dispatches_by_build_mode);
 
     /* Entropy dispatch */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(random_u64_null_returns_error);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(random_u64_no_hooks_returns_hook_missing);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(random_u64_missing_entropy_stream_is_refused);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(random_u64_dispatches_to_hook);
 
     /* Fallible entropy source and secure draws (bd-9kll.16.5) */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(random_u64_prefers_fallible_source);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(random_u64_reports_fallible_source_failure);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(hooks_validate_treats_fallible_source_as_entropy);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(secure_draw_rejects_null_and_missing_hooks);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(secure_draw_serves_fallible_source);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(secure_draw_reports_fallible_source_failure);
 #if ASX_DETERMINISTIC
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(secure_draw_keeps_seeded_stream_in_deterministic_builds);
 #else
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(secure_draw_refuses_builtin_seeded_prng_in_live_builds);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(secure_draw_refuses_when_no_source_in_live_builds);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(secure_draw_serves_application_source_in_live_builds);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(default_init_security_draw_follows_the_profile_in_live_builds);
 #endif
 
     /* Reactor dispatch */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(reactor_wait_null_returns_error);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(reactor_wait_dispatches_to_ghost_hook);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(reactor_wait_prefers_native_hook_when_both_are_installed);
 
     /* Log dispatch */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(log_write_dispatches_to_hook);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(log_write_no_sink_is_silent);
 
     /* Fault injection */
     RUN_TEST(fault_inject_null_returns_error);
     RUN_TEST(fault_inject_none_kind_returns_error);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(fault_inject_and_count);
     RUN_TEST(fault_inject_exhaustion);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(fault_alloc_fail_triggers);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(fault_clock_skew_adds_offset);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(fault_entropy_const_overrides);
 
     /* Config init */

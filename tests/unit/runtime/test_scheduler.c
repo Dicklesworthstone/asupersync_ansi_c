@@ -8,6 +8,7 @@
  */
 
 #include "../../test_harness.h"
+#include "../../test_runtime.h"
 #include <asx/asx.h>
 #include <asx/core/ghost.h>
 #include <asx/runtime/runtime.h>
@@ -54,10 +55,10 @@ TEST(scheduler_single_task_immediate_complete) {
     asx_budget budget;
     asx_scheduler_event ev;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &tid), ASX_OK);
 
     budget = asx_budget_infinite();
@@ -86,10 +87,10 @@ TEST(scheduler_task_yields_then_completes) {
     asx_budget budget;
     int counter = 2; /* yield twice then complete */
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_yield_n, &counter, &tid), ASX_OK);
 
     budget = asx_budget_infinite();
@@ -116,10 +117,10 @@ TEST(scheduler_budget_exhaustion_emits_event) {
     asx_budget budget;
     asx_scheduler_event ev;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_forever, NULL, &tid), ASX_OK);
 
     /* Only 2 poll units — task will exhaust budget */
@@ -145,10 +146,10 @@ TEST(scheduler_task_failure_emits_complete) {
     asx_status st;
     asx_containment_policy policy;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_fail, NULL, &tid), ASX_OK);
 
     budget = asx_budget_infinite();
@@ -176,10 +177,10 @@ TEST(scheduler_multi_task_deterministic_order) {
     asx_budget budget;
     asx_scheduler_event e0, e1, e2;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     /* Spawn 3 tasks that all complete immediately */
     ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &t1), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &t2), ASX_OK);
@@ -225,12 +226,12 @@ TEST(scheduler_replay_identity) {
     uint32_t i;
 
     /* --- Run 1 --- */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     c1 = 1;
     c2 = 0;
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_yield_n, &c1, &t1), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_yield_n, &c2, &t2), ASX_OK);
 
@@ -242,12 +243,12 @@ TEST(scheduler_replay_identity) {
     for (i = 0; i < count1 && i < 16u; i++) { asx_scheduler_event_get(i, &events_run1[i]); }
 
     /* --- Run 2 (identical setup) --- */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     c1 = 1;
     c2 = 0;
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_yield_n, &c1, &t1), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_yield_n, &c2, &t2), ASX_OK);
 
@@ -281,10 +282,10 @@ TEST(scheduler_event_reset_clears) {
     asx_task_id tid;
     asx_budget budget;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &tid), ASX_OK);
 
     budget = asx_budget_infinite();
@@ -302,10 +303,10 @@ TEST(scheduler_round_tracking_multi_round) {
     int counter = 3; /* yield 3 times */
     asx_scheduler_event e0, e1, e2;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_yield_n, &counter, &tid), ASX_OK);
 
     budget = asx_budget_infinite();
@@ -328,10 +329,10 @@ TEST(scheduler_no_tasks_is_quiescent) {
     asx_budget budget;
     asx_scheduler_event ev;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     /* No tasks spawned */
 
     budget = asx_budget_infinite();
@@ -352,11 +353,11 @@ TEST(scheduler_trace_emits_round_markers) {
     uint32_t round_count = 0;
     uint32_t i;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     asx_trace_reset();
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_yield_n, &counter, &tid), ASX_OK);
 
     budget = asx_budget_infinite();
@@ -411,9 +412,9 @@ TEST(scheduler_polls_higher_budget_priority_first) {
     uint32_t order[16];
     uint32_t n;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     /* The low-priority task is first in arena order. */
     ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_yield_n, &c_low, &b_low, &low), ASX_OK);
     ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_yield_n, &c_high, &b_high, &high), ASX_OK);
@@ -440,9 +441,9 @@ TEST(scheduler_polls_three_priorities_highest_first_arena_order_within_one) {
     asx_budget b200 = budget_with_priority(200u);
     uint32_t order[8];
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_complete, NULL, &b50, &t[0]), ASX_OK);
     ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_complete, NULL, &b200, &t[1]), ASX_OK);
     ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_complete, NULL, &b50, &t[2]), ASX_OK);
@@ -464,9 +465,9 @@ TEST(scheduler_polls_the_cancel_lane_before_the_ready_lane) {
     asx_budget budget;
     uint32_t order[8];
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &a), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &b), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &c), ASX_OK);
@@ -488,9 +489,9 @@ TEST(scheduler_orders_the_cancel_lane_by_cleanup_priority) {
     asx_budget budget;
     uint32_t order[8];
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &a), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &b), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &c), ASX_OK);
@@ -518,9 +519,9 @@ TEST(scheduler_cancel_streak_gives_ready_work_a_turn) {
     uint32_t order[32];
     uint32_t i;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &ready), ASX_OK);
     for (i = 0; i < (uint32_t)CANCELLED; i++) {
         ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &c[i]), ASX_OK);
@@ -557,9 +558,9 @@ TEST(scheduler_polls_a_task_spawned_in_a_round_in_that_round) {
     uint32_t polls_in_round_0 = 0;
     uint32_t i;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     s.region = rid;
     s.child = ASX_INVALID_ID;
     ASSERT_EQ(asx_task_spawn(rid, poll_spawn_once_then_complete, &s, &parent), ASX_OK);
@@ -628,11 +629,11 @@ TEST(scheduler_polls_a_task_in_a_region_opened_in_the_round_before_its_opener_re
     asx_budget budget;
     scope_opener o;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     g_scope_n = 0u;
     memset(g_scope_log, 0, sizeof(g_scope_log));
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     o.parent = rid;
     o.stage = 0;
     ASSERT_EQ(asx_task_spawn(rid, poll_scope_opener, &o, &tid), ASX_OK);
@@ -718,7 +719,7 @@ TEST(scheduler_does_not_cancel_a_cleanup_task_at_its_budget_deadline_before_it_p
     ASSERT_EQ(setup_with_clock(), ASX_OK);
     asx_ghost_reset();
     memset(&s, 0, sizeof(s));
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &rid), ASX_OK);
     s.region = rid;
     parent_budget = asx_budget_infinite();
     parent_budget.deadline = 100u;
@@ -793,7 +794,7 @@ TEST(scheduler_a_passed_deadline_strengthens_a_user_cancel_that_arrived_first) {
     asx_ghost_reset();
     memset(&c, 0, sizeof(c));
     memset(&s, 0, sizeof(s));
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &rid), ASX_OK);
     /* The canceller is first in arena order, so it runs before the victim in
      * the round both wake in. */
     ASSERT_EQ(asx_task_spawn(rid, poll_cancel_after_sleep, &c, &canceller), ASX_OK);
@@ -861,7 +862,7 @@ TEST(scheduler_budget_deadlines_fire_before_any_task_polls_in_the_round) {
     asx_ghost_reset();
     memset(&a, 0, sizeof(a));
     memset(&s, 0, sizeof(s));
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &rid), ASX_OK);
     tb = asx_budget_infinite();
     tb.deadline = 100u;
     ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_abort_with_own_reason, &a, &tb, &aborter),
@@ -908,7 +909,7 @@ TEST(scheduler_a_lone_parked_task_is_cancelled_at_its_budget_deadline) {
 
     ASSERT_EQ(setup_with_clock(), ASX_OK);
     asx_ghost_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &rid), ASX_OK);
     tb = asx_budget_infinite();
     tb.deadline = 100u;
     ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_park_until_cancelled, NULL, &tb, &t), ASX_OK);
@@ -957,10 +958,10 @@ TEST(scheduler_stamps_an_exhausted_poll_quota_with_the_poll_quota_defaults) {
     asx_cancel_reason expect;
     quota_probe p;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     memset(&p, 0, sizeof(p));
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     quota = asx_budget_from_polls(2);
     ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_probe_quota_reason, &p, &quota, &tid), ASX_OK);
     run = asx_budget_infinite();
@@ -985,11 +986,11 @@ TEST(scheduler_poll_quota_stamp_is_reattributed_by_a_later_checkpoint) {
     asx_budget run;
     quota_probe p;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     memset(&p, 0, sizeof(p));
     p.checkpoint = 1;
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     quota = asx_budget_from_polls(2);
     ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_probe_quota_reason, &p, &quota, &tid), ASX_OK);
     run = asx_budget_infinite();

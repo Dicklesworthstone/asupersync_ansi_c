@@ -22,6 +22,7 @@
 
 #if !defined(ASX_PROFILE_BROWSER) || ASX_HAS_BROWSER_TRACE
 
+#include "../../test_runtime.h"
 #include "../../test_task.h"
 
 static asx_status poll_complete(void *data, asx_task_id self) {
@@ -392,7 +393,7 @@ TEST(replay_reference_rejects_over_capacity) {
 TEST(snapshot_capture_empty) {
     asx_snapshot_buffer snap;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     asx_trace_reset();
 
@@ -406,11 +407,11 @@ TEST(snapshot_capture_with_region) {
     asx_snapshot_buffer snap;
     asx_region_id rid;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     asx_trace_reset();
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_snapshot_capture(&snap), ASX_OK);
 
     /* Should mention regions */
@@ -435,7 +436,7 @@ TEST(snapshot_capture_uses_runtime_snapshot_entities) {
     asx_trace_reset();
     ASSERT_EQ(asx_waker_register(77, &w), ASX_OK);
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rt, &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
     /* Held by the live task, which is never polled. */
     ASSERT_EQ(asx_obligation_reserve_ex(rid, ASX_OBLIGATION_KIND_GENERIC, tid, &oid), ASX_OK);
@@ -484,7 +485,7 @@ TEST(snapshot_digest_deterministic) {
     asx_snapshot_buffer s1, s2;
     uint64_t d1, d2;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     asx_trace_reset();
 
@@ -492,7 +493,7 @@ TEST(snapshot_digest_deterministic) {
     d1 = asx_snapshot_digest(&s1);
 
     /* Same state again */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     asx_trace_reset();
 
@@ -608,11 +609,11 @@ static void reserve_abort_and_check_trace(void *ctx) {
 TEST(trace_obligation_abort_emitted_by_runtime) {
     asx_region_id rid;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     asx_trace_reset();
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(test_run_in_task(rid, reserve_abort_and_check_trace, &rid), ASX_OK);
 }
 
@@ -621,11 +622,11 @@ TEST(trace_region_closed_emitted_by_drain) {
     asx_budget budget;
     asx_trace_event ev;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     asx_trace_reset();
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     budget = asx_budget_infinite();
     ASSERT_EQ(asx_region_drain(rid, &budget), ASX_OK);
 
@@ -643,11 +644,11 @@ TEST(trace_task_transitions_emitted_by_scheduler) {
     int saw_created_running = 0;
     int saw_running_completed = 0;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     asx_trace_reset();
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &tid), ASX_OK);
     budget = asx_budget_infinite();
     ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
@@ -680,11 +681,11 @@ TEST(trace_task_transitions_emitted_by_cancel_api) {
     uint32_t transitions = 0;
     int saw_created_cancel_requested = 0;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     asx_trace_reset();
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
     ASSERT_EQ(asx_task_cancel(tid, ASX_CANCEL_USER), ASX_OK);
 
@@ -710,11 +711,11 @@ TEST(trace_channel_events_emitted_by_runtime) {
     asx_trace_event ev;
     uint64_t value;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_channel_reset();
     asx_trace_reset();
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     asx_trace_reset();
 
     ASSERT_EQ(asx_channel_create(rid, 4, &ch), ASX_OK);
@@ -794,10 +795,10 @@ TEST(runtime_reset_clears_global_support_state) {
     cfg.lane_weights[2] = 1u;
     cfg.starvation_limit = 8u;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_channel_create(rid, 2, &ch), ASX_OK);
     ASSERT_EQ(asx_channel_try_reserve(ch, &permit), ASX_OK);
     ASSERT_EQ(asx_send_permit_send(&permit, 55u), ASX_OK);
@@ -812,7 +813,7 @@ TEST(runtime_reset_clears_global_support_state) {
     ASSERT_EQ(asx_telemetry_emitted_count(), (uint32_t)1);
     ASSERT_EQ(asx_hindsight_total_count(), (uint32_t)1);
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     ASSERT_EQ(asx_trace_event_count(), (uint32_t)0);
     ASSERT_EQ(asx_timer_active_count(asx_timer_wheel_global()), (uint32_t)0);
@@ -1321,7 +1322,7 @@ static asx_status swarm_wave(void) {
     asx_status st;
     uint32_t i;
 
-    st = asx_region_open(&rid);
+    st = asx_region_open(test_runtime(), &rid);
     if (st != ASX_OK) return st;
     for (i = 0; i < (uint32_t)tasks_per_wave; i++) {
         st = asx_task_spawn(rid, poll_swarm_task, NULL, &tids[i]);
@@ -1347,7 +1348,7 @@ static asx_status swarm_run(uint32_t waves, uint32_t perturb_wave, uint64_t *dig
     uint32_t w;
     asx_status st;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     asx_trace_reset();
     for (w = 0; w < waves; w++) {

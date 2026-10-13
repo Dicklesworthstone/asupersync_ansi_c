@@ -13,6 +13,7 @@
  */
 
 #include "test_harness.h"
+#include "test_runtime.h"
 #include <asx/asx.h>
 #include <asx/runtime/runtime.h>
 #include <asx/runtime/trace.h>
@@ -23,7 +24,7 @@
  * ------------------------------------------------------------------- */
 
 static void reset_all(void) {
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     asx_trace_reset();
     asx_replay_clear_reference();

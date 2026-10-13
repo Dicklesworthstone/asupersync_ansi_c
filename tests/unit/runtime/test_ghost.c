@@ -25,6 +25,7 @@
 #include <asx/core/transition.h>
 #include <asx/runtime/runtime.h>
 
+#include "test_runtime.h"
 #include "test_task.h"
 
 /* ------------------------------------------------------------------ */
@@ -391,12 +392,12 @@ TEST(ghost_lifecycle_legal_workflow) {
     asx_region_id rid;
     asx_budget budget;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
 
     /* Full legal workflow: open region, reserve obligation,
      * commit obligation, close region, drain */
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(test_run_in_task(rid, reserve_commit_body, &rid), ASX_OK);
 
     /* Ghost should have no violations for legal operations */
@@ -413,10 +414,10 @@ TEST(ghost_lifecycle_legal_workflow) {
 TEST(ghost_lifecycle_obligation_abort) {
     asx_region_id rid;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(test_run_in_task(rid, reserve_abort_body, &rid), ASX_OK);
 
     /* Abort is legal, no violations */

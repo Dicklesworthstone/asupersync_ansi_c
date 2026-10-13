@@ -37,7 +37,7 @@ static asx_status poll_count_twice(void *user_data, asx_task_id self) {
 
 static void setup(void) {
     MUST_OK(asx_runtime_init_default(&g_rt));
-    MUST_OK(asx_region_open(&g_rid));
+    MUST_OK(asx_region_open(&g_rt, &g_rid));
     MUST_OK(asx_cx_init(&g_cx, g_rid, ASX_INVALID_ID, ASX_CAP_ALL));
     g_poll_count = 0;
 }

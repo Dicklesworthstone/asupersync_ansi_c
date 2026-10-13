@@ -20,6 +20,7 @@
 
 #include "../../../src/runtime/runtime_internal.h"
 #include "../../test_harness.h"
+#include "../../test_runtime.h"
 #include "../../test_task.h"
 #include <asx/asx.h>
 #include <asx/core/cleanup.h>
@@ -238,7 +239,7 @@ TEST(mismatched_creation_preserves_live_work_and_all_objects) {
     uint64_t mismatch = ASX_CONFIG_FINGERPRINT ^ UINT64_C(1);
 
     ASSERT_EQ(asx_runtime_init_default(&active), ASX_OK);
-    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    ASSERT_EQ(asx_region_open(&active, &region), ASX_OK);
     ASSERT_EQ(asx_task_spawn(region, dummy_poll, NULL, &task), ASX_OK);
     ASSERT_EQ(asx_runtime_config_init(&cfg), ASX_OK);
     ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
@@ -377,11 +378,11 @@ TEST(conflicting_init_preserves_live_runtime_and_destination) {
     asx_budget run;
     asx_outcome outcome;
     preserved_task_state state;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     make_valid_config(&cfg);
     make_valid_hooks(&hooks);
     MUST_OK(asx_runtime_init(&a, &cfg, &hooks));
-    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    ASSERT_EQ(asx_region_open(&a, &region), ASX_OK);
     state.polls = 0;
     state.obligation = ASX_INVALID_ID;
     state.commit = ASX_E_PENDING;
@@ -493,7 +494,7 @@ TEST(runtime_arenas_live_in_the_callers_storage_and_return_to_the_static_block) 
     asx_budget run;
     asx_outcome outcome;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     static_regions = (const void *)g_kernels[0]->regions;
     static_tasks = (const void *)g_kernels[0]->tasks;
     static_obligations = (const void *)g_kernels[0]->obligations;
@@ -513,7 +514,7 @@ TEST(runtime_arenas_live_in_the_callers_storage_and_return_to_the_static_block) 
 
     /* The runtime works in it: init zeroed the block, a region opens in
      * slot 0 and a task completes. */
-    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rt, &region), ASX_OK);
     ASSERT_TRUE(g_kernels[0]->regions[0].alive);
     ASSERT_EQ(asx_task_spawn(region, dummy_poll, NULL, &task), ASX_OK);
     ASSERT_TRUE(g_kernels[0]->tasks[0].alive);
@@ -533,7 +534,7 @@ TEST(runtime_arenas_live_in_the_callers_storage_and_return_to_the_static_block) 
     cfg.storage_size = 0u;
     MUST_OK(asx_runtime_init(&rt, &cfg, &hooks));
     ASSERT_TRUE((const void *)g_kernels[0]->regions == static_regions);
-    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rt, &region), ASX_OK);
     asx_runtime_shutdown(&rt);
     storage_block_free(&blk);
 }
@@ -550,7 +551,7 @@ TEST(kernel_registry_names_only_the_kernels_runtimes_hold) {
     asx_region_id region;
     uint16_t tag;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_TRUE(g_kernels[0] == &g_kernel_static);
     ASSERT_TRUE(asx_kernel_for_tag(0u) == &g_kernel_static);
     ASSERT_EQ(g_kernel_static.tag, (uint16_t)0u);
@@ -560,7 +561,7 @@ TEST(kernel_registry_names_only_the_kernels_runtimes_hold) {
     ASSERT_FALSE(asx_kernel_any_held());
 
     /* A handle is told apart by the tag it carries. */
-    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &region), ASX_OK);
     ASSERT_TRUE(asx_kernel_of(region) == &g_kernel_static);
     ASSERT_TRUE(asx_kernel_of(asx_handle_with_runtime_tag(region, 1u)) == NULL);
 
@@ -605,7 +606,7 @@ TEST(kernel_clear_leaves_another_held_kernel_and_the_process_state_alone) {
     asx_runtime_config cfg;
     asx_runtime_hooks hooks;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_FALSE(asx_kernel_other_held(NULL));
     ASSERT_FALSE(asx_kernel_other_held(g_kernels[0]));
 
@@ -633,7 +634,7 @@ TEST(kernel_clear_leaves_another_held_kernel_and_the_process_state_alone) {
         /* Clearing kernel 0 drops its own hold, arenas and trace, and leaves
          * the other kernel's hold and trace, and the process-wide event
          * log, alone. */
-        ASSERT_EQ(asx_region_open(&region), ASX_OK);
+        ASSERT_EQ(asx_region_open(&rt, &region), ASX_OK);
         asx_trace_emit_internal(k2, ASX_TRACE_USER, 7u, 8u);
         ASSERT_TRUE(asx_trace_emitted_total() != 0u);
         ASSERT_TRUE(asx_event_log_count() != 0u);
@@ -657,7 +658,7 @@ TEST(kernel_clear_leaves_another_held_kernel_and_the_process_state_alone) {
     }
 #endif
     asx_runtime_shutdown(&rt);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 }
 
 /* The default seeded entropy stream's step (hooks.c), as the channel-wake
@@ -737,7 +738,7 @@ TEST(kernel_clock_and_entropy_belong_to_the_kernel) {
     }
 #endif
     asx_runtime_shutdown(&rt);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 }
 
 /* K18: a runtime's trace (ring, counters, digest) is its kernel's; the
@@ -809,7 +810,7 @@ TEST(kernel_trace_belongs_to_the_kernel) {
     }
 #endif
     asx_runtime_shutdown(&rt);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 }
 
 /* K18: a poll run from inside another poll (a second runtime's scheduler
@@ -853,8 +854,8 @@ TEST(nested_poll_restores_the_current_task_and_the_ledger_binding) {
     asx_task_slot *outer_slot;
 
     memset(&c, 0, sizeof(c));
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &region), ASX_OK);
     ASSERT_EQ(asx_task_spawn(region, nested_outer_poll, &c, &outer), ASX_OK);
     ASSERT_EQ(asx_task_spawn(region, nested_inner_poll, &c, &inner), ASX_OK);
     ASSERT_EQ(asx_task_slot_lookup(outer, &outer_slot), ASX_OK);
@@ -873,7 +874,34 @@ TEST(nested_poll_restores_the_current_task_and_the_ledger_binding) {
     /* The outermost poll leaves both unbound, as a sweep poll always did. */
     ASSERT_EQ(asx_task_current(), ASX_INVALID_ID);
     ASSERT_EQ(asx_error_ledger_bound_task(), ASX_INVALID_ID);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
+}
+
+TEST(region_open_names_its_runtime) {
+    asx_runtime absent;
+    asx_region_id rid = ASX_INVALID_ID;
+
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(NULL, &rid), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_region_open(test_runtime(), NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(rid, ASX_INVALID_ID);
+
+    /* A tag no runtime holds names no kernel: refused, and a reset of it
+     * (or of NULL) touches nothing. */
+    memset(&absent, 0, sizeof(absent));
+    absent.tag = (uint16_t)ASX_MAX_RUNTIMES;
+    ASSERT_EQ(asx_region_open(&absent, &rid), ASX_E_INVALID_STATE);
+    ASSERT_EQ(rid, ASX_INVALID_ID);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
+    asx_runtime_reset(&absent);
+    asx_runtime_reset(NULL);
+    ASSERT_EQ(asx_resource_used(ASX_RESOURCE_REGION), 1u);
+
+    /* The zeroed object is the static kernel: its region carries tag 0, and
+     * the reset through the same object ends it. */
+    ASSERT_EQ(asx_handle_runtime_tag(rid), (uint16_t)0u);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_resource_used(ASX_RESOURCE_REGION), 0u);
 }
 
 TEST(runtime_storage_refusals_bind_nothing_and_change_no_byte) {
@@ -884,7 +912,7 @@ TEST(runtime_storage_refusals_bind_nothing_and_change_no_byte) {
     storage_block blk;
     const void *static_regions;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     static_regions = (const void *)g_kernels[0]->regions;
     ASSERT_TRUE(storage_block_make(&blk, 0xA5u));
     make_valid_config(&cfg);
@@ -937,12 +965,12 @@ TEST(refused_storage_init_preserves_the_live_runtime_and_the_block) {
     asx_budget run;
     asx_outcome outcome;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     make_valid_config(&cfg);
     make_valid_hooks(&hooks);
     MUST_OK(asx_runtime_init(&a, &cfg, &hooks));
     static_regions = (const void *)g_kernels[0]->regions;
-    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    ASSERT_EQ(asx_region_open(&a, &region), ASX_OK);
     ASSERT_EQ(asx_task_spawn(region, dummy_poll, NULL, &task), ASX_OK);
 
     ASSERT_TRUE(storage_block_make(&blk, 0xA5u));
@@ -981,7 +1009,7 @@ TEST(runtimes_in_turn_in_their_own_blocks_do_not_share_arenas) {
     asx_task_id tb;
     asx_budget run;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     make_valid_config(&cfg);
     make_valid_hooks(&hooks);
     ASSERT_TRUE(storage_block_make(&blk_a, 0xA5u));
@@ -990,7 +1018,7 @@ TEST(runtimes_in_turn_in_their_own_blocks_do_not_share_arenas) {
     cfg.storage = blk_a.block;
     cfg.storage_size = blk_a.size;
     MUST_OK(asx_runtime_init(&rt, &cfg, &hooks));
-    ASSERT_EQ(asx_region_open(&ra), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rt, &ra), ASX_OK);
     ASSERT_EQ(asx_task_spawn(ra, dummy_poll, NULL, &ta), ASX_OK);
     run = asx_budget_from_polls(8u);
     ASSERT_EQ(asx_scheduler_run(ra, &run), ASX_OK);
@@ -1005,7 +1033,7 @@ TEST(runtimes_in_turn_in_their_own_blocks_do_not_share_arenas) {
     cfg.storage = blk_b.block;
     cfg.storage_size = blk_b.size;
     MUST_OK(asx_runtime_init(&rt, &cfg, &hooks));
-    ASSERT_EQ(asx_region_open(&rb), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rt, &rb), ASX_OK);
     ASSERT_EQ(rb, ra);
     ASSERT_EQ(asx_task_spawn(rb, dummy_poll, NULL, &tb), ASX_OK);
     ASSERT_EQ(tb, ta);
@@ -1026,7 +1054,7 @@ TEST(stale_runtime_reports_uninitialized_after_new_init) {
 
     MUST_OK(asx_runtime_init_default(&a));
     ASSERT_TRUE(asx_runtime_is_initialized(&a));
-    asx_runtime_reset(); /* Explicit teardown permits the new singleton. */
+    asx_runtime_reset(&a); /* Explicit teardown permits the new singleton. */
     MUST_OK(asx_runtime_init_default(&b));
     ASSERT_FALSE(asx_runtime_is_initialized(&a));
     ASSERT_TRUE(asx_runtime_is_initialized(&b));
@@ -1050,7 +1078,7 @@ TEST(second_init_is_refused_while_a_runtime_is_live) {
 
     MUST_OK(asx_runtime_init_default(&a));
     ASSERT_TRUE(asx_runtime_is_initialized(&a));
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&a, &r), ASX_OK);
 
     memset(&b, 0, sizeof(b));
     ASSERT_EQ(asx_runtime_init_default(&b), ASX_E_INVALID_STATE);
@@ -1078,7 +1106,7 @@ TEST(explicit_shutdown_permits_runtime_restart) {
 
     MUST_OK(asx_runtime_init_default(&a));
     gen = a.generation;
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&a, &r), ASX_OK);
     ASSERT_EQ(asx_runtime_init_default(&a), ASX_E_INVALID_STATE);
     ASSERT_TRUE(asx_runtime_is_initialized(&a));
     ASSERT_EQ(a.generation, gen);
@@ -1098,7 +1126,7 @@ TEST(runtime_reset_releases_the_live_runtime) {
     asx_runtime a, b;
 
     MUST_OK(asx_runtime_init_default(&a));
-    asx_runtime_reset();
+    asx_runtime_reset(&a);
     ASSERT_FALSE(asx_runtime_is_initialized(&a));
     memset(&b, 0, sizeof(b));
     ASSERT_EQ(asx_runtime_init_default(&b), ASX_OK);
@@ -1653,7 +1681,7 @@ TEST(counts_reflect_opened_region) {
     asx_region_id rid;
     MUST_OK(asx_runtime_init_default(&rt));
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rt, &rid), ASX_OK);
     ASSERT_EQ(asx_runtime_region_count(&rt), 1u);
 
     asx_runtime_shutdown(&rt);
@@ -1665,7 +1693,7 @@ TEST(counts_reflect_spawned_task) {
     asx_task_id tid;
     MUST_OK(asx_runtime_init_default(&rt));
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rt, &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, dummy_poll, NULL, &tid), ASX_OK);
     ASSERT_EQ(asx_runtime_task_count(&rt), 1u);
 
@@ -1679,7 +1707,7 @@ TEST(task_count_retains_completed_task_slot_until_reset) {
     asx_budget budget;
 
     MUST_OK(asx_runtime_init_default(&rt));
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rt, &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, dummy_poll, NULL, &tid), ASX_OK);
 
     budget = asx_budget_from_polls(8);
@@ -1710,7 +1738,7 @@ TEST(runtime_is_quiescent_true_with_idle_open_region) {
     asx_region_id rid;
 
     MUST_OK(asx_runtime_init_default(&rt));
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rt, &rid), ASX_OK);
     ASSERT_TRUE(asx_runtime_is_quiescent(&rt));
     asx_runtime_shutdown(&rt);
 }
@@ -1724,7 +1752,7 @@ TEST(runtime_is_quiescent_false_with_closing_region) {
     uint32_t i;
 
     MUST_OK(asx_runtime_init_default(&rt));
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rt, &rid), ASX_OK);
     ASSERT_EQ(asx_region_slot_lookup(rid, &region), ASX_OK);
     for (i = 0; i < 3u; i++) {
         region->state = closing[i];
@@ -1746,7 +1774,7 @@ TEST(runtime_is_quiescent_false_with_pending_lab_cancel_command) {
 
     MUST_OK(asx_runtime_init_default(&rt));
     ASSERT_EQ(asx_scheduler_use_lab_dispatch(7u), ASX_OK);
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rt, &rid), ASX_OK);
     ASSERT_TRUE(asx_runtime_is_quiescent(&rt));
     memset(&reason, 0, sizeof(reason));
     reason.kind = ASX_CANCEL_SHUTDOWN;
@@ -1767,7 +1795,7 @@ TEST(runtime_is_quiescent_false_with_live_task) {
     asx_region_slot *region = NULL;
 
     MUST_OK(asx_runtime_init_default(&rt));
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rt, &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, dummy_poll, NULL, &tid), ASX_OK);
     ASSERT_EQ(asx_region_slot_lookup(rid, &region), ASX_OK);
     region->state = ASX_REGION_CLOSED;
@@ -1783,7 +1811,7 @@ TEST(runtime_is_quiescent_true_with_completed_task_in_closed_region) {
     asx_budget budget;
 
     MUST_OK(asx_runtime_init_default(&rt));
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rt, &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, dummy_poll, NULL, &tid), ASX_OK);
 
     budget = asx_budget_from_polls(8);
@@ -1804,7 +1832,7 @@ TEST(runtime_is_quiescent_false_with_pending_obligation) {
     asx_task_slot *holder_slot = NULL;
 
     MUST_OK(asx_runtime_init_default(&rt));
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rt, &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, dummy_poll, NULL, &holder), ASX_OK);
     ASSERT_EQ(asx_obligation_reserve_ex(rid, ASX_OBLIGATION_KIND_GENERIC, holder, &oid), ASX_OK);
     ASSERT_EQ(asx_region_slot_lookup(rid, &region), ASX_OK);
@@ -1827,7 +1855,7 @@ TEST(runtime_is_quiescent_false_with_pending_region_cleanup) {
     int cleaned = 0;
 
     MUST_OK(asx_runtime_init_default(&rt));
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rt, &rid), ASX_OK);
     ASSERT_EQ(asx_region_slot_lookup(rid, &region), ASX_OK);
     region->state = ASX_REGION_CLOSED;
     ASSERT_EQ(asx_cleanup_push(&region->cleanup, cleanup_mark, &cleaned, &handle), ASX_OK);
@@ -2051,7 +2079,7 @@ TEST(full_roundtrip) {
     ASSERT_TRUE(asx_runtime_is_initialized(&rt));
 
     /* Open region */
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rt, &rid), ASX_OK);
     ASSERT_EQ(asx_runtime_region_count(&rt), 1u);
 
     /* Reserve and commit obligation */
@@ -2081,6 +2109,7 @@ int main(void) {
     RUN_TEST(kernel_clock_and_entropy_belong_to_the_kernel);
     RUN_TEST(kernel_trace_belongs_to_the_kernel);
     RUN_TEST(nested_poll_restores_the_current_task_and_the_ledger_binding);
+    RUN_TEST(region_open_names_its_runtime);
     RUN_TEST(runtime_storage_refusals_bind_nothing_and_change_no_byte);
     RUN_TEST_IF(ASX_MAX_RUNTIMES == 1u,
                 refused_storage_init_preserves_the_live_runtime_and_the_block,

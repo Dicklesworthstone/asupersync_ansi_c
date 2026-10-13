@@ -12,6 +12,7 @@
 
 #include "../../../src/runtime/runtime_internal.h"
 #include "../../test_harness.h"
+#include "../../test_runtime.h"
 #include <asx/asx.h>
 #include <asx/core/cleanup.h>
 #include <asx/core/ghost.h>
@@ -38,7 +39,7 @@ static void cleanup_mark(void *ctx) {
 }
 
 static void fresh(void) {
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
 }
 
@@ -108,7 +109,7 @@ TEST(kernel_oracles_pass_on_a_healthy_tree_with_a_closed_child) {
     fresh();
     memset(&lab, 0, sizeof(lab));
     lab.initialized = 1;
-    ASSERT_EQ(asx_region_open(&root), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &root), ASX_OK);
     ASSERT_EQ(asx_region_open_child(root, &child), ASX_OK);
     ASSERT_EQ(asx_task_spawn(child, poll_complete, NULL, &t), ASX_OK);
     budget = asx_budget_from_polls(100);
@@ -129,7 +130,7 @@ TEST(task_leak_names_a_closed_region_with_a_live_task) {
     asx_oracle_result r;
 
     fresh();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &t), ASX_OK);
     ASSERT_EQ(asx_region_slot_lookup(rid, &region), ASX_OK);
     ASSERT_TRUE(all_pass());
@@ -152,7 +153,7 @@ TEST(obligation_leak_names_a_closed_region_with_a_reserved_obligation) {
     asx_oracle_result r;
 
     fresh();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &holder), ASX_OK);
     ASSERT_EQ(asx_obligation_reserve_ex(rid, ASX_OBLIGATION_KIND_GENERIC, holder, &oid), ASX_OK);
     ASSERT_EQ(asx_region_slot_lookup(rid, &region), ASX_OK);
@@ -173,7 +174,7 @@ TEST(finalizer_names_a_closed_region_with_cleanup_pending) {
     int ran = 0;
 
     fresh();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_region_slot_lookup(rid, &region), ASX_OK);
     asx_cleanup_init(&region->cleanup);
     ASSERT_EQ(asx_cleanup_push(&region->cleanup, cleanup_mark, &ran, &handle), ASX_OK);
@@ -194,7 +195,7 @@ TEST(quiescence_names_a_closed_region_with_a_child_that_is_not_closed) {
     asx_oracle_result r;
 
     fresh();
-    ASSERT_EQ(asx_region_open(&root), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &root), ASX_OK);
     ASSERT_EQ(asx_region_open_child(root, &child), ASX_OK);
     ASSERT_EQ(asx_region_slot_lookup(root, &parent), ASX_OK);
     ASSERT_TRUE(all_pass());
@@ -214,19 +215,19 @@ TEST(region_tree_names_a_second_root_and_an_unlisted_child) {
     asx_oracle_result r;
 
     fresh();
-    ASSERT_EQ(asx_region_open(&a), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &a), ASX_OK);
     ASSERT_EQ(asx_region_open_child(a, &child), ASX_OK);
     ASSERT_EQ((int)check("region_tree").verdict, (int)ASX_ORACLE_PASS);
 
     /* The rooted-tree rule: a second parentless region. */
-    ASSERT_EQ(asx_region_open(&b), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &b), ASX_OK);
     r = check("region_tree");
     ASSERT_EQ((int)r.verdict, (int)ASX_ORACLE_FAIL);
     ASSERT_STR_EQ(r.message, "the region tree has more than one root");
 
     /* A child its parent does not list. */
     fresh();
-    ASSERT_EQ(asx_region_open(&a), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &a), ASX_OK);
     ASSERT_EQ(asx_region_open_child(a, &child), ASX_OK);
     ASSERT_EQ(asx_region_slot_lookup(a, &parent), ASX_OK);
     parent->child_count = 0u;
@@ -244,7 +245,7 @@ TEST(deadline_monotone_names_a_child_with_a_later_deadline_than_its_parent) {
     asx_oracle_result r;
 
     fresh();
-    ASSERT_EQ(asx_region_open(&root), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &root), ASX_OK);
     ASSERT_EQ(asx_region_open_child(root, &child), ASX_OK);
     ASSERT_EQ(asx_region_slot_lookup(root, &rs), ASX_OK);
     ASSERT_EQ(asx_region_slot_lookup(child, &cs), ASX_OK);
@@ -267,7 +268,7 @@ TEST(cancellation_protocol_names_a_child_a_region_cancel_did_not_reach) {
     asx_oracle_result r;
 
     fresh();
-    ASSERT_EQ(asx_region_open(&root), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &root), ASX_OK);
     ASSERT_EQ(asx_region_open_child(root, &child), ASX_OK);
     ASSERT_EQ(asx_region_slot_lookup(root, &rs), ASX_OK);
     ASSERT_EQ(asx_region_slot_lookup(child, &cs), ASX_OK);
@@ -280,7 +281,7 @@ TEST(cancellation_protocol_names_a_child_a_region_cancel_did_not_reach) {
 
     /* The kernel's own region cancel reaches every descendant. */
     fresh();
-    ASSERT_EQ(asx_region_open(&root), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &root), ASX_OK);
     ASSERT_EQ(asx_region_open_child(root, &child), ASX_OK);
     memset(&req, 0, sizeof(req));
     req.kind = ASX_CANCEL_USER;
@@ -310,7 +311,7 @@ TEST(cancel_correctness_names_a_witness_that_is_not_its_tasks) {
 
     /* The kernel's own witness is its task's. */
     fresh();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &t), ASX_OK);
     request_cancel(rid, t);
     ASSERT_EQ(asx_task_slot_lookup(t, &ts), ASX_OK);
@@ -354,7 +355,7 @@ TEST(cancel_debt_names_a_requested_cancel_that_nothing_will_run) {
     /* Without lab dispatch the sweep's idle handling delivers the cancel:
      * the same state is not a violation, and the oracle says it did not look. */
     fresh();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &t), ASX_OK);
     request_cancel(rid, t);
     ASSERT_EQ(asx_task_slot_lookup(t, &ts), ASX_OK);
@@ -366,7 +367,7 @@ TEST(cancel_debt_names_a_requested_cancel_that_nothing_will_run) {
     /* Under lab dispatch the request scheduled the task. */
     fresh();
     ASSERT_EQ(asx_scheduler_use_lab_dispatch(1u), ASX_OK);
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &t), ASX_OK);
     request_cancel(rid, t);
     ASSERT_EQ(asx_task_slot_lookup(t, &ts), ASX_OK);
@@ -406,7 +407,7 @@ TEST(task_counters_names_a_region_whose_counter_disagrees_with_its_tasks) {
     asx_budget budget;
 
     fresh();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_region_open_child(rid, &other), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &a), ASX_OK);
     ASSERT_EQ(asx_task_spawn(other, poll_pending, NULL, &b), ASX_OK);
@@ -434,7 +435,7 @@ TEST(task_counters_names_a_region_whose_counter_disagrees_with_its_tasks) {
 
     /* The kernel's own completion keeps them equal. */
     fresh();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &a), ASX_OK);
     ASSERT_EQ((int)check("task_counters").verdict, (int)ASX_ORACLE_PASS);
     budget = asx_budget_from_polls(100);
@@ -453,7 +454,7 @@ TEST(arena_counters_names_a_live_counter_or_free_list_that_disagrees_with_its_ar
 
     /* Two completed tasks, one joined: its slot is released and on the free list. */
     fresh();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &a), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &b), ASX_OK);
     budget = asx_budget_from_polls(100);
@@ -506,7 +507,7 @@ TEST(obligation_leak_names_a_reserved_obligation_whose_holder_completed) {
     asx_oracle_result r;
 
     fresh();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &holder), ASX_OK);
     ASSERT_EQ(asx_obligation_reserve_ex(rid, ASX_OBLIGATION_KIND_GENERIC, holder, &oid), ASX_OK);
     ASSERT_EQ(asx_task_slot_lookup(holder, &ts), ASX_OK);
@@ -542,7 +543,7 @@ TEST(region_leak_names_a_closing_region_with_nothing_left_to_wait_for) {
     int ran = 0;
 
     fresh();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &t), ASX_OK);
     ASSERT_EQ(asx_region_slot_lookup(rid, &region), ASX_OK);
     ASSERT_EQ(asx_task_slot_lookup(t, &ts), ASX_OK);
@@ -586,7 +587,7 @@ TEST(cancel_signal_ordering_names_a_child_cancelled_by_a_parent_that_was_not) {
 
     /* The kernel's region cancel visits the parent first. */
     fresh();
-    ASSERT_EQ(asx_region_open(&root), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &root), ASX_OK);
     ASSERT_EQ(asx_region_open_child(root, &child), ASX_OK);
     memset(&req, 0, sizeof(req));
     req.kind = ASX_CANCEL_USER;
@@ -601,7 +602,7 @@ TEST(cancel_signal_ordering_names_a_child_cancelled_by_a_parent_that_was_not) {
 
     /* Orphaned: the child carries its parent's cancel, the parent has none. */
     fresh();
-    ASSERT_EQ(asx_region_open(&root), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &root), ASX_OK);
     ASSERT_EQ(asx_region_open_child(root, &child), ASX_OK);
     ASSERT_EQ(asx_region_slot_lookup(root, &rs), ASX_OK);
     ASSERT_EQ(asx_region_slot_lookup(child, &cs), ASX_OK);
@@ -645,7 +646,7 @@ TEST(channel_atomicity_names_counters_that_disagree_with_a_channels_permits_and_
     /* A channel the kernel made and used: one message queued, one permit
      * outstanding, one cloned sender. */
     fresh();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_channel_create(rid, 4u, &ch), ASX_OK);
     ASSERT_EQ(asx_channel_try_reserve(ch, &permit), ASX_OK);
     ASSERT_EQ(asx_send_permit_send(&permit, 7u), ASX_OK);
@@ -730,7 +731,7 @@ TEST(down_order_names_monitors_fired_out_of_order) {
 
     /* Two monitors of one exit fire by ascending reference. */
     fresh();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &watcher), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &target), ASX_OK);
     ASSERT_EQ(asx_monitor_establish(watcher, target, &r1), ASX_OK);
@@ -775,7 +776,7 @@ TEST(reply_linearity_names_an_obligation_resolved_twice_or_never_reserved) {
 
     /* The kernel's own reserve and commit leave one of each in the ring. */
     fresh();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_reserve_commit, &rid, &t), ASX_OK);
     budget = asx_budget_from_polls(8u);
     ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
@@ -814,7 +815,7 @@ TEST(loser_drain_names_a_race_loser_that_outlived_the_task_that_raced_it) {
     asx_oracle_result r;
 
     fresh();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &owner), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &loser), ASX_OK);
     ASSERT_EQ(asx_task_slot_lookup(owner, &os), ASX_OK);

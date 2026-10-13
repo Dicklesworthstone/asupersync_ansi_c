@@ -13,6 +13,7 @@
  */
 
 #include "../../test_harness.h"
+#include "../../test_runtime.h"
 #include <asx/asx.h>
 #include <asx/core/budget.h>
 #include <asx/core/cancel.h>
@@ -117,9 +118,9 @@ TEST(auto_watchdog_checkpoint_001_basic) {
     asx_task_state state;
     asx_outcome out;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &tid), ASX_OK);
 
     /* Run with generous budget — task completes in first poll */
@@ -140,9 +141,9 @@ TEST(auto_watchdog_checkpoint_001_checkpoint_clean) {
     asx_budget budget;
     asx_checkpoint_result cr;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
 
     /* Run one round to make task Running */
@@ -176,9 +177,9 @@ TEST(auto_watchdog_checkpoint_001_scheduler_quiescent) {
     uint32_t i;
     int found_quiescent = 0;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &tid), ASX_OK);
 
     budget = asx_budget_from_polls(10);
@@ -213,9 +214,9 @@ TEST(auto_degraded_transition_002_phase_progression) {
     asx_checkpoint_result cr;
     asx_cancel_phase phase;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_checkpoint_cooperative, NULL, &tid), ASX_OK);
 
     /* Run once to make Running */
@@ -253,9 +254,9 @@ TEST(auto_degraded_transition_002_cooperative_completion) {
     asx_task_state state;
     asx_outcome out;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_checkpoint_cooperative, NULL, &tid), ASX_OK);
 
     /* Run once to make Running */
@@ -285,10 +286,10 @@ TEST(auto_degraded_transition_002_deterministic_events) {
     uint32_t event_count_run2;
 
     /* First run */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_trace_reset();
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_checkpoint_cooperative, NULL, &tid), ASX_OK);
 
     budget = asx_budget_from_polls(1);
@@ -301,10 +302,10 @@ TEST(auto_degraded_transition_002_deterministic_events) {
     event_count_run1 = asx_scheduler_event_count();
 
     /* Second run — identical scenario */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_trace_reset();
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_checkpoint_cooperative, NULL, &tid), ASX_OK);
 
     budget = asx_budget_from_polls(1);
@@ -374,7 +375,7 @@ TEST(auto_deadline_miss_003_forced_completion) {
 
     ASSERT_EQ(reset_with_hard_cleanup_bound(), ASX_OK);
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     /* Stubborn task: checkpoints but never completes voluntarily */
     ASSERT_EQ(asx_task_spawn(rid, poll_checkpoint_stubborn, NULL, &tid), ASX_OK);
 
@@ -415,7 +416,7 @@ TEST(auto_deadline_miss_003_cancel_forced_event) {
 
     ASSERT_EQ(reset_with_hard_cleanup_bound(), ASX_OK);
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_checkpoint_stubborn, NULL, &tid), ASX_OK);
 
     budget = asx_budget_from_polls(1);
@@ -452,9 +453,9 @@ TEST(auto_deadline_miss_003_no_partial_mutation) {
     counter.poll_count = 0;
     counter.checkpoint_seen = 0;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_counting, &counter, &tid), ASX_OK);
 
     /* Run once to make Running */
@@ -491,9 +492,9 @@ TEST(deadline_cancel_transitions_are_legal) {
     asx_budget budget;
     asx_task_state state;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
 
     /* Created → Running (via scheduler poll) */
@@ -527,9 +528,9 @@ TEST(deadline_strengthen_to_shutdown) {
     asx_budget budget;
     asx_checkpoint_result cr;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
 
     budget = asx_budget_from_polls(1);
@@ -589,9 +590,9 @@ TEST(watchdog_region_containment_after_deadline) {
     asx_task_id tid;
     int poisoned = 0;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
 
     /* Poison the region (simulating deadline watchdog triggering containment) */
@@ -621,9 +622,9 @@ TEST(scheduler_budget_event_on_exhaustion) {
     uint32_t i;
     int found_budget = 0;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
 
     /* Run with exactly 2 polls — task never completes, budget exhausts */
@@ -649,10 +650,10 @@ TEST(deterministic_trace_digest_across_runs) {
     uint64_t digest2;
 
     /* First run */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_trace_reset();
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_checkpoint_cooperative, NULL, &tid), ASX_OK);
 
     budget = asx_budget_from_polls(1);
@@ -664,10 +665,10 @@ TEST(deterministic_trace_digest_across_runs) {
     digest1 = asx_trace_digest();
 
     /* Second identical run */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_trace_reset();
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_checkpoint_cooperative, NULL, &tid), ASX_OK);
 
     budget = asx_budget_from_polls(1);

@@ -1058,6 +1058,7 @@ TEST(a_recovery_replay_checks_identity_and_only_the_prefix_s_records) {
 #include "../../../src/fs/fs_native.h"
 #include "../../../src/net/net_native.h"
 #include "../../../src/process/process_native.h"
+#include "../../test_runtime.h"
 #include <asx/fs/fs.h>
 #include <asx/net/net.h>
 #include <asx/platform/posix.h>
@@ -1125,7 +1126,7 @@ static asx_status run_program(program_obs *o, int reordered) {
     (void)close(fds[1]);
     if (st != ASX_OK) return st;
 
-    st = asx_region_open(&region);
+    st = asx_region_open(test_runtime(), &region);
     if (st != ASX_OK) return st;
     st = asx_sleep_init(&sl, 3000000u);
     if (st != ASX_OK) return st;
@@ -2063,7 +2064,7 @@ static asx_status tcp_program(void *obs) {
     asx_status st;
 
     memset(o, 0, sizeof(*o));
-    st = asx_region_open(&region);
+    st = asx_region_open(test_runtime(), &region);
     if (st != ASX_OK) return st;
     st = asx_task_spawn_captured(region, tcp_server_poll, (uint32_t)sizeof(tcp_server), NULL, &ts,
                                  (void **)&s);
@@ -2200,7 +2201,7 @@ static asx_status job_program(void *obs) {
     asx_status st;
 
     memset(o, 0, sizeof(*o));
-    st = asx_region_open(&region);
+    st = asx_region_open(test_runtime(), &region);
     if (st != ASX_OK) return st;
     st = asx_task_spawn_captured(region, job_waiter_poll, (uint32_t)sizeof(job_waiter), NULL, &t,
                                  (void **)&w);
@@ -2466,7 +2467,7 @@ static asx_status spin_program(void *obs) {
     asx_budget budget;
     asx_status st;
 
-    st = asx_region_open(&region);
+    st = asx_region_open(test_runtime(), &region);
     if (st != ASX_OK) return st;
     st = asx_task_spawn(region, spin_poll, NULL, &task);
     if (st != ASX_OK) return st;

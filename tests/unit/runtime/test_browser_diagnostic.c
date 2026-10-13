@@ -10,6 +10,7 @@
  */
 
 #include "test_harness.h"
+#include "test_runtime.h"
 #include <asx/asx.h>
 #include <asx/core/ghost.h>
 #include <asx/runtime/browser_diagnostic.h>
@@ -290,9 +291,9 @@ TEST(flake_match_different_digest) {
     /* Emit a trace event to change the digest */
     asx_trace_reset();
     {
-        asx_runtime_reset();
+        asx_runtime_reset(test_runtime());
         asx_region_id rid;
-        asx_status rc = asx_region_open(&rid);
+        asx_status rc = asx_region_open(test_runtime(), &rid);
         (void)rc;
         asx_budget budget = asx_budget_from_polls(8);
         rc = asx_region_drain(rid, &budget);

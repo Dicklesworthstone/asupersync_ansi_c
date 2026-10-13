@@ -20,6 +20,7 @@
  */
 
 #include "../../test_harness.h"
+#include "../../test_runtime.h"
 #include <asx/asx.h>
 #include <asx/core/budget.h>
 #include <asx/core/cancel.h>
@@ -79,7 +80,7 @@ static asx_status poll_fail(void *ctx, asx_task_id id) {
 }
 
 static void reset_all(void) {
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     asx_scheduler_event_reset();
 }
@@ -98,7 +99,7 @@ TEST(hft_burst_admission_fills_capacity) {
     uint32_t remaining;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     /* Pre-check: capacity should be available */
     remaining = asx_resource_remaining(ASX_RESOURCE_TASK);
@@ -129,7 +130,7 @@ TEST(hft_burst_overload_rejected_cleanly) {
     asx_budget budget;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     /* Fill all task slots */
     for (i = 0; i < ASX_MAX_TASKS; i++) {
@@ -150,7 +151,7 @@ TEST(hft_burst_admission_gate_precheck) {
     uint32_t i;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     /* Pre-check: can we admit half the task arena? */
     ASSERT_EQ(asx_resource_admit(ASX_RESOURCE_TASK, ASX_MAX_TASKS / 2u), ASX_OK);
@@ -190,7 +191,7 @@ TEST(hft_burst_fairness_no_starvation) {
     uint32_t completed;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     /* Spawn 32 tasks (up to the arena), each needing 2 polls */
     for (i = 0; i < BURST(32); i++) {
@@ -227,7 +228,7 @@ TEST(hft_burst_fairness_round_robin_order) {
 
     /* Spawn 4 yield-once tasks: we expect round 0 polls all 4,
      * round 1 completes all 4 */
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     for (i = 0; i < 4; i++) {
         g_fairness_ctx[i].target_polls = 2;
         g_fairness_ctx[i].polls_done = 0;
@@ -272,7 +273,7 @@ TEST(hft_burst_tight_budget_partial_completion) {
     uint32_t completed;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     /* 16 immediate-complete tasks */
     for (i = 0; i < 16; i++) {
@@ -321,7 +322,7 @@ TEST(hft_burst_mixed_completion_times) {
     uint32_t completed;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     /* 8 immediate, 8 yield-once (2 polls), 8 yield-many (5 polls): thirds
      * of up to 24 tasks */
@@ -378,7 +379,7 @@ TEST(hft_burst_cancel_storm_resolves_all) {
     uint32_t cancelled_count;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     /* Spawn 16 checkpoint-compliant tasks */
     for (i = 0; i < 16; i++) {
@@ -424,7 +425,7 @@ static void run_replay_scenario(yield_ctx *ctxs, asx_task_id *tids) {
     asx_budget budget;
     uint32_t i;
 
-    IGNORE(asx_region_open(&rid));
+    IGNORE(asx_region_open(test_runtime(), &rid));
     for (i = 0; i < 8; i++) {
         ctxs[i].target_polls = (int)(i % 3) + 1;
         ctxs[i].polls_done = 0;
@@ -510,7 +511,7 @@ TEST(hft_burst_drain_quiescence) {
     uint32_t i;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     /* Spawn 32 immediate tasks (up to the arena) */
     for (i = 0; i < BURST(32); i++) {
@@ -549,7 +550,7 @@ TEST(hft_burst_errors_do_not_corrupt_peers) {
     asx_status run_st;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     /* 8 successful tasks + 8 failing tasks interleaved */
     for (i = 0; i < 8; i++) {
@@ -616,7 +617,7 @@ TEST(hft_burst_event_monotonicity) {
     uint32_t prev_seq;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     for (i = 0; i < BURST(32); i++) {
         ASSERT_EQ(asx_task_spawn(rid, poll_immediate, NULL, &tid), ASX_OK);
@@ -649,7 +650,7 @@ TEST(hft_burst_resource_snapshot_consistent) {
     uint32_t i;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     /* Spawn 16 tasks and check snapshot at each step */
     for (i = 0; i < 16; i++) {

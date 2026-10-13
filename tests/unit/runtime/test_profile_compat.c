@@ -13,6 +13,7 @@
  */
 
 #include "test_harness.h"
+#include "test_runtime.h"
 #include <asx/core/channel.h>
 #include <asx/runtime/profile_compat.h>
 #include <asx/runtime/runtime.h>
@@ -307,10 +308,10 @@ TEST(self_parity_after_scenario) {
 
     /* Reset telemetry to get a clean digest */
     asx_telemetry_reset();
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     /* Run a minimal scenario: open region, spawn task, schedule, drain */
-    ASSERT_EQ((int)asx_region_open(&rid), (int)ASX_OK);
+    ASSERT_EQ((int)asx_region_open(test_runtime(), &rid), (int)ASX_OK);
     ASSERT_EQ((int)asx_task_spawn(rid, noop_poll, NULL, &tid), (int)ASX_OK);
 
     budget = asx_budget_from_polls(100);

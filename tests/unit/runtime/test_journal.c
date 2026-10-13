@@ -783,7 +783,7 @@ TEST(a_journal_over_the_default_clock_keeps_it_virtual_and_a_sleep_completes) {
 
     memset(&t, 0, sizeof(t));
     ASSERT_EQ(asx_sleep_init(&t.s, 5000000ULL), ASX_OK);
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_journaled_sleeper, &t, &id), ASX_OK);
     budget = asx_budget_from_polls(100);
     ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
@@ -1792,7 +1792,7 @@ TEST(a_small_live_run_is_recorded_and_read_back) {
     (void)close(fds[1]);
 
     /* A TCP round trip between two tasks. */
-    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rt, &region), ASX_OK);
     ASSERT_EQ(asx_task_spawn_captured(region, jserver_poll, (uint32_t)sizeof(jserver), NULL, &ts,
                                       (void **)&s),
               ASX_OK);

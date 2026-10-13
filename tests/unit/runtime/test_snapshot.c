@@ -6,6 +6,7 @@
 
 #include "../../test_harness.h"
 #include "../../test_io_fd.h"
+#include "../../test_runtime.h"
 #include <asx/codec/codec.h>
 #include <asx/runtime/blocking.h>
 #include <asx/runtime/io_driver.h>
@@ -72,7 +73,7 @@ TEST(snapshot_capture_empty) {
     asx_runtime_snapshot snap;
     asx_status s;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     s = asx_runtime_snapshot_capture(&snap);
     ASSERT_EQ(s, ASX_OK);
     ASSERT_EQ(snap.io_driver_initialized, 0);
@@ -98,8 +99,8 @@ TEST(snapshot_capture_with_region) {
     asx_region_id rid;
     asx_status s;
 
-    asx_runtime_reset();
-    s = asx_region_open(&rid);
+    asx_runtime_reset(test_runtime());
+    s = asx_region_open(test_runtime(), &rid);
     ASSERT_EQ(s, ASX_OK);
 
     s = asx_runtime_snapshot_capture(&snap);
@@ -117,8 +118,8 @@ TEST(snapshot_capture_with_task) {
     asx_task_id tid;
     asx_status s;
 
-    asx_runtime_reset();
-    s = asx_region_open(&rid);
+    asx_runtime_reset(test_runtime());
+    s = asx_region_open(test_runtime(), &rid);
     ASSERT_EQ(s, ASX_OK);
     s = asx_task_spawn(rid, dummy_poll, NULL, &tid);
     ASSERT_EQ(s, ASX_OK);
@@ -139,8 +140,8 @@ TEST(snapshot_capture_completed_task_preserves_outcome_severity) {
     asx_task_id tid;
     asx_status s;
 
-    asx_runtime_reset();
-    s = asx_region_open(&rid);
+    asx_runtime_reset(test_runtime());
+    s = asx_region_open(test_runtime(), &rid);
     ASSERT_EQ(s, ASX_OK);
     s = asx_task_spawn(rid, failing_poll, NULL, &tid);
     ASSERT_EQ(s, ASX_OK);
@@ -166,8 +167,8 @@ TEST(snapshot_capture_with_obligation) {
     asx_obligation_id oid;
     asx_status s;
 
-    asx_runtime_reset();
-    s = asx_region_open(&rid);
+    asx_runtime_reset(test_runtime());
+    s = asx_region_open(test_runtime(), &rid);
     ASSERT_EQ(s, ASX_OK);
     /* Held by a live task that is never polled. */
     s = asx_task_spawn(rid, dummy_poll, NULL, &holder);
@@ -216,7 +217,7 @@ TEST(snapshot_eq_identical) {
     asx_runtime_snapshot a, b;
     asx_status s;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     s = asx_runtime_snapshot_capture(&a);
     ASSERT_EQ(s, ASX_OK);
     memcpy(&b, &a, sizeof(b));
@@ -254,15 +255,15 @@ TEST(snapshot_capture_deterministic) {
     asx_status st;
 
     /* First capture */
-    asx_runtime_reset();
-    st = asx_region_open(&rid);
+    asx_runtime_reset(test_runtime());
+    st = asx_region_open(test_runtime(), &rid);
     ASSERT_EQ(st, ASX_OK);
     st = asx_runtime_snapshot_capture(&s1);
     ASSERT_EQ(st, ASX_OK);
 
     /* Second identical run */
-    asx_runtime_reset();
-    st = asx_region_open(&rid);
+    asx_runtime_reset(test_runtime());
+    st = asx_region_open(test_runtime(), &rid);
     ASSERT_EQ(st, ASX_OK);
     st = asx_runtime_snapshot_capture(&s2);
     ASSERT_EQ(st, ASX_OK);
@@ -279,7 +280,7 @@ TEST(snapshot_to_json_empty) {
     asx_codec_buffer buf;
     asx_status s;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     s = asx_runtime_snapshot_capture(&snap);
     ASSERT_EQ(s, ASX_OK);
     asx_codec_buffer_init(&buf);
@@ -299,8 +300,8 @@ TEST(snapshot_to_json_with_entities) {
     asx_region_id rid;
     asx_status s;
 
-    asx_runtime_reset();
-    s = asx_region_open(&rid);
+    asx_runtime_reset(test_runtime());
+    s = asx_region_open(test_runtime(), &rid);
     ASSERT_EQ(s, ASX_OK);
     s = asx_runtime_snapshot_capture(&snap);
     ASSERT_EQ(s, ASX_OK);
@@ -378,41 +379,41 @@ TEST(snapshot_eq_rejects_oversized_counts) {
 int main(void) {
     fprintf(stderr, "=== snapshot unit tests ===\n");
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(snapshot_init_zeroes);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(snapshot_init_null_safe);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(snapshot_capture_empty);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(snapshot_capture_null_returns_error);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(snapshot_capture_with_region);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(snapshot_capture_with_task);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(snapshot_capture_completed_task_preserves_outcome_severity);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(snapshot_capture_with_obligation);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(snapshot_capture_includes_subsystem_state);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(snapshot_eq_identical);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(snapshot_eq_different_counts);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(snapshot_eq_null_returns_error);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(snapshot_capture_deterministic);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(snapshot_to_json_empty);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(snapshot_to_json_with_entities);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(snapshot_to_json_null_returns_error);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(snapshot_to_json_rejects_oversized_counts);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(snapshot_eq_rejects_oversized_counts);
 
     TEST_REPORT();

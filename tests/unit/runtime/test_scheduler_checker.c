@@ -12,6 +12,7 @@
  */
 
 #include "../../test_harness.h"
+#include "../../test_runtime.h"
 #include <asx/asx.h>
 #include <asx/core/cancel.h>
 #include <asx/runtime/rt.h>
@@ -282,9 +283,9 @@ static int run_scenario(const scenario *sc, uint32_t budget_polls) {
     uint32_t i;
     int ok = 1;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    if (asx_region_open(&rid) != ASX_OK) return 0;
+    if (asx_region_open(test_runtime(), &rid) != ASX_OK) return 0;
 
     /* Spawn tasks */
     for (i = 0; i < sc->ntasks; i++) {
@@ -492,8 +493,8 @@ TEST(checker_deterministic_replay) {
         asx_budget budget;
         uint32_t i;
 
-        asx_runtime_reset();
-        ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+        asx_runtime_reset(test_runtime());
+        ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
         for (i = 0; i < sc.ntasks; i++) {
             ctxs[i].behavior = sc.behaviors[i];
@@ -534,8 +535,8 @@ TEST(checker_budget_exhaustion_safe) {
     asx_status result;
     uint32_t i;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     /* Spawn 3 always-pending tasks */
     for (i = 0; i < 3; i++) {
@@ -580,7 +581,7 @@ TEST(checker_cycle_budget_checkpoint) {
     asx_outcome out;
 
     ASSERT_EQ(reset_with_hard_cleanup_bound(), ASX_OK);
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     /* Task that checkpoints but never completes on its own */
     ctx.behavior = BEHAV_CHECKPOINT_PEND;
@@ -618,8 +619,8 @@ TEST(checker_fairness_round_robin) {
     uint32_t i;
     int task_0_polled = 0, task_1_polled = 0, task_2_polled = 0;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     /* 3 always-pending tasks */
     for (i = 0; i < 3; i++) {
@@ -654,8 +655,8 @@ TEST(checker_no_starvation_mixed_completion) {
     asx_status result;
     uint32_t i;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     /* Task 0: immediate, Task 1: yield-then-ok, Task 2: immediate */
     ctxs[0].behavior = BEHAV_IMMEDIATE;

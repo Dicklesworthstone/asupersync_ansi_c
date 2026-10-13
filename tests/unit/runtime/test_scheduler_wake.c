@@ -138,7 +138,7 @@ TEST(parked_task_is_not_repolled_until_woken) {
 
     setup();
     memset(&ps, 0, sizeof(ps));
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_park_until_done, &ps, &parked), ASX_OK);
 
     /* Nothing can wake it: the run reports WOULD_BLOCK after one poll
@@ -169,7 +169,7 @@ TEST(task_wakes_another_task) {
     memset(&ps, 0, sizeof(ps));
     memset(&ws, 0, sizeof(ws));
     cd.remaining = 3u;
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_park_until_done, &ps, &parked), ASX_OK);
     /* Countdown keeps the run busy for a few rounds before the waker runs. */
     ASSERT_EQ(asx_task_spawn(r, poll_countdown, &cd, &delay), ASX_OK);
@@ -189,7 +189,7 @@ TEST(park_outside_poll_is_rejected) {
 
     setup();
     memset(&ps, 0, sizeof(ps));
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_park_until_done, &ps, &t), ASX_OK);
     ASSERT_EQ(asx_task_park(t), ASX_E_INVALID_STATE);
 }
@@ -206,7 +206,7 @@ TEST(sleep_parks_and_virtual_time_jumps_to_deadline) {
 
     setup();
     g_finish_count = 0;
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn_captured(r, poll_sleeper, (uint32_t)sizeof(sleeper_state), NULL, &t,
                                       (void **)&s),
               ASX_OK);
@@ -232,7 +232,7 @@ TEST(run_deadline_bounds_idle_waiting) {
 
     setup();
     g_finish_count = 0;
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn_captured(r, poll_sleeper, (uint32_t)sizeof(sleeper_state), NULL, &t,
                                       (void **)&s),
               ASX_OK);
@@ -261,7 +261,7 @@ TEST(sleepers_finish_in_deadline_order) {
 
     setup();
     g_finish_count = 0;
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     for (i = 0; i < 4u; i++) {
         ASSERT_EQ(asx_task_spawn_captured(r, poll_sleeper, (uint32_t)sizeof(sleeper_state), NULL,
                                           &t, (void **)&s[i]),
@@ -296,7 +296,7 @@ TEST(timeout_fires_for_parked_inner) {
     asx_budget budget;
 
     setup();
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn_captured(r, asx_timeout_poll, (uint32_t)sizeof(timeout_fixture), NULL,
                                       &t, (void **)&f),
               ASX_OK);
@@ -328,7 +328,7 @@ TEST(interval_ticks_on_virtual_time) {
     asx_budget budget;
 
     setup();
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn_captured(r, asx_interval_poll, (uint32_t)sizeof(interval_fixture),
                                       NULL, &t, (void **)&f),
               ASX_OK);
@@ -350,7 +350,7 @@ TEST(arm_timer_keeps_earliest_deadline) {
 
     setup();
     memset(&ps, 0, sizeof(ps));
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_park_until_done, &ps, &t), ASX_OK);
     ASSERT_EQ(asx_task_arm_timer(t, 50u * MS), ASX_OK);
     ASSERT_EQ(asx_task_arm_timer(t, 20u * MS), ASX_OK);
@@ -379,7 +379,7 @@ TEST(join_poll_parks_until_target_completes) {
     setup();
     g_finish_count = 0;
     memset(&js, 0, sizeof(js));
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn_captured(r, poll_sleeper, (uint32_t)sizeof(sleeper_state), NULL,
                                       &target, (void **)&s),
               ASX_OK);
@@ -406,7 +406,7 @@ TEST(join_poll_reports_error_outcome) {
 
     setup();
     memset(&js, 0, sizeof(js));
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_fail_io, NULL, &target), ASX_OK);
     ASSERT_EQ(asx_task_get_error(target, &err), ASX_E_TASK_NOT_COMPLETED);
     js.target = target;
@@ -427,7 +427,7 @@ TEST(join_poll_rejects_self_join) {
     asx_outcome out;
 
     setup();
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_ok, NULL, &t), ASX_OK);
     ASSERT_EQ(asx_task_join_poll(t, t, &out), ASX_E_INVALID_ARGUMENT);
 }
@@ -439,7 +439,7 @@ TEST(get_error_reports_failure_status) {
     asx_budget budget;
 
     setup();
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_fail_io, NULL, &t), ASX_OK);
     budget = asx_budget_from_polls(10);
     ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_E_DISCONNECTED);
@@ -460,7 +460,7 @@ TEST(cancel_wakes_parked_task) {
 
     setup();
     memset(&ps, 0, sizeof(ps));
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_park_until_done, &ps, &t), ASX_OK);
     budget = asx_budget_from_polls(100);
     ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_E_WOULD_BLOCK);
@@ -487,7 +487,7 @@ TEST(hard_cleanup_bound_completes_a_stranded_cancelled_task) {
 
     ASSERT_EQ(setup_with_cleanup_bound(1u), ASX_OK);
     memset(&ps, 0, sizeof(ps));
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_park_until_done, &ps, &t), ASX_OK);
     budget = asx_budget_from_polls(100);
     ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_E_WOULD_BLOCK);
@@ -514,7 +514,7 @@ TEST(scheduler_runs_whole_region_subtree) {
     asx_budget budget;
 
     setup();
-    ASSERT_EQ(asx_region_open(&root), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &root), ASX_OK);
     ASSERT_EQ(asx_region_open_child(root, &child), ASX_OK);
     ASSERT_EQ(asx_region_open_child(child, &grandchild), ASX_OK);
     ASSERT_EQ(asx_task_spawn(root, poll_ok, NULL, &t1), ASX_OK);
@@ -546,7 +546,7 @@ TEST(drain_cancels_sleepers_without_waiting_for_deadline) {
 
     setup();
     g_finish_count = 0;
-    ASSERT_EQ(asx_region_open(&root), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &root), ASX_OK);
     ASSERT_EQ(asx_region_open_child(root, &child), ASX_OK);
     ASSERT_EQ(asx_task_spawn_captured(child, poll_sleeper, (uint32_t)sizeof(sleeper_state), NULL,
                                       &t, (void **)&s),
@@ -580,7 +580,7 @@ TEST(wake_driven_run_is_deterministic) {
 
         setup();
         g_finish_count = 0;
-        ASSERT_EQ(asx_region_open(&r), ASX_OK);
+        ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
         for (i = 0; i < 4u; i++) {
             ASSERT_EQ(asx_task_spawn_captured(r, poll_sleeper, (uint32_t)sizeof(sleeper_state),
                                               NULL, &t, (void **)&s[i]),
@@ -605,7 +605,7 @@ TEST(run_until_idle_leaves_the_clock_to_the_caller) {
 
     setup();
     g_finish_count = 0;
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn_captured(r, poll_sleeper, (uint32_t)sizeof(sleeper_state), NULL, &t,
                                       (void **)&s),
               ASX_OK);
@@ -647,7 +647,7 @@ TEST(run_until_idle_fires_due_timers_when_a_task_is_runnable) {
 
     setup();
     g_finish_count = 0;
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn_captured(r, poll_sleeper, (uint32_t)sizeof(sleeper_state), NULL, &t,
                                       (void **)&s),
               ASX_OK);
@@ -668,7 +668,7 @@ TEST(run_until_idle_reports_would_block_without_wake_sources) {
 
     setup();
     memset(&ps, 0, sizeof(ps));
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_park_until_done, &ps, &t), ASX_OK);
     budget = asx_budget_from_polls(100);
     ASSERT_EQ(asx_scheduler_run_until_idle(r, &budget), ASX_E_WOULD_BLOCK);
@@ -684,7 +684,7 @@ TEST(sleep_ends_early_on_a_user_cancel_and_drops_its_timer) {
 
     setup();
     g_finish_count = 0;
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn_captured(r, poll_sleeper, (uint32_t)sizeof(sleeper_state), NULL, &t,
                                       (void **)&s),
               ASX_OK);
@@ -716,7 +716,7 @@ TEST(sleep_records_how_it_ended_not_when_its_timer_woke_it) {
 
     setup();
     g_finish_count = 0;
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn_captured(r, poll_sleeper, (uint32_t)sizeof(sleeper_state), NULL, &t,
                                       (void **)&s),
               ASX_OK);
@@ -731,7 +731,7 @@ TEST(sleep_records_how_it_ended_not_when_its_timer_woke_it) {
 
     /* Control: no cancel, the sleep completes at its deadline: fired. */
     setup();
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn_captured(r, poll_sleeper, (uint32_t)sizeof(sleeper_state), NULL, &t,
                                       (void **)&s),
               ASX_OK);
@@ -754,7 +754,7 @@ TEST(deadline_cancelled_sleeper_sleeps_to_its_own_deadline) {
     setup();
     g_finish_count = 0;
     memset(&s, 0, sizeof(s));
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     deadline = asx_budget_infinite();
     deadline.deadline = 100u;
     ASSERT_EQ(asx_sleep_init(&s.sleep, 200u), ASX_OK);
@@ -800,7 +800,7 @@ TEST(panic_completes_the_task_as_panicked_even_when_cancelled) {
     for (cancelled_case = 0; cancelled_case < 2; cancelled_case++) {
         setup();
         g_panic_poll_cancel = cancelled_case;
-        ASSERT_EQ(asx_region_open(&r), ASX_OK);
+        ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
         ASSERT_EQ(asx_task_spawn(r, poll_panics, NULL, &t), ASX_OK);
         ASSERT_EQ(asx_task_panic(t, "outside a poll"), ASX_E_INVALID_STATE);
         budget = asx_budget_from_polls(8);

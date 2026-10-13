@@ -13,6 +13,7 @@
  */
 
 #include "../../test_harness.h"
+#include "../../test_runtime.h"
 #include <asx/actor/gen_server.h>
 #include <asx/asx.h>
 #include <asx/core/affinity.h>
@@ -80,13 +81,13 @@ TEST(a_registered_hook_runs_once_per_reset_and_survives_it) {
     g_calls = 0;
     asx_runtime_reset_hook_register_internal(ASX_RESET_SLOT_PROCESS, count_hook);
     asx_runtime_reset_hook_register_internal(ASX_RESET_SLOT_PROCESS, count_hook);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(g_calls, 1);
     ASSERT_TRUE(registered(ASX_RESET_SLOT_PROCESS));
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(g_calls, 2);
     forget();
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(g_calls, 2);
 }
 
@@ -98,7 +99,7 @@ TEST(hooks_run_in_slot_order_whatever_the_registration_order) {
     asx_runtime_reset_hook_register_internal(ASX_RESET_SLOT_NET, order_hook_net);
     asx_runtime_reset_hook_register_internal(ASX_RESET_SLOT_PROCESS, order_hook_process);
     asx_runtime_reset_hook_register_internal(ASX_RESET_SLOT_FS, order_hook_fs);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(g_calls, 4);
     ASSERT_EQ(g_order[0], 0u);
     ASSERT_EQ(g_order[1], 1u);
@@ -182,10 +183,10 @@ TEST(a_runtime_reset_reaches_net_after_its_first_use) {
     ASSERT_EQ(st, ASX_OK);
     st = asx_tcp_listener_bind(&second, &at);
     ASSERT_EQ(st, ASX_E_ALREADY_EXISTS);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     st = asx_tcp_listener_bind(&second, &at);
     ASSERT_EQ(st, ASX_OK);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 }
 
 #if ASX_HAS_NATIVE_RUNTIME_SURFACES
@@ -244,7 +245,7 @@ TEST(a_runtime_reset_reaches_fs_after_its_first_use) {
     ASSERT_EQ(asx_fs_path_from_cstr(&dir, "/reset-hooks-fs"), ASX_OK);
     ASSERT_EQ(asx_fs_dir_create(&dir), ASX_OK);
     ASSERT_TRUE(asx_fs_exists(&dir));
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_FALSE(asx_fs_exists(&dir));
 }
 
@@ -302,7 +303,7 @@ TEST(a_runtime_reset_reaches_process_after_its_first_use) {
     st = asx_process_spawn(&h, &opts);
     ASSERT_EQ(st, ASX_OK);
     ASSERT_EQ(asx_process_state_query(h, &state), ASX_OK);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_TRUE(asx_process_state_query(h, &state) != ASX_OK);
 }
 
@@ -339,7 +340,7 @@ TEST(a_runtime_reset_reaches_signal_after_its_first_use) {
     forget();
     ASSERT_EQ(asx_signal_raise(ASX_SIGNAL_TERM), ASX_OK);
     ASSERT_TRUE(asx_signal_shutdown_requested());
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_FALSE(asx_signal_shutdown_requested());
 }
 
@@ -363,7 +364,7 @@ TEST(pipe_is_cleared_by_a_runtime_reset) {
     ASSERT_TRUE(registered(ASX_RESET_SLOT_PIPE));
     ASSERT_TRUE(asx_pipe_read_is_alive(rd));
     ASSERT_TRUE(asx_pipe_write_is_alive(wr));
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_FALSE(asx_pipe_read_is_alive(rd));
     ASSERT_FALSE(asx_pipe_write_is_alive(wr));
 }
@@ -378,7 +379,7 @@ TEST(quic_is_cleared_by_a_runtime_reset) {
     ASSERT_EQ(asx_quic_connect(&conn, &cfg), ASX_OK);
     ASSERT_TRUE(registered(ASX_RESET_SLOT_QUIC));
     ASSERT_TRUE(asx_quic_conn_is_alive(conn));
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_FALSE(asx_quic_conn_is_alive(conn));
 }
 
@@ -401,7 +402,7 @@ TEST(ws_is_cleared_by_a_runtime_reset) {
     ASSERT_EQ(asx_ws_accept(&conn, server, &cfg), ASX_OK);
     ASSERT_TRUE(registered(ASX_RESET_SLOT_WS));
     ASSERT_TRUE(asx_ws_conn_is_alive(conn));
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_FALSE(asx_ws_conn_is_alive(conn));
 }
 
@@ -427,7 +428,7 @@ TEST(tls_is_cleared_by_a_runtime_reset) {
     ASSERT_EQ(asx_tls_connect(&tls, &conn, client), ASX_OK);
     ASSERT_TRUE(registered(ASX_RESET_SLOT_TLS));
     ASSERT_TRUE(asx_tls_stream_is_alive(tls));
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_FALSE(asx_tls_stream_is_alive(tls));
 }
 #endif
@@ -441,7 +442,7 @@ TEST(epoch_is_cleared_by_a_runtime_reset) {
     ASSERT_EQ(asx_epoch_create(&policy, &h), ASX_OK);
     ASSERT_TRUE(registered(ASX_RESET_SLOT_EPOCH));
     ASSERT_EQ(asx_epoch_get_state(h), ASX_EPOCH_ACTIVE);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_epoch_get_state(h), ASX_EPOCH_CLOSED);
 }
 
@@ -457,7 +458,7 @@ TEST(affinity_is_cleared_by_a_runtime_reset) {
     ASSERT_TRUE(registered(ASX_RESET_SLOT_AFFINITY));
     ASSERT_EQ(asx_affinity_tracked_count(), 1u);
     ASSERT_EQ(asx_affinity_current_domain(), (asx_affinity_domain)3u);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_affinity_tracked_count(), 0u);
     ASSERT_EQ(asx_affinity_current_domain(), ASX_AFFINITY_DOMAIN_ANY);
 }
@@ -490,7 +491,7 @@ TEST(pool_is_cleared_by_a_runtime_reset) {
     ASSERT_EQ(asx_pool_create(&cfg, &h), ASX_OK);
     ASSERT_TRUE(registered(ASX_RESET_SLOT_POOL));
     ASSERT_EQ(asx_pool_get_stats(h, &stats), ASX_OK);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_TRUE(asx_pool_get_stats(h, &stats) != ASX_OK);
 }
 
@@ -504,7 +505,7 @@ TEST(contended_mutex_is_cleared_by_a_runtime_reset) {
     ASSERT_TRUE(registered(ASX_RESET_SLOT_CONTENDED_MUTEX));
     ASSERT_EQ(asx_contended_mutex_try_lock(h, &guard), ASX_OK);
     ASSERT_TRUE(asx_contended_mutex_is_locked(h));
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_FALSE(asx_contended_mutex_is_locked(h));
     ASSERT_TRUE(asx_contended_mutex_try_lock(h, &guard) != ASX_OK);
 }
@@ -533,7 +534,7 @@ TEST(gen_server_is_cleared_by_a_runtime_reset) {
     ASSERT_EQ(asx_gen_server_start(&ref, &cb, NULL), ASX_OK);
     ASSERT_TRUE(registered(ASX_RESET_SLOT_GEN_SERVER));
     ASSERT_EQ(asx_gen_server_get_state(ref), ASX_GEN_SERVER_RUNNING);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_TRUE(asx_gen_server_get_state(ref) != ASX_GEN_SERVER_RUNNING);
 }
 
@@ -546,7 +547,7 @@ TEST(deadline_monitor_is_cleared_by_a_runtime_reset) {
     ASSERT_EQ(asx_deadline_monitor_register(1000u, 7u, NULL, NULL, &h), ASX_OK);
     ASSERT_TRUE(registered(ASX_RESET_SLOT_DEADLINE_MONITOR));
     ASSERT_EQ(asx_deadline_monitor_active_count(), 1u);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_deadline_monitor_active_count(), 0u);
     ASSERT_EQ(asx_deadline_monitor_get_state(&h), ASX_DEADLINE_CANCELLED);
     asx_deadline_monitor_shutdown();
@@ -560,7 +561,7 @@ TEST(symbol_registry_survives_a_runtime_reset) {
 
     asx_symbol_registry_reset();
     ASSERT_EQ(asx_symbol_register("bd-u4o2.symbol", &id), ASX_OK);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_symbol_lookup("bd-u4o2.symbol", &again), ASX_OK);
     ASSERT_EQ(again, id);
     ASSERT_EQ(asx_symbol_count(), 1u);

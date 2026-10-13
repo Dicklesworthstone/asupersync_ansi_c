@@ -5,6 +5,7 @@
  */
 
 #include "../../test_harness.h"
+#include "../../test_runtime.h"
 #include <asx/codec/codec.h>
 #include <asx/runtime/event.h>
 #include <asx/runtime/runtime.h>
@@ -15,14 +16,14 @@
 /* ------------------------------------------------------------------ */
 
 TEST(event_log_reset_clears_state) {
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_event_log_reset();
     ASSERT_EQ(asx_event_log_count(), 0u);
     ASSERT_EQ(asx_event_hash_chain(), 14695981039346656037ULL); /* FNV offset */
 }
 
 TEST(event_emit_increments_count) {
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_event_log_reset();
     asx_event_emit(ASX_EVENT_REGION_OPEN, 1, 0, ASX_OK);
     ASSERT_EQ(asx_event_log_count(), 1u);
@@ -32,7 +33,7 @@ TEST(event_emit_increments_count) {
 
 TEST(event_emit_returns_sequence) {
     uint32_t seq0, seq1, seq2;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_event_log_reset();
     seq0 = asx_event_emit(ASX_EVENT_REGION_OPEN, 1, 0, ASX_OK);
     seq1 = asx_event_emit(ASX_EVENT_TASK_SPAWN, 2, 1, ASX_OK);
@@ -49,7 +50,7 @@ TEST(event_emit_returns_sequence) {
 TEST(event_log_get_reads_back) {
     asx_event_record rec;
     int ok;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_event_log_reset();
     asx_event_emit(ASX_EVENT_REGION_OPEN, 42, 0, ASX_OK);
     asx_event_emit(ASX_EVENT_TASK_SPAWN, 99, 42, ASX_OK);
@@ -71,7 +72,7 @@ TEST(event_log_get_reads_back) {
 
 TEST(event_log_get_oob_returns_zero) {
     asx_event_record rec;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_event_log_reset();
     asx_event_emit(ASX_EVENT_REGION_OPEN, 1, 0, ASX_OK);
     ASSERT_FALSE(asx_event_log_get(1, &rec));
@@ -79,7 +80,7 @@ TEST(event_log_get_oob_returns_zero) {
 }
 
 TEST(event_log_get_null_returns_zero) {
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_event_log_reset();
     asx_event_emit(ASX_EVENT_REGION_OPEN, 1, 0, ASX_OK);
     ASSERT_FALSE(asx_event_log_get(0, NULL));
@@ -91,7 +92,7 @@ TEST(event_log_get_null_returns_zero) {
 
 TEST(hash_chain_is_deterministic) {
     uint64_t h1, h2;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_event_log_reset();
     asx_event_emit(ASX_EVENT_REGION_OPEN, 10, 0, ASX_OK);
     asx_event_emit(ASX_EVENT_TASK_SPAWN, 20, 10, ASX_OK);
@@ -109,7 +110,7 @@ TEST(hash_chain_is_deterministic) {
 
 TEST(hash_chain_differs_for_different_events) {
     uint64_t h1, h2;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_event_log_reset();
     asx_event_emit(ASX_EVENT_REGION_OPEN, 10, 0, ASX_OK);
     h1 = asx_event_hash_chain();
@@ -152,7 +153,7 @@ TEST(hash_chain_matches_byte_reference_across_capacity_and_reads) {
     uint64_t expected = 14695981039346656037ULL;
     uint32_t i;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_event_log_reset();
     for (i = 0; i < total; i++) {
         asx_event_emit(chain_kind(i), chain_entity(i), (uint64_t)i, ASX_OK);
@@ -246,7 +247,7 @@ TEST(replay_verify_identical) {
     asx_replay_divergence div;
     asx_status s;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     emit_run(3u, UINT32_MAX);
     capture_reference(&ref);
 
@@ -265,7 +266,7 @@ TEST(replay_verify_count_mismatch) {
     asx_replay_divergence div;
     asx_status s;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     emit_run(1u, UINT32_MAX);
     capture_reference(&ref);
 
@@ -284,7 +285,7 @@ TEST(replay_verify_content_mismatch) {
     asx_replay_divergence div;
     asx_status s;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     emit_run(2u, UINT32_MAX);
     capture_reference(&ref);
 
@@ -303,7 +304,7 @@ TEST(replay_verify_content_mismatch) {
 
 TEST(replay_verify_null_divergence_returns_error) {
     asx_status s;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_event_log_reset();
     s = asx_event_replay_verify(NULL, 0, 0, 0, NULL);
     ASSERT_EQ(s, ASX_E_INVALID_ARGUMENT);
@@ -313,7 +314,7 @@ TEST(replay_verify_rejects_inconsistent_arguments) {
     asx_event_record one;
     asx_replay_divergence div;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_event_log_reset();
     memset(&one, 0, sizeof(one));
     /* entries promised but no array */
@@ -332,7 +333,7 @@ TEST(replay_verify_sees_a_divergence_beyond_the_stored_window) {
     const uint32_t beyond = (uint32_t)ASX_EVENT_LOG_CAPACITY + 88u;          /* 600 */
     const uint32_t inside = ((uint32_t)ASX_EVENT_LOG_CAPACITY * 25u) / 128u; /* 100 */
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     emit_run(total, UINT32_MAX);
     capture_reference(&ref);
     ASSERT_EQ(ref.stored, (uint32_t)ASX_EVENT_LOG_CAPACITY);
@@ -370,7 +371,7 @@ TEST(replay_verify_refuses_a_stored_prefix_of_a_longer_run) {
     const uint32_t cap = (uint32_t)ASX_EVENT_LOG_CAPACITY;
 
     /* a reference of exactly the stored 512 events ... */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     emit_run(cap, UINT32_MAX);
     capture_reference(&ref);
     ASSERT_EQ(asx_event_replay_verify(ref.events, ref.stored, ref.total, ref.chain, &div), ASX_OK);
@@ -399,7 +400,7 @@ TEST(event_log_to_json_empty) {
     asx_codec_buffer buf;
     asx_status s;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_event_log_reset();
     asx_codec_buffer_init(&buf);
 
@@ -416,7 +417,7 @@ TEST(event_log_to_json_with_events) {
     asx_codec_buffer buf;
     asx_status s;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_event_log_reset();
     asx_event_emit(ASX_EVENT_REGION_OPEN, 1, 0, ASX_OK);
     asx_event_emit(ASX_EVENT_TASK_SPAWN, 2, 1, ASX_OK);
@@ -433,7 +434,7 @@ TEST(event_log_to_json_with_events) {
 
 TEST(event_log_to_json_null_returns_error) {
     asx_status s;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     s = asx_event_log_to_json(NULL);
     ASSERT_EQ(s, ASX_E_INVALID_ARGUMENT);
 }
@@ -447,7 +448,7 @@ TEST(runtime_reset_clears_event_log) {
     asx_event_emit(ASX_EVENT_REGION_OPEN, 1, 0, ASX_OK);
     ASSERT_EQ(asx_event_log_count(), 1u);
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_event_log_count(), 0u);
 }
 
@@ -497,50 +498,50 @@ TEST(event_log_reset_after_overflow_matches_fresh_log) {
 int main(void) {
     fprintf(stderr, "=== event_log unit tests ===\n");
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(event_log_reset_clears_state);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(event_emit_increments_count);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(event_emit_returns_sequence);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(event_log_get_reads_back);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(event_log_get_oob_returns_zero);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(event_log_get_null_returns_zero);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(hash_chain_is_deterministic);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(hash_chain_differs_for_different_events);
     RUN_TEST(hash_chain_matches_byte_reference_across_capacity_and_reads);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(event_kind_str_known);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(event_kind_str_unknown);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(replay_verify_identical);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(replay_verify_count_mismatch);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(replay_verify_content_mismatch);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(replay_verify_null_divergence_returns_error);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(replay_verify_rejects_inconsistent_arguments);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(replay_verify_sees_a_divergence_beyond_the_stored_window);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(replay_verify_refuses_a_stored_prefix_of_a_longer_run);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(event_log_to_json_empty);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(event_log_to_json_with_events);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(event_log_to_json_null_returns_error);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(runtime_reset_clears_event_log);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(event_log_reset_after_overflow_matches_fresh_log);
 
     TEST_REPORT();

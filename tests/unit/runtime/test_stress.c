@@ -10,6 +10,7 @@
 
 #include "test_harness.h"
 #include "test_log.h"
+#include "test_runtime.h"
 #include "test_task.h"
 #include <asx/asx.h>
 #include <asx/runtime/rt.h>
@@ -23,7 +24,7 @@
  * ------------------------------------------------------------------- */
 
 static void reset_all(void) {
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     asx_trace_reset();
     asx_replay_clear_reference();
@@ -90,7 +91,7 @@ TEST(task_arena_full_exhaustion) {
     uint32_t i;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     /* Fill the task arena to capacity */
     for (i = 0; i < ASX_MAX_TASKS; i++) {
@@ -107,7 +108,7 @@ TEST(task_arena_exhaustion_then_complete_then_respawn) {
     uint32_t i;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     /* Fill arena with immediate-complete tasks */
     for (i = 0; i < ASX_MAX_TASKS; i++) {
@@ -136,10 +137,12 @@ TEST(region_arena_full_exhaustion) {
 
     reset_all();
 
-    for (i = 0; i < ASX_MAX_REGIONS; i++) { ASSERT_EQ(asx_region_open(&rids[i]), ASX_OK); }
+    for (i = 0; i < ASX_MAX_REGIONS; i++) {
+        ASSERT_EQ(asx_region_open(test_runtime(), &rids[i]), ASX_OK);
+    }
 
     /* Next region should fail */
-    ASSERT_EQ(asx_region_open(&extra), ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(asx_region_open(test_runtime(), &extra), ASX_E_RESOURCE_EXHAUSTED);
 }
 
 /* -------------------------------------------------------------------
@@ -154,7 +157,7 @@ TEST(obligation_arena_full_exhaustion) {
     uint32_t i;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     /* Every obligation has a holder task: a live one that is never polled
      * holds them all, so none is settled or leaked. */
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &holder), ASX_OK);
@@ -179,7 +182,7 @@ TEST(cancel_all_tasks_in_region) {
     uint32_t i;
 
     ASSERT_EQ(reset_all_with_hard_cleanup_bound(), ASX_OK);
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     /* Spawn 16 pending tasks */
     for (i = 0; i < 16; i++) {
@@ -219,7 +222,7 @@ TEST(cancel_storm_rapid_cancel_propagate) {
     uint32_t i;
 
     ASSERT_EQ(reset_all_with_hard_cleanup_bound(), ASX_OK);
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     /* Spawn a single pending task */
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
@@ -254,8 +257,8 @@ TEST(multi_region_independent_scheduling) {
 
     reset_all();
 
-    ASSERT_EQ(asx_region_open(&r1), ASX_OK);
-    ASSERT_EQ(asx_region_open(&r2), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &r1), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &r2), ASX_OK);
 
     /* Region 1: two tasks with different countdown */
     s1.remaining = 2;
@@ -299,8 +302,8 @@ TEST(multi_region_cancel_one_leaves_other_intact) {
 
     ASSERT_EQ(reset_all_with_hard_cleanup_bound(), ASX_OK);
 
-    ASSERT_EQ(asx_region_open(&r1), ASX_OK);
-    ASSERT_EQ(asx_region_open(&r2), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &r1), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &r2), ASX_OK);
 
     ASSERT_EQ(asx_task_spawn(r1, poll_pending, NULL, &t1), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r2, poll_ok, NULL, &t2), ASX_OK);
@@ -414,7 +417,7 @@ TEST(budget_exhaustion_with_many_pending_tasks) {
     uint32_t i;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     /* Spawn 16 always-pending tasks */
     for (i = 0; i < 16; i++) { ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK); }
@@ -440,7 +443,7 @@ TEST(tight_budget_one_poll_per_call) {
     uint32_t i;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     /* Task needs 5 polls to complete */
     cs.remaining = 4; /* 4 pending + 1 final OK = 5 polls */
@@ -541,7 +544,7 @@ TEST(obligation_rapid_reserve_commit_cycle) {
     asx_region_id rid;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     ASSERT_EQ(test_run_in_task(rid, reserve_commit_cycle_body, &rid), ASX_OK);
     ASSERT_TRUE(asx_resource_used(ASX_RESOURCE_OBLIGATION) <= (uint32_t)ASX_MAX_OBLIGATIONS);
@@ -553,7 +556,7 @@ TEST(task_spawn_join_cycle_exceeds_arena) {
     uint32_t i;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     /* Spawn/run/join many more tasks than the arena holds. */
     for (i = 0; i < ASX_MAX_TASKS * 8u; i++) {
@@ -575,7 +578,7 @@ TEST(task_detach_releases_on_completion) {
     uint32_t i;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     for (i = 0; i < ASX_MAX_TASKS * 4u; i++) {
         asx_budget budget = asx_budget_from_polls(4);
@@ -597,7 +600,7 @@ TEST(closed_region_tasks_reclaimed_under_pressure) {
     uint32_t i;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&r1), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &r1), ASX_OK);
     for (i = 0; i < ASX_MAX_TASKS; i++) {
         ASSERT_EQ(asx_task_spawn(r1, poll_ok, NULL, &tid), ASX_OK);
         if (i == 0u) first = tid;
@@ -610,7 +613,7 @@ TEST(closed_region_tasks_reclaimed_under_pressure) {
     /* Outcomes of a CLOSED region stay readable until capacity is needed. */
     ASSERT_EQ(asx_task_get_outcome(first, &out), ASX_OK);
 
-    ASSERT_EQ(asx_region_open(&r2), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &r2), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r2, poll_ok, NULL, &tid), ASX_OK);
     ASSERT_EQ(asx_task_get_outcome(first, &out), ASX_E_STALE_HANDLE);
 }
@@ -652,7 +655,7 @@ TEST(obligation_mixed_commit_abort_pattern) {
     asx_region_id rid;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(test_run_in_task(rid, mixed_commit_abort_body, &rid), ASX_OK);
 }
 
@@ -667,7 +670,7 @@ TEST(fault_containment_multiple_failures_same_region) {
     asx_containment_policy policy;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     /* Mix of failing and ok tasks */
     ASSERT_EQ(asx_task_spawn(rid, poll_fail, NULL, &t1), ASX_OK);

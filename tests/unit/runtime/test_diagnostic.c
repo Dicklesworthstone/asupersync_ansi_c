@@ -6,6 +6,7 @@
  */
 
 #include "test_io_fd.h"
+#include "test_runtime.h"
 #include <asx/core/budget.h>
 #include <asx/runtime/blocking.h>
 #include <asx/runtime/browser_boundary.h>
@@ -41,7 +42,7 @@ static asx_status st_sink_;
 #define RUN(fn)                                                                                    \
     do {                                                                                           \
         printf("  " #fn "...\n");                                                                  \
-        asx_runtime_reset();                                                                       \
+        asx_runtime_reset(test_runtime());                                                         \
         fn();                                                                                      \
         g_pass++;                                                                                  \
     } while (0)
@@ -175,7 +176,7 @@ static void test_inspect_with_entities(void) {
     asx_io_token tok;
 
     MUST_OK(asx_runtime_init_default(&rt));
-    MUST_OK(asx_region_open(&region));
+    MUST_OK(asx_region_open(&rt, &region));
     if (asx_surface_available_active(ASX_SURFACE_IO_DRIVER)) {
         MUST_OK(asx_waker_register(55, &waker));
         MUST_OK(asx_io_register(test_io_fd(55), ASX_IO_READABLE, &waker, &tok));
@@ -231,11 +232,11 @@ static void test_inspect_stale_runtime_fails_closed(void) {
     asx_region_id region;
 
     MUST_OK(asx_runtime_init_default(&a));
-    MUST_OK(asx_region_open(&region));
+    MUST_OK(asx_region_open(&a, &region));
     /* A raw reset invalidates A's generation without rewriting its object. */
-    asx_runtime_reset();
+    asx_runtime_reset(&a);
     MUST_OK(asx_runtime_init_default(&b));
-    MUST_OK(asx_region_open(&region));
+    MUST_OK(asx_region_open(&b, &region));
 
     MUST_OK(asx_inspect(&a, &rpt));
     ASSERT(!rpt.initialized, "stale runtime not initialized");
@@ -267,7 +268,7 @@ static void test_inspect_copied_stale_runtime_fails_closed(void) {
     a = b;
     asx_runtime_shutdown(&b);
     ASSERT(asx_runtime_init_default(&b) == ASX_OK, "replacement runtime initialized");
-    ASSERT(asx_region_open(&region) == ASX_OK, "replacement region created");
+    ASSERT(asx_region_open(&b, &region) == ASX_OK, "replacement region created");
 
     ASSERT(asx_inspect(&a, &rpt) == ASX_OK, "stale inspection succeeds");
     ASSERT(!rpt.initialized, "stale runtime not initialized");

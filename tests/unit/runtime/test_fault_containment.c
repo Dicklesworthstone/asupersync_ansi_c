@@ -9,6 +9,7 @@
  */
 
 #include "../../test_harness.h"
+#include "../../test_runtime.h"
 #include <asx/asx.h>
 #include <asx/asx_config.h>
 #include <asx/core/cancel.h>
@@ -72,9 +73,9 @@ TEST(failing_task_gets_err_outcome) {
     asx_outcome out;
     asx_budget budget;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_fail, NULL, &tid), ASX_OK);
 
     budget = asx_budget_from_polls(10);
@@ -92,9 +93,9 @@ TEST(contain_fault_ok_is_noop) {
     asx_region_id rid;
     int poisoned;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_region_contain_fault(rid, ASX_OK), ASX_OK);
     ASSERT_EQ(asx_region_is_poisoned(rid, &poisoned), ASX_OK);
     ASSERT_EQ(poisoned, 0);
@@ -110,9 +111,9 @@ TEST(poisoned_region_blocks_spawn_allows_query) {
     asx_region_state state;
     int poisoned;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_region_poison(rid), ASX_OK);
 
     /* Spawn should be blocked */
@@ -137,9 +138,9 @@ TEST(scheduler_drains_tasks_on_poisoned_region) {
     asx_task_state s1, s2;
     asx_budget budget;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &tid1), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &tid2), ASX_OK);
 
@@ -170,9 +171,9 @@ TEST(failing_task_does_not_block_other_tasks) {
     asx_status run_st;
     asx_containment_policy policy;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_fail, NULL, &tid_fail), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &tid_ok), ASX_OK);
 
@@ -211,9 +212,9 @@ TEST(poisoned_region_drains_to_closed) {
     asx_region_state state;
     asx_budget budget;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &tid), ASX_OK);
 
     /* Poison region, then drain */
@@ -249,9 +250,9 @@ TEST(spawn_rejected_during_poisoned_drain) {
     asx_task_id tid1, tid2;
     asx_budget budget;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid1), ASX_OK);
 
     /* Poison the region */
@@ -302,9 +303,9 @@ TEST(contain_fault_fail_fast_does_not_poison) {
     asx_region_id rid;
     int poisoned;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     /* Under DEBUG/FAIL_FAST, contain_fault returns the fault
      * but does NOT poison the region */
@@ -322,9 +323,9 @@ TEST(poison_blocks_obligation_reserve) {
     asx_region_id rid;
     asx_obligation_id oid;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_region_poison(rid), ASX_OK);
 
     ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_E_REGION_POISONED);
@@ -337,9 +338,9 @@ TEST(poison_blocks_obligation_reserve) {
 TEST(poison_blocks_region_close) {
     asx_region_id rid;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_region_poison(rid), ASX_OK);
 
     ASSERT_EQ(asx_region_close(rid), ASX_E_REGION_POISONED);
@@ -357,9 +358,9 @@ TEST(scheduler_handles_fail_and_pending_mix) {
     asx_status run_st;
     asx_containment_policy policy;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_fail, NULL, &tid_fail), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid_pend), ASX_OK);
 
@@ -392,9 +393,9 @@ TEST(poison_is_idempotent) {
     asx_region_id rid;
     int poisoned;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     ASSERT_EQ(asx_region_poison(rid), ASX_OK);
     ASSERT_EQ(asx_region_poison(rid), ASX_OK);
@@ -415,7 +416,7 @@ TEST(cancelled_task_on_poisoned_region) {
 
     ASSERT_EQ(reset_with_hard_cleanup_bound(), ASX_OK);
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
 
     /* Move task to Running */
@@ -445,10 +446,10 @@ TEST(multi_region_isolation_after_poison) {
     int poisoned1, poisoned2;
     asx_budget budget;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid1), ASX_OK);
-    ASSERT_EQ(asx_region_open(&rid2), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid1), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid2), ASX_OK);
 
     ASSERT_EQ(asx_task_spawn(rid1, poll_pending, NULL, &tid1), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid2, poll_complete, NULL, &tid2), ASX_OK);
@@ -492,7 +493,7 @@ TEST(poison_plus_cancel_propagation_resolves_tasks) {
 
     ASSERT_EQ(reset_with_hard_cleanup_bound(), ASX_OK);
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid1), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid2), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid3), ASX_OK);
@@ -550,8 +551,8 @@ TEST(containment_event_ordering_is_deterministic) {
     int events_match = 1;
 
     /* Run 1 */
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid1), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid2), ASX_OK);
 
@@ -580,8 +581,8 @@ TEST(containment_event_ordering_is_deterministic) {
         }
 
         /* Run 2: identical sequence */
-        asx_runtime_reset();
-        ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+        asx_runtime_reset(test_runtime());
+        ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
         ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid1), ASX_OK);
         ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid2), ASX_OK);
 

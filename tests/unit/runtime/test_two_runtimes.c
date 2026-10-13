@@ -82,7 +82,7 @@ TEST(two_runtimes_have_independent_regions_tasks_and_quiescence) {
 
     memset(&a, 0, sizeof(a));
     memset(&b, 0, sizeof(b));
-    asx_runtime_reset();
+    asx_runtime_reset(&a);
     ASSERT_TRUE(two_block_make(&blk));
     asx_runtime_config_init(&cfg_a);
     asx_runtime_hooks_init(&hooks);
@@ -99,8 +99,8 @@ TEST(two_runtimes_have_independent_regions_tasks_and_quiescence) {
     ASSERT_TRUE(g_kernels[1] == (asx_kernel *)(void *)blk.block);
 
     /* The same slot and generation in each, told apart by the tag. */
-    ASSERT_EQ(asx_region_open(&ra), ASX_OK);
-    ASSERT_EQ(asx_region_open_kernel_internal(g_kernels[1], &rb), ASX_OK);
+    ASSERT_EQ(asx_region_open(&a, &ra), ASX_OK);
+    ASSERT_EQ(asx_region_open(&b, &rb), ASX_OK);
     ASSERT_EQ(asx_handle_runtime_tag(ra), (uint16_t)0u);
     ASSERT_EQ(asx_handle_runtime_tag(rb), (uint16_t)1u);
     ASSERT_EQ(asx_handle_slot(ra), asx_handle_slot(rb));
@@ -168,7 +168,7 @@ TEST(a_second_runtime_is_refused_by_name_while_a_shared_subsystem_is_in_use) {
 
     memset(&a, 0, sizeof(a));
     memset(&b, 0, sizeof(b));
-    asx_runtime_reset();
+    asx_runtime_reset(&a);
     ASSERT_TRUE(two_block_make(&blk));
     asx_runtime_config_init(&cfg_a);
     asx_runtime_hooks_init(&hooks);
@@ -178,7 +178,7 @@ TEST(a_second_runtime_is_refused_by_name_while_a_shared_subsystem_is_in_use) {
 
     /* A channel is in use: a second runtime would share the table. */
     ASSERT_EQ(asx_runtime_init(&a, &cfg_a, &hooks), ASX_OK);
-    ASSERT_EQ(asx_region_open(&ra), ASX_OK);
+    ASSERT_EQ(asx_region_open(&a, &ra), ASX_OK);
     ASSERT_EQ(asx_channel_create(ra, 4u, &ch), ASX_OK);
     ASSERT_EQ(asx_runtime_init(&b, &cfg_b, &hooks), ASX_E_INVALID_STATE);
     ASSERT_TRUE(reason_names("channels"));
@@ -186,7 +186,7 @@ TEST(a_second_runtime_is_refused_by_name_while_a_shared_subsystem_is_in_use) {
     ASSERT_TRUE(g_kernels[1] == NULL);
 
     /* A runtime without a block of its own is refused as a state, by name. */
-    asx_runtime_reset();
+    asx_runtime_reset(&a);
     ASSERT_EQ(asx_runtime_init(&a, &cfg_a, &hooks), ASX_OK);
     ASSERT_EQ(asx_runtime_init(&b, &cfg_a, &hooks), ASX_E_INVALID_STATE);
     ASSERT_TRUE(reason_names("storage block"));
@@ -201,7 +201,7 @@ TEST(a_second_runtime_is_refused_by_name_while_a_shared_subsystem_is_in_use) {
     /* Two runtimes live: the still process-wide subsystems refuse to acquire
      * state, naming themselves, and a runtime's own state is not refused. */
     ASSERT_EQ(asx_runtime_init(&b, &cfg_b, &hooks), ASX_OK);
-    ASSERT_EQ(asx_region_open(&ra), ASX_OK);
+    ASSERT_EQ(asx_region_open(&a, &ra), ASX_OK);
     ASSERT_EQ(asx_channel_create(ra, 4u, &ch), ASX_E_INVALID_STATE);
     ASSERT_TRUE(reason_names("channels"));
     ASSERT_EQ(asx_semaphore_create(1u, &sem), ASX_E_INVALID_STATE);

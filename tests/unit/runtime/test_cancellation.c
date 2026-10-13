@@ -10,6 +10,7 @@
 #include "../../../src/runtime/runtime_internal.h"
 #include "../../test_harness.h"
 #include "../../test_log.h"
+#include "../../test_runtime.h"
 #include "../../test_task.h"
 #include <asx/asx.h>
 #include <asx/core/cancel.h>
@@ -90,9 +91,9 @@ TEST(cancel_running_task_transitions_to_cancel_requested) {
     asx_task_state state;
     asx_budget budget;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
 
     /* Run one round to transition Created → Running */
@@ -153,9 +154,9 @@ TEST(cancel_created_task_goes_straight_to_cancel_requested) {
     uint64_t seen[4];
     uint32_t mark;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_checkpoint_then_complete, NULL, &tid), ASX_OK);
 
     mark = asx_trace_event_count();
@@ -191,8 +192,8 @@ TEST(budget_cancel_of_a_created_task_materializes_in_one_step) {
     uint64_t seen[4];
     uint32_t mark;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     b = asx_budget_infinite();
     b.deadline = 1u; /* already passed: the clock is past 1 ns */
     asx_runtime_virtual_advance(10u);
@@ -220,9 +221,9 @@ TEST(checkpoint_advances_to_cancelling) {
     asx_checkpoint_result cr;
     asx_budget budget;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
 
     /* Run once to make it Running, then cancel */
@@ -251,9 +252,9 @@ TEST(checkpoint_non_cancelled_task_reports_clean) {
     asx_checkpoint_result cr;
     asx_budget budget;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
 
     budget = asx_budget_from_polls(1);
@@ -274,9 +275,9 @@ TEST(finalize_transitions_cancelling_to_finalizing) {
     asx_checkpoint_result cr;
     asx_budget budget;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
 
     /* Get task to Cancelling state */
@@ -301,9 +302,9 @@ TEST(finalize_rejects_wrong_state) {
     asx_task_id tid;
     asx_budget budget;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
 
     /* Task is still Created — finalize should fail */
@@ -324,9 +325,9 @@ TEST(cancel_strengthen_higher_severity_upgrades) {
     asx_checkpoint_result cr;
     asx_budget budget;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
 
     budget = asx_budget_from_polls(1);
@@ -353,9 +354,9 @@ TEST(cancel_completed_task_is_noop) {
     asx_task_id tid;
     asx_budget budget;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &tid), ASX_OK);
 
     /* Run scheduler — task completes immediately */
@@ -377,9 +378,9 @@ TEST(cancel_propagation_cancels_all_tasks_in_region) {
     uint32_t count;
     asx_budget budget;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid1), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid2), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid3), ASX_OK);
@@ -412,9 +413,9 @@ TEST(cancel_propagation_skips_completed_tasks) {
     uint32_t count;
     asx_budget budget;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &tid1), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid2), ASX_OK);
 
@@ -444,9 +445,9 @@ TEST(cancelled_task_completion_gets_cancelled_outcome) {
     asx_cancel_phase phase;
     asx_budget budget;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_checkpoint_then_complete, NULL, &tid), ASX_OK);
 
     /* Run one round to make task Running */
@@ -514,8 +515,8 @@ static asx_status run_acknowledged_cancel(const ack_then_return_cfg *cfg, asx_ta
     asx_status st;
     uint32_t mark;
 
-    asx_runtime_reset();
-    st = asx_region_open(&rid);
+    asx_runtime_reset(test_runtime());
+    st = asx_region_open(test_runtime(), &rid);
     if (st != ASX_OK) return st;
     st = asx_task_spawn(rid, poll_ack_then_return, (void *)cfg, out_tid);
     if (st != ASX_OK) return st;
@@ -642,7 +643,7 @@ TEST(cleanup_budget_exhaustion_forces_completion) {
 
     ASSERT_EQ(reset_with_hard_cleanup_bound(), ASX_OK);
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_checkpoint_forever, NULL, &tid), ASX_OK);
 
     /* Run once to make Running */
@@ -686,7 +687,7 @@ TEST(cancel_forced_event_emitted) {
 
     ASSERT_EQ(reset_with_hard_cleanup_bound(), ASX_OK);
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_checkpoint_forever, NULL, &tid), ASX_OK);
 
     budget = asx_budget_from_polls(1);
@@ -722,9 +723,9 @@ TEST(cancel_phase_query_tracks_progression) {
     asx_checkpoint_result cr;
     asx_budget budget;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
 
     budget = asx_budget_from_polls(1);
@@ -763,9 +764,9 @@ TEST(scheduler_decrements_cleanup_budget) {
     asx_checkpoint_result cr1, cr2;
     asx_budget budget;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_checkpoint_forever, NULL, &tid), ASX_OK);
 
     /* Run once to make Running */
@@ -796,9 +797,9 @@ TEST(cancel_with_origin_sets_attribution) {
     asx_task_id tid1, tid2;
     asx_budget budget;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid1), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid2), ASX_OK);
 
@@ -823,7 +824,7 @@ TEST(cancel_storm_all_tasks_resolve) {
     /* The tasks never finish on their own: only the hard bound ends them. */
     ASSERT_EQ(reset_with_hard_cleanup_bound(), ASX_OK);
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     /* Spawn 8 tasks */
     for (k = 0; k < 8; k++) {
@@ -868,10 +869,10 @@ TEST(cancel_propagate_preserves_stronger_origin) {
     asx_task_slot *t;
     asx_budget budget;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
-    ASSERT_EQ(asx_region_open(&rid_other), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid_other), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
 
     /* Run once to make it Running */
@@ -902,9 +903,9 @@ TEST(cancel_propagation_sets_origin_region) {
     asx_budget budget;
     uint32_t count;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
 
     budget = asx_budget_from_polls(1);
@@ -929,9 +930,9 @@ TEST(scheduler_quiesces_after_cancel_completion) {
     asx_budget budget;
     asx_status result;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_checkpoint_then_complete, NULL, &tid), ASX_OK);
 
     budget = asx_budget_from_polls(1);
@@ -965,9 +966,9 @@ TEST(checkpoint_null_result_rejected) {
     asx_task_id tid;
     asx_budget budget;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
 
     budget = asx_budget_from_polls(1);
@@ -985,9 +986,9 @@ TEST(cancel_phase_null_output_rejected) {
     asx_task_id tid;
     asx_budget budget;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
 
     budget = asx_budget_from_polls(1);
@@ -1010,8 +1011,8 @@ TEST(mask_defers_checkpoint_acknowledgement) {
     asx_checkpoint_result cr;
     asx_cancel_phase phase;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
     ASSERT_EQ(asx_task_mask(tid), ASX_OK);
     ASSERT_EQ(asx_task_cancel(tid, ASX_CANCEL_TIMEOUT), ASX_OK);
@@ -1050,8 +1051,8 @@ TEST(mask_depth_is_a_nesting_depth_not_a_consumed_deferral_budget) {
     asx_checkpoint_result cr;
     uint32_t depth;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
     ASSERT_EQ(asx_task_cancel(tid, ASX_CANCEL_USER), ASX_OK);
 
@@ -1124,7 +1125,7 @@ TEST(masked_task_is_not_force_completed) {
     s.polls = 0;
     s.unmask_at = 80u; /* well past SHUTDOWN's 50-poll cleanup budget */
     s.finished_itself = 0;
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_masked_section, &s, &tid), ASX_OK);
     ASSERT_EQ(asx_task_cancel(tid, ASX_CANCEL_SHUTDOWN), ASX_OK);
     budget = asx_budget_from_polls(500);
@@ -1141,7 +1142,7 @@ TEST(unmasked_task_is_force_completed_by_cleanup_budget) {
     asx_budget budget;
 
     ASSERT_EQ(reset_with_hard_cleanup_bound(), ASX_OK);
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
     ASSERT_EQ(asx_task_mask(tid), ASX_OK);
     ASSERT_EQ(asx_task_unmask(tid), ASX_OK);
@@ -1176,8 +1177,8 @@ TEST(masked_callback_restores_on_success_error_and_pending_returns) {
     uint32_t depth;
     masked_callback_state state;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
     for (i = 0; i < sizeof(returns) / sizeof(returns[0]); i++) {
         memset(&state, 0, sizeof(state));
@@ -1214,8 +1215,8 @@ TEST(masked_callback_nested_error_restores_each_level_and_delivers_cancel) {
     nested_masked_callback_state state;
     uint32_t depth;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
     ASSERT_EQ(asx_task_cancel(tid, ASX_CANCEL_USER), ASX_OK);
     memset(&state, 0, sizeof(state));
@@ -1240,8 +1241,8 @@ TEST(masked_callback_preserves_an_existing_raw_mask) {
     masked_callback_state state;
     uint32_t depth;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
     ASSERT_EQ(asx_task_mask(tid), ASX_OK);
     memset(&state, 0, sizeof(state));
@@ -1260,8 +1261,8 @@ TEST(masked_callback_refuses_excess_depth_without_running_body) {
     uint32_t depth;
     uint32_t i;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
     for (i = 0; i < ASX_MAX_MASK_DEPTH - 1u; i++) ASSERT_EQ(asx_task_mask(tid), ASX_OK);
     memset(&state, 0, sizeof(state));
@@ -1284,8 +1285,8 @@ TEST(masked_callback_rejects_null_terminal_and_stale_admission) {
     masked_callback_state state;
     uint32_t depth;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &tid), ASX_OK);
     memset(&state, 0, sizeof(state));
     ASSERT_EQ(asx_task_masked(tid, NULL, &state), ASX_E_INVALID_ARGUMENT);
@@ -1295,7 +1296,7 @@ TEST(masked_callback_rejects_null_terminal_and_stale_admission) {
     ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
     ASSERT_EQ(asx_task_masked(tid, masked_callback, &state), ASX_E_INVALID_STATE);
     ASSERT_EQ(state.calls, 0u);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_NE(asx_task_masked(tid, masked_callback, &state), ASX_OK);
     ASSERT_EQ(state.calls, 0u);
     ASSERT_NE(asx_task_masked(ASX_INVALID_ID, masked_callback, &state), ASX_OK);
@@ -1313,8 +1314,8 @@ TEST(masked_callback_reports_a_failed_restoration) {
     asx_task_id tid;
     uint32_t depth;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
     ASSERT_EQ(asx_task_masked(tid, masked_callback_unbalances_its_raw_mask, NULL),
               ASX_E_INVALID_STATE);
@@ -1328,8 +1329,8 @@ TEST(mask_depth_is_bounded) {
     uint32_t depth = 99u;
     uint32_t i;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
     ASSERT_EQ(asx_task_unmask(tid), ASX_E_INVALID_STATE);
     for (i = 0; i < ASX_MAX_MASK_DEPTH; i++) ASSERT_EQ(asx_task_mask(tid), ASX_OK);
@@ -1351,8 +1352,8 @@ TEST(mask_refuses_a_completed_task_and_a_handle_from_a_reset_runtime) {
     asx_budget budget;
     uint32_t depth = 7u;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &tid), ASX_OK);
     budget = asx_budget_from_polls(4);
     ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
@@ -1360,7 +1361,7 @@ TEST(mask_refuses_a_completed_task_and_a_handle_from_a_reset_runtime) {
     ASSERT_EQ(asx_task_mask_depth(tid, &depth), ASX_OK);
     ASSERT_EQ(depth, 0u);
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_NE(asx_task_mask(tid), ASX_OK);
     ASSERT_NE(asx_task_unmask(tid), ASX_OK);
     depth = 7u;
@@ -1426,8 +1427,8 @@ static void run_nested_mask_scenario(nested_mask_worker *w, mask_joiner *j, asx_
     asx_task_id jid;
     asx_budget budget;
     asx_status st;
-    asx_runtime_reset();
-    st = asx_region_open(&rid);
+    asx_runtime_reset(test_runtime());
+    st = asx_region_open(test_runtime(), &rid);
     if (st == ASX_OK) st = asx_task_spawn(rid, poll_nested_mask_worker, w, wid);
     j->target = *wid;
     j->worker = w;
@@ -1502,8 +1503,8 @@ TEST(checkpoint_observes_budget_deadline_inline) {
     asx_budget tb;
     asx_checkpoint_result cr;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     tb = asx_budget_infinite();
     tb.deadline = asx_runtime_virtual_now() + 1000u;
     ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_pending, NULL, &tb, &tid), ASX_OK);
@@ -1529,8 +1530,8 @@ TEST(checkpoint_strengthens_a_pending_cancel_with_a_passed_budget_deadline) {
     asx_checkpoint_result cr;
     asx_cancel_reason got;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     tb = asx_budget_infinite();
     tb.deadline = asx_runtime_virtual_now() + 1000u;
     ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_pending, NULL, &tb, &tid), ASX_OK);
@@ -1574,8 +1575,8 @@ TEST(region_cancel_closes_subtree_and_chains_parent_reasons) {
     uint32_t reached = 0;
     asx_budget budget;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&parent), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &parent), ASX_OK);
     ASSERT_EQ(asx_region_open_child(parent, &child), ASX_OK);
     ASSERT_EQ(asx_task_spawn(parent, poll_checkpoint_then_complete, NULL, &tp), ASX_OK);
     ASSERT_EQ(asx_task_spawn(child, poll_checkpoint_then_complete, NULL, &tc), ASX_OK);
@@ -1622,8 +1623,8 @@ TEST(region_cancel_of_an_idle_region_finalizes_at_once) {
     asx_region_state rs;
     asx_cancel_reason req;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     req = test_reason(ASX_CANCEL_SHUTDOWN, rid, 0u, NULL);
     ASSERT_EQ(asx_region_cancel(rid, &req, NULL), ASX_OK);
     ASSERT_EQ(asx_region_get_state(rid, &rs), ASX_OK);
@@ -1638,8 +1639,8 @@ TEST(cancel_strengthen_replaces_the_whole_reason_and_records_no_event) {
     asx_cancel_reason weak;
     asx_cancel_reason strong;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
     ASSERT_EQ(asx_task_get_cancel_reason(tid, &got), ASX_E_NOT_FOUND);
 
@@ -1671,8 +1672,8 @@ TEST(region_cancel_records_one_request_per_newly_cancelled_task) {
     asx_cancel_reason strong;
     uint32_t reached = 0;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
     weak = test_reason(ASX_CANCEL_USER, rid, 10u, NULL);
     strong = test_reason(ASX_CANCEL_SHUTDOWN, rid, 20u, "stop");
@@ -1700,8 +1701,8 @@ TEST(witness_of_a_cancelled_task_carries_its_task_region_and_epoch) {
     asx_cancel_witness_info after;
     asx_budget budget;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_checkpoint_forever, NULL, &tid), ASX_OK);
     budget = asx_budget_from_polls(1);
     SCHED_RUN_IGNORE(rid, &budget);
@@ -1746,7 +1747,7 @@ TEST(runtime_config_installs_the_chain_bounds_and_reset_restores_the_defaults) {
     ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
     ASSERT_EQ(asx_runtime_init(&rt, &cfg, &hooks), ASX_OK);
 
-    ASSERT_EQ(asx_region_open(&rid[0]), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rt, &rid[0]), ASX_OK);
     for (i = 1; i < 4u; i++) { ASSERT_EQ(asx_region_open_child(rid[i - 1u], &rid[i]), ASX_OK); }
     req = test_reason(ASX_CANCEL_USER, rid[0], 7u, NULL);
     ASSERT_EQ(asx_region_cancel(rid[0], &req, NULL), ASX_OK);
@@ -1757,8 +1758,8 @@ TEST(runtime_config_installs_the_chain_bounds_and_reset_restores_the_defaults) {
     }
 
     /* The same tree under the defaults is not cut. */
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid[0]), ASX_OK);
+    asx_runtime_reset(&rt);
+    ASSERT_EQ(asx_region_open(&rt, &rid[0]), ASX_OK);
     for (i = 1; i < 4u; i++) { ASSERT_EQ(asx_region_open_child(rid[i - 1u], &rid[i]), ASX_OK); }
     req = test_reason(ASX_CANCEL_USER, rid[0], 7u, NULL);
     ASSERT_EQ(asx_region_cancel(rid[0], &req, NULL), ASX_OK);
@@ -1781,9 +1782,9 @@ TEST(region_cancel_cuts_the_cause_chain_at_the_chain_bound) {
     asx_cancel_reason req;
     uint32_t i;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_cancel_chain_limits_set_internal(2u, 4096u);
-    ASSERT_EQ(asx_region_open(&rid[0]), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid[0]), ASX_OK);
     for (i = 1; i < 4u; i++) { ASSERT_EQ(asx_region_open_child(rid[i - 1u], &rid[i]), ASX_OK); }
     ASSERT_EQ(asx_task_spawn(rid[3], poll_pending, NULL, &tid), ASX_OK);
 
@@ -1862,11 +1863,11 @@ static asx_outcome_severity child_outcome(int ack, int cancel_now) {
     asx_outcome out;
     asx_budget budget;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     memset(&s, 0, sizeof(s));
     s.child_state.ack = ack;
     s.cancel_now = cancel_now;
-    if (asx_region_open(&rid) != ASX_OK) return ASX_OUTCOME_PANICKED;
+    if (asx_region_open(test_runtime(), &rid) != ASX_OK) return ASX_OUTCOME_PANICKED;
     s.region = rid;
     if (asx_task_spawn(rid, poll_spawner, &s, &parent) != ASX_OK) return ASX_OUTCOME_PANICKED;
     budget = asx_budget_from_polls(2); /* parent completes, child polled once */
@@ -1903,10 +1904,10 @@ TEST(top_level_task_that_acknowledges_is_still_cancelled) {
     asx_outcome out;
     asx_budget budget;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     memset(&c, 0, sizeof(c));
     c.ack = 1;
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_ack_child, &c, &tid), ASX_OK);
     budget = asx_budget_from_polls(1);
     {
@@ -1931,8 +1932,8 @@ TEST(cx_checkpoint_acknowledges_and_observes_a_passed_deadline) {
     asx_budget b;
     asx_cx cx;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
     ASSERT_EQ(asx_task_cancel(tid, ASX_CANCEL_USER), ASX_OK);
     asx_cx_init(&cx, rid, tid, ASX_CAP_NONE);
@@ -1969,8 +1970,8 @@ TEST(cx_checkpoint_turns_a_spent_quota_into_its_cancel_kind_unless_masked) {
             asx_budget b;
             asx_cx cx;
 
-            asx_runtime_reset();
-            ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+            asx_runtime_reset(test_runtime());
+            ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
             b = asx_budget_infinite();
             if (k == 0u) {
                 b.poll_quota = 0u;
@@ -2017,8 +2018,8 @@ TEST(cx_is_cancelled_reports_whether_a_cancel_was_requested) {
     asx_budget budget;
     asx_cx cx;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &done), ASX_OK);
     budget = asx_budget_from_polls(10);
@@ -2063,8 +2064,8 @@ TEST(budget_cancel_is_attributed_to_the_task_and_records_no_request) {
     asx_budget quota;
     asx_budget budget;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     quota = asx_budget_infinite();
     quota.poll_quota = 1u;
     ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_checkpoint_then_complete, NULL, &quota, &tid),
@@ -2104,8 +2105,8 @@ static void abort_with_reason_body(void *ctx) {
 TEST(obligation_abort_with_reason_records_it) {
     asx_region_id rid;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(test_run_in_task(rid, abort_with_reason_body, &rid), ASX_OK);
 }
 
@@ -2147,8 +2148,8 @@ static asx_status run_cleanup(cleanup_state *s, asx_cancel_kind kind, asx_task_i
     asx_region_id rid;
     asx_budget budget;
     asx_status st;
-    asx_runtime_reset();
-    st = asx_region_open(&rid);
+    asx_runtime_reset(test_runtime());
+    st = asx_region_open(test_runtime(), &rid);
     if (st == ASX_OK) st = asx_task_spawn(rid, poll_cleanup, s, out_tid);
     if (st != ASX_OK) return st;
     budget = asx_budget_from_polls(1);
@@ -2198,8 +2199,8 @@ TEST(unacknowledged_cancel_is_never_force_completed) {
     asx_task_state state;
     asx_budget budget;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
     ASSERT_EQ(asx_task_cancel(tid, ASX_CANCEL_SHUTDOWN), ASX_OK);
     /* Far past SHUTDOWN's 50 cleanup polls: the task, which never
@@ -2218,8 +2219,8 @@ TEST(acknowledgement_replaces_the_budget_with_the_cleanup_budget) {
     asx_budget budget;
     asx_budget got;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     tb = asx_budget_from_polls(10);
     tb.cost_quota = 50u;
     ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_checkpoint_forever, NULL, &tb, &tid), ASX_OK);
@@ -2251,8 +2252,8 @@ TEST(cancel_during_cleanup_meets_and_refills_the_budget) {
     asx_budget budget;
     asx_budget got;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_checkpoint_forever, NULL, &tid), ASX_OK);
     ASSERT_EQ(asx_task_cancel(tid, ASX_CANCEL_USER), ASX_OK);
     budget = asx_budget_from_polls(11);
@@ -2281,8 +2282,8 @@ TEST(get_cleanup_budget_reports_the_met_budget_of_a_pending_cancel) {
     asx_task_id tid;
     asx_budget got;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
     ASSERT_EQ(asx_task_get_cleanup_budget(tid, NULL), ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_task_get_cleanup_budget(tid, &got), ASX_E_INVALID_STATE);
@@ -2320,8 +2321,8 @@ static asx_status spend_masked(asx_region_id *out_rid, asx_task_id *out_tid) {
     asx_budget tb = asx_budget_from_polls(1);
     asx_budget run = asx_budget_from_polls(10);
     asx_status st;
-    asx_runtime_reset();
-    st = asx_region_open(out_rid);
+    asx_runtime_reset(test_runtime());
+    st = asx_region_open(test_runtime(), out_rid);
     if (st == ASX_OK) {
         st = asx_task_spawn_with_budget(*out_rid, poll_spend_masked_then_park, NULL, &tb, out_tid);
     }
@@ -2390,8 +2391,8 @@ TEST(task_state_write_applies_the_transition_table_in_every_build) {
     uint32_t legal = 0;
     uint32_t refused = 0;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
     ASSERT_EQ(asx_task_slot_lookup(tid, &slot), ASX_OK);
 
@@ -2443,8 +2444,8 @@ TEST(scheduler_refuses_to_complete_a_task_whose_state_is_corrupt) {
     uint64_t seen[4];
     uint32_t mark;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &tid), ASX_OK);
     ASSERT_EQ(asx_task_slot_lookup(tid, &slot), ASX_OK);
     slot->state = (asx_task_state)6;
@@ -2489,8 +2490,8 @@ TEST(runtime_reset_releases_the_witnesses_of_tasks_cancelled_and_never_completed
     asx_status refusal = ASX_OK;
     uint32_t round;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
     ASSERT_EQ(asx_task_cancel(tid, ASX_CANCEL_USER), ASX_OK);
     ASSERT_EQ(asx_task_slot_lookup(tid, &slot), ASX_OK);
@@ -2498,7 +2499,7 @@ TEST(runtime_reset_releases_the_witnesses_of_tasks_cancelled_and_never_completed
     ASSERT_TRUE(asx_cancel_witness_is_valid(kept));
 
     /* The reset takes the witness with its task, and the table is whole. */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_TRUE(!asx_cancel_witness_is_valid(kept));
 
     /* Exhaust it, reset, exhaust it again: the same capacity each round, and
@@ -2506,10 +2507,10 @@ TEST(runtime_reset_releases_the_witnesses_of_tasks_cancelled_and_never_completed
     for (round = 0u; round < 3u; round++) {
         ASSERT_EQ(take_all_witnesses(&refusal), (uint32_t)ASX_MAX_CANCEL_WITNESSES);
         ASSERT_EQ(refusal, ASX_E_RESOURCE_EXHAUSTED);
-        asx_runtime_reset();
+        asx_runtime_reset(test_runtime());
     }
     ASSERT_EQ(take_all_witnesses(&refusal), (uint32_t)ASX_MAX_CANCEL_WITNESSES);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 }
 
 TEST(a_completion_the_scheduler_helper_did_not_see_still_releases_the_witness) {
@@ -2522,8 +2523,8 @@ TEST(a_completion_the_scheduler_helper_did_not_see_still_releases_the_witness) {
     asx_region_slot *region;
     asx_cancel_witness_id w;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
     ASSERT_EQ(asx_task_cancel(tid, ASX_CANCEL_USER), ASX_OK);
     ASSERT_EQ(asx_task_slot_lookup(tid, &slot), ASX_OK);
@@ -2535,7 +2536,7 @@ TEST(a_completion_the_scheduler_helper_did_not_see_still_releases_the_witness) {
     slot->outcome = asx_outcome_make(ASX_OUTCOME_CANCELLED);
     asx_task_on_complete_internal(slot, region);
     ASSERT_TRUE(!asx_cancel_witness_is_valid(w));
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 }
 
 int main(void) {

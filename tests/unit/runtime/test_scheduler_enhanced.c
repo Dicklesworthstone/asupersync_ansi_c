@@ -78,7 +78,7 @@ TEST(inject_ready_assigns_to_ready_lane) {
     asx_task_id tid;
     asx_lane_state ls;
     setup();
-    MUST_OK(asx_region_open(&rid));
+    MUST_OK(asx_region_open(&g_rt, &rid));
     MUST_OK(asx_task_spawn(rid, poll_ok, NULL, &tid));
     ASSERT_EQ(asx_inject_ready(tid), ASX_OK);
     MUST_OK(asx_lane_get_state(ASX_LANE_READY, &ls));
@@ -91,7 +91,7 @@ TEST(inject_cancel_assigns_to_cancel_lane) {
     asx_task_id tid;
     asx_lane_state ls;
     setup();
-    MUST_OK(asx_region_open(&rid));
+    MUST_OK(asx_region_open(&g_rt, &rid));
     MUST_OK(asx_task_spawn(rid, poll_ok, NULL, &tid));
     ASSERT_EQ(asx_inject_cancel(tid), ASX_OK);
     MUST_OK(asx_lane_get_state(ASX_LANE_CANCEL, &ls));
@@ -104,7 +104,7 @@ TEST(inject_timed_assigns_to_timed_lane) {
     asx_task_id tid;
     asx_lane_state ls;
     setup();
-    MUST_OK(asx_region_open(&rid));
+    MUST_OK(asx_region_open(&g_rt, &rid));
     MUST_OK(asx_task_spawn(rid, poll_ok, NULL, &tid));
     ASSERT_EQ(asx_inject_timed(tid), ASX_OK);
     MUST_OK(asx_lane_get_state(ASX_LANE_TIMED, &ls));
@@ -138,7 +138,7 @@ TEST(metrics_track_ready_dispatches) {
     asx_budget b;
     asx_scheduling_metrics m;
     setup();
-    MUST_OK(asx_region_open(&rid));
+    MUST_OK(asx_region_open(&g_rt, &rid));
     MUST_OK(asx_task_spawn(rid, poll_ok, NULL, &tid));
     b = asx_budget_from_polls(100);
     asx_parallel_reset_metrics();
@@ -178,7 +178,7 @@ TEST(single_worker_parallel_completes_all_tasks) {
     asx_budget b;
     asx_task_state st1, st2, st3;
     setup();
-    MUST_OK(asx_region_open(&rid));
+    MUST_OK(asx_region_open(&g_rt, &rid));
     MUST_OK(asx_task_spawn(rid, poll_ok, NULL, &t1));
     MUST_OK(asx_task_spawn(rid, poll_ok, NULL, &t2));
     MUST_OK(asx_task_spawn(rid, poll_ok, NULL, &t3));
@@ -201,7 +201,7 @@ TEST(parallel_run_with_pending_tasks) {
     setup();
     g_pending_count = 0;
     g_pending_limit = 3;
-    MUST_OK(asx_region_open(&rid));
+    MUST_OK(asx_region_open(&g_rt, &rid));
     MUST_OK(asx_task_spawn(rid, poll_n_pending, NULL, &tid));
     b = asx_budget_from_polls(100);
     ASSERT_EQ(asx_parallel_run(rid, &b), ASX_OK);
