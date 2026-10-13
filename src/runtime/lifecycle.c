@@ -59,7 +59,7 @@ uint64_t asx_task_next_member_seq_internal(asx_kernel *k) { return ++k->member_s
 void asx_runtime_clear_internal(asx_kernel *k) {
     uint32_t i, j;
     asx_runtime_object_reset_internal(k);
-    for (i = 0; i < ASX_MAX_REGIONS; i++) {
+    for (i = 0; i < ASX_ARENA_CLEAR_N(k, k->region_count, ASX_MAX_REGIONS); i++) {
         k->regions[i].state = ASX_REGION_OPEN;
         k->regions[i].parent_id = ASX_INVALID_ID;
         k->regions[i].child_count = 0;
@@ -76,7 +76,7 @@ void asx_runtime_clear_internal(asx_kernel *k) {
     }
     k->region_count = 0;
     k->region_live = 0;
-    for (i = 0; i < ASX_MAX_TASKS; i++) {
+    for (i = 0; i < ASX_ARENA_CLEAR_N(k, k->task_count, ASX_MAX_TASKS); i++) {
         k->tasks[i].state = ASX_TASK_CREATED;
         k->tasks[i].region = ASX_INVALID_ID;
         k->tasks[i].poll_fn = NULL;
@@ -105,7 +105,7 @@ void asx_runtime_clear_internal(asx_kernel *k) {
     k->task_count = 0;
     k->task_live = 0;
     k->task_free_head = 0u;
-    for (i = 0; i < ASX_MAX_OBLIGATIONS; i++) {
+    for (i = 0; i < ASX_ARENA_CLEAR_N(k, k->obligation_count, ASX_MAX_OBLIGATIONS); i++) {
         k->obligations[i].state = ASX_OBLIGATION_RESERVED;
         k->obligations[i].region = ASX_INVALID_ID;
         k->obligations[i].generation = 0;
@@ -132,6 +132,7 @@ void asx_runtime_clear_internal(asx_kernel *k) {
     k->leak_count = 0;
     k->cleanup_hard_bound = 0;
     k->member_seq = 0;
+    k->arenas_clear = 1u; /* the three arena loops above covered the used prefix or all of it */
     asx_kernel_clock_reset_internal(k);
     asx_scheduler_reset_internal(k);
     asx_error_ledger_reset_runtime_internal(k->tag);
@@ -176,11 +177,10 @@ void asx_runtime_clear_internal(asx_kernel *k) {
     asx_once_reset();
     asx_actor_reset();
     asx_supervisor_reset();
-    /* net, fs, process and signal: each registered its reset the first time
-     * it held state, and the hooks run here in slot order, where the four
-     * resets were called by name (bd-dkfs). The kernel names none of them,
-     * so an application that never uses one does not link it; a subsystem
-     * never used has nothing a reset would clear. */
+    /* net, fs, process and signal: each registered its reset the first time it held state, and
+     * the hooks run here in slot order, where the four resets were called by name (bd-dkfs). The
+     * kernel names none of them, so an application that never uses one does not link it; a
+     * subsystem never used has nothing a reset would clear. */
     asx_runtime_reset_hooks_run_internal();
     asx_diagnostic_reset();
 }

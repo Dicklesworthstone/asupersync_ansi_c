@@ -248,6 +248,13 @@ run_unit_mutant PARALLEL_NO_CANCEL_PROMOTE unit/runtime/test_parallel \
 run_unit_mutant SPAWN_INTO_CLOSING_REGION unit/runtime/test_parallel \
     parallel_spawn_into_a_cancelled_region_is_refused_and_admits_nothing
 
+# A reset visits only the used prefix of each arena once they were cleared in
+# full (bd-9kll.14.2): the mutant leaves the last used slot as it was, and a
+# heavy epoch, a reset, a light epoch, a reset and the heavy epoch again must
+# then issue different handles.
+run_unit_mutant CLEAR_SKIPS_USED_SLOTS unit/runtime/test_boundary_exhaustion \
+    reset_after_heavy_then_light_use_leaves_no_slot_behind
+
 if [ "$failures" -eq 0 ]; then
     echo "test_oracle_mutants: every mutant caught"
     exit 0

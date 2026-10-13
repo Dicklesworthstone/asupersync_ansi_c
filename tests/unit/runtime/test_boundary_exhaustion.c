@@ -888,6 +888,106 @@ TEST(region_limits_cap_live_tasks_children_and_obligations) {
 }
 
 /* ====================================================================
+ * A reset after use clears the used prefix of each arena and nothing
+ * else (bd-9kll.14.2): the arenas' counts are the high-water marks, and a
+ * slot at or above one has not been allocated since the last full clear.
+ * What would show a slot left behind is a handle: it carries the slot's
+ * generation, which a clear returns to 0.
+ * ==================================================================== */
+
+#define RESET_LOG_CAP ((uint32_t)ASX_MAX_TASKS + (uint32_t)ASX_MAX_TASKS / 2u + 4u)
+
+typedef struct {
+    uint64_t ids[RESET_LOG_CAP];
+    uint32_t n;
+} reset_log;
+
+static void reset_log_add(reset_log *l, uint64_t id) {
+    if (l->n < RESET_LOG_CAP) l->ids[l->n++] = id;
+}
+
+/* Fills the task arena with tasks that complete and closes their region,
+ * then spawns half as many again in another: the arena is full of closed
+ * tasks, so their slots are reclaimed and the new handles carry generation
+ * 1. Returns 0 on success. */
+static int reset_heavy_epoch(reset_log *l) {
+    asx_region_id first;
+    asx_region_id second;
+    asx_task_id tid;
+    asx_budget budget = asx_budget_from_polls(10000);
+    uint32_t i;
+
+    memset(l, 0, sizeof(*l));
+    if (asx_region_open(&first) != ASX_OK) return 1;
+    reset_log_add(l, first);
+    for (i = 0; i < (uint32_t)ASX_MAX_TASKS; i++) {
+        if (asx_task_spawn(first, poll_ok, NULL, &tid) != ASX_OK) return 2;
+        reset_log_add(l, tid);
+    }
+    if (asx_scheduler_run(first, &budget) != ASX_OK) return 3;
+    if (asx_region_close(first) != ASX_OK) return 4;
+    budget = asx_budget_from_polls(10000);
+    if (asx_scheduler_run(first, &budget) != ASX_OK) return 4;
+    budget = asx_budget_from_polls(10000);
+    if (asx_region_drain(first, &budget) != ASX_OK) return 4;
+    if (asx_region_open(&second) != ASX_OK) return 5;
+    reset_log_add(l, second);
+    for (i = 0; i < (uint32_t)ASX_MAX_TASKS / 2u; i++) {
+        if (asx_task_spawn(second, poll_ok, NULL, &tid) != ASX_OK) return 6;
+        reset_log_add(l, tid);
+    }
+    budget = asx_budget_from_polls(10000);
+    if (asx_scheduler_run(second, &budget) != ASX_OK) return 7;
+    return 0;
+}
+
+static int reset_light_epoch(reset_log *l) {
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_budget budget = asx_budget_from_polls(100);
+    uint32_t i;
+
+    memset(l, 0, sizeof(*l));
+    if (asx_region_open(&rid) != ASX_OK) return 1;
+    reset_log_add(l, rid);
+    for (i = 0; i < 2u; i++) {
+        if (asx_task_spawn(rid, poll_ok, NULL, &tid) != ASX_OK) return 2;
+        reset_log_add(l, tid);
+    }
+    if (asx_scheduler_run(rid, &budget) != ASX_OK) return 3;
+    return 0;
+}
+
+TEST(reset_after_heavy_then_light_use_leaves_no_slot_behind) {
+    reset_log first;
+    reset_log light;
+    reset_log third;
+    uint32_t i;
+
+    reset_all();
+    ASSERT_EQ(reset_heavy_epoch(&first), 0);
+    ASSERT_TRUE(first.n > (uint32_t)ASX_MAX_TASKS);
+
+    /* Heavy, reset, light, reset: the second reset visits only the two
+     * slots the light epoch used; every other slot must still be as the
+     * first reset left it. */
+    reset_all();
+    ASSERT_EQ(asx_resource_remaining(ASX_RESOURCE_TASK), (uint32_t)ASX_MAX_TASKS);
+    ASSERT_EQ(reset_light_epoch(&light), 0);
+    reset_all();
+    ASSERT_EQ(asx_resource_remaining(ASX_RESOURCE_TASK), (uint32_t)ASX_MAX_TASKS);
+
+    /* The same heavy epoch again issues the same handles: the same indexes
+     * and generations, as from a process that never ran anything. */
+    ASSERT_EQ(reset_heavy_epoch(&third), 0);
+    ASSERT_EQ(third.n, first.n);
+    for (i = 0; i < first.n; i++) { ASSERT_EQ(third.ids[i], first.ids[i]); }
+
+    reset_all();
+    ASSERT_EQ(asx_resource_remaining(ASX_RESOURCE_TASK), (uint32_t)ASX_MAX_TASKS);
+}
+
+/* ====================================================================
  * Main
  * ==================================================================== */
 
@@ -940,6 +1040,9 @@ int main(void) {
 
     /* Region admission limits */
     RUN_TEST(region_limits_cap_live_tasks_children_and_obligations);
+
+    /* Reset visits the used prefix of each arena */
+    RUN_TEST(reset_after_heavy_then_light_use_leaves_no_slot_behind);
 
     TEST_REPORT();
     return test_failures;

@@ -442,10 +442,10 @@ typedef struct asx_kernel {
     asx_trace_state trace;
     uint32_t rt_generation; /* nonzero while an initialized runtime holds it */
     uint16_t tag;           /* its index in g_kernels; stamped on its handles */
+    uint8_t arenas_clear;   /* the arenas were cleared in full once: ASX_ARENA_CLEAR_N */
 } asx_kernel;
 
-/* The library's static block, the kernel of tag 0 whenever no caller block
- * is (resource.c). */
+/* The library's static block: the kernel of tag 0 when no caller block is. */
 extern asx_kernel g_kernel_static;
 
 /* The registry, by runtime tag: the kernel a handle's tag names, or NULL
@@ -1168,5 +1168,19 @@ int asx_channel_accounting_get_internal(uint32_t index, asx_channel_accounting *
 /* The first way `a` is inconsistent as a static message, or NULL when its
  * counters agree (oracle.c). */
 const char *asx_channel_accounting_defect_internal(const asx_channel_accounting *a);
+
+/* How many slots of an arena asx_runtime_clear_internal visits. Once the
+ * arenas have been cleared in full (arenas_clear), a slot at or above the
+ * arena's count (the high-water mark every scan of it stops at) has not been
+ * allocated since, so the used prefix is all a clear needs. A zeroed kernel,
+ * the static block or a block a bind zeroed, has the flag 0 and its first
+ * clear is the full one. ASX_MUTANT_CLEAR_SKIPS_USED_SLOTS plants the bug of
+ * leaving the last used slot as it was (tests/gates/test_oracle_mutants.sh). */
+#ifdef ASX_MUTANT_CLEAR_SKIPS_USED_SLOTS
+#define ASX_ARENA_CLEAR_N(k, count, max)                                                           \
+    ((k)->arenas_clear ? ((count) > 0u ? (count) - 1u : 0u) : (uint32_t)(max))
+#else
+#define ASX_ARENA_CLEAR_N(k, count, max) ((k)->arenas_clear ? (count) : (uint32_t)(max))
+#endif
 
 #endif /* ASX_RUNTIME_INTERNAL_H */
