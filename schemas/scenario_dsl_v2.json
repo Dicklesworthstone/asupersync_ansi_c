@@ -132,6 +132,7 @@
       {"$ref": "#/$defs/s_delay_queue_insert"}, {"$ref": "#/$defs/s_delay_queue_insert_at"},
       {"$ref": "#/$defs/s_delay_queue_reset"}, {"$ref": "#/$defs/s_delay_queue_reset_at"},
       {"$ref": "#/$defs/s_delay_queue_key"}, {"$ref": "#/$defs/s_delay_queue_ref"},
+      {"$ref": "#/$defs/s_demonitor"}, {"$ref": "#/$defs/s_server_demonitor"},
       {"$ref": "#/$defs/s_masked"}
     ]},
     "step": {"oneOf": [
@@ -145,7 +146,8 @@
       {"$ref": "#/$defs/s_sync_ref_b"}, {"$ref": "#/$defs/s_mutex_lock_until"},
       {"$ref": "#/$defs/s_sem_acquire"},
       {"$ref": "#/$defs/s_server_spawn"}, {"$ref": "#/$defs/s_cast"}, {"$ref": "#/$defs/s_call"},
-      {"$ref": "#/$defs/s_server_ref"}, {"$ref": "#/$defs/s_supervise"}, {"$ref": "#/$defs/s_supervisor_join"}
+      {"$ref": "#/$defs/s_server_ref"}, {"$ref": "#/$defs/s_supervise"}, {"$ref": "#/$defs/s_supervisor_join"},
+      {"$ref": "#/$defs/s_monitor"}, {"$ref": "#/$defs/s_await_down"}, {"$ref": "#/$defs/s_server_monitor"}
     ]},
     "s_bare": {"type": "object", "required": ["op"], "additionalProperties": false, "properties": {"op": {"const": "yield"}}},
     "s_checkpoint": {"type": "object", "required": ["op"], "additionalProperties": false,
@@ -292,6 +294,17 @@
       "properties": {"op": {"const": "call"}, "server": {"$ref": "#/$defs/name"}, "request": {"$ref": "#/$defs/u64"}}},
     "s_server_ref": {"type": "object", "required": ["op", "server"], "additionalProperties": false,
       "properties": {"op": {"enum": ["server_stop", "server_evicted"]}, "server": {"$ref": "#/$defs/name"}}},
+    "s_monitor": {"type": "object", "required": ["op", "task", "as"], "additionalProperties": false,
+      "properties": {"op": {"const": "monitor"}, "task": {"$ref": "#/$defs/task_name"}, "as": {"$ref": "#/$defs/name"}}},
+    "s_await_down": {"type": "object", "required": ["op", "monitor"], "additionalProperties": false,
+      "properties": {"op": {"const": "await_down"}, "monitor": {"$ref": "#/$defs/name"}}},
+    "s_demonitor": {"type": "object", "required": ["op", "monitor"], "additionalProperties": false,
+      "properties": {"op": {"const": "demonitor"}, "monitor": {"$ref": "#/$defs/name"}}},
+    "s_server_monitor": {"type": "object", "required": ["op", "server", "task", "as"], "additionalProperties": false,
+      "properties": {"op": {"const": "server_monitor"}, "server": {"$ref": "#/$defs/name"},
+                     "task": {"$ref": "#/$defs/task_name"}, "as": {"$ref": "#/$defs/name"}}},
+    "s_server_demonitor": {"type": "object", "required": ["op", "server", "monitor"], "additionalProperties": false,
+      "properties": {"op": {"const": "server_demonitor"}, "server": {"$ref": "#/$defs/name"}, "monitor": {"$ref": "#/$defs/name"}}},
     "s_supervise": {"type": "object", "required": ["op", "as", "policy", "max_restarts", "window_ns", "children"], "additionalProperties": false,
       "properties": {"op": {"const": "supervise"}, "as": {"$ref": "#/$defs/name"},
                      "policy": {"enum": ["one_for_one", "one_for_all", "rest_for_one"]},

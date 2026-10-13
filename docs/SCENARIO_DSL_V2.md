@@ -597,6 +597,33 @@ A standalone `time::timeout` is not a step yet: its inner future and its own
 `Sleep` register two timers that twin_run names as one, and C waits for both
 on the task's one sleep timer slot.
 
+### 3.10 Monitors
+
+A task, or a GenServer, watches another task and is told once when it
+finishes (`monitor.rs`, `gen_server.rs`). A request is a command of the
+region-command lane (§2, `WatchCommand::Monitor`, `monitor.rs:1198`), so a
+`monitor` or `server_monitor` step takes at least one scheduler step: the
+task parks, the next step's drain applies the request (eight commands per
+step, with the region opens and cancels), and the task wakes with the result.
+A DOWN is fired by the exit itself: monitors on the task leave the set by
+ascending reference (DOWN-ORDER) and the task's own monitors end silently.
+
+| op | Fields | Rust | C | Observation |
+|---|---|---|---|---|
+| `monitor` | `task` (a task name, as `join` takes it), `as` (the monitor's name) | `cx.monitor(target).await` (`monitor.rs:1090`): `target` is the task's handle when the harness holds one, else its id | `asx_monitor_open_poll` until done | `ASX_OK` with the monitor's reference (`MonitorRef::id`, from 1); `ASX_E_NOT_FOUND` when the task is not live when the request is applied (finished, or its spawn was refused). A name is used once per task. |
+| `await_down` | `monitor` | `monitor.down(&cx).await` (`:1170`) | `asx_monitor_down_poll` until done | until the task finishes. `ASX_OK` with `{"monitored": <task name>, "reason": "normal" \| "error" \| "cancelled" \| "panicked", "ref": <reference>}` (the error text and the cancel reason are not projected); `ASX_E_CANCELLED` when this task is cancelled first, checked after the stored notice. The same DOWN again on a later call. |
+| `demonitor` | `monitor` | `drop(monitor)` (`Monitor::drop`, `:1203`): a Demonitor command unless the DOWN was delivered | `asx_monitor_release` | no. `ASX_OK`. The monitor is gone from the task's names. |
+| `server_monitor` | `server`, `task`, `as` | `handle.monitor(&cx, target).await` (`gen_server.rs:1946`): the server's task holds the monitor | `asx_monitor_open_server_poll` until done | as `monitor`: the reference, or `ASX_E_NOT_FOUND`. The DOWN reaches the server's `handle_info` through its system lane (§3.8). |
+| `server_demonitor` | `server`, `monitor` (a `server_monitor`'s name) | `handle.demonitor(&cx, ref)` (`:1978`): a Demonitor command | `asx_demonitor` | no. `ASX_OK`. |
+
+The built-in servers (`counter`, `echo` and the budget probes) answer every
+system message with one user trace, so a server's DOWNs are in the trace and
+compare as events: `down:ref=<reference> reason=<kind> vt=<ns>` (`vt` is the
+virtual time of the exit, `SystemMsg::Down`'s `completion_vt`; `exit` and
+`timeout` for the other two kinds). No new event kind is involved. A
+server's handler runs only if the server runs: a cancelled server drops its
+system lane, as it does its mailbox (§3.8).
+
 ## 4. Driver operations (`script`)
 
 Each entry is `{"at_ns": t, "op": {...}}`. It is applied after the run goes

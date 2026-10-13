@@ -23,6 +23,7 @@ use asupersync::gen_server::{
     CallError, CastError, CastOverflowPolicy, GenServer, GenServerHandle, Reply, SystemMsg,
 };
 use asupersync::lab::{LabConfig, LabRuntime};
+use asupersync::monitor::{DownReason, Monitor, MonitorRef, WatchError, WatchTarget};
 use asupersync::record::task::TaskState;
 use asupersync::record::{ObligationAbortReason, ObligationKind, RegionLimits};
 use asupersync::runtime::obligation_mailbox::ObligationToken;
@@ -525,6 +526,12 @@ struct Local {
     intervals: BTreeMap<String, Interval>,
     delay_queues: BTreeMap<String, DelayQueue<u64>>,
     delay_keys: BTreeMap<(String, String), DelayKey>,
+    /// Monitors this task holds by name, with the monitored task's name
+    /// (DSL §3.10); dropping one removes it (Monitor's Drop). The references
+    /// of monitors a server holds for this task's `server_monitor` steps,
+    /// by name.
+    monitors: BTreeMap<String, (Monitor, String)>,
+    server_monitors: BTreeMap<String, MonitorRef>,
     /// GenServers this task spawned, by name (DSL §3.8).
     servers: BTreeMap<String, Server>,
     /// Supervisors this task spawned, by name, joined or not (DSL §3.8):
@@ -797,6 +804,61 @@ fn probe_trace(cx: &Cx, hook: &str) {
     ));
 }
 
+/// A DOWN's reason as the DSL names it (DSL §3.10). The error text and the
+/// cancel reason are not projected.
+fn down_reason_kind(reason: &DownReason) -> &'static str {
+    match reason {
+        DownReason::Normal => "normal",
+        DownReason::Error(_) => "error",
+        DownReason::Cancelled(_) => "cancelled",
+        DownReason::Panicked(_) => "panicked",
+    }
+}
+
+/// What a server's `handle_info` leaves for the oracle (DSL §3.10): one user
+/// trace per system message, with the monitor reference, the reason and the
+/// virtual time of the exit behind it. The C server writes the same text.
+fn trace_system_msg(cx: &Cx, msg: &SystemMsg) {
+    match msg {
+        SystemMsg::Down {
+            completion_vt,
+            notification,
+        } => cx.trace(&format!(
+            "down:ref={} reason={} vt={}",
+            notification.monitor_ref.id(),
+            down_reason_kind(&notification.reason),
+            completion_vt.as_nanos()
+        )),
+        SystemMsg::Exit { .. } => cx.trace("exit"),
+        SystemMsg::Timeout { .. } => cx.trace("timeout"),
+    }
+}
+
+/// A monitor opening's failure as a status (vocabulary §5).
+fn watch_error_status(err: WatchError) -> &'static str {
+    match err {
+        WatchError::NotFound => "ASX_E_NOT_FOUND",
+        WatchError::WatcherNotFound => "ASX_E_STALE_HANDLE",
+        WatchError::Cancelled => "ASX_E_CANCELLED",
+        _ => "ASX_E_INVALID_STATE",
+    }
+}
+
+/// The task a monitor step names: its handle when the harness holds one
+/// (so a task spawned a moment ago, not yet admitted, is found once it is),
+/// else its id (DSL §3.10).
+fn watch_target_of(shared: &SharedRef, name: &str) -> RunResult<WatchTarget> {
+    let s = lock(shared);
+    if let Some(handle) = s.handles.get(name) {
+        return Ok(WatchTarget::from(handle));
+    }
+    s.task_ids
+        .get(name)
+        .copied()
+        .map(WatchTarget::from)
+        .ok_or_else(|| format!("unknown task {name:?}"))
+}
+
 impl GenServer for CounterServer {
     type Call = u64;
     type Reply = u64;
@@ -844,6 +906,16 @@ impl GenServer for CounterServer {
         Box::pin(async {})
     }
 
+    fn handle_info(
+        &mut self,
+        cx: &Cx,
+        msg: SystemMsg,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        self.1.record(cx);
+        trace_system_msg(cx, &msg);
+        Box::pin(async {})
+    }
+
     fn on_start(&mut self, cx: &Cx) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         self.1.record(cx);
         if self.2.traces_budget() {
@@ -881,6 +953,16 @@ impl GenServer for EchoServer {
 
     fn handle_cast(&mut self, cx: &Cx, _msg: u64) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         self.0.record(cx);
+        Box::pin(async {})
+    }
+
+    fn handle_info(
+        &mut self,
+        cx: &Cx,
+        msg: SystemMsg,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        self.0.record(cx);
+        trace_system_msg(cx, &msg);
         Box::pin(async {})
     }
 
@@ -1945,6 +2027,33 @@ fn exec_sync(
                 .clear();
             observe(&ctx.shared, me, idx, label, "ASX_OK", Value::Null);
         }
+        // Dropping the Monitor (monitor.rs:1203) queues a Demonitor command
+        // unless the DOWN was delivered (DSL §3.10).
+        "demonitor" => {
+            let name = str_field(step, "monitor")?;
+            if local.monitors.remove(name).is_none() {
+                return Err(format!("this task holds no monitor {name:?}"));
+            }
+            observe(&ctx.shared, me, idx, label, "ASX_OK", Value::Null);
+        }
+        // GenServerHandle::demonitor(cx, ref) (gen_server.rs:1978).
+        "server_demonitor" => {
+            let server = str_field(step, "server")?;
+            let name = str_field(step, "monitor")?;
+            let reference = local
+                .server_monitors
+                .remove(name)
+                .ok_or_else(|| format!("this task holds no server monitor {name:?}"))?;
+            match local
+                .servers
+                .get(server)
+                .ok_or_else(|| format!("unknown server {server:?}"))?
+            {
+                Server::Counter(h) => h.demonitor(cx, reference),
+                Server::Echo(h) => h.demonitor(cx, reference),
+            }
+            observe(&ctx.shared, me, idx, label, "ASX_OK", Value::Null);
+        }
         // A masked step inside masked nests; each inner observation's op is
         // its path, e.g. masked/2/masked/1/checkpoint (DSL §3.2).
         "masked" => {
@@ -2183,6 +2292,71 @@ async fn exec_step(
             match accepted {
                 Ok(v) => observe(&ctx.shared, me, idx, op, "ASX_OK", json!(v)),
                 Err(e) => observe(&ctx.shared, me, idx, op, watch_recv_status(e), Value::Null),
+            }
+        }
+        // Cx::monitor(target).await (monitor.rs:1090, DSL §3.10): the
+        // request goes through the region-command lane, so the opening
+        // resolves a scheduler step later; the Monitor is held by name.
+        "monitor" => {
+            let target = str_field(step, "task")?.to_string();
+            let name = str_field(step, "as")?.to_string();
+            if local.monitors.contains_key(&name) {
+                return Err(format!("monitor {name:?} is named twice"));
+            }
+            let watch_target = watch_target_of(&ctx.shared, &target)?;
+            match cx.monitor(watch_target).await {
+                Ok(monitor) => {
+                    let reference = monitor.monitor_ref().id();
+                    local.monitors.insert(name, (monitor, target));
+                    observe(&ctx.shared, me, idx, op, "ASX_OK", json!(reference));
+                }
+                Err(e) => observe(&ctx.shared, me, idx, op, watch_error_status(e), Value::Null),
+            }
+        }
+        // Monitor::down(&cx).await (:1170): the DOWN's task, reason kind and
+        // reference; Cancelled if this task is cancelled first.
+        "await_down" => {
+            let name = str_field(step, "monitor")?;
+            let (monitor, target) = local
+                .monitors
+                .get(name)
+                .ok_or_else(|| format!("this task holds no monitor {name:?}"))?;
+            match monitor.down(cx).await {
+                Ok(down) => {
+                    let value = json!({
+                        "monitored": target,
+                        "reason": down_reason_kind(&down.reason),
+                        "ref": down.monitor_ref.id(),
+                    });
+                    observe(&ctx.shared, me, idx, op, "ASX_OK", value);
+                }
+                Err(e) => observe(&ctx.shared, me, idx, op, watch_error_status(e), Value::Null),
+            }
+        }
+        // GenServerHandle::monitor(cx, target).await (gen_server.rs:1946):
+        // the server holds the monitor and gets the DOWN in handle_info.
+        "server_monitor" => {
+            let server = str_field(step, "server")?;
+            let target = str_field(step, "task")?.to_string();
+            let name = str_field(step, "as")?.to_string();
+            if local.server_monitors.contains_key(&name) {
+                return Err(format!("server monitor {name:?} is named twice"));
+            }
+            let watch_target = watch_target_of(&ctx.shared, &target)?;
+            let opening = match local
+                .servers
+                .get(server)
+                .ok_or_else(|| format!("unknown server {server:?}"))?
+            {
+                Server::Counter(h) => h.monitor(cx, watch_target),
+                Server::Echo(h) => h.monitor(cx, watch_target),
+            };
+            match opening.await {
+                Ok(reference) => {
+                    local.server_monitors.insert(name, reference);
+                    observe(&ctx.shared, me, idx, op, "ASX_OK", json!(reference.id()));
+                }
+                Err(e) => observe(&ctx.shared, me, idx, op, watch_error_status(e), Value::Null),
             }
         }
         // DelayQueue::poll_expired once (time/delay_queue.rs:260, DSL §3.9).
