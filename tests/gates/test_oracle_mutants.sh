@@ -18,6 +18,9 @@
 #                              timer nor the round-start deadline pass reaches
 #                              it (sweep only, compare-sweep)          -> any fixture
 #                              the baseline sweep passes
+#   - SWEEP_PARKED_DEADLINE_NO_TIMER only the wake timer is dropped, so a lone
+#                              parked task is never moved to its deadline
+#                              (sweep only, compare-sweep)  -> budget-deadline-parked-*
 # A mutant the corpus does not catch means the fixtures stopped exercising
 # that rule: the gate fails.
 # The raw-ID authorization bypass is tested through actual polling tasks:
@@ -103,9 +106,12 @@ run_mutant MASKED_SKIP_UNMASK 'cancel-masked-'
 # paths: the wake timer a task arms when it parks, and the round-start pass
 # of sched_fire_budget_deadlines (d9a6e51), which cancels and wakes a parked
 # task whenever another timer has moved the clock past its deadline. With the
-# pass in place, dropping the timer alone is seen by no fixture in the corpus
+# pass in place, dropping the timer alone was seen by no fixture in the corpus
 # (batch #7): only a lone parked task, which nothing else wakes, needs it.
+# Such a fixture exists since d22031c (budget-deadline-parked-barrier-001, a
+# Rust capture), so the timer alone is a mutant of its own, caught by it.
 run_mutant SWEEP_PARKED_DEADLINE_NO_WAKE '.' compare-sweep
+run_mutant SWEEP_PARKED_DEADLINE_NO_TIMER 'budget-deadline-parked-' compare-sweep
 
 # The scenario parser cannot reach depth 64; the actual public boundary
 # test must catch acceptance of depth 65, without a compile/empty-run pass.
