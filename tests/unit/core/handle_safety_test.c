@@ -8,6 +8,7 @@
  */
 
 #include "../../test_harness.h"
+#include "../../test_runtime.h"
 #include <asx/asx.h>
 
 /* Internal header for test access to arena slots */
@@ -53,12 +54,12 @@ TEST(stale_region_handle_after_recycle) {
     asx_budget budget;
 
     /* Open, drain, and close a region to make slot 0 recyclable */
-    ASSERT_EQ(asx_region_open(&rid1), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid1), ASX_OK);
     budget = asx_budget_infinite();
     ASSERT_EQ(asx_region_drain(rid1, &budget), ASX_OK);
 
     /* Recycle slot 0 with a new region */
-    ASSERT_EQ(asx_region_open(&rid2), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid2), ASX_OK);
 
     /* Old handle should be stale */
     ASSERT_EQ(asx_region_get_state(rid1, &state), ASX_E_STALE_HANDLE);
@@ -77,7 +78,7 @@ TEST(stale_handle_on_region_close) {
     asx_status st;
     asx_region_state state;
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     budget = asx_budget_infinite();
     ASSERT_EQ(asx_region_drain(rid, &budget), ASX_OK);
 
@@ -93,12 +94,12 @@ TEST(stale_handle_spawn_rejected) {
     asx_task_id tid;
     asx_budget budget;
 
-    ASSERT_EQ(asx_region_open(&rid1), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid1), ASX_OK);
     budget = asx_budget_infinite();
     ASSERT_EQ(asx_region_drain(rid1, &budget), ASX_OK);
 
     /* Recycle the slot */
-    ASSERT_EQ(asx_region_open(&rid2), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid2), ASX_OK);
 
     /* Spawning with stale handle should fail */
     ASSERT_EQ(asx_task_spawn(rid1, noop_poll, NULL, &tid), ASX_E_STALE_HANDLE);
@@ -124,7 +125,7 @@ TEST(task_handle_type_mismatch) {
     asx_region_id rid;
     asx_task_state tstate;
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     /* Using a region handle where a task handle is expected */
     ASSERT_EQ(asx_task_get_state(rid, &tstate), ASX_E_NOT_FOUND);
@@ -134,7 +135,7 @@ TEST(generation_preserved_in_handle_round_trip) {
     asx_region_id rid;
     uint16_t gen, slot_idx, tag;
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     tag = asx_handle_type_tag(rid);
     gen = asx_handle_generation(rid);
@@ -150,21 +151,21 @@ TEST(generation_increments_on_recycle) {
     asx_budget budget;
 
     /* First generation */
-    ASSERT_EQ(asx_region_open(&rid1), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid1), ASX_OK);
     ASSERT_EQ(asx_handle_generation(rid1), (uint16_t)0);
 
     budget = asx_budget_infinite();
     ASSERT_EQ(asx_region_drain(rid1, &budget), ASX_OK);
 
     /* Second generation */
-    ASSERT_EQ(asx_region_open(&rid2), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid2), ASX_OK);
     ASSERT_EQ(asx_handle_generation(rid2), (uint16_t)1);
 
     budget = asx_budget_infinite();
     ASSERT_EQ(asx_region_drain(rid2, &budget), ASX_OK);
 
     /* Third generation */
-    ASSERT_EQ(asx_region_open(&rid3), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid3), ASX_OK);
     ASSERT_EQ(asx_handle_generation(rid3), (uint16_t)2);
 }
 
@@ -277,7 +278,7 @@ TEST(cleanup_drain_during_region_finalize) {
     asx_cleanup_handle h1, h2;
 
     cleanup_log_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     /* Push cleanups onto the region's internal stack */
     {
@@ -306,19 +307,19 @@ int main(void) {
     fprintf(stderr, "=== handle_safety_test ===\n");
 
     /* Handle safety tests */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(stale_region_handle_after_recycle);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(stale_handle_on_region_close);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(stale_handle_spawn_rejected);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(invalid_handle_returns_not_found);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(task_handle_type_mismatch);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(generation_preserved_in_handle_round_trip);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(generation_increments_on_recycle);
 
     /* Cleanup-stack tests */
@@ -327,7 +328,7 @@ int main(void) {
     RUN_TEST(cleanup_drain_idempotent);
     RUN_TEST(cleanup_capacity_limit);
     RUN_TEST(cleanup_pop_invalid_handle);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(cleanup_drain_during_region_finalize);
 
     TEST_REPORT();

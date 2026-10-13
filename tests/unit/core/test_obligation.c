@@ -5,6 +5,7 @@
  */
 
 #include "test_harness.h"
+#include "test_runtime.h"
 #include "test_task.h"
 #include <asx/asx.h>
 #include <asx/runtime/runtime.h>
@@ -44,8 +45,8 @@ TEST(obligation_reserve_and_get_state) {
     asx_obligation_state state;
     asx_budget run;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     memset(&h, 0, sizeof(h));
     h.region = rid;
     h.ob = ASX_INVALID_ID;
@@ -73,8 +74,8 @@ TEST(obligation_host_can_neither_reserve_nor_settle) {
     asx_obligation_state state;
     asx_budget run;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     memset(&h, 0, sizeof(h));
     h.region = rid;
     h.ob = ASX_INVALID_ID;
@@ -115,8 +116,8 @@ static void commit_body(void *ctx) {
 TEST(obligation_commit) {
     asx_region_id rid;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(test_run_in_task(rid, commit_body, &rid), ASX_OK);
 }
 
@@ -134,8 +135,8 @@ static void abort_body(void *ctx) {
 TEST(obligation_abort) {
     asx_region_id rid;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(test_run_in_task(rid, abort_body, &rid), ASX_OK);
 }
 
@@ -156,8 +157,8 @@ static void commit_is_terminal_body(void *ctx) {
 TEST(obligation_commit_is_terminal) {
     asx_region_id rid;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(test_run_in_task(rid, commit_is_terminal_body, &rid), ASX_OK);
 }
 
@@ -176,8 +177,8 @@ static void abort_is_terminal_body(void *ctx) {
 TEST(obligation_abort_is_terminal) {
     asx_region_id rid;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(test_run_in_task(rid, abort_is_terminal_body, &rid), ASX_OK);
 }
 
@@ -185,14 +186,14 @@ TEST(obligation_abort_is_terminal) {
 
 TEST(obligation_reserve_null_out) {
     asx_region_id rid;
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_obligation_reserve(rid, NULL), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(obligation_reserve_invalid_region) {
     asx_obligation_id oid;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_obligation_reserve(ASX_INVALID_ID, &oid), ASX_E_NOT_FOUND);
 }
 
@@ -207,14 +208,14 @@ static void get_state_null_out_body(void *ctx) {
 
 TEST(obligation_get_state_null_out) {
     asx_region_id rid;
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(test_run_in_task(rid, get_state_null_out_body, &rid), ASX_OK);
 }
 
 TEST(obligation_invalid_handle) {
     asx_obligation_state state;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_obligation_get_state(ASX_INVALID_ID, &state), ASX_E_NOT_FOUND);
     ASSERT_EQ(asx_obligation_commit(ASX_INVALID_ID), ASX_E_NOT_FOUND);
     ASSERT_EQ(asx_obligation_abort(ASX_INVALID_ID), ASX_E_NOT_FOUND);
@@ -227,8 +228,8 @@ TEST(obligation_reserve_rejected_after_close) {
     asx_obligation_id oid;
     asx_budget budget;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_region_close(rid), ASX_OK);
     ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_E_REGION_CLOSED);
 
@@ -252,8 +253,8 @@ static void handle_type_tag_body(void *ctx) {
 TEST(obligation_handle_type_tag) {
     asx_region_id rid;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(test_run_in_task(rid, handle_type_tag_body, &rid), ASX_OK);
 }
 
@@ -286,8 +287,8 @@ static void multiple_in_region_body(void *ctx) {
 TEST(obligation_multiple_in_region) {
     asx_region_id rid;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(test_run_in_task(rid, multiple_in_region_body, &rid), ASX_OK);
 }
 
@@ -322,9 +323,9 @@ static void commit_reports_held_time_body(void *ctx) {
 TEST(obligation_commit_reports_held_time) {
     asx_region_id rid;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_runtime_virtual_advance(1000u);
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(test_run_in_task(rid, commit_reports_held_time_body, &rid), ASX_OK);
 }
 
@@ -344,9 +345,9 @@ static void abort_reports_held_time_body(void *ctx) {
 TEST(obligation_abort_reports_held_time) {
     asx_region_id rid;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_runtime_virtual_advance(100u);
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(test_run_in_task(rid, abort_reports_held_time_body, &rid), ASX_OK);
 }
 
@@ -365,9 +366,9 @@ static void resolved_at_the_reserve_instant_body(void *ctx) {
 TEST(obligation_resolved_at_the_reserve_instant_was_held_for_zero) {
     asx_region_id rid;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_runtime_virtual_advance(4242u);
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(test_run_in_task(rid, resolved_at_the_reserve_instant_body, &rid), ASX_OK);
 }
 
@@ -394,8 +395,8 @@ static void held_time_is_per_obligation_body(void *ctx) {
 TEST(obligation_held_time_is_per_obligation) {
     asx_region_id rid;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(test_run_in_task(rid, held_time_is_per_obligation_body, &rid), ASX_OK);
 }
 
@@ -429,12 +430,12 @@ TEST(obligation_leak_at_holder_completion_reports_held_time) {
      * (the default table's logical clock is the virtual one), and with the
      * LOG policy named rather than assumed: this test is about the held
      * time, not about what a leak does. */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_runtime_config_init(&cfg);
     cfg.leak_response = ASX_LEAK_LOG;
     ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
     ASSERT_EQ(asx_runtime_init(&rt, &cfg, &hooks), ASX_OK);
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rt, &rid), ASX_OK);
     memset(&h, 0, sizeof(h));
     h.region = rid;
     h.ob = ASX_INVALID_ID;

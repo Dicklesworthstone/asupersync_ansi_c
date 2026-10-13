@@ -10,6 +10,7 @@
  */
 
 #include "test_harness.h"
+#include "test_runtime.h"
 #include <asx/asx.h>
 #include <asx/runtime/runtime.h>
 #include <stdlib.h>
@@ -353,13 +354,13 @@ static asx_status noop_poll(void *user_data, asx_task_id self) {
 TEST(fault_lifecycle_region_open_succeeds_without_alloc) {
     asx_region_id rid;
     reset_fault_state();
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     install_fault_hooks();
 
     /* Walking skeleton uses static arenas — region open doesn't
      * need the hook allocator. Should succeed even with sealed alloc. */
     ASSERT_EQ(asx_runtime_seal_allocator(), ASX_OK);
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 }
 
 TEST(fault_lifecycle_spawn_succeeds_without_alloc) {
@@ -367,12 +368,12 @@ TEST(fault_lifecycle_spawn_succeeds_without_alloc) {
     asx_task_id tid;
     reset_fault_state();
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     /* runtime_reset clears installed hooks, so install after reset
      * before sealing the allocator for the static-arena lifecycle path. */
     install_fault_hooks();
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     /* Seal allocator — walking skeleton task spawn is static */
     ASSERT_EQ(asx_runtime_seal_allocator(), ASX_OK);

@@ -5,6 +5,7 @@
  */
 
 #include "test_harness.h"
+#include "test_runtime.h"
 #include <asx/asx.h>
 #include <asx/core/outcome.h>
 #include <string.h>
@@ -283,8 +284,8 @@ TEST(task_outcome_carries_the_reason_it_was_cancelled_with) {
     asx_outcome out;
     asx_budget run;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_acknowledge_cancel, NULL, &tid), ASX_OK);
     ASSERT_EQ(asx_task_cancel_with_reason(tid, &reason), ASX_OK);
     run = asx_budget_from_polls(20);
@@ -310,8 +311,8 @@ TEST(task_join_returns_the_panic_message) {
     asx_outcome out;
     asx_budget run;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_panic, NULL, &tid), ASX_OK);
     run = asx_budget_from_polls(20);
     ASSERT_EQ(asx_scheduler_run(rid, &run), ASX_OK);
@@ -330,8 +331,8 @@ TEST(region_close_outcome_joins_member_payloads) {
     asx_outcome out;
     asx_budget run;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_acknowledge_cancel, NULL, &cancelled), ASX_OK);
     ASSERT_EQ(asx_task_cancel_with_reason(cancelled, &reason), ASX_OK);
     run = asx_budget_from_polls(20);
@@ -358,8 +359,8 @@ TEST(cancelled_region_without_tasks_reports_its_own_reason) {
     asx_outcome out;
     uint32_t reached = 99u;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_region_cancel(rid, &reason, &reached), ASX_OK);
     ASSERT_EQ(reached, 0u);
 

@@ -8,6 +8,7 @@
  */
 
 #include "test_harness.h"
+#include "test_runtime.h"
 #include <asx/asx_ids.h>
 #include <asx/asx_status.h>
 #include <asx/runtime/runtime.h>
@@ -58,15 +59,15 @@ TEST(region_stale_handle_after_reclaim) {
     asx_region_state state;
     asx_budget budget;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     /* Open and drain a region to CLOSED */
-    ASSERT_EQ(asx_region_open(&first_id), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &first_id), ASX_OK);
     budget = asx_budget_infinite();
     ASSERT_EQ(asx_region_drain(first_id, &budget), ASX_OK);
 
     /* The slot is now CLOSED — open a new region that reclaims it */
-    ASSERT_EQ(asx_region_open(&second_id), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &second_id), ASX_OK);
 
     /* The new handle should work */
     ASSERT_EQ(asx_region_get_state(second_id, &state), ASX_OK);
@@ -79,17 +80,17 @@ TEST(region_stale_handle_after_reclaim) {
 TEST(region_stale_handle_different_generation) {
     asx_region_id first_id, second_id;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     /* Open and drain */
-    ASSERT_EQ(asx_region_open(&first_id), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &first_id), ASX_OK);
     {
         asx_budget b = asx_budget_infinite();
         ASSERT_EQ(asx_region_drain(first_id, &b), ASX_OK);
     }
 
     /* Reclaim */
-    ASSERT_EQ(asx_region_open(&second_id), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &second_id), ASX_OK);
 
     /* Verify generations differ */
     ASSERT_NE(asx_handle_generation(first_id), asx_handle_generation(second_id));
@@ -100,8 +101,8 @@ TEST(region_stale_handle_different_generation) {
 
 TEST(region_fresh_handle_generation_zero) {
     asx_region_id id;
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&id), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &id), ASX_OK);
     ASSERT_EQ(asx_handle_generation(id), (uint16_t)0);
 }
 
@@ -110,11 +111,11 @@ TEST(region_reclaimed_handle_generation_increments) {
     asx_budget budget;
     int i;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     /* Open, drain, and reclaim the same slot 3 times */
     for (i = 0; i < 3; i++) {
-        ASSERT_EQ(asx_region_open(&ids[i]), ASX_OK);
+        ASSERT_EQ(asx_region_open(test_runtime(), &ids[i]), ASX_OK);
         budget = asx_budget_infinite();
         ASSERT_EQ(asx_region_drain(ids[i], &budget), ASX_OK);
     }
@@ -137,8 +138,8 @@ TEST(task_handle_has_generation_zero) {
     asx_region_id rid;
     asx_task_id tid;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, noop_poll, NULL, &tid), ASX_OK);
     ASSERT_EQ(asx_handle_generation(tid), (uint16_t)0);
 }
@@ -148,8 +149,8 @@ TEST(task_lookup_validates_generation) {
     asx_task_id tid;
     asx_task_state state;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, noop_poll, NULL, &tid), ASX_OK);
 
     /* Valid handle works */
@@ -176,19 +177,19 @@ TEST(unjoined_task_keeps_closed_region_slot) {
     asx_budget budget;
     asx_outcome out;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&first), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &first), ASX_OK);
     ASSERT_EQ(asx_task_spawn(first, noop_poll, NULL, &tid), ASX_OK);
     budget = asx_budget_infinite();
     ASSERT_EQ(asx_scheduler_run(first, &budget), ASX_OK); /* completes OK */
     ASSERT_EQ(asx_region_drain(first, &budget), ASX_OK);
 
-    ASSERT_EQ(asx_region_open(&second), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &second), ASX_OK);
     ASSERT_NE(asx_handle_slot(second), asx_handle_slot(first));
     ASSERT_EQ(asx_task_join(tid, &out), ASX_OK);
     ASSERT_EQ((int)out.severity, (int)ASX_OUTCOME_OK);
 
-    ASSERT_EQ(asx_region_open(&third), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &third), ASX_OK);
     ASSERT_EQ(asx_handle_slot(third), asx_handle_slot(first));
     ASSERT_NE(asx_handle_generation(third), asx_handle_generation(first));
 }
@@ -211,8 +212,8 @@ TEST(handle_of_another_runtime_is_not_found_through_a_coincident_slot) {
     asx_task_id other;
     asx_obligation_id extra;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, noop_poll, NULL, &tid), ASX_OK);
     ASSERT_EQ(asx_obligation_reserve_ex(rid, ASX_OBLIGATION_KIND_GENERIC, tid, &oid), ASX_OK);
 

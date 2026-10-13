@@ -5,6 +5,7 @@
  */
 
 #include "../../test_harness.h"
+#include "../../test_runtime.h"
 #include <asx/core/channel.h>
 #include <asx/core/combinator.h>
 #include <asx/core/combinator2.h>
@@ -154,14 +155,14 @@ TEST(retry_starts_no_attempt_once_its_owner_is_cancelled) {
     MUST_OK(asx_runtime_init_default(&runtime));
     memset(&rt, 0, sizeof(rt));
     MUST_OK(asx_retry_init(&rt.rs, poll_cancel_owner_then_fail, &count, &p));
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&runtime, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_retry_task, &rt, &t), ASX_OK);
     budget = asx_budget_from_polls(100);
     ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
     ASSERT_EQ(rt.polls, 1u);
     ASSERT_EQ(rt.result, ASX_E_CANCELLED);
     ASSERT_EQ(count, 1);
-    asx_runtime_reset();
+    asx_runtime_reset(&runtime);
 }
 
 TEST(retry_single_attempt) {
@@ -338,7 +339,7 @@ TEST(retry_backs_off_between_attempts) {
     memset(&f, 0, sizeof(f));
     f.fail_first = 3u;
     MUST_OK(asx_retry_init(&rt.rs, poll_flaky, &f, &p));
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&runtime, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_retry_task, &rt, &t), ASX_OK);
     budget = asx_budget_from_polls(100);
     ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
@@ -351,7 +352,7 @@ TEST(retry_backs_off_between_attempts) {
     ASSERT_EQ(asx_retry_attempts(&rt.rs), 4u);
     ASSERT_EQ(asx_retry_total_delay_ns(&rt.rs), (uint64_t)7000000u);
     ASSERT_EQ(rt.polls, 4u); /* the first poll, then one wake per delay */
-    asx_runtime_reset();
+    asx_runtime_reset(&runtime);
 }
 
 TEST(retry_jitter_is_drawn_from_the_owner_entropy) {
@@ -377,7 +378,7 @@ TEST(retry_jitter_is_drawn_from_the_owner_entropy) {
         memset(&f, 0, sizeof(f));
         f.fail_first = 2u;
         MUST_OK(asx_retry_init(&rt.rs, poll_flaky, &f, &p));
-        ASSERT_EQ(asx_region_open(&r), ASX_OK);
+        ASSERT_EQ(asx_region_open(&runtime, &r), ASX_OK);
         ASSERT_EQ(asx_task_spawn(r, poll_retry_task, &rt, &t), ASX_OK);
         budget = asx_budget_from_polls(100);
         ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
@@ -392,7 +393,7 @@ TEST(retry_jitter_is_drawn_from_the_owner_entropy) {
         } else {
             ASSERT_EQ(asx_retry_total_delay_ns(&rt.rs), first_total);
         }
-        asx_runtime_reset();
+        asx_runtime_reset(&runtime);
     }
     /* The seeded stream jitters at least one of the two delays. */
     ASSERT_TRUE(first_total > (uint64_t)3000000u);
@@ -432,7 +433,7 @@ TEST(retry_cancel_during_the_delay_starts_no_attempt) {
     memset(&c, 0, sizeof(c));
     f.fail_first = 3u;
     MUST_OK(asx_retry_init(&rt.rs, poll_flaky, &f, &p));
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&runtime, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_retry_task, &rt, &t), ASX_OK);
     MUST_OK(asx_sleep_init(&c.sleep, 10000000u));
     c.target = t;
@@ -445,7 +446,7 @@ TEST(retry_cancel_during_the_delay_starts_no_attempt) {
     ASSERT_EQ(asx_retry_attempts(&rt.rs), 2u);
     ASSERT_EQ(asx_retry_total_delay_ns(&rt.rs), (uint64_t)100000000u);
     ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)10000000u);
-    asx_runtime_reset();
+    asx_runtime_reset(&runtime);
 }
 
 /* ================================================================== */
@@ -1096,7 +1097,7 @@ TEST(hedge_delay_wakes_a_parked_owner) {
     MUST_OK(asx_runtime_init(&rt, &cfg, &hooks));
     memset(&h, 0, sizeof(h));
     MUST_OK(asx_hedge_init(&h.hs, hedge_primary_parks, NULL, poll_ok, NULL, 5000000ULL));
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_hedge_task, &h, &t), ASX_OK);
     budget = asx_budget_from_polls(100);
     ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
@@ -1104,7 +1105,7 @@ TEST(hedge_delay_wakes_a_parked_owner) {
     ASSERT_EQ(h.result, ASX_OK);
     ASSERT_EQ(asx_hedge_winner(&h.hs), 1);
     ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)5000000u);
-    asx_runtime_reset();
+    asx_runtime_reset(&rt);
 }
 
 /* Cancels its own task and stays pending. */
@@ -1131,7 +1132,7 @@ TEST(hedge_owner_cancel_drops_both_attempts) {
     backup_polls = 0;
     MUST_OK(asx_hedge_init(&h.hs, hedge_primary_cancels_owner, NULL, hedge_backup_counted,
                            &backup_polls, 5000000ULL));
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_hedge_task, &h, &t), ASX_OK);
     budget = asx_budget_from_polls(100);
     ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
@@ -1139,7 +1140,7 @@ TEST(hedge_owner_cancel_drops_both_attempts) {
     ASSERT_EQ(h.result, ASX_E_CANCELLED);
     ASSERT_EQ(asx_hedge_current_phase(&h.hs), ASX_HEDGE_DECIDED);
     ASSERT_EQ(backup_polls, 0);
-    asx_runtime_reset();
+    asx_runtime_reset(&rt);
 }
 
 /* ================================================================== */
@@ -1312,14 +1313,14 @@ TEST(map_reduce_caches_failure_before_reentrant_resource_release) {
     asx_send_permit next;
     uint32_t reserved;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     memset(&first, 0, sizeof(first));
     memset(&last, 0, sizeof(last));
     first.owner = &ms;
     last.owner = &ms;
     first.nested_result = ASX_E_PENDING;
     last.nested_result = ASX_E_PENDING;
-    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &region), ASX_OK);
     ASSERT_EQ(asx_channel_create(region, 2u, &channel), ASX_OK);
     ASSERT_EQ(asx_channel_try_reserve(channel, &first.permit), ASX_OK);
     ASSERT_EQ(asx_channel_try_reserve(channel, &last.permit), ASX_OK);
@@ -1350,7 +1351,7 @@ TEST(map_reduce_caches_failure_before_reentrant_resource_release) {
     asx_send_permit_abort(&next);
     ASSERT_EQ(asx_map_reduce_poll(&ms, 0), ASX_E_INVALID_STATE);
     ASSERT_EQ(first.drops + last.drops, 2u);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 }
 
 TEST(hedge_releases_the_attempt_that_did_not_win) {
@@ -1399,14 +1400,14 @@ TEST(hedge_releases_the_attempt_that_did_not_win) {
                                &backup, 5000000ULL));
         h.hs.primary.drop_fn = release_counted;
         h.hs.backup.drop_fn = release_counted;
-        ASSERT_EQ(asx_region_open(&r), ASX_OK);
+        ASSERT_EQ(asx_region_open(&rt, &r), ASX_OK);
         ASSERT_EQ(asx_task_spawn(r, poll_hedge_task, &h, &t), ASX_OK);
         budget = asx_budget_from_polls(100);
         ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
         ASSERT_EQ(h.result, ASX_E_CANCELLED);
         ASSERT_EQ(primary, 100);
         ASSERT_EQ(backup, 100);
-        asx_runtime_reset();
+        asx_runtime_reset(&rt);
     }
 }
 

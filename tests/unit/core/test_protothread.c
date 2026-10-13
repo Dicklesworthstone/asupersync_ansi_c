@@ -5,6 +5,7 @@
  */
 
 #include "../../test_harness.h"
+#include "../../test_runtime.h"
 #include <asx/asx.h>
 
 typedef struct yield_state {
@@ -53,8 +54,8 @@ TEST(protothread_yield_resume_ordering) {
     asx_outcome out;
     asx_budget budget;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn_captured(rid, yielding_poll, (uint32_t)sizeof(yield_state), NULL, &tid,
                                       (void **)&st),
               ASX_OK);
@@ -76,8 +77,8 @@ TEST(captured_state_arena_limit_enforced) {
     asx_task_id tid;
     void *state = NULL;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn_captured(rid, immediate_ok_poll, ASX_REGION_CAPTURE_ARENA_BYTES + 8u,
                                       NULL, &tid, &state),
               ASX_E_RESOURCE_EXHAUSTED);
@@ -89,9 +90,9 @@ TEST(captured_state_destructor_runs_on_completion) {
     void *state = NULL;
     asx_budget budget;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     dtor_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn_captured(rid, immediate_ok_poll, 24u, state_dtor, &tid, &state),
               ASX_OK);
     ASSERT_TRUE(state != NULL);
@@ -109,8 +110,8 @@ TEST(region_drain_completes_yielding_task) {
     asx_budget budget;
     asx_region_state rstate;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn_captured(rid, yielding_poll, (uint32_t)sizeof(yield_state), NULL, &tid,
                                       (void **)&st),
               ASX_OK);

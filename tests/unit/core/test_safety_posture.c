@@ -23,6 +23,7 @@
  */
 
 #include "../../test_harness.h"
+#include "../../test_runtime.h"
 #include "../../test_task.h"
 #include <asx/asx.h>
 #include <asx/core/ghost.h>
@@ -91,7 +92,7 @@ TEST(crafted_handle_wrong_generation) {
     asx_region_id rid;
     asx_region_state state;
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     {
         uint64_t fake = asx_handle_pack(ASX_TYPE_REGION, 0x0001, asx_handle_pack_index(99, 0));
         ASSERT_EQ(asx_region_get_state(fake, &state), ASX_E_STALE_HANDLE);
@@ -124,10 +125,10 @@ TEST(zero_handle_rejected_everywhere) {
 TEST(null_out_pointers_rejected) {
     asx_region_id rid;
 
-    ASSERT_EQ(asx_region_open(NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_region_open(test_runtime(), NULL), ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_region_get_state(ASX_INVALID_ID, NULL), ASX_E_INVALID_ARGUMENT);
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, noop_poll, NULL, NULL), ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_task_spawn(rid, NULL, NULL, NULL), ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_task_get_state(ASX_INVALID_ID, NULL), ASX_E_INVALID_ARGUMENT);
@@ -140,14 +141,14 @@ TEST(null_poll_fn_rejected) {
     asx_region_id rid;
     asx_task_id tid;
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, NULL, NULL, &tid), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(null_budget_rejected) {
     asx_region_id rid;
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_scheduler_run(rid, NULL), ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_region_drain(rid, NULL), ASX_E_INVALID_ARGUMENT);
 }
@@ -161,10 +162,10 @@ TEST(stale_handle_spawn_after_recycle) {
     asx_task_id tid;
     asx_budget budget;
 
-    ASSERT_EQ(asx_region_open(&rid1), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid1), ASX_OK);
     budget = asx_budget_infinite();
     ASSERT_EQ(asx_region_drain(rid1, &budget), ASX_OK);
-    ASSERT_EQ(asx_region_open(&rid2), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid2), ASX_OK);
 
     ASSERT_EQ(asx_task_spawn(rid1, noop_poll, NULL, &tid), ASX_E_STALE_HANDLE);
 }
@@ -173,10 +174,10 @@ TEST(stale_handle_close_after_recycle) {
     asx_region_id rid1, rid2;
     asx_budget budget;
 
-    ASSERT_EQ(asx_region_open(&rid1), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid1), ASX_OK);
     budget = asx_budget_infinite();
     ASSERT_EQ(asx_region_drain(rid1, &budget), ASX_OK);
-    ASSERT_EQ(asx_region_open(&rid2), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid2), ASX_OK);
 
     ASSERT_EQ(asx_region_close(rid1), ASX_E_STALE_HANDLE);
 }
@@ -186,10 +187,10 @@ TEST(stale_handle_obligation_reserve_after_recycle) {
     asx_obligation_id oid;
     asx_budget budget;
 
-    ASSERT_EQ(asx_region_open(&rid1), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid1), ASX_OK);
     budget = asx_budget_infinite();
     ASSERT_EQ(asx_region_drain(rid1, &budget), ASX_OK);
-    ASSERT_EQ(asx_region_open(&rid2), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid2), ASX_OK);
 
     ASSERT_EQ(asx_obligation_reserve(rid1, &oid), ASX_E_STALE_HANDLE);
 }
@@ -198,10 +199,10 @@ TEST(stale_handle_scheduler_after_recycle) {
     asx_region_id rid1, rid2;
     asx_budget budget;
 
-    ASSERT_EQ(asx_region_open(&rid1), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid1), ASX_OK);
     budget = asx_budget_infinite();
     ASSERT_EQ(asx_region_drain(rid1, &budget), ASX_OK);
-    ASSERT_EQ(asx_region_open(&rid2), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid2), ASX_OK);
 
     budget = asx_budget_infinite();
     ASSERT_EQ(asx_scheduler_run(rid1, &budget), ASX_E_STALE_HANDLE);
@@ -215,7 +216,7 @@ TEST(poison_blocks_spawn) {
     asx_region_id rid;
     asx_task_id tid;
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_region_poison(rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, noop_poll, NULL, &tid), ASX_E_REGION_POISONED);
 }
@@ -223,7 +224,7 @@ TEST(poison_blocks_spawn) {
 TEST(poison_blocks_close) {
     asx_region_id rid;
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_region_poison(rid), ASX_OK);
     ASSERT_EQ(asx_region_close(rid), ASX_E_REGION_POISONED);
 }
@@ -232,7 +233,7 @@ TEST(poison_blocks_obligation_reserve) {
     asx_region_id rid;
     asx_obligation_id oid;
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_region_poison(rid), ASX_OK);
     ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_E_REGION_POISONED);
 }
@@ -241,7 +242,7 @@ TEST(poison_allows_state_query) {
     asx_region_id rid;
     asx_region_state state;
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_region_poison(rid), ASX_OK);
     ASSERT_EQ(asx_region_get_state(rid, &state), ASX_OK);
     ASSERT_EQ(state, ASX_REGION_OPEN);
@@ -251,7 +252,7 @@ TEST(poison_is_queryable) {
     asx_region_id rid;
     int is_poisoned;
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_region_is_poisoned(rid, &is_poisoned), ASX_OK);
     ASSERT_EQ(is_poisoned, 0);
 
@@ -264,7 +265,7 @@ TEST(poison_is_idempotent) {
     asx_region_id rid;
     int is_poisoned;
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_region_poison(rid), ASX_OK);
     ASSERT_EQ(asx_region_poison(rid), ASX_OK);
     ASSERT_EQ(asx_region_is_poisoned(rid, &is_poisoned), ASX_OK);
@@ -278,7 +279,7 @@ TEST(poison_on_invalid_handle_fails) {
 TEST(poison_is_poisoned_null_out) {
     asx_region_id rid;
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_region_is_poisoned(rid, NULL), ASX_E_INVALID_ARGUMENT);
 }
 
@@ -289,7 +290,7 @@ TEST(poison_is_poisoned_null_out) {
 TEST(double_close_rejected) {
     asx_region_id rid;
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_region_close(rid), ASX_OK);
     ASSERT_EQ(asx_region_close(rid), ASX_E_INVALID_TRANSITION);
 }
@@ -298,7 +299,7 @@ TEST(spawn_on_closed_region_rejected) {
     asx_region_id rid;
     asx_task_id tid;
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_region_close(rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, noop_poll, NULL, &tid), ASX_E_REGION_CLOSED);
 }
@@ -318,7 +319,7 @@ static void double_commit_body(void *ctx) {
 TEST(obligation_double_commit_rejected) {
     asx_region_id rid;
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(test_run_in_task(rid, double_commit_body, &rid), ASX_OK);
 }
 
@@ -334,7 +335,7 @@ static void commit_then_abort_body(void *ctx) {
 TEST(obligation_commit_then_abort_rejected) {
     asx_region_id rid;
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(test_run_in_task(rid, commit_then_abort_body, &rid), ASX_OK);
 }
 
@@ -343,7 +344,7 @@ TEST(task_outcome_before_completion_rejected) {
     asx_task_id tid;
     asx_outcome outcome;
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, pending_poll, NULL, &tid), ASX_OK);
     ASSERT_EQ(asx_task_get_outcome(tid, &outcome), ASX_E_TASK_NOT_COMPLETED);
 }
@@ -357,7 +358,7 @@ TEST(ghost_records_illegal_region_transition) {
     uint32_t violations_before;
     uint32_t violations_after;
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_region_close(rid), ASX_OK);
 
     violations_before = asx_ghost_violation_count();
@@ -386,7 +387,7 @@ static void ghost_double_resolution_body(void *ctx) {
 TEST(ghost_records_obligation_double_resolution) {
     asx_region_id rid;
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(test_run_in_task(rid, ghost_double_resolution_body, &rid), ASX_OK);
 }
 
@@ -406,10 +407,10 @@ TEST(stale_handle_error_is_deterministic) {
     asx_budget budget;
     int i;
 
-    ASSERT_EQ(asx_region_open(&rid1), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid1), ASX_OK);
     budget = asx_budget_infinite();
     ASSERT_EQ(asx_region_drain(rid1, &budget), ASX_OK);
-    ASSERT_EQ(asx_region_open(&rid2), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid2), ASX_OK);
 
     for (i = 0; i < 5; i++) { ASSERT_EQ(asx_region_get_state(rid1, &state), ASX_E_STALE_HANDLE); }
 }
@@ -418,7 +419,7 @@ TEST(poison_does_not_corrupt_region_state) {
     asx_region_id rid;
     asx_region_state state;
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_region_get_state(rid, &state), ASX_OK);
     ASSERT_EQ(state, ASX_REGION_OPEN);
 
@@ -431,12 +432,12 @@ TEST(poison_reset_clears_on_new_region) {
     asx_region_id rid;
     int is_poisoned;
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_region_poison(rid), ASX_OK);
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     ASSERT_EQ(asx_region_is_poisoned(rid, &is_poisoned), ASX_OK);
     ASSERT_EQ(is_poisoned, 0);
@@ -454,7 +455,7 @@ TEST(contain_fault_returns_fault_and_follows_active_policy) {
     asx_status fault = ASX_E_INVALID_STATE;
     int is_poisoned;
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     policy = asx_containment_policy_active();
 
     ASSERT_EQ(asx_region_contain_fault(rid, fault), fault);
@@ -475,119 +476,119 @@ int main(void) {
     fprintf(stderr, "=== test_safety_posture ===\n");
 
     /* Section 1: Crafted handle misuse */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     RUN_TEST(crafted_handle_wrong_type_tag_region);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     RUN_TEST(crafted_handle_wrong_type_tag_task);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     RUN_TEST(crafted_handle_wrong_type_tag_obligation);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     RUN_TEST(crafted_handle_out_of_range_slot);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     RUN_TEST(crafted_handle_dead_slot);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     RUN_TEST(crafted_handle_wrong_generation);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     RUN_TEST(zero_handle_rejected_everywhere);
 
     /* Section 2: Null pointer boundary */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     RUN_TEST(null_out_pointers_rejected);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     RUN_TEST(null_poll_fn_rejected);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     RUN_TEST(null_budget_rejected);
 
     /* Section 3: Stale handle misuse */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     RUN_TEST(stale_handle_spawn_after_recycle);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     RUN_TEST(stale_handle_close_after_recycle);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     RUN_TEST(stale_handle_obligation_reserve_after_recycle);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     RUN_TEST(stale_handle_scheduler_after_recycle);
 
     /* Section 4: Region poison / containment */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     RUN_TEST(poison_blocks_spawn);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     RUN_TEST(poison_blocks_close);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     RUN_TEST(poison_blocks_obligation_reserve);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     RUN_TEST(poison_allows_state_query);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     RUN_TEST(poison_is_queryable);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     RUN_TEST(poison_is_idempotent);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     RUN_TEST(poison_on_invalid_handle_fails);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     RUN_TEST(poison_is_poisoned_null_out);
 
     /* Section 5: Illegal transitions */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     RUN_TEST(double_close_rejected);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     RUN_TEST(spawn_on_closed_region_rejected);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     RUN_TEST(obligation_double_commit_rejected);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     RUN_TEST(obligation_commit_then_abort_rejected);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     RUN_TEST(task_outcome_before_completion_rejected);
 
     /* Section 6: Ghost violation recording */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     RUN_TEST(ghost_records_illegal_region_transition);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     RUN_TEST(ghost_records_obligation_double_resolution);
 
     /* Section 7: Deterministic containment */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     RUN_TEST(poison_status_string_available);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     RUN_TEST(stale_handle_error_is_deterministic);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     RUN_TEST(poison_does_not_corrupt_region_state);
     RUN_TEST(poison_reset_clears_on_new_region);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     RUN_TEST(containment_policy_mapping_by_profile);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     RUN_TEST(contain_fault_returns_fault_and_follows_active_policy);
 

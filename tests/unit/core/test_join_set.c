@@ -39,7 +39,7 @@ TEST(join_set_add_and_count) {
 
     setup();
     asx_join_set_init(&js);
-    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &region), ASX_OK);
     ASSERT_EQ(asx_task_spawn(region, noop_poll, NULL, &t1), ASX_OK);
     ASSERT_EQ(asx_task_spawn(region, noop_poll, NULL, &t2), ASX_OK);
 
@@ -61,7 +61,7 @@ TEST(join_set_poll_completed) {
 
     setup();
     asx_join_set_init(&js);
-    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &region), ASX_OK);
     ASSERT_EQ(asx_task_spawn(region, noop_poll, NULL, &tid), ASX_OK);
     ASSERT_EQ(asx_join_set_add(&js, tid), ASX_OK);
 

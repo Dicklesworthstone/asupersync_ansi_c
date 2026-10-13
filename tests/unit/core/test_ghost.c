@@ -12,6 +12,7 @@
 
 #include "../../../src/runtime/runtime_internal.h"
 #include "test_harness.h"
+#include "test_runtime.h"
 #include "test_task.h"
 #include <asx/asx.h>
 #include <asx/core/ghost.h>
@@ -29,7 +30,7 @@ static asx_status noop_poll(void *user_data, asx_task_id self) {
 
 TEST(ghost_protocol_region_valid_transition) {
     asx_status st;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     /* Valid transition: Open -> Closing */
     st = asx_ghost_check_region_transition(ASX_INVALID_ID, ASX_REGION_OPEN, ASX_REGION_CLOSING);
@@ -39,7 +40,7 @@ TEST(ghost_protocol_region_valid_transition) {
 
 TEST(ghost_protocol_region_invalid_transition) {
     asx_status st;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     /* Invalid: Open -> Closed (skips intermediate states) */
     st = asx_ghost_check_region_transition(ASX_INVALID_ID, ASX_REGION_OPEN, ASX_REGION_CLOSED);
@@ -61,7 +62,7 @@ TEST(ghost_protocol_region_invalid_transition) {
 
 TEST(ghost_protocol_task_valid_transition) {
     asx_status st;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     /* Valid: Created -> Running */
     st = asx_ghost_check_task_transition(ASX_INVALID_ID, ASX_TASK_CREATED, ASX_TASK_RUNNING);
@@ -71,7 +72,7 @@ TEST(ghost_protocol_task_valid_transition) {
 
 TEST(ghost_protocol_task_invalid_transition) {
     asx_status st;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     /* Invalid: Completed -> Running (terminal state, no outgoing edges) */
     st = asx_ghost_check_task_transition(ASX_INVALID_ID, ASX_TASK_COMPLETED, ASX_TASK_RUNNING);
@@ -90,7 +91,7 @@ TEST(ghost_protocol_task_invalid_transition) {
 
 TEST(ghost_protocol_obligation_valid_transition) {
     asx_status st;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     /* Valid: Reserved -> Committed */
     st = asx_ghost_check_obligation_transition(ASX_INVALID_ID, ASX_OBLIGATION_RESERVED,
@@ -101,7 +102,7 @@ TEST(ghost_protocol_obligation_valid_transition) {
 
 TEST(ghost_protocol_obligation_invalid_transition) {
     asx_status st;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     /* Invalid: Committed -> Reserved (terminal state) */
     st = asx_ghost_check_obligation_transition(ASX_INVALID_ID, ASX_OBLIGATION_COMMITTED,
@@ -139,9 +140,9 @@ static void double_commit_body(void *ctx) {
 
 TEST(ghost_linearity_double_commit) {
     asx_region_id rid;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(test_run_in_task(rid, double_commit_body, &rid), ASX_OK);
 
     /* Ghost should have recorded the protocol violation for the
@@ -164,9 +165,9 @@ static void double_abort_body(void *ctx) {
 
 TEST(ghost_linearity_double_abort) {
     asx_region_id rid;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(test_run_in_task(rid, double_abort_body, &rid), ASX_OK);
 
     ASSERT_TRUE(asx_ghost_violation_count() >= (uint32_t)1);
@@ -185,9 +186,9 @@ static void commit_after_abort_body(void *ctx) {
 
 TEST(ghost_linearity_commit_after_abort) {
     asx_region_id rid;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(test_run_in_task(rid, commit_after_abort_body, &rid), ASX_OK);
     ASSERT_TRUE(asx_ghost_violation_count() >= (uint32_t)1);
 }
@@ -199,9 +200,9 @@ TEST(ghost_linearity_leaked_obligation) {
     asx_task_id holder;
     asx_obligation_id oid;
     uint32_t leaks;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     /* The holder is live and never polled, so it neither resolves nor
      * completes with the obligation before the monitor looks. */
     ASSERT_EQ(asx_task_spawn(rid, noop_poll, NULL, &holder), ASX_OK);
@@ -233,9 +234,9 @@ static void reserve_and_commit_body(void *ctx) {
 TEST(ghost_linearity_no_leak_after_commit) {
     asx_region_id rid;
     uint32_t leaks;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(test_run_in_task(rid, reserve_and_commit_body, &rid), ASX_OK);
 
     leaks = asx_ghost_check_obligation_leaks(rid);
@@ -253,9 +254,9 @@ static void reserve_and_abort_body(void *ctx) {
 TEST(ghost_linearity_no_leak_after_abort) {
     asx_region_id rid;
     uint32_t leaks;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(test_run_in_task(rid, reserve_and_abort_body, &rid), ASX_OK);
 
     leaks = asx_ghost_check_obligation_leaks(rid);
@@ -285,22 +286,22 @@ static void multiple_mixed_body(void *ctx) {
 
 TEST(ghost_linearity_multiple_obligations_mixed) {
     asx_region_id rid;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(test_run_in_task(rid, multiple_mixed_body, &rid), ASX_OK);
 }
 
 /* ---- Ring buffer mechanics ---- */
 
 TEST(ghost_ring_empty_initially) {
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_ghost_violation_count(), (uint32_t)0);
     ASSERT_FALSE(asx_ghost_ring_overflowed());
 }
 
 TEST(ghost_ring_sequential_access) {
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     /* Record two violations (both genuinely invalid transitions) */
     (void)asx_ghost_check_region_transition(ASX_INVALID_ID, ASX_REGION_OPEN, ASX_REGION_CLOSED);
@@ -321,7 +322,7 @@ TEST(ghost_ring_sequential_access) {
 
 TEST(ghost_ring_out_of_bounds_get) {
     asx_ghost_violation v;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     /* No violations recorded — index 0 should fail */
     ASSERT_FALSE(asx_ghost_violation_get(0, &v));
@@ -332,7 +333,7 @@ TEST(ghost_ring_out_of_bounds_get) {
 
 TEST(ghost_ring_overflow_wraps) {
     uint32_t i;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     /* Fill ring beyond capacity */
     for (i = 0; i < ASX_GHOST_RING_CAPACITY + 10u; i++) {
@@ -368,7 +369,7 @@ TEST(ghost_violation_kind_str_coverage) {
 /* ---- Integration: ghost reset clears state ---- */
 
 TEST(ghost_reset_clears_violations) {
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     /* Generate a violation */
     (void)asx_ghost_check_region_transition(ASX_INVALID_ID, ASX_REGION_OPEN, ASX_REGION_CLOSED);
@@ -385,9 +386,9 @@ TEST(ghost_reset_clears_violations) {
 TEST(ghost_integration_lifecycle_region_close) {
     asx_region_id rid;
     asx_budget budget;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     /* Close and drain — all transitions should be clean */
     budget = asx_budget_infinite();
@@ -409,11 +410,11 @@ static void reserve_and_complete_body(void *ctx) {
 TEST(ghost_integration_lifecycle_obligation_leak_on_drain) {
     asx_region_id rid;
     asx_budget budget;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     /* LOG named: under the default PANIC the leak is a fault instead. */
     asx_runtime_set_leak_policy_internal(g_kernels[0], ASX_LEAK_LOG, NULL);
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     /* An obligation always has a live holder, so this one leaks when the
      * holder completes, before any close. The ghost linearity monitor has
      * not looked yet: it runs at the close. */

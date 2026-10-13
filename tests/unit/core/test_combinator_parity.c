@@ -166,14 +166,14 @@ TEST(retry_timeout_expires_during_the_delay) {
     p.jitter = 0.0;
     memset(&t, 0, sizeof(t));
     MUST_OK(asx_retry_timeout_init(&t.rt, poll_fail, NULL, &p, 30000000ULL));
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_retry_timeout_task, &t, &id), ASX_OK);
     budget = asx_budget_from_polls(100);
     ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
     ASSERT_EQ(t.result, ASX_E_TIMED_OUT);
     ASSERT_EQ(asx_retry_timeout_attempts(&t.rt), 2u); /* attempt 2's delay had begun */
     ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)30000000u);
-    asx_runtime_reset();
+    asx_runtime_reset(&rt);
 }
 
 /* An attempt that parks its task and never finishes; counts its polls
@@ -208,14 +208,14 @@ TEST(retry_timeout_releases_the_attempt_it_abandons) {
     MUST_OK(asx_retry_timeout_init(&t.rt, poll_park_counted, &attempt, NULL, 30000000ULL));
     ASSERT_TRUE(t.rt.retry.drop_fn == NULL);
     t.rt.retry.drop_fn = release_counted;
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_retry_timeout_task, &t, &id), ASX_OK);
     budget = asx_budget_from_polls(100);
     ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
     ASSERT_EQ(t.result, ASX_E_TIMED_OUT);
     ASSERT_EQ(attempt, 101); /* polled once, released once */
     ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)30000000u);
-    asx_runtime_reset();
+    asx_runtime_reset(&rt);
 }
 
 TEST(retry_timeout_null_attempts) { ASSERT_EQ(asx_retry_timeout_attempts(NULL), 0u); }

@@ -18,7 +18,7 @@ static asx_status st_sink_;
 
 static asx_runtime g_rt;
 static void setup_runtime(void) { MUST_OK(asx_runtime_init_default(&g_rt)); }
-static void teardown_runtime(void) { asx_runtime_reset(); }
+static void teardown_runtime(void) { asx_runtime_reset(&g_rt); }
 
 /* On the runtime's virtual clock (default stub hooks) even in live POSIX
  * builds, where asx_runtime_init_default installs a real one: for tests
@@ -206,7 +206,7 @@ TEST(race_empty_waits_for_the_owner_cancel) {
     memset(&c, 0, sizeof(c));
     c.poll = asx_race_poll;
     c.state = &rs;
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_combinator_task, &c, &t), ASX_OK);
     budget = asx_budget_from_polls(100);
     ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_E_WOULD_BLOCK);
@@ -489,7 +489,7 @@ TEST(first_ok_starts_no_attempt_once_its_owner_is_cancelled) {
     memset(&c, 0, sizeof(c));
     c.poll = asx_first_ok_poll;
     c.state = &fs;
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_combinator_task, &c, &t), ASX_OK);
     budget = asx_budget_from_polls(100);
     ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
@@ -642,7 +642,7 @@ TEST(race_timeout_wakes_a_parked_owner_at_its_deadline) {
     memset(&c, 0, sizeof(c));
     c.poll = asx_race_timeout_poll;
     c.state = &rts;
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_combinator_task, &c, &t), ASX_OK);
     budget = asx_budget_from_polls(100);
     ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
@@ -831,7 +831,7 @@ TEST(timeout_releases_its_inner_future_when_the_deadline_passes) {
     memset(&c, 0, sizeof(c));
     c.poll = asx_timeout_combinator_poll;
     c.state = &ts;
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_combinator_task, &c, &t), ASX_OK);
     budget = asx_budget_from_polls(100);
     ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
