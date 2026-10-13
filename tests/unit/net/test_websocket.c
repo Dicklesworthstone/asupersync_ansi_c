@@ -1037,10 +1037,34 @@ TEST(engine_oversized_message_maps_to_1009) {
                       (uint32_t)sizeof(wire) - n);
     ASSERT_EQ(fail_code_for(ASX_WS_ROLE_SERVER, 16u, wire, n), ASX_WS_CLOSE_MESSAGE_TOO_BIG);
 
-    /* a 64 KiB header is refused before any payload arrives */
+    /* a header one byte over ASX_WS_MAX_MESSAGE is refused before any payload
+     * arrives, in the shortest length form RFC 6455 allows for it: 16 bits
+     * up to 65535, else 64 */
     {
-        static const uint8_t hdr64k[] = {0x82, 0xFF, 0, 0, 0, 0, 0, 1, 0, 0, 1, 2, 3, 4};
-        ASSERT_EQ(fail_code_for(ASX_WS_ROLE_SERVER, 0u, hdr64k, sizeof(hdr64k)),
+        uint8_t hdr_over[14];
+        uint32_t over = ASX_WS_MAX_MESSAGE + 1u;
+        uint32_t hn = 0u;
+        hdr_over[hn++] = 0x82;
+        if (over <= 65535u) {
+            hdr_over[hn++] = 0xFE;
+            hdr_over[hn++] = (uint8_t)(over >> 8);
+            hdr_over[hn++] = (uint8_t)over;
+        } else {
+            hdr_over[hn++] = 0xFF;
+            hdr_over[hn++] = 0;
+            hdr_over[hn++] = 0;
+            hdr_over[hn++] = 0;
+            hdr_over[hn++] = 0;
+            hdr_over[hn++] = (uint8_t)(over >> 24);
+            hdr_over[hn++] = (uint8_t)(over >> 16);
+            hdr_over[hn++] = (uint8_t)(over >> 8);
+            hdr_over[hn++] = (uint8_t)over;
+        }
+        hdr_over[hn++] = 1; /* the mask */
+        hdr_over[hn++] = 2;
+        hdr_over[hn++] = 3;
+        hdr_over[hn++] = 4;
+        ASSERT_EQ(fail_code_for(ASX_WS_ROLE_SERVER, 0u, hdr_over, hn),
                   ASX_WS_CLOSE_MESSAGE_TOO_BIG);
     }
 }

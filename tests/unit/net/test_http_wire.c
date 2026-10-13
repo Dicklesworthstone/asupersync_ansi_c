@@ -1158,7 +1158,9 @@ TEST(parse_response_informational_and_upgrade) {
 static asx_http_request g_req;
 static asx_http_request g_req2;
 static asx_http_response g_resp;
-static uint8_t g_wire[16384];
+/* Room for one body of ASX_HTTP_BODY_MAX + 1 bytes and its head (16384 at
+ * the default ASX_HTTP_BODY_MAX of 4096). */
+static uint8_t g_wire[ASX_HTTP_BODY_MAX + 12288u];
 
 TEST(collect_request_pipelined_and_partial) {
     static const char msg[] = "POST /one HTTP/1.1\r\nHost: a\r\nContent-Length: 3\r\n\r\nabc"

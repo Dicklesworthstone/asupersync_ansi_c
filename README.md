@@ -790,14 +790,23 @@ the kernel-only quickstart does not link them.
 
 ### Capacity Macros
 
-Every arena and pool capacity (the macros named `ASX_MAX_*` or
-`ASX_*_CAPACITY`) can be overridden at build time, e.g.
-`make CFLAGS=-DASX_MAX_TCP_STREAMS=64u` (a value below a macro's minimum
-fails the build with `#error`). Per-module size limits with other names,
-such as `ASX_HTTP_SERVER_MAX_CONNS`, `ASX_HTTP_MAX_HEADERS` or
-`ASX_WS_MAX_MESSAGE`, are resolved with the public capacity defaults in
-`include/asx/asx_config.h`, but are
-not listed or bound-checked here yet. The defaults below are a CORE build's,
+Every size limit (a macro named `ASX_MAX_*`, `ASX_*_CAPACITY`, or with a
+`MAX`, `CAPACITY`, `LIMIT` or `CAP` word in its name, such as
+`ASX_HTTP_SERVER_MAX_CONNS`, `ASX_HTTP_MAX_HEADERS` or `ASX_WS_MAX_MESSAGE`)
+can be overridden at build time, e.g.
+`make CFLAGS=-DASX_MAX_TCP_STREAMS=64u`. A capacity has a lower bound: a
+value below it fails the build with `#error` (a count is at least 1, a
+string buffer at least 2 for a byte and the NUL, and a few have the minimum
+the code needs, such as `ASX_HTTP_CONN_HEAD_MAX` at 16 and
+`ASX_WS_HANDSHAKE_MAX` at 128); `tests/gates/test_capacity_bounds.sh`
+compiles every one a unit below its bound (it must fail with its own
+message) and at its bound, at `-O2` under the strict warnings (it must
+compile). The limits that are not capacities are in the second table. The
+resource classes size the arenas the library owns (`ASX_MAX_REGIONS`,
+`ASX_MAX_TASKS`, and the others in "Resource Classes"); the per-module
+limits of this table size caller-owned structures and small tables, so they
+keep their defaults in every class (a class that changed them would change
+the layout of a public structure). The defaults below are a CORE build's,
 without a resource class. `ASX_MAX_WORKERS` depends on the profile (1 for
 FREESTANDING and BROWSER, 4 for EMBEDDED_ROUTER, 16 for HFT and AUTOMOTIVE,
 else 64).
@@ -815,20 +824,77 @@ it drifts from the headers or a new capacity macro is missing.
 | `ASX_ACTOR_MAILBOX_CAPACITY` | 64 | `include/asx/asx_config.h` |
 | `ASX_ACTOR_SYSTEM_LANE_CAPACITY` | 16 | `include/asx/actor/actor.h` |
 | `ASX_AFFINITY_TABLE_CAPACITY` | 256 | `include/asx/asx_config.h` |
+| `ASX_ANCILLARY_MAX_FDS` | 8 | `include/asx/asx_config.h` |
+| `ASX_BARRIER_MAX` | 8 | `include/asx/asx_config.h` |
 | `ASX_BROADCAST_MAX_CAPACITY` | 32 | `include/asx/asx_config.h` |
 | `ASX_BUF_CAPACITY` | 4096 | `include/asx/asx_config.h` |
+| `ASX_CANON_MAX_EVENTS` | 8192 | `src/conformance/canon.h` |
+| `ASX_CANON_MAX_RESOURCES` | 4096 | `src/conformance/canon.h` |
 | `ASX_CHANNEL_MAX_CAPACITY` | 64 | `include/asx/asx_config.h` |
+| `ASX_CHANNEL_MAX_SENDERS` | 16 | `include/asx/core/channel.h` |
 | `ASX_CLEANUP_STACK_CAPACITY` | 32 | `include/asx/asx_config.h` |
+| `ASX_COMBINATOR_MAX_BRANCHES` | 8 | `include/asx/asx_config.h` |
+| `ASX_CONTENDED_MUTEX_MAX` | 16 | `include/asx/asx_config.h` |
+| `ASX_CX_MACAROON_MAX_CAVEATS` | 8 | `include/asx/asx_config.h` |
+| `ASX_DB_CELL_MAX` | 128 | `include/asx/asx_config.h` |
+| `ASX_DB_COLUMN_NAME_MAX` | 32 | `include/asx/asx_config.h` |
+| `ASX_DB_DSN_MAX` | 128 | `include/asx/asx_config.h` |
+| `ASX_DB_MAX_COLUMNS` | 16 | `include/asx/asx_config.h` |
+| `ASX_DB_MAX_CONNECTIONS` | 4 | `include/asx/asx_config.h` |
+| `ASX_DB_MAX_ROWS` | 64 | `include/asx/asx_config.h` |
+| `ASX_DET_HASH_MAX_ENTRIES` | 64 | `include/asx/asx_config.h` |
+| `ASX_DIST_MAX_NODES` | 8 | `include/asx/asx_config.h` |
+| `ASX_DIST_MAX_PARTITIONS` | 16 | `include/asx/asx_config.h` |
+| `ASX_DIST_MAX_SNAPSHOTS` | 8 | `include/asx/asx_config.h` |
+| `ASX_DIST_NODE_NAME_MAX` | 32 | `include/asx/asx_config.h` |
+| `ASX_DIST_SNAPSHOT_DATA_MAX` | 1024 | `include/asx/asx_config.h` |
+| `ASX_DOCTOR_MAX_CHECKS` | 16 | `include/asx/asx_config.h` |
 | `ASX_ERROR_LEDGER_TASK_SLOTS` | 64 | `include/asx/asx_config.h` |
 | `ASX_EVENT_LOG_CAPACITY` | 512 | `include/asx/asx_config.h` |
 | `ASX_EVIDENCE_SINK_CAPACITY` | 64 | `include/asx/asx_config.h` |
 | `ASX_FS_FILE_CAPACITY` | 1024 | `include/asx/asx_config.h` |
+| `ASX_FS_NAME_MAX` | 256 | `include/asx/asx_config.h` |
+| `ASX_FS_NATIVE_MAX_DIRS` | 16 | `src/platform/posix/fs_posix.c` |
+| `ASX_FS_NATIVE_MAX_FILES` | 64 | `src/platform/posix/fs_posix.c` |
+| `ASX_FS_PATH_MAX` | 192 | `include/asx/asx_config.h` |
 | `ASX_GHOST_BORROW_TABLE_CAPACITY` | 128 | `include/asx/asx_config.h` |
 | `ASX_GHOST_DETERMINISM_CAPACITY` | 256 | `include/asx/asx_config.h` |
 | `ASX_GHOST_LINEARITY_CAPACITY` | 256 | `src/core/ghost.c` |
 | `ASX_GHOST_RING_CAPACITY` | 64 | `include/asx/asx_config.h` |
+| `ASX_GRPC_MAX_HEALTH_ENTRIES` | 8 | `include/asx/asx_config.h` |
+| `ASX_GRPC_MAX_METADATA` | 8 | `include/asx/asx_config.h` |
+| `ASX_GRPC_MAX_METHODS` | 16 | `include/asx/asx_config.h` |
+| `ASX_GRPC_MAX_SERVICES` | 8 | `include/asx/asx_config.h` |
+| `ASX_GRPC_METADATA_KEY_MAX` | 64 | `include/asx/asx_config.h` |
+| `ASX_GRPC_METADATA_VALUE_MAX` | 128 | `include/asx/asx_config.h` |
+| `ASX_GRPC_METHOD_NAME_MAX` | 128 | `include/asx/asx_config.h` |
+| `ASX_GRPC_MSG_MAX` | 4096 | `include/asx/asx_config.h` |
+| `ASX_GRPC_SERVICE_NAME_MAX` | 128 | `include/asx/asx_config.h` |
 | `ASX_HINDSIGHT_CAPACITY` | 256 | `include/asx/asx_config.h` |
+| `ASX_HTTP_BODY_MAX` | 4096 | `include/asx/asx_config.h` |
+| `ASX_HTTP_CONN_HEAD_MAX` | 8192 | `include/asx/asx_config.h` |
+| `ASX_HTTP_DEFAULT_MAX_HEADER_BYTES` | 16384 | `include/asx/asx_config.h` |
+| `ASX_HTTP_HEADER_NAME_MAX` | 64 | `include/asx/asx_config.h` |
+| `ASX_HTTP_HEADER_VALUE_MAX` | 256 | `include/asx/asx_config.h` |
+| `ASX_HTTP_MAX_HEADERS` | 16 | `include/asx/asx_config.h` |
+| `ASX_HTTP_MAX_PATH_PARAMS` | 8 | `include/asx/asx_config.h` |
+| `ASX_HTTP_MAX_ROUTES` | 16 | `include/asx/asx_config.h` |
+| `ASX_HTTP_MAX_ROUTE_MIDDLEWARE` | 8 | `include/asx/asx_config.h` |
+| `ASX_HTTP_MULTIPART_DATA_MAX` | 512 | `include/asx/asx_config.h` |
+| `ASX_HTTP_MULTIPART_FILENAME_MAX` | 64 | `include/asx/asx_config.h` |
+| `ASX_HTTP_MULTIPART_PARTS_MAX` | 8 | `include/asx/asx_config.h` |
+| `ASX_HTTP_PARAM_NAME_MAX` | 32 | `include/asx/asx_config.h` |
+| `ASX_HTTP_PARAM_VALUE_MAX` | 128 | `include/asx/asx_config.h` |
+| `ASX_HTTP_PARSER_MAX_FIELDS` | 64 | `include/asx/asx_config.h` |
+| `ASX_HTTP_POOL_MAX_CONNECTIONS` | 8 | `include/asx/asx_config.h` |
+| `ASX_HTTP_SECURITY_PURPOSE_MAX` | 32 | `include/asx/asx_config.h` |
+| `ASX_HTTP_SERVER_MAX_CONNS` | 16 | `include/asx/asx_config.h` |
+| `ASX_HTTP_URI_MAX` | 256 | `include/asx/asx_config.h` |
 | `ASX_IDEMPOTENCY_STORE_CAPACITY` | 16 | `include/asx/asx_config.h` |
+| `ASX_JOIN_SET_MAX_TASKS` | 16 | `include/asx/asx_config.h` |
+| `ASX_JSON_MAX_NODES` | 32768 | `src/conformance/json.h` |
+| `ASX_JSON_MAX_TEXT` | 524288 | `src/conformance/json.h` |
+| `ASX_LAB_MAX_STEPS` | 32 | `include/asx/asx_config.h` |
 | `ASX_LANE_TASK_CAPACITY` | 64 | `include/asx/asx_config.h` |
 | `ASX_LINK_CAPACITY` | 8 | `include/asx/link/link.h` |
 | `ASX_MAX_ACTORS` | 16 | `include/asx/asx_config.h` |
@@ -869,25 +935,122 @@ it drifts from the headers or a new capacity macro is missing.
 | `ASX_MAX_WATCHES` | 16 | `include/asx/asx_config.h` |
 | `ASX_MAX_WORKERS` | 64 | `include/asx/asx_config.h` |
 | `ASX_MAX_WS_CONNECTIONS` | 8 | `include/asx/asx_config.h` |
+| `ASX_MEM_TRANSPORT_MAX_CONNS` | 16 | `include/asx/asx_config.h` |
+| `ASX_MEM_TRANSPORT_MAX_LISTENERS` | 4 | `include/asx/asx_config.h` |
+| `ASX_METRICS_MAX_ENTRIES` | 32 | `include/asx/asx_config.h` |
+| `ASX_METRICS_NAME_MAX` | 64 | `include/asx/asx_config.h` |
 | `ASX_MONITOR_CAPACITY` | 8 | `include/asx/monitor/monitor.h` |
+| `ASX_MSG_MAX_PAYLOAD` | 1024 | `include/asx/asx_config.h` |
+| `ASX_MSG_MAX_SUBSCRIBERS` | 8 | `include/asx/asx_config.h` |
+| `ASX_MSG_MAX_TOPICS` | 8 | `include/asx/asx_config.h` |
+| `ASX_MSG_MAX_TOPIC_LEN` | 64 | `include/asx/asx_config.h` |
+| `ASX_NAME_MAX_LEN` | 63 | `include/asx/actor/actor.h` |
 | `ASX_NAME_REGISTRY_CAPACITY` | 16 | `include/asx/actor/actor.h` |
+| `ASX_NATIVE_MAX_DETACHED` | 64 | `src/platform/posix/process_posix.c` |
+| `ASX_NATIVE_MAX_PROCESSES` | 16 | `src/platform/posix/process_posix.c` |
+| `ASX_NATIVE_MAX_SOCKETS` | 64 | `src/platform/posix/net_posix.c` |
+| `ASX_NOTIFY_MAX` | 16 | `include/asx/asx_config.h` |
+| `ASX_ONCE_MAX` | 16 | `include/asx/asx_config.h` |
+| `ASX_ORACLE_SUITE_MAX` | 8 | `include/asx/asx_config.h` |
+| `ASX_PIPELINE_MAX_STAGES` | 8 | `include/asx/asx_config.h` |
+| `ASX_PLAN_MAX_CHILDREN` | 8 | `include/asx/asx_config.h` |
+| `ASX_PLAN_MAX_LABEL` | 32 | `include/asx/asx_config.h` |
+| `ASX_PLAN_MAX_NODES` | 64 | `include/asx/asx_config.h` |
+| `ASX_PLAN_MAX_STEPS` | 32 | `include/asx/asx_config.h` |
+| `ASX_POOL_MAX_RESOURCES` | 16 | `include/asx/asx_config.h` |
+| `ASX_POOL_MAX` | 8 | `include/asx/asx_config.h` |
 | `ASX_POSIX_BLOCKING_QUEUE_CAPACITY` | 8 | `src/platform/posix/hooks.c` |
 | `ASX_POSIX_BLOCKING_WORKERS` | 4 | `src/platform/posix/hooks.c` |
+| `ASX_POSIX_REACTOR_MAX_FDS` | 256 | `src/platform/posix/hooks.c` |
+| `ASX_PROCESS_ARG_MAX` | 128 | `include/asx/asx_config.h` |
+| `ASX_PROCESS_ENV_INHERIT_MAX` | 1024 | `src/platform/posix/process_posix.c` |
+| `ASX_PROCESS_MAX_ARGS` | 16 | `include/asx/asx_config.h` |
+| `ASX_PROCESS_MAX_ENV` | 16 | `include/asx/asx_config.h` |
+| `ASX_PROCESS_OUTPUT_MAX` | 4096 | `include/asx/asx_config.h` |
+| `ASX_PROCESS_PROGRAM_MAX` | 96 | `include/asx/asx_config.h` |
+| `ASX_PROCESS_RESOLVE_MAX` | 1024 | `src/platform/posix/process_posix.c` |
+| `ASX_PROCESS_WAIT_MAX_POLLS` | 10000 | `include/asx/asx_config.h` |
+| `ASX_RECONNECT_TRANSPORT_MAX_ADDR` | 64 | `include/asx/asx_config.h` |
 | `ASX_REGION_CAPTURE_ARENA_BYTES` | 16384 | `include/asx/asx_config.h` |
 | `ASX_RESOLVER_CACHE_CAPACITY` | 8 | `include/asx/asx_config.h` |
 | `ASX_RESOLVER_HOST_CAPACITY` | 256 | `include/asx/asx_config.h` |
+| `ASX_RESOLVE_MAX_INFLIGHT` | 8 | `include/asx/asx_config.h` |
+| `ASX_RESOLVE_MAX_RESULTS` | 4 | `include/asx/asx_config.h` |
+| `ASX_RWLOCK_MAX` | 16 | `include/asx/asx_config.h` |
+| `ASX_SAGA_MAX_STEPS` | 8 | `include/asx/asx_config.h` |
+| `ASX_SCATTER_GATHER_MAX_ITEMS` | 8 | `include/asx/asx_config.h` |
 | `ASX_SCHED_EVENT_LOG_CAPACITY` | 256 | `src/runtime/scheduler.c` |
+| `ASX_SEMAPHORE_MAX` | 16 | `include/asx/asx_config.h` |
+| `ASX_SERVER_MAX_CONNECTIONS` | 16 | `include/asx/asx_config.h` |
 | `ASX_SERVICE_BUFFER_CAPACITY` | 8 | `include/asx/asx_config.h` |
+| `ASX_SERVICE_BUILDER_MAX_LAYERS` | 8 | `include/asx/asx_config.h` |
+| `ASX_SERVICE_LB_MAX_BACKENDS` | 8 | `include/asx/asx_config.h` |
 | `ASX_SESSION_MAX_CAPACITY` | 16 | `include/asx/asx_config.h` |
+| `ASX_SNAPSHOT_MAX` | 8 | `include/asx/asx_config.h` |
+| `ASX_SPORK_PIPELINE_MAX_STAGES` | 8 | `include/asx/asx_config.h` |
+| `ASX_STREAM_CHUNK_MAX` | 16 | `include/asx/asx_config.h` |
+| `ASX_STREAM_WINDOW_MAX` | 16 | `include/asx/asx_config.h` |
+| `ASX_SUPERVISOR_MAX_CHILDREN` | 8 | `include/asx/asx_config.h` |
+| `ASX_SUPERVISOR_MAX_DEPS` | 4 | `include/asx/asx_config.h` |
+| `ASX_SUPERVISOR_MAX_RESTARTS` | 32 | `include/asx/asx_config.h` |
+| `ASX_SUPERVISOR_NAME_MAX` | 32 | `include/asx/asx_config.h` |
 | `ASX_SYMBOL_REGISTRY_CAPACITY` | 256 | `include/asx/asx_config.h` |
+| `ASX_TASK_GROUP_MAX` | 16 | `include/asx/asx_config.h` |
+| `ASX_TLS_ALPN_MAX_LEN` | 16 | `include/asx/asx_config.h` |
+| `ASX_TLS_MAX_ALPN` | 4 | `include/asx/asx_config.h` |
+| `ASX_TLS_MAX_HOSTNAME` | 64 | `include/asx/asx_config.h` |
 | `ASX_TRACE_CAPACITY` | 1024 | `include/asx/asx_config.h` |
 | `ASX_UDP_PAYLOAD_CAPACITY` | 4096 | `include/asx/asx_config.h` |
 | `ASX_UDP_QUEUE_CAPACITY` | 4 | `include/asx/asx_config.h` |
 | `ASX_UNIX_DGRAM_PAYLOAD_CAPACITY` | 4096 | `include/asx/asx_config.h` |
 | `ASX_UNIX_DGRAM_QUEUE_CAPACITY` | 4 | `include/asx/asx_config.h` |
 | `ASX_WAIT_NODE_CAPACITY` | 256 | `src/sync/wait_queue.h` |
+| `ASX_WEB_CORS_MAX_ORIGINS` | 8 | `include/asx/asx_config.h` |
+| `ASX_WEB_CORS_ORIGIN_MAX` | 128 | `include/asx/asx_config.h` |
+| `ASX_WEB_MAX_MIDDLEWARE` | 8 | `include/asx/asx_config.h` |
+| `ASX_WEB_MAX_MULTIPART_PARTS` | 8 | `include/asx/asx_config.h` |
+| `ASX_WEB_MAX_QUERY_PARAMS` | 16 | `include/asx/asx_config.h` |
+| `ASX_WEB_MAX_ROUTES` | 32 | `include/asx/asx_config.h` |
+| `ASX_WEB_MAX_SESSIONS` | 16 | `include/asx/asx_config.h` |
+| `ASX_WEB_MAX_STATIC_FILES` | 16 | `include/asx/asx_config.h` |
+| `ASX_WEB_MULTIPART_DATA_MAX` | 4096 | `include/asx/asx_config.h` |
+| `ASX_WEB_MULTIPART_FILENAME_MAX` | 128 | `include/asx/asx_config.h` |
+| `ASX_WEB_MULTIPART_NAME_MAX` | 64 | `include/asx/asx_config.h` |
+| `ASX_WEB_PARAM_KEY_MAX` | 64 | `include/asx/asx_config.h` |
+| `ASX_WEB_PARAM_VALUE_MAX` | 256 | `include/asx/asx_config.h` |
+| `ASX_WEB_PATH_MAX` | 128 | `include/asx/asx_config.h` |
+| `ASX_WEB_SESSION_MAX_DATA` | 512 | `include/asx/asx_config.h` |
+| `ASX_WEB_SSE_DATA_MAX` | 256 | `include/asx/asx_config.h` |
+| `ASX_WEB_SSE_EVENT_NAME_MAX` | 32 | `include/asx/asx_config.h` |
+| `ASX_WEB_SSE_MAX_EVENTS` | 16 | `include/asx/asx_config.h` |
+| `ASX_WORK_POOL_MAX_ITEMS` | 16 | `include/asx/asx_config.h` |
+| `ASX_WS_HANDSHAKE_MAX` | 4096 | `include/asx/asx_config.h` |
+| `ASX_WS_MAX_MESSAGE` | 16384 | `include/asx/asx_config.h` |
+| `ASX_WS_PROTOCOLS_MAX` | 128 | `include/asx/asx_config.h` |
 | `ASX_WS_TX_CAPACITY` | 16896 | `include/asx/asx_config.h` |
 <!-- capacity-table:end -->
+
+The size limits that are not capacities are in `tools/ci/capacity_fixed.txt`
+and in the table below (generated the same way, checked by `make lint-docs`):
+a constant Rust or the protocol fixes (with the pinned asupersync file and
+line), an expression of capacities above, or a knob nothing reads. They are
+not raised by `make test-capacity-x4` and have no lower bound.
+
+<!-- fixed-limits:begin -->
+| Macro | Default | Why it is not a capacity |
+|---|---|---|
+| `ASX_DB_QUERY_MAX` | 512 | Unused: no code reads it (only the configuration fingerprint names it) |
+| `ASX_HTTP_CLIENT_MAX_INFORMATIONAL` | 8 | Rust fixes it: MAX_INFORMATIONAL_RESPONSES = 8 (asupersync src/http/h1/client.rs:33) |
+| `ASX_HTTP_CLIENT_TX_MAX` | 10112 | Derived: ASX_HTTP_CONN_TX_MAX + ASX_HTTP_BODY_MAX + 64, so it scales with them |
+| `ASX_HTTP_CONN_TX_MAX` | 5952 | Derived: an expression of ASX_HTTP_MAX_HEADERS, ASX_HTTP_HEADER_NAME_MAX, ASX_HTTP_HEADER_VALUE_MAX and ASX_HTTP_URI_MAX, so it scales with them |
+| `ASX_HTTP_COOKIE_VALUE_MAX` | 128 | Unused: no code reads it (only the configuration fingerprint names it) |
+| `ASX_HTTP_DEFAULT_MAX_BODY` | 16777216 | Rust fixes it: DEFAULT_MAX_BODY_SIZE = 16 MiB (asupersync src/http/h1/codec.rs:21) |
+| `ASX_HTTP_DEFAULT_MAX_CHUNK_LINE` | 1024 | Rust fixes it: MAX_CHUNK_LINE_LEN = 1024 (asupersync src/http/h1/codec.rs:1154) |
+| `ASX_HTTP_DEFAULT_MAX_START_LINE` | 8192 | Rust fixes it: MAX_REQUEST_LINE = 8192 (asupersync src/http/h1/codec.rs:27) |
+| `ASX_PROCESS_ENV_MAX` | 128 | Unused: no code reads it (only the configuration fingerprint names it) |
+| `ASX_QUIC_MAX_DGRAM` | 1200 | Protocol constant: QUIC's 1200-byte minimum datagram (RFC 9000 section 14.1); Rust: MAX_DATAGRAM_FRAME_SIZE = 1200 (asupersync src/net/quic_native/connection.rs:460) |
+| `ASX_UNIX_PATH_MAX` | 108 | OS constant: the size of sockaddr_un.sun_path on Linux (108 bytes) |
+<!-- fixed-limits:end -->
 
 ## Deployment Profiles
 

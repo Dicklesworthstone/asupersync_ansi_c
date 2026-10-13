@@ -73,6 +73,18 @@ extern char **environ;
 #ifndef ASX_PROCESS_RESOLVE_MAX
 #define ASX_PROCESS_RESOLVE_MAX 1024u
 #endif
+#if (ASX_NATIVE_MAX_PROCESSES) < 1
+#error "ASX_NATIVE_MAX_PROCESSES must be at least 1"
+#endif
+#if (ASX_NATIVE_MAX_DETACHED) < 1
+#error "ASX_NATIVE_MAX_DETACHED must be at least 1"
+#endif
+#if (ASX_PROCESS_ENV_INHERIT_MAX) < 1
+#error "ASX_PROCESS_ENV_INHERIT_MAX must be at least 1"
+#endif
+#if (ASX_PROCESS_RESOLVE_MAX) < 3
+#error "ASX_PROCESS_RESOLVE_MAX must be at least 3 (a directory byte, a slash and a name byte)"
+#endif
 
 #define PROC_BACKOFF_MIN_MS 1u
 #define PROC_BACKOFF_MAX_MS 50u

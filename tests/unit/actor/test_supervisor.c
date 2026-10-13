@@ -272,6 +272,7 @@ static const asx_supervisor_completion *completion_of(const owner *o, uint32_t c
 static void test_config_defaults(void) {
     asx_supervisor_config cfg;
     asx_child_spec spec;
+    uint32_t d;
     asx_supervisor_config_init(&cfg, "s", 3, 1000u);
     ASSERT(cfg.strategy == ASX_SUPERVISOR_ONE_FOR_ONE, "one_for_one by default");
     ASSERT(cfg.escalation == ASX_ESCALATION_STOP, "stop by default");
@@ -283,16 +284,18 @@ static void test_config_defaults(void) {
     asx_child_spec_init(&spec, "c", ASX_CHILD_TRANSIENT, start_child, NULL);
     ASSERT(spec.required == 1u && spec.start_immediately == 1u && spec.dep_count == 0u,
            "ChildSpec::new's defaults");
-    ASSERT(asx_child_spec_depends_on(&spec, 1) == ASX_OK, "a dependency");
-    ASSERT(asx_child_spec_depends_on(&spec, 2) == ASX_OK, "a second dependency");
-    ASSERT(asx_child_spec_depends_on(&spec, 3) == ASX_OK, "a third dependency");
-    ASSERT(asx_child_spec_depends_on(&spec, 4) == ASX_OK, "a fourth dependency");
-    ASSERT(asx_child_spec_depends_on(&spec, 5) == ASX_E_RESOURCE_EXHAUSTED, "too many");
+    for (d = 1; d <= ASX_SUPERVISOR_MAX_DEPS; d++) {
+        ASSERT(asx_child_spec_depends_on(&spec, d) == ASX_OK, "a dependency up to the limit");
+    }
+    ASSERT(asx_child_spec_depends_on(&spec, ASX_SUPERVISOR_MAX_DEPS + 1u) ==
+               ASX_E_RESOURCE_EXHAUSTED,
+           "too many");
 }
 
 static void test_spawn_rejects_bad_arguments(void) {
     asx_supervisor_config cfg;
     asx_child_spec specs[ASX_SUPERVISOR_MAX_CHILDREN + 1u];
+    char too_long[ASX_SUPERVISOR_NAME_MAX + 8u]; /* a name past the limit */
     asx_supervisor_handle h;
     behaviour b;
     uint32_t i;
@@ -317,7 +320,9 @@ static void test_spawn_rejects_bad_arguments(void) {
     ASSERT(asx_supervisor_spawn(&h, g_root, &cfg, specs, 1) == ASX_E_INVALID_ARGUMENT,
            "no start function");
     specs[0].start = start_child;
-    specs[0].name = "a-name-that-is-far-too-long-for-a-child";
+    memset(too_long, 'a', sizeof(too_long) - 1u);
+    too_long[sizeof(too_long) - 1u] = '\0';
+    specs[0].name = too_long;
     ASSERT(asx_supervisor_spawn(&h, g_root, &cfg, specs, 1) == ASX_E_INVALID_ARGUMENT,
            "name too long");
 }

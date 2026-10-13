@@ -50,8 +50,8 @@ extern "C" {
 
 #define ASX_PARALLEL_GENERIC_TARGET_WORKERS 64u
 #define ASX_PARALLEL_MAX_LOCALITY_SHARDS ASX_MAX_WORKERS
-#if (ASX_LANE_TASK_CAPACITY) < 1
-#error "ASX_LANE_TASK_CAPACITY must be at least 1"
+#if (ASX_LANE_TASK_CAPACITY) < 2
+#error "ASX_LANE_TASK_CAPACITY must be at least 2"
 #endif
 
 /* -------------------------------------------------------------------

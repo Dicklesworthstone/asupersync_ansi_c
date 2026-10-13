@@ -1379,6 +1379,365 @@ typedef struct {
 #error "ASX_MAX_RUNTIMES must be at most 15 (the handle's runtime tag)"
 #endif
 
+/* Lower bounds of the per-module size limits (bd-t8if). Each limit sizes a
+ * table or a buffer of a caller-owned structure; a value below the minimum
+ * would size an array 0 or leave a NUL-terminated name no room for a byte,
+ * so it fails the build here. A count is at least 1 and a string buffer at
+ * least 2 (one byte and the NUL); ASX_HTTP_CONN_HEAD_MAX is at least the 16
+ * bytes asx_http_parser_init requires and ASX_WS_HANDSHAKE_MAX at least the
+ * 128 bytes below which no WebSocket handshake fits. tests/gates/
+ * test_capacity_bounds.sh compiles every limit at its minimum and one
+ * below it. The limits that are constants of Rust or of a protocol are in
+ * tools/ci/capacity_fixed.txt. */
+#if (ASX_SNAPSHOT_MAX) < 1
+#error "ASX_SNAPSHOT_MAX must be at least 1"
+#endif
+#if (ASX_ORACLE_SUITE_MAX) < 1
+#error "ASX_ORACLE_SUITE_MAX must be at least 1"
+#endif
+#if (ASX_LAB_MAX_STEPS) < 1
+#error "ASX_LAB_MAX_STEPS must be at least 1"
+#endif
+#if (ASX_TASK_GROUP_MAX) < 1
+#error "ASX_TASK_GROUP_MAX must be at least 1"
+#endif
+#if (ASX_DET_HASH_MAX_ENTRIES) < 1
+#error "ASX_DET_HASH_MAX_ENTRIES must be at least 1"
+#endif
+#if (ASX_COMBINATOR_MAX_BRANCHES) < 1
+#error "ASX_COMBINATOR_MAX_BRANCHES must be at least 1"
+#endif
+#if (ASX_JOIN_SET_MAX_TASKS) < 1
+#error "ASX_JOIN_SET_MAX_TASKS must be at least 1"
+#endif
+#if (ASX_PIPELINE_MAX_STAGES) < 1
+#error "ASX_PIPELINE_MAX_STAGES must be at least 1"
+#endif
+#if (ASX_CX_MACAROON_MAX_CAVEATS) < 1
+#error "ASX_CX_MACAROON_MAX_CAVEATS must be at least 1"
+#endif
+#if (ASX_SEMAPHORE_MAX) < 1
+#error "ASX_SEMAPHORE_MAX must be at least 1"
+#endif
+#if (ASX_CONTENDED_MUTEX_MAX) < 1
+#error "ASX_CONTENDED_MUTEX_MAX must be at least 1"
+#endif
+#if (ASX_NOTIFY_MAX) < 1
+#error "ASX_NOTIFY_MAX must be at least 1"
+#endif
+#if (ASX_BARRIER_MAX) < 1
+#error "ASX_BARRIER_MAX must be at least 1"
+#endif
+#if (ASX_RWLOCK_MAX) < 1
+#error "ASX_RWLOCK_MAX must be at least 1"
+#endif
+#if (ASX_ONCE_MAX) < 1
+#error "ASX_ONCE_MAX must be at least 1"
+#endif
+#if (ASX_POOL_MAX) < 1
+#error "ASX_POOL_MAX must be at least 1"
+#endif
+#if (ASX_POOL_MAX_RESOURCES) < 1
+#error "ASX_POOL_MAX_RESOURCES must be at least 1"
+#endif
+#if (ASX_SUPERVISOR_MAX_DEPS) < 2
+#error "ASX_SUPERVISOR_MAX_DEPS must be at least 2"
+#endif
+#if (ASX_SUPERVISOR_MAX_RESTARTS) < 1
+#error "ASX_SUPERVISOR_MAX_RESTARTS must be at least 1"
+#endif
+#if (ASX_SUPERVISOR_NAME_MAX) < 2
+#error "ASX_SUPERVISOR_NAME_MAX must be at least 2"
+#endif
+#if (ASX_SERVICE_BUILDER_MAX_LAYERS) < 1
+#error "ASX_SERVICE_BUILDER_MAX_LAYERS must be at least 1"
+#endif
+#if (ASX_SERVICE_LB_MAX_BACKENDS) < 1
+#error "ASX_SERVICE_LB_MAX_BACKENDS must be at least 1"
+#endif
+#if (ASX_WORK_POOL_MAX_ITEMS) < 1
+#error "ASX_WORK_POOL_MAX_ITEMS must be at least 1"
+#endif
+#if (ASX_SCATTER_GATHER_MAX_ITEMS) < 1
+#error "ASX_SCATTER_GATHER_MAX_ITEMS must be at least 1"
+#endif
+#if (ASX_SPORK_PIPELINE_MAX_STAGES) < 1
+#error "ASX_SPORK_PIPELINE_MAX_STAGES must be at least 1"
+#endif
+#if (ASX_STREAM_CHUNK_MAX) < 1
+#error "ASX_STREAM_CHUNK_MAX must be at least 1"
+#endif
+#if (ASX_STREAM_WINDOW_MAX) < 1
+#error "ASX_STREAM_WINDOW_MAX must be at least 1"
+#endif
+#if (ASX_PLAN_MAX_NODES) < 1
+#error "ASX_PLAN_MAX_NODES must be at least 1"
+#endif
+#if (ASX_PLAN_MAX_CHILDREN) < 1
+#error "ASX_PLAN_MAX_CHILDREN must be at least 1"
+#endif
+#if (ASX_PLAN_MAX_STEPS) < 1
+#error "ASX_PLAN_MAX_STEPS must be at least 1"
+#endif
+#if (ASX_PLAN_MAX_LABEL) < 2
+#error "ASX_PLAN_MAX_LABEL must be at least 2"
+#endif
+#if (ASX_METRICS_MAX_ENTRIES) < 1
+#error "ASX_METRICS_MAX_ENTRIES must be at least 1"
+#endif
+#if (ASX_METRICS_NAME_MAX) < 2
+#error "ASX_METRICS_NAME_MAX must be at least 2"
+#endif
+#if (ASX_DOCTOR_MAX_CHECKS) < 1
+#error "ASX_DOCTOR_MAX_CHECKS must be at least 1"
+#endif
+#if (ASX_SAGA_MAX_STEPS) < 1
+#error "ASX_SAGA_MAX_STEPS must be at least 1"
+#endif
+#if (ASX_HTTP_MAX_HEADERS) < 1
+#error "ASX_HTTP_MAX_HEADERS must be at least 1"
+#endif
+#if (ASX_HTTP_HEADER_NAME_MAX) < 2
+#error "ASX_HTTP_HEADER_NAME_MAX must be at least 2"
+#endif
+#if (ASX_HTTP_HEADER_VALUE_MAX) < 10
+#error "ASX_HTTP_HEADER_VALUE_MAX must be at least 10 (a cookie name, value and its path attribute)"
+#endif
+#if (ASX_HTTP_BODY_MAX) < 1
+#error "ASX_HTTP_BODY_MAX must be at least 1"
+#endif
+#if (ASX_HTTP_URI_MAX) < 2
+#error "ASX_HTTP_URI_MAX must be at least 2 (one path byte and the NUL)"
+#endif
+#if (ASX_HTTP_MAX_ROUTES) < 1
+#error "ASX_HTTP_MAX_ROUTES must be at least 1"
+#endif
+#if (ASX_HTTP_MAX_ROUTE_MIDDLEWARE) < 1
+#error "ASX_HTTP_MAX_ROUTE_MIDDLEWARE must be at least 1"
+#endif
+#if (ASX_HTTP_MAX_PATH_PARAMS) < 1
+#error "ASX_HTTP_MAX_PATH_PARAMS must be at least 1"
+#endif
+#if (ASX_HTTP_PARAM_NAME_MAX) < 2
+#error "ASX_HTTP_PARAM_NAME_MAX must be at least 2"
+#endif
+#if (ASX_HTTP_PARAM_VALUE_MAX) < 2
+#error "ASX_HTTP_PARAM_VALUE_MAX must be at least 2"
+#endif
+#if (ASX_HTTP_SECURITY_PURPOSE_MAX) < 2
+#error "ASX_HTTP_SECURITY_PURPOSE_MAX must be at least 2"
+#endif
+#if (ASX_HTTP_MULTIPART_PARTS_MAX) < 1
+#error "ASX_HTTP_MULTIPART_PARTS_MAX must be at least 1"
+#endif
+#if (ASX_HTTP_MULTIPART_DATA_MAX) < 1
+#error "ASX_HTTP_MULTIPART_DATA_MAX must be at least 1"
+#endif
+#if (ASX_HTTP_MULTIPART_FILENAME_MAX) < 2
+#error "ASX_HTTP_MULTIPART_FILENAME_MAX must be at least 2"
+#endif
+#if (ASX_HTTP_PARSER_MAX_FIELDS) < 1
+#error "ASX_HTTP_PARSER_MAX_FIELDS must be at least 1"
+#endif
+#if (ASX_HTTP_DEFAULT_MAX_HEADER_BYTES) < 1
+#error "ASX_HTTP_DEFAULT_MAX_HEADER_BYTES must be at least 1"
+#endif
+#if (ASX_HTTP_CONN_HEAD_MAX) < 16
+#error "ASX_HTTP_CONN_HEAD_MAX must be at least 16 (asx_http_parser_init's minimum)"
+#endif
+#if (ASX_HTTP_POOL_MAX_CONNECTIONS) < 1
+#error "ASX_HTTP_POOL_MAX_CONNECTIONS must be at least 1"
+#endif
+#if (ASX_WS_MAX_MESSAGE) < 1
+#error "ASX_WS_MAX_MESSAGE must be at least 1"
+#endif
+#if (ASX_WS_HANDSHAKE_MAX) < 128
+#error "ASX_WS_HANDSHAKE_MAX must be at least 128 (no handshake fits below it)"
+#endif
+#if (ASX_WS_PROTOCOLS_MAX) < 2
+#error "ASX_WS_PROTOCOLS_MAX must be at least 2"
+#endif
+#if (ASX_TLS_MAX_HOSTNAME) < 2
+#error "ASX_TLS_MAX_HOSTNAME must be at least 2"
+#endif
+#if (ASX_TLS_MAX_ALPN) < 1
+#error "ASX_TLS_MAX_ALPN must be at least 1"
+#endif
+#if (ASX_TLS_ALPN_MAX_LEN) < 2
+#error "ASX_TLS_ALPN_MAX_LEN must be at least 2"
+#endif
+#if (ASX_ANCILLARY_MAX_FDS) < 1
+#error "ASX_ANCILLARY_MAX_FDS must be at least 1"
+#endif
+#if (ASX_RESOLVE_MAX_RESULTS) < 1
+#error "ASX_RESOLVE_MAX_RESULTS must be at least 1"
+#endif
+#if (ASX_RESOLVE_MAX_INFLIGHT) < 1
+#error "ASX_RESOLVE_MAX_INFLIGHT must be at least 1"
+#endif
+#if (ASX_GRPC_MSG_MAX) < 1
+#error "ASX_GRPC_MSG_MAX must be at least 1"
+#endif
+#if (ASX_GRPC_MAX_METADATA) < 1
+#error "ASX_GRPC_MAX_METADATA must be at least 1"
+#endif
+#if (ASX_GRPC_METADATA_KEY_MAX) < 2
+#error "ASX_GRPC_METADATA_KEY_MAX must be at least 2"
+#endif
+#if (ASX_GRPC_METADATA_VALUE_MAX) < 2
+#error "ASX_GRPC_METADATA_VALUE_MAX must be at least 2"
+#endif
+#if (ASX_GRPC_MAX_METHODS) < 1
+#error "ASX_GRPC_MAX_METHODS must be at least 1"
+#endif
+#if (ASX_GRPC_METHOD_NAME_MAX) < 3
+#error "ASX_GRPC_METHOD_NAME_MAX must be at least 3 (a slash, one name byte and the NUL)"
+#endif
+#if (ASX_GRPC_MAX_SERVICES) < 1
+#error "ASX_GRPC_MAX_SERVICES must be at least 1"
+#endif
+#if (ASX_GRPC_SERVICE_NAME_MAX) < 2
+#error "ASX_GRPC_SERVICE_NAME_MAX must be at least 2"
+#endif
+#if (ASX_GRPC_MAX_HEALTH_ENTRIES) < 1
+#error "ASX_GRPC_MAX_HEALTH_ENTRIES must be at least 1"
+#endif
+#if (ASX_MSG_MAX_PAYLOAD) < 1
+#error "ASX_MSG_MAX_PAYLOAD must be at least 1"
+#endif
+#if (ASX_MSG_MAX_TOPIC_LEN) < 2
+#error "ASX_MSG_MAX_TOPIC_LEN must be at least 2"
+#endif
+#if (ASX_MSG_MAX_TOPICS) < 1
+#error "ASX_MSG_MAX_TOPICS must be at least 1"
+#endif
+#if (ASX_MSG_MAX_SUBSCRIBERS) < 1
+#error "ASX_MSG_MAX_SUBSCRIBERS must be at least 1"
+#endif
+#if (ASX_DIST_MAX_NODES) < 1
+#error "ASX_DIST_MAX_NODES must be at least 1"
+#endif
+#if (ASX_DIST_MAX_PARTITIONS) < 1
+#error "ASX_DIST_MAX_PARTITIONS must be at least 1"
+#endif
+#if (ASX_DIST_NODE_NAME_MAX) < 2
+#error "ASX_DIST_NODE_NAME_MAX must be at least 2"
+#endif
+#if (ASX_DIST_SNAPSHOT_DATA_MAX) < 1
+#error "ASX_DIST_SNAPSHOT_DATA_MAX must be at least 1"
+#endif
+#if (ASX_DIST_MAX_SNAPSHOTS) < 1
+#error "ASX_DIST_MAX_SNAPSHOTS must be at least 1"
+#endif
+#if (ASX_DB_MAX_CONNECTIONS) < 1
+#error "ASX_DB_MAX_CONNECTIONS must be at least 1"
+#endif
+#if (ASX_DB_MAX_COLUMNS) < 1
+#error "ASX_DB_MAX_COLUMNS must be at least 1"
+#endif
+#if (ASX_DB_MAX_ROWS) < 1
+#error "ASX_DB_MAX_ROWS must be at least 1"
+#endif
+#if (ASX_DB_COLUMN_NAME_MAX) < 2
+#error "ASX_DB_COLUMN_NAME_MAX must be at least 2"
+#endif
+#if (ASX_DB_CELL_MAX) < 2
+#error "ASX_DB_CELL_MAX must be at least 2"
+#endif
+#if (ASX_DB_DSN_MAX) < 2
+#error "ASX_DB_DSN_MAX must be at least 2"
+#endif
+#if (ASX_SERVER_MAX_CONNECTIONS) < 1
+#error "ASX_SERVER_MAX_CONNECTIONS must be at least 1"
+#endif
+#if (ASX_MEM_TRANSPORT_MAX_CONNS) < 1
+#error "ASX_MEM_TRANSPORT_MAX_CONNS must be at least 1"
+#endif
+#if (ASX_MEM_TRANSPORT_MAX_LISTENERS) < 1
+#error "ASX_MEM_TRANSPORT_MAX_LISTENERS must be at least 1"
+#endif
+#if (ASX_RECONNECT_TRANSPORT_MAX_ADDR) < 1
+#error "ASX_RECONNECT_TRANSPORT_MAX_ADDR must be at least 1"
+#endif
+#if (ASX_WEB_MAX_ROUTES) < 1
+#error "ASX_WEB_MAX_ROUTES must be at least 1"
+#endif
+#if (ASX_WEB_PATH_MAX) < 2
+#error "ASX_WEB_PATH_MAX must be at least 2"
+#endif
+#if (ASX_WEB_MAX_MIDDLEWARE) < 1
+#error "ASX_WEB_MAX_MIDDLEWARE must be at least 1"
+#endif
+#if (ASX_WEB_MAX_QUERY_PARAMS) < 1
+#error "ASX_WEB_MAX_QUERY_PARAMS must be at least 1"
+#endif
+#if (ASX_WEB_PARAM_KEY_MAX) < 2
+#error "ASX_WEB_PARAM_KEY_MAX must be at least 2"
+#endif
+#if (ASX_WEB_PARAM_VALUE_MAX) < 2
+#error "ASX_WEB_PARAM_VALUE_MAX must be at least 2"
+#endif
+#if (ASX_WEB_MAX_SESSIONS) < 1
+#error "ASX_WEB_MAX_SESSIONS must be at least 1"
+#endif
+#if (ASX_WEB_SESSION_MAX_DATA) < 1
+#error "ASX_WEB_SESSION_MAX_DATA must be at least 1"
+#endif
+#if (ASX_WEB_SSE_MAX_EVENTS) < 1
+#error "ASX_WEB_SSE_MAX_EVENTS must be at least 1"
+#endif
+#if (ASX_WEB_SSE_DATA_MAX) < 2
+#error "ASX_WEB_SSE_DATA_MAX must be at least 2"
+#endif
+#if (ASX_WEB_SSE_EVENT_NAME_MAX) < 2
+#error "ASX_WEB_SSE_EVENT_NAME_MAX must be at least 2"
+#endif
+#if (ASX_WEB_MAX_MULTIPART_PARTS) < 1
+#error "ASX_WEB_MAX_MULTIPART_PARTS must be at least 1"
+#endif
+#if (ASX_WEB_MULTIPART_NAME_MAX) < 2
+#error "ASX_WEB_MULTIPART_NAME_MAX must be at least 2"
+#endif
+#if (ASX_WEB_MULTIPART_FILENAME_MAX) < 2
+#error "ASX_WEB_MULTIPART_FILENAME_MAX must be at least 2"
+#endif
+#if (ASX_WEB_MULTIPART_DATA_MAX) < 1
+#error "ASX_WEB_MULTIPART_DATA_MAX must be at least 1"
+#endif
+#if (ASX_WEB_CORS_MAX_ORIGINS) < 1
+#error "ASX_WEB_CORS_MAX_ORIGINS must be at least 1"
+#endif
+#if (ASX_WEB_CORS_ORIGIN_MAX) < 2
+#error "ASX_WEB_CORS_ORIGIN_MAX must be at least 2"
+#endif
+#if (ASX_WEB_MAX_STATIC_FILES) < 1
+#error "ASX_WEB_MAX_STATIC_FILES must be at least 1"
+#endif
+#if (ASX_PROCESS_WAIT_MAX_POLLS) < 1
+#error "ASX_PROCESS_WAIT_MAX_POLLS must be at least 1"
+#endif
+#if (ASX_PROCESS_PROGRAM_MAX) < 2
+#error "ASX_PROCESS_PROGRAM_MAX must be at least 2"
+#endif
+#if (ASX_PROCESS_MAX_ARGS) < 1
+#error "ASX_PROCESS_MAX_ARGS must be at least 1"
+#endif
+#if (ASX_PROCESS_ARG_MAX) < 2
+#error "ASX_PROCESS_ARG_MAX must be at least 2"
+#endif
+#if (ASX_PROCESS_MAX_ENV) < 1
+#error "ASX_PROCESS_MAX_ENV must be at least 1"
+#endif
+#if (ASX_PROCESS_OUTPUT_MAX) < 1
+#error "ASX_PROCESS_OUTPUT_MAX must be at least 1"
+#endif
+#if (ASX_FS_PATH_MAX) < 2
+#error "ASX_FS_PATH_MAX must be at least 2"
+#endif
+#if (ASX_FS_NAME_MAX) < 2
+#error "ASX_FS_NAME_MAX must be at least 2"
+#endif
+
 /* Datagram arenas of the in-memory network (bd-dkfs). A UDP or a Unix
  * datagram socket queues up to *_QUEUE_CAPACITY datagrams of up to
  * *_PAYLOAD_CAPACITY bytes, and after the socket counts these two tables

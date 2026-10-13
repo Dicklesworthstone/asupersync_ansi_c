@@ -65,8 +65,8 @@ typedef struct {
 /* Regression localization result                                      */
 /* ------------------------------------------------------------------ */
 
-#if (ASX_MAX_SUSPECTS) < 1
-#error "ASX_MAX_SUSPECTS must be at least 1"
+#if (ASX_MAX_SUSPECTS) < 2
+#error "ASX_MAX_SUSPECTS must be at least 2"
 #endif
 
 typedef struct {

@@ -801,6 +801,12 @@ asx_status asx_posix_hooks_install_checked(asx_runtime_hooks *hooks,
     return ASX_OK;
 }
 
+/* The lower bound of ASX_POSIX_REACTOR_MAX_FDS (bd-t8if), here and not at its
+ * definition so that the line numbers the docs cite stay. */
+#if (ASX_POSIX_REACTOR_MAX_FDS) < 1
+#error "ASX_POSIX_REACTOR_MAX_FDS must be at least 1"
+#endif
+
 #else
 typedef int asx_no_empty_tu_warning;
 #endif /* ASX_PROFILE_POSIX */

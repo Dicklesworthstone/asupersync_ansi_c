@@ -143,8 +143,8 @@ extern "C" {
 #error "ASX_MAX_SUPERVISORS must be at least 1"
 #endif
 
-#if (ASX_SUPERVISOR_MAX_CHILDREN) < 1
-#error "ASX_SUPERVISOR_MAX_CHILDREN must be at least 1"
+#if (ASX_SUPERVISOR_MAX_CHILDREN) < 2
+#error "ASX_SUPERVISOR_MAX_CHILDREN must be at least 2"
 #endif
 
 /* Supervisor and child names, terminator included. */

@@ -1,0 +1,23 @@
+# Size limits that are not capacities (bd-t8if): not raised by make
+# test-capacity-x4, not given a lower bound, listed with the reason in the
+# README's "Fixed limits" table (tools/ci/capacity_table.sh generates it and
+# fails if a guarded size-limit macro of include/ and src/ is in neither this
+# file nor CAPACITY_X4_CFLAGS in the Makefile).
+#
+# One macro per line: NAME, a space, the reason (no '|'). Three kinds:
+#   - a constant Rust or the protocol fixes, with the pinned asupersync
+#     (5e60b1c4c) file:line or the RFC it comes from;
+#   - an expression of other capacities, which scales with them;
+#   - a knob no code reads.
+
+ASX_HTTP_DEFAULT_MAX_START_LINE Rust fixes it: MAX_REQUEST_LINE = 8192 (asupersync src/http/h1/codec.rs:27)
+ASX_HTTP_DEFAULT_MAX_BODY Rust fixes it: DEFAULT_MAX_BODY_SIZE = 16 MiB (asupersync src/http/h1/codec.rs:21)
+ASX_HTTP_DEFAULT_MAX_CHUNK_LINE Rust fixes it: MAX_CHUNK_LINE_LEN = 1024 (asupersync src/http/h1/codec.rs:1154)
+ASX_HTTP_CLIENT_MAX_INFORMATIONAL Rust fixes it: MAX_INFORMATIONAL_RESPONSES = 8 (asupersync src/http/h1/client.rs:33)
+ASX_QUIC_MAX_DGRAM Protocol constant: QUIC's 1200-byte minimum datagram (RFC 9000 section 14.1); Rust: MAX_DATAGRAM_FRAME_SIZE = 1200 (asupersync src/net/quic_native/connection.rs:460)
+ASX_UNIX_PATH_MAX OS constant: the size of sockaddr_un.sun_path on Linux (108 bytes)
+ASX_HTTP_CONN_TX_MAX Derived: an expression of ASX_HTTP_MAX_HEADERS, ASX_HTTP_HEADER_NAME_MAX, ASX_HTTP_HEADER_VALUE_MAX and ASX_HTTP_URI_MAX, so it scales with them
+ASX_HTTP_CLIENT_TX_MAX Derived: ASX_HTTP_CONN_TX_MAX + ASX_HTTP_BODY_MAX + 64, so it scales with them
+ASX_DB_QUERY_MAX Unused: no code reads it (only the configuration fingerprint names it)
+ASX_HTTP_COOKIE_VALUE_MAX Unused: no code reads it (only the configuration fingerprint names it)
+ASX_PROCESS_ENV_MAX Unused: no code reads it (only the configuration fingerprint names it)

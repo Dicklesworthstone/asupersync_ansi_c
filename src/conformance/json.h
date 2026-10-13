@@ -31,6 +31,12 @@
 #ifndef ASX_JSON_MAX_TEXT
 #define ASX_JSON_MAX_TEXT (512u * 1024u)
 #endif
+#if (ASX_JSON_MAX_NODES) < 1
+#error "ASX_JSON_MAX_NODES must be at least 1"
+#endif
+#if (ASX_JSON_MAX_TEXT) < 2
+#error "ASX_JSON_MAX_TEXT must be at least 2 (one byte and the NUL)"
+#endif
 #define ASX_JSON_MAX_DEPTH 64u
 
 /* Index of "no node". */

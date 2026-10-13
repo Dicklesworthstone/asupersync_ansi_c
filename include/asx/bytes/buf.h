@@ -28,8 +28,8 @@ extern "C" {
  * Compile-time buffer capacity
  * ------------------------------------------------------------------- */
 
-#if (ASX_BUF_CAPACITY) < 1
-#error "ASX_BUF_CAPACITY must be at least 1"
+#if (ASX_BUF_CAPACITY) < 8
+#error "ASX_BUF_CAPACITY must be at least 8 (one u64 put)"
 #endif
 
 /* -------------------------------------------------------------------

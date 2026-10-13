@@ -217,8 +217,10 @@ TEST(broker_topic_exhaustion) {
         return;
     }
     for (i = 0; i < ASX_MSG_MAX_TOPICS; i++) {
+        /* distinct names whatever the limit: two letters give 676 */
         name[0] = 'a' + (char)(i % 26);
-        name[1] = '\0';
+        name[1] = 'a' + (char)((i / 26) % 26);
+        name[2] = '\0';
         ASSERT_EQ(asx_msg_broker_topic(&broker, name, &topic), ASX_OK);
     }
     ASSERT_EQ(asx_msg_broker_topic(&broker, "overflow", &topic), ASX_E_RESOURCE_EXHAUSTED);

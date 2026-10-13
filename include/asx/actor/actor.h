@@ -87,8 +87,8 @@ extern "C" {
 #ifndef ASX_ACTOR_SYSTEM_LANE_CAPACITY
 #define ASX_ACTOR_SYSTEM_LANE_CAPACITY 16u
 #endif
-#if (ASX_ACTOR_SYSTEM_LANE_CAPACITY) < 1
-#error "ASX_ACTOR_SYSTEM_LANE_CAPACITY must be at least 1"
+#if (ASX_ACTOR_SYSTEM_LANE_CAPACITY) < 2
+#error "ASX_ACTOR_SYSTEM_LANE_CAPACITY must be at least 2 (one monitor and one link)"
 #endif
 
 /* -------------------------------------------------------------------
@@ -343,6 +343,9 @@ ASX_API void asx_actor_op_drop(asx_actor_handle actor, asx_actor_op *op);
 #endif
 #ifndef ASX_NAME_MAX_LEN
 #define ASX_NAME_MAX_LEN 63u
+#endif
+#if (ASX_NAME_MAX_LEN) < 1
+#error "ASX_NAME_MAX_LEN must be at least 1"
 #endif
 
 typedef struct {

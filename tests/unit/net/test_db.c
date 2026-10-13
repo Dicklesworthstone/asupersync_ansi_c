@@ -137,7 +137,7 @@ TEST(db_execute_refuses_every_statement_with_a_typed_error) {
     };
     asx_db_pool pool;
     asx_db_conn *conn = NULL;
-    asx_db_result result;
+    static asx_db_result result; /* rows x columns x cells: too big for a stack at 4x */
     size_t i;
 
     asx_db_pool_init(&pool);
@@ -164,7 +164,7 @@ TEST(db_execute_refuses_every_statement_with_a_typed_error) {
 TEST(db_execute_refusal_leaves_the_transaction_alone) {
     asx_db_pool pool;
     asx_db_conn *conn = NULL;
-    asx_db_result result;
+    static asx_db_result result; /* rows x columns x cells: too big for a stack at 4x */
 
     asx_db_pool_init(&pool);
     if (!db_surface_available()) return;
@@ -182,7 +182,7 @@ TEST(db_execute_refusal_leaves_the_transaction_alone) {
 TEST(db_execute_rejects_an_empty_statement_and_a_closed_connection) {
     asx_db_pool pool;
     asx_db_conn *conn = NULL;
-    asx_db_result result;
+    static asx_db_result result; /* rows x columns x cells: too big for a stack at 4x */
 
     asx_db_pool_init(&pool);
     if (!db_surface_available()) return;
@@ -228,7 +228,7 @@ TEST(db_transaction_lifecycle) {
 }
 
 TEST(db_result_navigation) {
-    asx_db_result result;
+    static asx_db_result result; /* rows x columns x cells: too big for a stack at 4x */
     asx_db_row row1, row2;
     const asx_db_row *r;
 
@@ -270,7 +270,7 @@ TEST(db_result_navigation) {
 }
 
 TEST(db_result_rejects_row_beyond_schema) {
-    asx_db_result result;
+    static asx_db_result result; /* rows x columns x cells: too big for a stack at 4x */
     asx_db_row row;
 
     asx_db_result_init(&result);
@@ -286,7 +286,7 @@ TEST(db_result_rejects_row_beyond_schema) {
 }
 
 TEST(db_result_rejects_corrupt_cell_count) {
-    asx_db_result result;
+    static asx_db_result result; /* rows x columns x cells: too big for a stack at 4x */
     asx_db_row row;
 
     asx_db_result_init(&result);
@@ -301,7 +301,7 @@ TEST(db_result_rejects_corrupt_cell_count) {
 }
 
 TEST(db_column_index) {
-    asx_db_result result;
+    static asx_db_result result; /* rows x columns x cells: too big for a stack at 4x */
     asx_db_result_init(&result);
     asx_db_result_add_column(&result, "id");
     asx_db_result_add_column(&result, "name");
@@ -343,7 +343,7 @@ TEST(db_value_types) {
 TEST(db_null_args) {
     asx_db_pool pool;
     asx_db_conn *conn;
-    asx_db_result result;
+    static asx_db_result result; /* rows x columns x cells: too big for a stack at 4x */
 
     asx_db_pool_init(&pool);
     ASSERT_EQ(asx_db_pool_set_backend(NULL, ASX_DB_BACKEND_MEMORY), ASX_E_INVALID_ARGUMENT);

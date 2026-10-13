@@ -28,6 +28,12 @@
 #ifndef ASX_CANON_MAX_RESOURCES
 #define ASX_CANON_MAX_RESOURCES 4096u
 #endif
+#if (ASX_CANON_MAX_EVENTS) < 1
+#error "ASX_CANON_MAX_EVENTS must be at least 1"
+#endif
+#if (ASX_CANON_MAX_RESOURCES) < 1
+#error "ASX_CANON_MAX_RESOURCES must be at least 1"
+#endif
 
 /* Diagnostic for the last failed call (static string), or NULL. */
 const char *asx_canon_error(void);

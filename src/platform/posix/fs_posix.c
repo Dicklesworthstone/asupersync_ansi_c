@@ -56,6 +56,12 @@
 #ifndef ASX_FS_NATIVE_MAX_DIRS
 #define ASX_FS_NATIVE_MAX_DIRS 16u
 #endif
+#if (ASX_FS_NATIVE_MAX_FILES) < 1
+#error "ASX_FS_NATIVE_MAX_FILES must be at least 1"
+#endif
+#if (ASX_FS_NATIVE_MAX_DIRS) < 1
+#error "ASX_FS_NATIVE_MAX_DIRS must be at least 1"
+#endif
 
 /* Largest single read/write request handed to the kernel. */
 #define ASX_FS_NATIVE_IO_MAX 0x40000000u
