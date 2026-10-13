@@ -65,12 +65,15 @@ log_case() {
 }
 
 # run_mutant <macro> <failing fixture family regex> [compare|compare-sweep]
+#            [first-divergence regex]
 # `compare-sweep` runs the corpus under the default sweep scheduler against
 # the known-divergence list (bd-9kll.4.9): the mutant must turn a fixture the
 # baseline passes into a FAIL, which lab dispatch cannot show for a sweep-only
-# line.
+# line. The optional last argument is a regex the output must also contain:
+# the report names where the runs part, not only that they do (the dispatch
+# index for a scheduling difference).
 run_mutant() {
-    local macro="$1" family="$2" mode="${3:-compare}"
+    local macro="$1" family="$2" mode="${3:-compare}" detail="${4:-}"
     local dir="$MUTANT_BUILD_ROOT/$macro"
     local out rc status observed fails
     mkdir -p "$dir"
@@ -96,6 +99,7 @@ run_mutant() {
     status="pass"
     if [ "$rc" -eq 0 ]; then status="fail"; fi
     if ! grep -Eq -- "^FAIL ($family)" <<<"$out"; then status="fail"; fi
+    if [ -n "$detail" ] && ! grep -Eq -- "$detail" <<<"$out"; then status="fail"; fi
     if [ "$status" = "pass" ]; then
         echo "  PASS: $macro caught ($fails fixture(s) fail, family /$family/ among them)"
     else
@@ -107,7 +111,11 @@ run_mutant() {
 
 echo "=== test_oracle_mutants ($RUN_ID) ==="
 
-run_mutant BUDGET_PRIORITY_MIN 'budget-'
+# The min meet gives a child a lower effective priority than Rust's max, so the
+# lab polls it later: the report must name the first dispatch where the two
+# runs part, with Rust's task and C's (bd-9kll.2.6).
+run_mutant BUDGET_PRIORITY_MIN 'budget-' compare \
+    '^    dispatch [0-9]+ differs \(rust has [0-9]+, c has [0-9]+\)$'
 run_mutant CANCEL_NO_STRENGTHEN 'cancel-'
 run_mutant SCHED_REVERSE_ORDER 'lab-'
 run_mutant OBLIGATION_DROP_COMMITS 'obligation-'

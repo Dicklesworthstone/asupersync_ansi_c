@@ -102,10 +102,19 @@ summaries = re.findall(r'^asx-conformance: compared=(\d+) pass=(\d+) fail=(\d+) 
 assert len(summaries) == 1, 'missing or duplicate actual comparison summary'
 compared, passed, failed, errors = map(int, summaries[0])
 assert compared == count and passed + failed + errors == count and errors == 0
+# A fixture is one PASS, one ERROR, or one or more FAIL lines: the runner
+# reports a FAIL for each check that failed (trace, snapshot, dispatches,
+# schedule certificate, replay of Rust's schedule), so a mutant that moves
+# the dispatch order fails two.
 rows = re.findall(r'^(PASS|FAIL|ERROR) (\S+?)(?::| )', text, re.M)
-assert len(rows) == count and len({row[1] for row in rows}) == count, 'missing or duplicate comparisons'
-assert sum(row[0] == 'PASS' for row in rows) == passed
-assert sum(row[0] == 'FAIL' for row in rows) == failed
+by_id = {}
+for kind, ident in rows:
+    by_id.setdefault(ident, []).append(kind)
+assert len(by_id) == count, 'missing or duplicate comparisons'
+for ident, kinds in by_id.items():
+    assert kinds in (['PASS'], ['ERROR']) or set(kinds) == {'FAIL'}, f'{ident}: mixed or repeated results {kinds}'
+assert sum(kinds == ['PASS'] for kinds in by_id.values()) == passed
+assert sum(set(kinds) == {'FAIL'} for kinds in by_id.values()) == failed
 if mode == 'clean':
     assert status == 0 and passed == count and failed == 0, 'clean runtime diverged'
 else:
@@ -203,6 +212,64 @@ check_compare clean 1 "$reduced_clean_status" "$RUN_DIR/reduced.clean.compare.lo
 reduced_mutant_status=0
 run_logged "$RUN_DIR/reduced.mutant.compare.log" "$ASX_MUTANT_C_RUNNER" compare "$live_fixture" || reduced_mutant_status=$?
 check_compare mutant 1 "$reduced_mutant_status" "$RUN_DIR/reduced.mutant.compare.log"
+
+# How far the minimizer reduces (bd-9kll.2.6, "a 40-step divergent scenario
+# reduces to at most 5 steps"). tests/fuzz/scenarios/padded-budget-divergence-001.json
+# is the 5-operation BUDGET_PRIORITY_MIN divergence of this run's seed-9
+# minimization (gen-9-0-001) padded with six independent tasks of six
+# operations each: 41 operations. Rust captures it, the clean runtime passes
+# it, the mutant fails it with a first divergence (the dispatch index and
+# both tasks), and the minimizer must hand back at most 5 operations that
+# the mutant still fails.
+PADDED="$PROJECT_ROOT/tests/fuzz/scenarios/padded-budget-divergence-001.json"
+[ -s "$PADDED" ] || fail "missing $PADDED"
+mkdir -p "$RUN_DIR/padded"
+run_logged "$RUN_DIR/padded/capture.log" "$ASX_TWIN_BIN" capture "$PADDED" --out "$RUN_DIR/padded/fixtures"
+padded_fixture="$RUN_DIR/padded/fixtures/padded-budget-divergence-001.json"
+[ -s "$padded_fixture" ] || fail "Rust did not capture the padded scenario"
+padded_clean_status=0
+run_logged "$RUN_DIR/padded/clean.compare.log" "$ASX_C_RUNNER" compare "$padded_fixture" || padded_clean_status=$?
+check_compare clean 1 "$padded_clean_status" "$RUN_DIR/padded/clean.compare.log"
+padded_mutant_status=0
+run_logged "$RUN_DIR/padded/mutant.compare.log" "$ASX_MUTANT_C_RUNNER" compare "$padded_fixture" || padded_mutant_status=$?
+check_compare mutant 1 "$padded_mutant_status" "$RUN_DIR/padded/mutant.compare.log"
+python3 -I - "$RUN_DIR/padded/mutant.compare.log" <<'PY'
+from pathlib import Path
+import re
+import sys
+text = Path(sys.argv[1]).read_text()
+# The report names where the two runs part: a dispatch index, with both sides.
+assert re.search(r'^FAIL padded-budget-divergence-001: dispatches$', text, re.M), 'mutant FAIL is not a dispatch divergence'
+assert re.search(r'^    dispatch [0-9]+ differs \(rust has [0-9]+, c has [0-9]+\)$', text, re.M), 'no first-divergence index'
+assert re.search(r'^      > ', text, re.M), 'no marked first differing dispatch'
+print('[live-diff] mutant first divergence reported with its dispatch index and both tasks')
+PY
+run_logged "$RUN_DIR/padded/minimize.log" "$ASX_TWIN_BIN" minimize "$PADDED" \
+    --runner "$ASX_MUTANT_C_RUNNER" --out "$RUN_DIR/padded/minimized"
+padded_reduced="$RUN_DIR/padded/minimized/padded-budget-divergence-001-min.scenario.json"
+[ -s "$padded_reduced" ] || fail "minimizer wrote no reduced padded scenario"
+python3 -I - "$PADDED" "$padded_reduced" <<'PY'
+import json
+from pathlib import Path
+import sys
+original, reduced = [json.loads(Path(path).read_text()) for path in sys.argv[1:]]
+def operations(value):
+    if isinstance(value, dict):
+        return int(isinstance(value.get('op'), str)) + sum(operations(v) for v in value.values())
+    if isinstance(value, list):
+        return sum(map(operations, value))
+    return 0
+before, after = operations(original), operations(reduced)
+assert before >= 40, f'the padded input must have at least 40 operations, has {before}'
+assert 0 < after <= 5, f'minimizer left {after} operations of {before}; expected at most 5'
+print(f'[live-diff] minimizer reduced a padded divergence: {before} -> {after} operations')
+PY
+padded_reduced_status=0
+run_logged "$RUN_DIR/padded/reduced.capture.log" "$ASX_TWIN_BIN" capture "$padded_reduced" --out "$RUN_DIR/padded/reduced-live"
+padded_reduced_fixture="$RUN_DIR/padded/reduced-live/padded-budget-divergence-001-min.json"
+[ -s "$padded_reduced_fixture" ] || fail "reduced padded scenario did not capture"
+run_logged "$RUN_DIR/padded/reduced.mutant.compare.log" "$ASX_MUTANT_C_RUNNER" compare "$padded_reduced_fixture" || padded_reduced_status=$?
+check_compare mutant 1 "$padded_reduced_status" "$RUN_DIR/padded/reduced.mutant.compare.log"
 
 # These explicit test doubles exercise only the minimizer's child-output parser.
 # They do not generate fixtures and never count as live Rust/C parity evidence.
