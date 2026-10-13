@@ -576,6 +576,76 @@ TEST(scheduler_polls_a_task_spawned_in_a_round_in_that_round) {
     ASSERT_EQ(polls_in_round_0, 2u);
 }
 
+/* ---- A task spawned into a region opened in that round (bd-9kll.4.12) ---- */
+
+static char g_scope_log[8];
+static uint32_t g_scope_n;
+
+static void scope_note(char c) {
+    if (g_scope_n < sizeof(g_scope_log)) g_scope_log[g_scope_n++] = c;
+}
+
+static asx_status poll_scope_child(void *data, asx_task_id self) {
+    (void)data;
+    (void)self;
+    scope_note('c');
+    return ASX_OK;
+}
+
+typedef struct {
+    asx_region_id parent;
+    int stage;
+} scope_opener;
+
+/* Opens a child region, spawns a task into it and yields once ("o"); on its
+ * next poll it completes ("O"). */
+static asx_status poll_scope_opener(void *data, asx_task_id self) {
+    scope_opener *o = (scope_opener *)data;
+    asx_region_id child;
+    asx_task_id tid;
+    asx_status st;
+    (void)self;
+    if (o->stage == 0) {
+        scope_note('o');
+        st = asx_region_open_child(o->parent, &child);
+        if (st != ASX_OK) return st;
+        st = asx_task_spawn(child, poll_scope_child, NULL, &tid);
+        if (st != ASX_OK) return st;
+        o->stage = 1;
+        return ASX_E_PENDING; /* a yield: the task stays runnable */
+    }
+    scope_note('O');
+    return ASX_OK;
+}
+
+/* Rust's ready queue runs a spawned task before its spawner's yield returns.
+ * The sweep took the round's scope before the walk, so a task spawned into a
+ * region the spawner opened in that round waited for the next round and ran
+ * after the spawner resumed. */
+TEST(scheduler_polls_a_task_in_a_region_opened_in_the_round_before_its_opener_resumes) {
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_budget budget;
+    scope_opener o;
+
+    asx_runtime_reset();
+    asx_ghost_reset();
+    g_scope_n = 0u;
+    memset(g_scope_log, 0, sizeof(g_scope_log));
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    o.parent = rid;
+    o.stage = 0;
+    ASSERT_EQ(asx_task_spawn(rid, poll_scope_opener, &o, &tid), ASX_OK);
+
+    budget = asx_budget_infinite();
+    ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
+
+    ASSERT_EQ(g_scope_n, 3u);
+    ASSERT_TRUE(g_scope_log[0] == 'o');
+    ASSERT_TRUE(g_scope_log[1] == 'c');
+    ASSERT_TRUE(g_scope_log[2] == 'O');
+}
+
 /* ---- Poll quota enforced before a poll (bd-9kll.4.13) ---- */
 
 typedef struct {
@@ -680,6 +750,7 @@ int main(void) {
     RUN_TEST_IF(ASX_MAX_TASKS >= 19u, scheduler_cancel_streak_gives_ready_work_a_turn,
                 "needs 19 tasks: 16 cancel polls in a row, the ready task, two more");
     RUN_TEST(scheduler_polls_a_task_spawned_in_a_round_in_that_round);
+    RUN_TEST(scheduler_polls_a_task_in_a_region_opened_in_the_round_before_its_opener_resumes);
 
     /* Budget enforcement before a poll */
     RUN_TEST(scheduler_stamps_an_exhausted_poll_quota_with_the_poll_quota_defaults);

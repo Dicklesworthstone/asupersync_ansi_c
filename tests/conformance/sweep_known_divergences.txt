@@ -16,10 +16,7 @@
 # A fixture that diverges and is not listed FAILs; one listed that now matches is
 # STALE and fails too.
 
-actor-cancel-after-batch-drains-call-001 drift bd-9kll.4.12: a worker spawned into a region opened this round is skipped for the round, so the parent's cancel lands first
 actor-cancel-before-start-drains-001 order: seed 2 puts the parent's two yields and the cancel before the server's first run; the sweep runs worker and server in the round they are spawned
-actor-cancel-caller-and-server-001 drift bd-9kll.4.12: a worker spawned into a region opened this round is skipped for the round, so the parent's cancel lands first
-actor-cancel-idle-server-001 drift bd-9kll.4.12: a worker spawned into a region opened this round is skipped for the round, so the parent's cancel lands first
 actor-refused-reply-before-sleep-001 lab-model: a refused server spawn keeps a handle only under lab dispatch (refused at admission); the sweep returns the error at the spawn
 actor-spawn-in-closing-region-001 lab-model: a refused server spawn keeps a handle only under lab dispatch (refused at admission); the sweep returns the error at the spawn
 cancel-region-request-lane-priority-001 drift bd-9kll.4.15: a checkpoint outside lab dispatch does not strengthen a pending cancel with the passed deadline

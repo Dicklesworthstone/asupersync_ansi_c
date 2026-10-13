@@ -1545,8 +1545,7 @@ static asx_status sched_run(asx_region_id region, asx_budget *budget, int advanc
             return ASX_E_POLL_BUDGET_EXHAUSTED;
         }
 
-        /* The run budget's deadline bounds the whole run, including time
-         * spent blocked in the reactor waiting for I/O. */
+        /* The run budget's deadline bounds the whole run, reactor waits included. */
         if (asx_budget_is_past_deadline(budget, sched_now())) {
             sched_emit(ASX_SCHED_EVENT_BUDGET, ASX_INVALID_ID, round);
             asx_trace_emit(ASX_TRACE_SCHED_BUDGET, ASX_INVALID_ID, round);
@@ -1556,9 +1555,8 @@ static asx_status sched_run(asx_region_id region, asx_budget *budget, int advanc
         sched_compute_scope(region);
         sched_poll_io_nonblocking();
         (void)sched_drain_wakers();
-        /* Due timers fire at the start of a round, as a lab step processes
-         * them before polling; run-until-idle starts no round for them
-         * when nothing is runnable (sched_any_runnable). */
+        /* Due timers fire at the start of a round, as a lab step processes them
+         * before polling; run-until-idle starts none when nothing is runnable. */
         if (sched_timers_pending() && (advance_clock || sched_any_runnable())) {
             (void)timers_fire(sched_now());
         }
@@ -1575,13 +1573,16 @@ static asx_status sched_run(asx_region_id region, asx_budget *budget, int advanc
             if (!t->alive) continue;
             if (asx_task_is_terminal(t->state)) continue;
             rslot = sched_scope_region(t);
+            if (rslot == NULL && t->spawned_in_poll && !t->first_polled) {
+                sched_compute_scope(region); /* a region opened this round (bd-9kll.4.12) */
+                rslot = sched_scope_region(t);
+            }
             if (rslot == NULL) continue;
 
             active++;
             tid = asx_task_handle_for_slot(i);
 
-            /* FINALIZING: the task called asx_task_finalize() — cleanup is
-             * done. Complete without consuming a poll unit. */
+            /* FINALIZING: asx_task_finalize() was called, so cleanup is done: complete. */
             if (t->state == ASX_TASK_FINALIZING) {
                 st = sched_complete(t, tid, rslot, ASX_OUTCOME_CANCELLED, ASX_SCHED_EVENT_COMPLETE,
                                     round);
@@ -1592,13 +1593,12 @@ static asx_status sched_run(asx_region_id region, asx_budget *budget, int advanc
             }
 
             /* Opt-in hard bound only (asx_runtime_config.cleanup_hard_bound):
-             * cleanup polls exhausted, force-complete with CANCELLED. The
-             * task either never called checkpoint (CANCEL_REQUESTED) or ran
-             * out of cleanup polls (CANCELLING). A masked task is inside a
-             * critical section and is never interrupted. Rust never
-             * force-completes: its cleanup budget only strengthens the
-             * reason once spent (record/task.rs:1340, lab/runtime.rs:4663;
-             * three_lane.rs:1268-1279 keeps it advisory in production). */
+             * cleanup polls exhausted, force-complete with CANCELLED. The task
+             * either never called checkpoint (CANCEL_REQUESTED) or ran out of
+             * cleanup polls (CANCELLING). A masked task is inside a critical
+             * section and is never interrupted. Rust never force-completes: its
+             * cleanup budget only strengthens the reason once spent (record/task.rs:1340,
+             * lab/runtime.rs:4663; three_lane.rs:1268-1279 keeps it advisory). */
             if (asx_cleanup_hard_bound_internal() && t->cancel_pending && t->mask_depth == 0u &&
                 (t->state == ASX_TASK_CANCELLING || t->state == ASX_TASK_CANCEL_REQUESTED ||
                  t->cancel_unmaterialized) &&
