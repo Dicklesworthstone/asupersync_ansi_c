@@ -677,8 +677,8 @@ ASX_API ASX_MUST_USE asx_status asx_task_mask_depth(asx_task_id id, uint32_t *ou
  * kind and its holder task. When a holder completes with obligations still
  * RESERVED, each is a leak, whether or not the holder was cancelled (as
  * Rust, where a body ending with an unresolved token drops it and the drop
- * posts a Leak), handled by the runtime's leak_response policy: PANIC
- * (marked LEAKED, fault reported through the region's containment policy),
+ * posts a Leak), handled by the runtime's leak_response policy: PANIC, the
+ * default as in Rust (marked LEAKED, fault reported through the region's containment policy),
  * LOG (LEAKED + log record), SILENT (LEAKED), or RECOVER (aborted with
  * ASX_OBLIGATION_ABORT_ERROR, as Rust's Recover aborts with
  * ObligationAbortReason::Error, runtime/state.rs:5781-5797; the leak is

@@ -7,7 +7,7 @@
 # scratch copies of the Rust document:
 #   - the document as it is                        -> PASSES, >= 50 constants equal
 #   - a constant with a different Rust value       -> FAILS naming it
-#   - a recorded difference that no longer differs -> FAILS (stale KNOWN entry)
+#   - Rust's leak-response default changed (D2)    -> FAILS naming it
 #   - a Rust constant C does not declare           -> FAILS ("no C counterpart")
 #   - a C constant the document lacks              -> FAILS ("the Rust document does not")
 #   - a document of another schema                 -> FAILS
@@ -86,9 +86,10 @@ run_case cleanup_finalizing_admission_drift_fails nonzero \
     'FAIL region_state\.Finalizing\.can_accept_cleanup_work: rust=false c=true' \
     "$WORK/cleanup_finalizing.json"
 
-edit stale_known.json '.constants["lab.default.panic_on_obligation_leak"].value = false'
-run_case stale_known_entry_fails nonzero \
-    'FAIL lab\.default\.panic_on_obligation_leak: .*now equals rust' "$WORK/stale_known.json"
+edit leak_default.json '.constants["runtime.default.obligation_leak_response"].value = "Log"'
+run_case leak_response_default_drift_fails nonzero \
+    'FAIL runtime\.default\.obligation_leak_response: rust="Log" c="Panic"' \
+    "$WORK/leak_default.json"
 
 edit unknown_rust_key.json '.constants["lab.new_constant"] = {"value": 1, "source": "test"}'
 run_case undeclared_rust_constant_fails nonzero 'FAIL lab\.new_constant: .*no C counterpart' \

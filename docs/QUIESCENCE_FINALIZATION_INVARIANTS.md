@@ -333,7 +333,7 @@ v4 does not define leak policies: v4 §3.4 LEAK says only "In lab: panic or reco
 
 Rust enum: `ObligationLeakResponse` (`src/runtime/config.rs:1319-1333`). Defaults: `Panic` in `RuntimeConfig` (`src/runtime/config.rs:2242`) and in `RuntimeState`'s internal constructor (`src/runtime/state.rs:2338`); the lab uses `Panic` when `panic_on_obligation_leak` is set and `Log` otherwise (`src/lab/runtime.rs:2435-2439`).
 
-**C status:** enum `asx_leak_response` (`include/asx/asx_config.h:1206-1211`), default `ASX_LEAK_LOG` (`src/runtime/lifecycle.c:96`, reset at `:180`). The default differs from Rust: row `rule.obligation.leak` (bd-9kll.3.6, owner decision bd-9kll.2.19). The Recover abort reason is Rust's `Error` since bd-9kll.3.6. Rust parity under `Log`: `leak-policy-leak-reported-001` (`panic_on_leak: false`). Unit tests: `tests/unit/runtime/test_budget_obligation.c` `recover_policy_aborts_leaked_obligation`, `panic_policy_routes_leak_through_containment`.
+**C status:** enum `asx_leak_response` (`include/asx/asx_config.h:1206-1211`), default `ASX_LEAK_PANIC` (`src/runtime/lifecycle.c:96`, reset at `:180`), as in Rust (owner decision bd-9kll.2.19, DEC-007; row `rule.obligation.leak`). Code that leaks on purpose sets another response. The Recover abort reason is Rust's `Error` since bd-9kll.3.6. Rust parity under `Log`: `leak-policy-leak-reported-001` (`panic_on_leak: false`, which the conformance interpreter maps to LOG). Unit tests: `tests/unit/runtime/test_budget_obligation.c` `recover_policy_aborts_leaked_obligation`, `panic_policy_routes_leak_through_containment`.
 
 ### 5.2 Escalation Policy
 
@@ -807,7 +807,7 @@ None of the candidate fixture IDs below exists in the repository: none is `fixtu
 | C4 | Advance must be iterative (not recursive) | Implemented (`src/runtime/quiescence.c:272-296`); active callback drain prevents reentrant finalization, and call-local validated handles protect nested drain/cancel traversal |
 | C5 | Double guard on Finalizing→Closed | Not implemented: one check sequence (section 3.1) |
 | C6 | Leak detection at task completion and region finalization | Implemented at holder completion, explicit drop and finalization after callbacks and cleanup tasks finish (sections 4.2-4.3); this does not complete full body-driven close (bd-9kll.3.4) |
-| C7 | Configurable leak response with escalation | Implemented with default LOG; escalation includes the current leak and Recover uses Error (section 5; bd-9kll.3.6) |
+| C7 | Configurable leak response with escalation | Implemented with default PANIC, as in Rust; escalation includes the current leak and Recover uses Error (section 5; bd-9kll.3.6, bd-9kll.2.19) |
 | C8 | Finalizer LIFO with bounded budget | LIFO for the C cleanup stack; an async finalizer task carries the budget fields (poll quota, deadline, advisory as in Rust) and the escalation is read (sections 6.2, 6.4, 6.5; bd-9kll.3.24). No region shutdown ceiling |
 | C9 | Cancel-masked async finalizers | Implemented for `asx_region_defer_async` (section 6.3; bd-9kll.3.24); Rust-capture of its scenarios pending |
 | C10 | Cleanup stack per task/region with LIFO drain | Per region only; public registration/unregistration, `asx_region_defer_sync` (Rust `Scope::defer_sync`) and reentrant synchronous LIFO drain are implemented (sections 6.1-6.2, 7.3) |
@@ -841,7 +841,7 @@ All of these are declared in `include/asx/asx_status.h`. Codes the close and adm
 
 | Config Field | Type | C default | Rust counterpart | C status |
 |-------------|------|---------|---|---|
-| `leak_response` | enum | `ASX_LEAK_LOG` (`src/runtime/lifecycle.c:96`) | `ObligationLeakResponse`, default `Panic` (section 5.1) | Read by the leak path; default differs (bd-9kll.3.6) |
+| `leak_response` | enum | `ASX_LEAK_PANIC` (`src/runtime/lifecycle.c:96`) | `ObligationLeakResponse`, default `Panic` (section 5.1) | Read by the leak path; same default (bd-9kll.2.19) |
 | `leak_escalation` | pointer (optional) | `NULL` | `Option<LeakEscalation>` | Read (section 5.2) |
 | `finalizer_poll_budget` | `uint32_t` | 100 (`src/runtime/hooks.c:785`) | `FINALIZER_POLL_BUDGET` 100 | Validated, otherwise unread (bd-udlh) |
 | `finalizer_time_budget_ns` | `uint64_t` | 5,000,000,000 (`src/runtime/hooks.c:786`) | `FINALIZER_TIME_BUDGET_NANOS` | Unread (bd-udlh) |

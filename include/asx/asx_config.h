@@ -1233,7 +1233,7 @@ typedef struct {
     uint32_t size;                                 /* sizeof(asx_runtime_config) */
     asx_wait_policy wait_policy;                   /* profile-dependent default */
     asx_io_backend io_backend;                     /* default: ghost */
-    asx_leak_response leak_response;               /* default: ASX_LEAK_LOG */
+    asx_leak_response leak_response;               /* default: ASX_LEAK_PANIC */
     asx_leak_escalation_config *leak_escalation;   /* optional */
     uint32_t finalizer_poll_budget;                /* default: 100 */
     uint64_t finalizer_time_budget_ns;             /* default: 5000000000 (5s) */

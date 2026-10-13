@@ -563,7 +563,7 @@ TEST(init_default_success) {
 
     /* Verify defaults were applied */
     ASSERT_EQ(rt.config.io_backend, ASX_IO_BACKEND_GHOST);
-    ASSERT_EQ(rt.config.leak_response, ASX_LEAK_LOG);
+    ASSERT_EQ(rt.config.leak_response, ASX_LEAK_PANIC);
     ASSERT_EQ(rt.config.finalizer_poll_budget, 100u);
     ASSERT_EQ(rt.config.max_cancel_chain_depth, 16u);
 

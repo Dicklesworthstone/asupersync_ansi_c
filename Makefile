@@ -1872,8 +1872,8 @@ fixtures-fresh:
 # Rust's values, which `twin_run constants` reads from the pinned asupersync:
 # its public API through the linked crate, its private constants from its
 # source (syn). asx-conformance compares each with the C value. A constant
-# without a C counterpart is declared N/A, a known difference is KNOWN with
-# its bead, and anything else fails. No cargo needed.
+# without a C counterpart is declared N/A, and any other difference fails:
+# there is no list of accepted differences. No cargo needed.
 # rust-constants-fresh re-derives the document (needs cargo) and fails
 # unless it equals the checked-in one. To refresh it after moving the pin,
 # copy build/rust_kernel_constants.json over it unmodified.

@@ -231,7 +231,7 @@ TEST(hooks_config_init) {
 #else
     ASSERT_EQ(cfg.wait_policy, ASX_WAIT_YIELD);
 #endif
-    ASSERT_EQ(cfg.leak_response, ASX_LEAK_LOG);
+    ASSERT_EQ(cfg.leak_response, ASX_LEAK_PANIC);
     ASSERT_EQ(cfg.finalizer_poll_budget, (uint32_t)100);
     ASSERT_EQ(cfg.finalizer_time_budget_ns, (uint64_t)5000000000ULL);
     ASSERT_EQ(cfg.finalizer_escalation, ASX_FINALIZER_BOUNDED_LOG);

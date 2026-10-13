@@ -522,7 +522,7 @@ uint32_t asx_region_subtree_internal(asx_region_id root, uint32_t *out_slots, ui
 /* Build the public handle for an occupied region slot. */
 asx_region_id asx_region_handle_for_slot(uint32_t slot_idx);
 
-/* Active obligation-leak policy (set by asx_runtime_init / reload; LOG
+/* Active obligation-leak policy (set by asx_runtime_init / reload; PANIC
  * after a bare asx_runtime_reset). */
 void asx_runtime_set_leak_policy_internal(asx_leak_response response,
                                           const asx_leak_escalation_config *escalation);

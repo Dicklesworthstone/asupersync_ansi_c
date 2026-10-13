@@ -93,7 +93,7 @@ static ob_post g_ob_posts[OB_POST_CAP];
 static uint32_t g_ob_post_n;
 
 /* Obligation leak policy (runtime config) and cumulative leak count. */
-static asx_leak_response g_leak_response = ASX_LEAK_LOG;
+static asx_leak_response g_leak_response = ASX_LEAK_PANIC;
 static asx_leak_escalation_config g_leak_escalation;
 static int g_leak_escalation_set = 0;
 static uint64_t g_leak_count = 0;
@@ -177,7 +177,7 @@ void asx_runtime_reset(void) {
     g_obligation_live = 0;
     g_obligation_free_head = ASX_SLOT_NONE;
     g_ob_post_n = 0;
-    g_leak_response = ASX_LEAK_LOG;
+    g_leak_response = ASX_LEAK_PANIC;
     g_leak_escalation_set = 0;
     g_leak_count = 0;
     g_cleanup_hard_bound = 0;

@@ -1070,10 +1070,10 @@ An obligation (send permit, ack, lease, I/O op, semaphore permit, transaction) i
 
 - A tracked **permit** (a send permit reserved with the task's Cx, a semaphore permit acquired with it) is dropped with its holder, as Rust drops the task body's locals: its channel slot or permits go back, and the obligation resolves as that permit's Rust `Drop` resolves it (a send permit aborts with `CANCEL`, a semaphore permit commits). The permit value is spent afterwards. Nothing leaks.
 - The other obligations are **leaks**, whether or not the holder was cancelled: a Rust task body that ends holding an unresolved obligation token drops it, and the drop posts a leak. They are handled by the configured `leak_response`:
-  - `LOG` (the default) warns.
+  - `PANIC` (the default, as in Rust) routes the leak through region fault containment, so FAIL_FAST surfaces `ASX_E_UNRESOLVED_OBLIGATIONS` from the scheduler. Code that leaks on purpose sets another response explicitly.
+  - `LOG` warns.
   - `SILENT` records them.
   - `RECOVER` aborts them with reason `ERROR`, as Rust's Recover does; they still count as leaks.
-  - `PANIC` routes the leak through region fault containment, so FAIL_FAST surfaces `ASX_E_UNRESOLVED_OBLIGATIONS` from the scheduler.
 - `leak_escalation` switches to a stricter response once the leak count reaches a threshold. As in Rust, the leak that reaches it is the first one escalated.
 
 A region's close follows Rust's finalization order: its cleanup stack drains (LIFO), any tasks spawned for explicit cleanup finish, then any obligation of the region still reserved (one with no holder, reserved outside a poll, for instance) is handled under the same leak policy as one batch, and the region closes. Under `PANIC` the close fails fast with `ASX_E_UNRESOLVED_OBLIGATIONS` first. `asx_region_get_close_outcome` reads a region's recorded close outcome, as Rust's `region_close_outcome` does: the outcomes of its tasks joined, including explicit cleanup tasks, or, if none completed, `CANCELLED` for a cancelled region and `OK` otherwise.

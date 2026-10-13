@@ -1119,7 +1119,7 @@ TEST(config_init_sets_defaults) {
 
     ASSERT_EQ(asx_runtime_config_init(&cfg), ASX_OK);
     ASSERT_EQ(cfg.size, (uint32_t)sizeof(cfg));
-    ASSERT_EQ(cfg.leak_response, (asx_leak_response)ASX_LEAK_LOG);
+    ASSERT_EQ(cfg.leak_response, (asx_leak_response)ASX_LEAK_PANIC);
     ASSERT_EQ(cfg.finalizer_poll_budget, 100u);
     ASSERT_EQ(cfg.finalizer_time_budget_ns, (uint64_t)5000000000ULL);
     ASSERT_EQ(cfg.finalizer_escalation, (asx_finalizer_escalation)ASX_FINALIZER_BOUNDED_LOG);

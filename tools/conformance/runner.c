@@ -652,10 +652,9 @@ typedef enum { CK_U64, CK_NULL, CK_STR, CK_BOOL, CK_NA } ck_kind;
 typedef struct {
     char key[64];
     ck_kind kind;
-    uint64_t u;        /* CK_U64; CK_BOOL as 0/1 */
-    char s[160];       /* CK_STR: the value; CK_NA: why C has no counterpart */
-    const char *known; /* a recorded difference: its bead or reason */
-    int as_set;        /* CK_STR from a list: compare the names sorted */
+    uint64_t u;  /* CK_U64; CK_BOOL as 0/1 */
+    char s[160]; /* CK_STR: the value; CK_NA: why C has no counterpart */
+    int as_set;  /* CK_STR from a list: compare the names sorted */
     int seen;
 } ck_entry;
 
@@ -724,19 +723,6 @@ static void ck_null(const char *key) { (void)ck_add(key, CK_NULL); }
 static void ck_na(const char *key, const char *why) {
     ck_entry *e = ck_add(key, CK_NA);
     if (e != NULL) (void)snprintf(e->s, sizeof(e->s), "%s", why);
-}
-
-/* Record that `key` is known to differ from Rust: `why` names the bead
- * that tracks it, or the reason it is accepted. */
-static void ck_known(const char *key, const char *why) {
-    uint32_t i;
-    for (i = 0; i < g_ck_n; i++) {
-        if (strcmp(g_ck[i].key, key) == 0) {
-            g_ck[i].known = why;
-            return;
-        }
-    }
-    g_ck_overflow = 1;
 }
 
 /* C's "unconstrained" encodings (deadline ASX_TIME_INFINITE, cost
@@ -1046,12 +1032,6 @@ static void ck_build(void) {
                 CK_COUNT(k_escalation_policies), 0);
     ck_variants("supervision.backoff.variants", k_backoffs, CK_COUNT(k_backoffs), 0);
     ck_variants("supervision.restart_mode.variants", k_restart_modes, CK_COUNT(k_restart_modes), 0);
-
-    /* Recorded differences. */
-    ck_known("runtime.default.obligation_leak_response", "bd-9kll.2.19: C defaults to Log");
-#if ASX_HAS_BROWSER_TRACE
-    ck_known("lab.default.panic_on_obligation_leak", "bd-9kll.2.19");
-#endif
 }
 
 /* The JSON value as C text, for messages. */
@@ -1119,7 +1099,6 @@ static int cmd_constants(const char *path) {
     uint32_t i;
     const char *schema;
     unsigned ok = 0;
-    unsigned known = 0;
     unsigned na = 0;
     unsigned fail = 0;
     char rust[256];
@@ -1136,8 +1115,7 @@ static int cmd_constants(const char *path) {
     }
     ck_build();
     if (g_ck_overflow) {
-        fprintf(stderr, "asx-conformance: the C constants table overflowed or names an "
-                        "unknown key\n");
+        fprintf(stderr, "asx-conformance: the C constants table overflowed\n");
         return 1;
     }
     for (m = asx_json_item(&g_fixture, constants, 0); m != ASX_JSON_NONE;
@@ -1164,17 +1142,7 @@ static int cmd_constants(const char *path) {
         }
         ck_c_text(e, c, sizeof(c));
         if (ck_equal(value, e)) {
-            if (e->known != NULL) {
-                fprintf(stdout,
-                        "FAIL %s: c=%s now equals rust; remove the recorded difference (%s)\n", key,
-                        c, e->known);
-                fail++;
-            } else {
-                ok++;
-            }
-        } else if (e->known != NULL) {
-            fprintf(stdout, "KNOWN %s: rust=%s c=%s (%s)\n", key, rust, c, e->known);
-            known++;
+            ok++;
         } else {
             fprintf(stdout, "FAIL %s: rust=%s c=%s (rust: %s)\n", key, rust, c,
                     source != NULL ? source : "?");
@@ -1187,12 +1155,11 @@ static int cmd_constants(const char *path) {
             fail++;
         }
     }
-    fprintf(stdout,
-            "asx-conformance constants: rust=%s compared=%u ok=%u known=%u n/a=%u fail=%u\n",
+    fprintf(stdout, "asx-conformance constants: rust=%s compared=%u ok=%u n/a=%u fail=%u\n",
             asx_json_get_string(&g_fixture, root, "asupersync_rev") != NULL
                 ? asx_json_get_string(&g_fixture, root, "asupersync_rev")
                 : "?",
-            ok + known + fail, ok, known, na, fail);
+            ok + fail, ok, na, fail);
     return fail == 0u && ok > 0u ? 0 : 1;
 }
 

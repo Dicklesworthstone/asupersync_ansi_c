@@ -820,7 +820,7 @@ asx_status asx_runtime_config_init_checked(asx_runtime_config *cfg,
     cfg->wait_policy = ASX_WAIT_YIELD;
 #endif
     cfg->io_backend = ASX_IO_BACKEND_GHOST;
-    cfg->leak_response = ASX_LEAK_LOG;
+    cfg->leak_response = ASX_LEAK_PANIC; /* Rust's RuntimeConfig default (DEC-007) */
     cfg->finalizer_poll_budget = 100;
     cfg->finalizer_time_budget_ns = (uint64_t)5000000000ULL; /* 5 seconds */
     cfg->finalizer_escalation = ASX_FINALIZER_BOUNDED_LOG;
