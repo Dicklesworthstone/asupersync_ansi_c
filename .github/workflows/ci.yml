@@ -1170,6 +1170,71 @@ jobs:
           if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------
+  # gate-scripts — integration tests and smoke lanes that no other job ran
+  # (bd-grub). Each is a step of its own, so a failure names it:
+  #   - the fuzz gates' integration tests: the counterexample replay, the
+  #     smoke gate's and the replay's negative controls, the minimizer
+  #     pipeline, the fuzz harnesses under ASan+UBSan;
+  #   - the foundational contract evidence script, the focused combinator
+  #     and actor-supervision harnesses, the POSIX adapter smoke;
+  #   - schema validation, strict (it skips without python3-jsonschema);
+  #   - the embedded portability proof;
+  #   - the Wave C acceptance bundle;
+  #   - the installer: scripts/install.sh into a temporary prefix, then the
+  #     quickstart compiled and run against it. It builds a release library
+  #     into build/, so it runs last.
+  # ---------------------------------------------------------------------------
+  gate-scripts:
+    name: "gate scripts and smoke lanes"
+    runs-on: ubuntu-latest
+    needs: [check]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq jq python3-jsonschema
+
+      - name: Build
+        run: make build
+
+      - name: Fuzz counterexample replay (durable minimized corpus)
+        run: make fuzz-counterexample-replay
+
+      - name: Fuzz gate integration tests (controls, minimizer pipeline, ASan+UBSan harnesses)
+        run: make test-fuzz-scripts
+
+      - name: Foundational contract evidence script
+        run: make test-e2e-foundational-evidence
+
+      - name: Combinator contract harness
+        run: make test-combinator-contract
+
+      - name: Actor supervision harness
+        run: make test-actor-supervision-harness
+
+      - name: POSIX adapter smoke (live profile)
+        run: make test-e2e-posix-adapter
+
+      - name: Schema validation (strict)
+        run: make lint-schema-validation FAIL_ON_MISSING_LINTER=1
+
+      - name: Embedded portability proof
+        run: make embedded-portability-proof
+
+      # The user-facing Wave C evidence bundle (GATE-E2E-WAVE-C-ACCEPTANCE,
+      # GATE-OVERLOAD-SLO-DEMO): it reruns the network-surface and actor
+      # e2e packs, parallel and profile parity and the PARALLEL benchmark
+      # gate, and records their outcomes with the replay command and the
+      # fail-closed unsupported-platform diagnostics (about a minute).
+      - name: Wave C acceptance bundle
+        run: make wave-c-acceptance-demo
+
+      - name: Installer smoke (scripts/install.sh, quickstart against the install)
+        run: make test-e2e-install
+
+  # ---------------------------------------------------------------------------
   # m32 — 32-bit x86: unit suite and Rust-parity fixture replay (bd-9kll.15.3).
   # gcc-multilib conflicts with the cross compilers, hence its own job.
   # ---------------------------------------------------------------------------

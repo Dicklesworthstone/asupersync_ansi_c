@@ -827,7 +827,7 @@ lint-semantic-delta:
 # ---------------------------------------------------------------------------
 lint-schema-validation:
 	@echo "[asx] lint-schema-validation: validating fixture schemas..."
-	@./tools/ci/validate_schemas.sh
+	@./tools/ci/validate_schemas.sh $(if $(filter 1,$(FAIL_ON_MISSING_LINTER)),--strict)
 
 # lint-scenarios-v2 — the oracle's normative schemas (vocabulary v2, scenario
 # DSL v2) are valid JSON Schema, and every DSL v2 scenario and the vocabulary
@@ -1582,6 +1582,24 @@ test-e2e-network-surface:
 	@chmod +x $(E2E_SCRIPT_DIR)/harness.sh $(E2E_SCRIPT_DIR)/network_surface.sh 2>/dev/null || true
 	@$(E2E_SCRIPT_DIR)/network_surface.sh
 
+# test-e2e-foundational-evidence — tests/e2e/test_foundational_contracts.sh
+# (bd-1eqo.15.1): the foundational type suites (algebraic and core unit tests)
+# built and run against the library, with their JSONL evidence. It is not an
+# e2e-suite family (that is foundational_contracts.sh); a failing suite fails it.
+.PHONY: test-e2e-foundational-evidence
+test-e2e-foundational-evidence: $(LIB_A)
+	@bash $(E2E_SCRIPT_DIR)/test_foundational_contracts.sh
+
+# test-e2e-install — scripts/install.sh and `make install` end to end
+# (tests/e2e/install_smoke.sh, bd-0toq/bd-jxpg): install into a temporary
+# prefix, compile and run the quickstart against the installed headers and
+# library, install again. It builds a release library, so it is not an
+# e2e-suite family (the suite fails a family that rewrites build/lib/libasx.a).
+.PHONY: test-e2e-install
+test-e2e-install:
+	@chmod +x $(E2E_SCRIPT_DIR)/harness.sh $(E2E_SCRIPT_DIR)/install_smoke.sh 2>/dev/null || true
+	@$(E2E_SCRIPT_DIR)/install_smoke.sh
+
 # RP3: a real native HTTP server run (keep-alive, half request, connection
 # reset, SIGTERM drain) recorded to a boundary journal, then replayed with no
 # socket opened and required to reproduce the trace digest bit for bit.
@@ -2185,9 +2203,17 @@ fixtures-promote:
 # check; `make test-fuzz-parser-mutants` runs it in the fuzz-parity job.
 TEST_GATES_EXCLUDE := tests/gates/test_fuzz_parser_mutants.sh
 
+# Besides tests/gates/*.sh, the unit tests of CI and e2e scripts that build
+# nothing (bd-grub: they ran in no job, and three of them had rotted):
+# tests/ci/test_*.sh (the crate acceptance gate, the fixture pipeline e2e
+# script, the e2e suite registry), the e2e harness contract and the checkpoint
+# lint's own tests. Add a new such script here, or under tests/gates.
+TEST_GATES_EXTRA := $(sort $(wildcard tests/ci/test_*.sh)) \
+	tests/e2e/test_harness_smoke.sh tests/unit/core/test_checkpoint_lint.sh
+
 test-gates:
 	@echo "[asx] test-gates: running gate negative controls..."
-	@for t in $(filter-out $(TEST_GATES_EXCLUDE),$(sort $(wildcard tests/gates/*.sh))); do \
+	@for t in $(filter-out $(TEST_GATES_EXCLUDE),$(sort $(wildcard tests/gates/*.sh))) $(TEST_GATES_EXTRA); do \
 		echo "  RUN  $$t"; \
 		ASX_CONFORMANCE_RUNNER="$(abspath $(CONFORMANCE_RUNNER))" bash "$$t" || exit 1; \
 	done
@@ -2489,6 +2515,23 @@ fuzz-run: fuzz-build
 fuzz-counterexample-replay: fuzz-build
 	@echo "[asx] fuzz-counterexample-replay: replaying the C determinism/crash corpus..."
 	@ASX_GIT_COMMIT="$(ASX_GIT_COMMIT)" BUILD_DIR="$(BUILD_DIR)" bash tools/ci/replay_fuzz_counterexamples.sh
+
+# test-fuzz-scripts — the integration tests of the fuzz gates (bd-grub): the
+# smoke gate and the counterexample replay's negative controls, the minimizer
+# pipeline, and the harnesses under ASan+UBSan (build_asan.sh builds those
+# into build/asan through this Makefile). Run by the fuzz-parity job.
+FUZZ_SCRIPT_TESTS := tests/fuzz/test_gate_fuzz.sh tests/fuzz/test_minimize_integration.sh
+
+.PHONY: test-fuzz-scripts
+test-fuzz-scripts: fuzz-build minimize-build
+	@echo "[asx] test-fuzz-scripts: running the fuzz gates' integration tests..."
+	@for t in $(FUZZ_SCRIPT_TESTS); do \
+		echo "  RUN  $$t"; \
+		bash "$$t" || exit 1; \
+	done
+	@echo "  RUN  tests/fuzz/test_harness_sanity.sh --quick"
+	@bash tests/fuzz/test_harness_sanity.sh --quick
+	@echo "[asx] test-fuzz-scripts: PASS"
 
 # ---------------------------------------------------------------------------
 # fuzz-parsers — libFuzzer harnesses for the parsers of untrusted input

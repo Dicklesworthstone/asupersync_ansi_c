@@ -255,6 +255,12 @@ repository also ships:
 ./scripts/install.sh [--prefix=/usr/local]
 ```
 
+The helper installs a release build (`-O2 -DNDEBUG`, profile CORE, JSON codec,
+deterministic). Compile applications with `-DNDEBUG -DASX_CODEC_JSON` (profile
+CORE and determinism are the header defaults): without `-DNDEBUG` the headers
+select the debug configuration, and a build with no codec macro is not the
+JSON codec, so the runtime returns `ASX_E_CONFIG_MISMATCH`.
+
 ### 2) Release Artifacts
 
 ```bash
@@ -2521,7 +2527,7 @@ verification, and risk documents, among them:
 
 ## CI Pipeline Architecture
 
-The primary CI workflow (`.github/workflows/ci.yml`) runs <!-- fact:ci_jobs -->15<!-- /fact --> top-level jobs on
+The primary CI workflow (`.github/workflows/ci.yml`) runs <!-- fact:ci_jobs -->16<!-- /fact --> top-level jobs on
 pushes and PRs:
 
 | Job | Runs |
@@ -2540,8 +2546,10 @@ pushes and PRs:
 | `msvc` | the library and the unit suite built by MSVC (x64, `/W4 /WX /wd4100`, via CMake) and run with CTest, for CORE and WIN32 (deterministic builds) |
 | `embedded-matrix` | router-class cross builds with size and layout rows (built, not run) |
 | `size-report` | the release library and the kernel-only archive built for CORE and EMBEDDED_ROUTER, resource classes default and 1, each quickstart linked and the kernel archive's link closure checked; a build, link or closure failure fails the lane, the sizes are reported and not gated |
+| `gcc-analyzer` | GCC 15.2 `-fanalyzer` over `src/` in CORE and POSIX live; every diagnostic is fixed or carries a reasoned waiver (`docs/STATIC_ANALYSIS_TRIAGE.md`) |
+| `gate-scripts` | the integration tests and smoke lanes no other job runs: the fuzz gates' integration tests (counterexample replay, controls, minimizer pipeline, the harnesses under ASan+UBSan), the foundational contract evidence script, the combinator and actor-supervision harnesses, the POSIX adapter smoke, strict schema validation, the embedded portability proof, and the installer smoke |
 
-None of the <!-- fact:ci_jobs -->15<!-- /fact --> jobs is marked `continue-on-error`, so a failure in any of
+None of the <!-- fact:ci_jobs -->16<!-- /fact --> jobs is marked `continue-on-error`, so a failure in any of
 them fails the workflow. A nightly workflow (`nightly.yml`) runs the C fuzzer
 for 100K iterations, Rust-vs-C differential fuzzing on a new seed each day,
 the full e2e suite with the conformance and parity gates, and strict fixture

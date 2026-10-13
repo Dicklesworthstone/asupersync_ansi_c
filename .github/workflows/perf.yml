@@ -113,6 +113,18 @@ jobs:
             --run-id "${{ env.ASX_CI_RUN_TAG }}" \
             --strict
 
+      # The PARALLEL worker-count baselines (GATE-PARALLEL-BENCHMARK,
+      # GATE-OVERLOAD-SLO-DEMO): an optimized PARALLEL benchmark build, the
+      # worker-count rows (parallel-bench-json runs inside it) and the
+      # observe/block summary build/perf/parallel-bench-gate-summary.json.
+      # Warnings are observe-only by the gate's own contract; a block fails
+      # the step. It builds into the default build/ directory, apart from the
+      # CORE and HFT directories above.
+      - name: PARALLEL benchmark gate (worker-count baselines)
+        id: parallel_bench
+        if: always() && steps.dependencies.outcome == 'success'
+        run: make parallel-bench-gate
+
       - name: Emit perf lane manifest
         if: always()
         run: |
@@ -157,6 +169,9 @@ jobs:
           elif [ "${{ steps.size_gate.outcome }}" = "failure" ]; then
             first_failure="size-gate"
             rerun="tools/ci/evaluate_size_gates.sh --lib build/perf-core/lib/libasx.a --bench-json bench-results.json --strict"
+          elif [ "${{ steps.parallel_bench.outcome }}" = "failure" ]; then
+            first_failure="parallel-bench-gate"
+            rerun="make parallel-bench-gate"
           fi
 
           status="pass"
@@ -192,6 +207,7 @@ jobs:
             --arg hft_bench_outcome "${{ steps.run_bench_hft.outcome }}" \
             --arg slo_hft_outcome "${{ steps.slo_gate_hft.outcome }}" \
             --arg size_outcome "${{ steps.size_gate.outcome }}" \
+            --arg parallel_outcome "${{ steps.parallel_bench.outcome }}" \
             --arg first_failure "$first_failure" \
             --arg rerun "$rerun" \
             --arg core_build_dir "$CORE_BUILD_DIR" \
@@ -222,7 +238,8 @@ jobs:
                 {id: "hft-build", outcome: $hft_build_outcome, rerun: "make release PROFILE=HFT BUILD_DIR=build/perf-hft"},
                 {id: "hft-bench-json", outcome: $hft_bench_outcome, rerun: "make bench-json PROFILE=HFT BUILD_DIR=build/perf-hft"},
                 {id: "slo-gate-hft", outcome: $slo_hft_outcome, rerun: "tools/ci/evaluate_slo_gates.sh --bench-json bench-results-hft.json --profile HFT --strict"},
-                {id: "size-gate", outcome: $size_outcome, rerun: "tools/ci/evaluate_size_gates.sh --lib build/perf-core/lib/libasx.a --bench-json bench-results.json --strict"}
+                {id: "size-gate", outcome: $size_outcome, rerun: "tools/ci/evaluate_size_gates.sh --lib build/perf-core/lib/libasx.a --bench-json bench-results.json --strict"},
+                {id: "parallel-bench-gate", outcome: $parallel_outcome, rerun: "make parallel-bench-gate"}
               ],
               first_failure: (if $first_failure == "" then null else {step: $first_failure, rerun: $rerun} end)
             }

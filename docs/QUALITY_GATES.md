@@ -330,7 +330,7 @@ and documentation enforcement.
 | `GATE-LINT` | `lint` | `check` | (inline cppcheck/clang-tidy) | Static analysis warnings |
 | `GATE-LINT-DOCS` | `lint-docs` | `check` | `tools/ci/check_api_docs.sh` | Public API documentation coverage |
 | `GATE-LINT-CHECKPOINT` | `lint-checkpoint` | `check` | `tools/ci/check_checkpoint_coverage.sh` | Kernel loop checkpoint coverage |
-| `GATE-LINT-EVIDENCE` | `lint-evidence` | `check` | `tools/ci/check_evidence_linkage.sh` | Per-bead evidence linkage validation |
+| `GATE-LINT-EVIDENCE` | `lint-evidence` | none (no CI job runs it) | `tools/ci/check_evidence_linkage.sh` | Per-bead evidence linkage validation. `make check` and `make check-ci` run it. It currently fails: 209 of the 383 beads checked name no unit test, e2e/invariant or artifact in their close notes (2026-10-13), so wiring it would make every push red. Open decision: repair the notes, or gate on new violations only |
 | `GATE-STATIC-ANALYSIS` | `lint-static-analysis` | `check` | `tools/ci/run_static_analysis.sh` | Section 10.7 deep static analysis: cppcheck, and clang-tidy (`bugprone-*`, `cert-*`, `misc-*`, `performance-*`, `portability-*`, `clang-analyzer-*`) in CORE and POSIX live; triage in `docs/STATIC_ANALYSIS_TRIAGE.md` |
 | `GATE-GCC-ANALYZER` | `lint-gcc-analyzer` | `gcc-analyzer` | `tools/ci/run_gcc_analyzer.sh` | GCC 15.2 `-fanalyzer` over `src/` in CORE and POSIX live; every diagnostic is fixed or carries an `ASX_ANALYZER_WAIVER` listed in `docs/STATIC_ANALYSIS_TRIAGE.md` (no backlog class); a unit that does not compile fails the lane |
 | `GATE-MODEL-CHECK` | `model-check` | `check` | `tests/invariant/model_check/test_bounded_model.c` | Bounded state machine verification |
@@ -338,14 +338,18 @@ and documentation enforcement.
 | `GATE-INVARIANT` | `test-invariants` | `unit-invariant` | (compiled test binaries) | Lifecycle/quiescence invariants |
 | `GATE-CONFORMANCE` | `conformance` | `conformance` | `tools/ci/run_conformance.sh` | Rust fixture parity |
 | `GATE-CODEC` | `codec-equivalence` | `conformance` | `tools/ci/run_codec_equivalence.sh` | JSON/BIN codec equivalence |
-| `GATE-RELEASE-EVIDENCE-MANIFEST` | `release-evidence-manifest` | `release-readiness` | `tools/ci/generate_release_evidence_manifest.sh` | Unified release evidence index with digest and stale-commit validation |
-| `GATE-EMBEDDED-PORTABILITY` | `embedded-portability-proof` | `profile-parity`, `embedded-matrix` | `tools/ci/run_embedded_portability_proof.sh`, `tests/embedded/embedded_portability_probe.c`, `tools/ci/portability_check.c` | Compact EMBEDDED_ROUTER/R1 proof with deterministic digest, resource caps, compiler/target/macro metadata, host alignment canary, optional 32-bit canary, unsupported-platform evidence, and profile-parity linkage |
+| `GATE-RELEASE-EVIDENCE-MANIFEST` | `release-evidence-manifest` | none (no CI job runs it) | `tools/ci/generate_release_evidence_manifest.sh` | Unified release evidence index with digest and stale-commit validation. It reads the artifacts of other lanes (profile-parity, benchmark-slo, wave-c-acceptance), so it fails in strict mode unless they exist; the release workflow's own gate (`tools/ci/release_gate.py`) collects its evidence itself and does not call it |
+| `GATE-EMBEDDED-PORTABILITY` | `embedded-portability-proof` | `gate-scripts` | `tools/ci/run_embedded_portability_proof.sh`, `tests/embedded/embedded_portability_probe.c`, `tools/ci/portability_check.c` | Compact EMBEDDED_ROUTER/R1 proof with deterministic digest, resource caps, compiler/target/macro metadata, host alignment canary, optional 32-bit canary, unsupported-platform evidence, and profile-parity linkage |
 | `GATE-RESOURCE-PRESSURE` | `resource-pressure-gate` | `unit-invariant` | `tools/ci/run_resource_pressure_gate.sh` | Deterministic region/task/obligation/channel/timer/scheduler/cancel cleanup pressure scenarios with failure-atomic snapshots, run in CORE/R3 and EMBEDDED_ROUTER/R1 lanes built with their class arenas (each lane's arenas must equal its class limits), and cross-lane digest parity |
-| `GATE-FUZZ-COUNTEREXAMPLE-REPLAY` | `fuzz-counterexample-replay` | `fuzz-parity` | `tools/ci/replay_fuzz_counterexamples.sh` | Durable minimized fuzz corpus replay with C counters and optional Rust oracle |
+| `GATE-FUZZ-COUNTEREXAMPLE-REPLAY` | `fuzz-counterexample-replay` | `gate-scripts` | `tools/ci/replay_fuzz_counterexamples.sh` | Durable minimized fuzz corpus replay with C counters and optional Rust oracle |
+| `GATE-CI-SCRIPT-TESTS` | `test-gates` (`TEST_GATES_EXTRA`) | `conformance` | `tests/ci/test_*.sh`, `tests/e2e/test_harness_smoke.sh`, `tests/unit/core/test_checkpoint_lint.sh` | Unit tests of the CI and e2e scripts, which build nothing: the crate acceptance gate, the fixture pipeline e2e script, the e2e suite registry (`E2E_ALL_SCRIPTS` equals `run_all.sh`'s families), the e2e harness contract, the checkpoint lint |
+| `GATE-FUZZ-SCRIPT-TESTS` | `test-fuzz-scripts` | `gate-scripts` | `tests/fuzz/test_gate_fuzz.sh`, `tests/fuzz/test_minimize_integration.sh`, `tests/fuzz/test_harness_sanity.sh`, `build_asan.sh` | Integration tests of the fuzz gates: the smoke gate and the replay's negative controls, the minimizer pipeline, the harnesses under ASan+UBSan (built through the Makefile into `build/asan`) |
+| `GATE-FOUNDATIONAL-EVIDENCE` | `test-e2e-foundational-evidence` | `gate-scripts` | `tests/e2e/test_foundational_contracts.sh` | The foundational type suites (algebraic and core unit tests) built and run with JSONL evidence; a failing suite fails the script |
+| `GATE-INSTALL-SMOKE` | `test-e2e-install` | `gate-scripts` | `tests/e2e/install_smoke.sh`, `scripts/install.sh` | The installer and `make install` end to end: install to a temporary prefix, compile and run the quickstart against the installed headers and library with the flags install.sh prints (`-DNDEBUG -DASX_CODEC_JSON`), install again |
 | `GATE-FUZZ-PARSER-MUTANTS` | `test-fuzz-parser-mutants` | `fuzz-parity` | `tests/gates/test_fuzz_parser_mutants.sh` | Replay control (gates): each parser fuzz harness (`fuzz-parsers`) finds its planted `ASX_MUTANT_<TARGET>` off-by-one from the committed seeds within a bounded run, and the unmutated harnesses stay clean. Discovery control (observes, never fails): the four boundary seeds withheld, fixed `-seed`, `found after N execs` or `NOT found` per harness in `discovery.md`. A green replay proves wiring, not fuzz discovery. Not part of `make test-gates` (12 sanitizer builds). SKIPs without clang + libFuzzer, fails under `STRICT_GATES=1`/CI |
 | `GATE-TWIN-RUN-CHECK` | `twin-run-fmt`, `twin-run-clippy`, `twin-run-test`, `twin-run-build` (aggregate `twin-run-check`) | `fuzz-rust-differential` | `tools/twin_run/` (`cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, `cargo build --release`) | The Rust half of the oracle is formatted, lint-clean (tests included), its unit tests pass (trace projection of hand-built traces, canon, minimize) and the capture binary builds, all before anything is captured with it. Needs the pinned nightly of `rust-toolchain.toml` |
 | `GATE-PARSER-DIFFERENTIAL` | `parser-differential` (`parser-differential-selftest`, `parser-diff-build`) | `fuzz-rust-differential` | `tools/ci/parser_differential.py`, `tools/twin_run/src/parsediff.rs`, `tests/fuzz/fuzz_parsers.c` (`ASX_DIFF_HTTP_REQUEST`), `tools/ci/parser_differential_known.txt` | The same bytes (ten well-formed HTTP/1.1 requests, then seeded byte-level and structure-aware mutations of them) go to asupersync's request parser at the pinned rev and to the C parser; accepted or rejected, then method, target, version, headers, trailers, body length and digest and bytes used are compared. Two fixed-seed campaigns: seed 1 / 2000 inputs with the C defaults, and seed 7 / 20000 inputs with the C Host requirement off (`PARSER_DIFF_REQUIRE_HOST=0`), so that policy does not mask other differences. Differing inputs are grouped by signature and request shape and each is reduced (delta debugging, then byte simplification) to classes of minimized input (`report.txt`, `report.json`, `beads.sh`). **Observes** (`PARSER_DIFF_MODE=observe`): each family is a bead with its minimized input (bd-9kll.16.2.1 to .8) and is listed in `tools/ci/parser_differential_known.txt`; `gate` mode fails on a family that is not listed. On the requests both parsers accept (about 4000) no field differs. HTTP request only; response and WebSocket frame parsers follow. Not a proof of equivalence: the corpus is bounded and mutation-derived |
-| `GATE-PARALLEL-MEMORY-MODEL` | `formal-litmus`, `formal-codegen`, `formal-check` | `check` | `tests/formal/litmus/test_memory_model_litmus.c`, `tools/ci/check_codegen_stability.sh` | Parallel-runtime atomic publication, queue ownership, seqlock/EBR, trace-ordering, and bounded scheduler proofs |
+| `GATE-PARALLEL-MEMORY-MODEL` | `formal-litmus`, `formal-codegen`, `formal-check` | `unit-invariant` (`formal-check`) | `tests/formal/litmus/test_memory_model_litmus.c`, `tools/ci/check_codegen_stability.sh` | Parallel-runtime atomic publication, queue ownership, seqlock/EBR, trace-ordering, and bounded scheduler proofs |
 | `GATE-PARALLEL-PARITY` | `parallel-parity` | `profile-parity` | `tools/ci/run_parallel_parity.sh` | Single-vs-multi-worker semantic and canonical-trace digest parity, including deterministic mixed-liveness quiescence stress records |
 | `GATE-PARALLEL-TELEMETRY` | `test-unit`, `parallel-parity`, `bench-json`, `parallel-bench-json` | `unit-invariant`, `profile-parity`, `perf-tail-deadline` | `tests/unit/runtime/test_parallel.c`, `tools/ci/run_parallel_parity.sh`, `tests/bench/bench_runtime.c` | Large-swarm pressure telemetry, admission evidence, worker-count baselines, locality metadata, and benchmark JSON artifacts |
 
@@ -366,10 +370,10 @@ isomorphism proof needed for locality-sensitive 64-core operator claims.
 
 | Gate ID | Makefile Target | CI Job | Tracking Bead | Purpose |
 |---------|-----------------|--------|---------------|---------|
-| `GATE-PARALLEL-MEMORY-MODEL` | `formal-litmus`, `formal-codegen`, `formal-check` | `check` | `bd-pweu.13` | Prove portable atomic publication, two-phase queue slot ownership, seqlock/EBR metadata safety, gap-free trace commit tickets, bounded work stealing, cancel fairness, and shutdown/drain state reporting. |
+| `GATE-PARALLEL-MEMORY-MODEL` | `formal-litmus`, `formal-codegen`, `formal-check` | `unit-invariant` (`formal-check`) | `bd-pweu.13` | Prove portable atomic publication, two-phase queue slot ownership, seqlock/EBR metadata safety, gap-free trace commit tickets, bounded work stealing, cancel fairness, and shutdown/drain state reporting. |
 | `GATE-PARALLEL-PARITY` | `parallel-parity` | `profile-parity` | `bd-pweu.11`, `bd-dq94.5` | Compare canonical semantic/trace digests and structured event summaries for the same scenarios under worker_count=1, 2, 8, and 64, with the mixed-liveness record asserting bounded quiescence after timer, cancellation, channel, and drain/finalize activity. |
 | `GATE-PARALLEL-TELEMETRY` | `test-unit`, `parallel-parity`, `bench-json` | `unit-invariant`, `profile-parity`, `perf-tail-deadline` | `bd-pweu.10` | Validate pressure snapshots, deterministic admission decisions, JSONL rendering, and benchmark JSON telemetry for large-swarm runs. |
-| `GATE-PARALLEL-BENCHMARK` | `parallel-bench-json`, `parallel-bench-gate` | `perf-tail-deadline` | `bd-pweu.14`, `bd-v12u.14` | Capture RCH-backed worker_count=1/2/8/32/64 baselines with scheduler p50/p95/p99/p99.9, admission rejection observations, queue pressure, steal-cost proxy, memory-footprint estimates, and warn/block threshold status. |
+| `GATE-PARALLEL-BENCHMARK` | `parallel-bench-json`, `parallel-bench-gate` (the CI step, in `perf.yml`, runs the gate, which runs the capture) | `perf-tail-deadline` | `bd-pweu.14`, `bd-v12u.14` | Capture RCH-backed worker_count=1/2/8/32/64 baselines with scheduler p50/p95/p99/p99.9, admission rejection observations, queue pressure, steal-cost proxy, memory-footprint estimates, and warn/block threshold status. |
 | `GATE-PARALLEL-LOCALITY` | `test-unit`, `parallel-parity`, `parallel-bench-json` | `unit-invariant`, `profile-parity`, `perf-tail-deadline` | `bd-pweu.9` | Validate compact vs worker-sharded locality routing, stale-handle fail-closed checks, shard telemetry, and benchmark evidence without semantic digest drift. |
 
 Coverage requirements:
@@ -493,7 +497,7 @@ scenario packs (see `docs/DEPLOYMENT_HARDENING.md`).
 | `GATE-E2E-VERTICAL-AUTO` | `automotive_watchdog.sh` | AUTOMOTIVE |
 | `GATE-E2E-CONTINUITY` | `continuity.sh`, `continuity_restart.sh` | CORE |
 | `GATE-E2E-PARALLEL-SWARM` | `parallel_swarm.sh` | PARALLEL |
-| `GATE-E2E-WAVE-C-ACCEPTANCE` | `wave_c_acceptance_demo.sh` | PARALLEL/mixed |
+| `GATE-E2E-WAVE-C-ACCEPTANCE` | `wave_c_acceptance_demo.sh` (run by `make wave-c-acceptance-demo`, CI job `gate-scripts`; not a `run_all.sh` family: it reruns other gates) | PARALLEL/mixed |
 | `GATE-E2E-DEPLOY-ROUTER` | `router_storm.sh` | EMBEDDED_ROUTER |
 | `GATE-E2E-DEPLOY-HFT` | `market_open_burst.sh` | HFT |
 | `GATE-E2E-DEPLOY-AUTO` | `automotive_fault_burst.sh` | AUTOMOTIVE |
@@ -503,8 +507,8 @@ scenario packs (see `docs/DEPLOYMENT_HARDENING.md`).
 
 | Target | Scope | Gates Included |
 |--------|-------|----------------|
-| `make check` | Local PR gate | FORMAT, LINT, LINT-DOCS, LINT-CHECKPOINT, GATE-SEM-DELTA (anti-butchering), LINT-EVIDENCE, STATIC-ANALYSIS, PORT (build), UNIT, INVARIANT, MODEL-CHECK, FORMAL-CHECK, PARALLEL-MEMORY-MODEL |
-| `make check-ci` | Full CI gate (`CI=1`) | FORMAT, LINT, LINT-CHECKPOINT, GATE-SEM-DELTA (anti-butchering), LINT-EVIDENCE, STATIC-ANALYSIS, PORT (build), UNIT, INVARIANT, MODEL-CHECK, E2E-VERTICAL, CONFORMANCE, CODEC, PROFILE, PARALLEL-PARITY, PARALLEL-TELEMETRY, FUZZ, EMBED |
+| `make check` | Local PR gate | FORMAT, LINT, LINT-DOCS, LINT-CHECKPOINT, GATE-SEM-DELTA (anti-butchering), LINT-EVIDENCE, STATIC-ANALYSIS, PORT (build), UNIT, INVARIANT, MODEL-CHECK, FORMAL-CHECK, PARALLEL-MEMORY-MODEL. Fails today at LINT-EVIDENCE (see its row) |
+| `make check-ci` | A local run of many CI gates in one command (`CI=1`); CI itself runs them as the separate jobs above and does not call this target | FORMAT, LINT, LINT-CHECKPOINT, GATE-SEM-DELTA (anti-butchering), LINT-EVIDENCE, STATIC-ANALYSIS, PORT (build), UNIT, INVARIANT, MODEL-CHECK, E2E-VERTICAL, CONFORMANCE, CODEC, PROFILE, PARALLEL-PARITY, PARALLEL-TELEMETRY, FUZZ, EMBED. Fails today at LINT-EVIDENCE |
 | `make test-e2e-suite` | Unified E2E manifest | All GATE-E2E-* gates |
 | `make test-e2e-parallel` | Parallel swarm e2e pack | GATE-E2E-PARALLEL-SWARM |
 | `make parallel-bench-json` | PARALLEL benchmark JSON artifact | GATE-PARALLEL-BENCHMARK |
@@ -532,18 +536,22 @@ From `.github/workflows/ci.yml`:
 | `m32` | PR, push | `check` | Yes |
 | `embedded-matrix` | PR, push | `check` | Yes |
 | `size-report` | PR, push | `check` | Yes (builds and link closure; the sizes are observed, not gated) |
+| `gcc-analyzer` | PR, push | `check` | Yes |
+| `gate-scripts` | PR, push | `check` | Yes (the integration tests and smoke lanes no other job runs: fuzz gate tests, replay, foundational evidence, harnesses, POSIX adapter smoke, strict schema validation, embedded portability proof, Wave C bundle, installer smoke) |
 
 From `.github/workflows/perf.yml`:
 
 | Job | Trigger | Dependencies | Blocking |
 |-----|---------|-------------|----------|
-| `perf-tail-deadline` | push to main | — | Warn (threshold enforcement planned) |
+| `perf-tail-deadline` | push to main | — | Warn (threshold enforcement planned); runs `bench`, `bench-json` for CORE and HFT, the SLO and size gates, and `parallel-bench-gate` |
 
 From `.github/workflows/release.yml`:
 
 | Job | Trigger | Dependencies | Blocking |
 |-----|---------|-------------|----------|
-| `release-artifacts` | push tag `v*` | — | Yes |
+| `gate` | push tag `v*` | — | Yes (required evidence at the tagged commit) |
+| `build` | push tag `v*` | `gate` | Yes (artifacts, checksums, signatures, installed consumer) |
+| `publish` | push tag `v*` | `gate`, `build` | Yes |
 
 ## 7. Enforcement Rules
 
