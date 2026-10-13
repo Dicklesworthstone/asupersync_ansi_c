@@ -279,10 +279,13 @@ if [[ -z "$impact_text" ]]; then
 fi
 
 missing_fields=()
+# Here-strings, not `printf | grep -q`: grep -q exits at its first match, and
+# with pipefail the printf that is still writing a large range's messages
+# dies of SIGPIPE, which made every present field read as missing.
 require_pattern() {
     local field="$1"
     local pattern="$2"
-    if ! printf '%s\n' "$impact_text" | grep -Eiq "$pattern"; then
+    if ! grep -Eiq "$pattern" <<<"$impact_text"; then
         missing_fields+=("$field")
     fi
 }
@@ -330,13 +333,13 @@ fi
 
 if [[ "$budget_value" != "missing" && "$budget_value" != "0" && "$budget_value" != "0.0" ]]; then
     budget_exception_required=true
-    if ! printf '%s\n' "$impact_text" | grep -Eiq '^[[:space:]-]*exception[[:space:]]+id:[[:space:]]*.+$'; then
+    if ! grep -Eiq '^[[:space:]-]*exception[[:space:]]+id:[[:space:]]*.+$' <<<"$impact_text"; then
         budget_exception_missing+=("exception_id")
     fi
-    if ! printf '%s\n' "$impact_text" | grep -Eiq '^[[:space:]-]*exception[[:space:]]+rationale:[[:space:]]*.+$'; then
+    if ! grep -Eiq '^[[:space:]-]*exception[[:space:]]+rationale:[[:space:]]*.+$' <<<"$impact_text"; then
         budget_exception_missing+=("exception_rationale")
     fi
-    if ! printf '%s\n' "$impact_text" | grep -Eiq '^[[:space:]-]*exception[[:space:]]+approver:[[:space:]]*.+$'; then
+    if ! grep -Eiq '^[[:space:]-]*exception[[:space:]]+approver:[[:space:]]*.+$' <<<"$impact_text"; then
         budget_exception_missing+=("exception_approver")
     fi
 fi

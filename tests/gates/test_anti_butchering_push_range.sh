@@ -41,7 +41,7 @@ full_sha() {
     git -C "$REPO_ROOT" rev-parse --verify --quiet "$1^{commit}"
 }
 
-for c in 18c643f d722cfe 729c102; do
+for c in 18c643f d722cfe 729c102 e44d99d 5026ae4; do
     if ! full_sha "$c" >/dev/null; then
         echo "test_anti_butchering_push_range: FAIL (commit $c not in history; shallow clone?)"
         exit 1
@@ -51,6 +51,10 @@ C18="$(full_sha 18c643f)"
 C5F="$(full_sha 18c643f~1)"
 CD7="$(full_sha d722cfe)"
 C72="$(full_sha 729c102)"
+# The 2026-10-13 push of 227 commits: their messages far exceed a pipe
+# buffer, which once made every present proof-block field read as missing.
+CE4="$(full_sha e44d99d)"
+C50="$(full_sha 5026ae4)"
 ZERO="0000000000000000000000000000000000000000"
 UNKNOWN="0123456789abcdef0123456789abcdef01234567"
 
@@ -97,10 +101,12 @@ run_case unknown_before_fails nonzero 'cannot resolve the diff range' \
     "{\"before\":\"$UNKNOWN\",\"after\":\"$C72\"}"
 run_case payload_without_range_fails nonzero 'cannot resolve the diff range' \
     '{"ref":"refs/heads/main"}'
+run_case large_range_with_blocks_passes 0 'anti-butchering: PASS' \
+    "{\"before\":\"$CE4\",\"after\":\"$C50\"}"
 
 echo ""
 if [ "$failures" -eq 0 ]; then
-    echo "test_anti_butchering_push_range: PASS (7 cases)"
+    echo "test_anti_butchering_push_range: PASS (8 cases)"
     exit 0
 fi
 echo "test_anti_butchering_push_range: FAIL ($failures case(s))"
