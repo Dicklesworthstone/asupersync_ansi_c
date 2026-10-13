@@ -18,6 +18,7 @@
 #include <asx/core/cancel.h>
 #include <asx/core/transition.h>
 #include <asx/runtime/replay.h>
+#include <asx/runtime/trace.h>
 #include <string.h>
 
 static asx_oracle_result oracle_verdict(asx_oracle_verdict verdict, const char *name,
@@ -123,8 +124,43 @@ static asx_oracle_result check_task_leak(const asx_kernel *k) {
     return check_closed_regions(k, "task_leak", ORACLE_TASKS);
 }
 
+/* Reserved obligations whose holder is a task that has completed or is gone:
+ * the kernel resolves a holder's obligations in the one completion path
+ * (asx_task_on_complete_internal), so none can outlive its holder. An
+ * obligation of no task (holder ASX_INVALID_ID) or of another runtime's
+ * task is not read. */
+static uint32_t obligations_of_ended_holders(const asx_kernel *k) {
+    uint32_t bad = 0;
+    uint32_t i;
+    for (i = 0; i < k->obligation_count; i++) {
+        const asx_obligation_slot *o = &k->obligations[i];
+        uint32_t slot;
+        /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
+        if (!o->alive || o->state != ASX_OBLIGATION_RESERVED) continue;
+        if (o->holder == ASX_INVALID_ID || asx_handle_runtime_tag(o->holder) != k->tag) continue;
+        slot = (uint32_t)asx_handle_slot(o->holder);
+        if (slot >= k->task_count || !k->tasks[slot].alive ||
+            k->tasks[slot].generation != asx_handle_generation(o->holder) ||
+            asx_task_is_terminal(k->tasks[slot].state)) {
+            bad++;
+        }
+    }
+    return bad;
+}
+
+/* Rust's obligation_leak: no obligation outlives its owner. A closed region
+ * holds no reserved obligation, and a reserved one's holder has not
+ * completed. */
 static asx_oracle_result check_obligation_leak(const asx_kernel *k) {
-    return check_closed_regions(k, "obligation_leak", ORACLE_OBLIGATIONS);
+    asx_oracle_result r = check_closed_regions(k, "obligation_leak", ORACLE_OBLIGATIONS);
+    uint32_t ended = obligations_of_ended_holders(k);
+    if (ended == 0u) return r;
+    if (r.verdict == ASX_ORACLE_FAIL) {
+        r.detail_count += ended;
+        return r;
+    }
+    return oracle_verdict(ASX_ORACLE_FAIL, "obligation_leak",
+                          "a reserved obligation's holder has completed", ended);
 }
 
 static asx_oracle_result check_quiescence(const asx_kernel *k) {
@@ -451,6 +487,104 @@ static asx_oracle_result check_arena_counters(const asx_kernel *k) {
                           "the kernel's live counters and free lists match its arenas", 0u);
 }
 
+/* Rust's region_leak watches regions stuck in Closing, Draining or
+ * Finalizing past wall-clock thresholds (RegionLeakConfig). State has no
+ * clock, so this is the part of it that needs none: a region that is closing
+ * and has nothing left to wait for. The kernel advances a closing region the
+ * moment its last task completes, its last child closes or its cleanup
+ * drains (asx_region_advance_internal), so a region found in CLOSING,
+ * DRAINING or FINALIZING with no live task, no child that is not closed, no
+ * cleanup pending or running, no async finalizer in flight and no reserved
+ * obligation (which the PANIC leak policy waits on) is a missed advance: it
+ * will never close. A poisoned region is exempt (containment keeps it open
+ * on purpose). */
+static asx_oracle_result check_region_leak(const asx_kernel *k) {
+    uint32_t bad = 0;
+    uint32_t i;
+    for (i = 0; i < k->region_count; i++) {
+        const asx_region_slot *r = &k->regions[i];
+        /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
+        if (!r->alive || r->state == ASX_REGION_OPEN || r->state == ASX_REGION_CLOSED) continue;
+        if (r->poisoned || r->task_count != 0u || r->child_count != 0u) continue;
+        if (asx_cleanup_pending(&r->cleanup) != 0u || r->cleanup.draining != 0u) continue;
+        if (r->finalizer.active) continue;
+        if (region_has_live_task(k, i, r->generation) ||
+            region_has_live_child(k, i, r->generation) ||
+            region_holds_reserved_obligation(k, i, r->generation)) {
+            continue;
+        }
+        bad++;
+    }
+    if (bad != 0u) {
+        return oracle_verdict(ASX_ORACLE_FAIL, "region_leak",
+                              "a closing region has nothing left to wait for and is not closed",
+                              bad);
+    }
+    return oracle_verdict(ASX_ORACLE_PASS, "region_leak",
+                          "every closing region still has something to wait for", 0u);
+}
+
+/* The retained trace index of the first region.cancelled event of `region`,
+ * or UINT32_MAX when the ring holds none. */
+static uint32_t first_region_cancelled_event(uint32_t events, asx_region_id region) {
+    uint32_t i;
+    for (i = 0; i < events; i++) {
+        asx_trace_event e;
+        /* ASX_CHECKPOINT_WAIVER("bounded: events <= ASX_TRACE_CAPACITY") */
+        if (asx_trace_event_get(i, &e) == 0) break;
+        if (e.kind == ASX_TRACE_REGION_CANCELLED && e.entity_id == region) return i;
+    }
+    return UINT32_MAX;
+}
+
+/* Rust's cancel_signal_ordering: a cancel reaches a parent before its
+ * children, and no child is cancelled by a parent that was not. Two of its
+ * violations are visible here. Orphaned: a region whose cancel reason is a
+ * propagated ParentCancelled (kind PARENT with a cause: asx_region_cancel
+ * chains each descendant's reason to its parent's) while its parent has no
+ * cancel requested. Child before parent: such a region's first
+ * region.cancelled event is retained and its parent's is not before it
+ * (asx_region_cancel emits a subtree parent first). The second reads the
+ * trace ring, so it is skipped when the ring dropped events. Rust's third,
+ * a child's cancel time earlier than its parent's, is not state: a parent's
+ * stored reason can be strengthened later with a more severe one. */
+static asx_oracle_result check_cancel_signal_ordering(const asx_kernel *k) {
+    uint32_t orphaned = 0;
+    uint32_t reordered = 0;
+    uint32_t events = asx_trace_event_count();
+    int ring_whole = asx_trace_dropped() == 0u;
+    uint32_t i;
+    for (i = 0; i < k->region_count; i++) {
+        const asx_region_slot *r = &k->regions[i];
+        const asx_region_slot *p;
+        /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
+        if (!r->alive || !r->cancel_requested) continue;
+        if (r->cancel_reason.kind != ASX_CANCEL_PARENT || r->cancel_reason.cause == NULL) continue;
+        p = oracle_region(k, r->parent_id);
+        if (p == NULL || !p->cancel_requested) {
+            orphaned++;
+            continue;
+        }
+        if (ring_whole) {
+            uint32_t at_child =
+                first_region_cancelled_event(events, asx_region_handle_for_slot(k, i));
+            uint32_t at_parent = first_region_cancelled_event(events, r->parent_id);
+            if (at_child != UINT32_MAX && at_parent > at_child) reordered++;
+        }
+    }
+    if (orphaned != 0u) {
+        return oracle_verdict(ASX_ORACLE_FAIL, "cancel_signal_ordering",
+                              "a region was cancelled by its parent, which was not cancelled",
+                              orphaned + reordered);
+    }
+    if (reordered != 0u) {
+        return oracle_verdict(ASX_ORACLE_FAIL, "cancel_signal_ordering",
+                              "a region's cancel was recorded before its parent's", reordered);
+    }
+    return oracle_verdict(ASX_ORACLE_PASS, "cancel_signal_ordering",
+                          "every propagated cancel followed its parent's", 0u);
+}
+
 typedef asx_oracle_result (*oracle_check_fn)(const asx_kernel *k);
 
 /* The lab contract the older oracles have: NULL fails, an uninitialized lab
@@ -523,6 +657,16 @@ asx_oracle_result asx_oracle_arena_counters(const asx_lab *lab, void *ctx) {
     return lab_oracle(lab, "arena_counters", check_arena_counters);
 }
 
+asx_oracle_result asx_oracle_region_leak(const asx_lab *lab, void *ctx) {
+    (void)ctx;
+    return lab_oracle(lab, "region_leak", check_region_leak);
+}
+
+asx_oracle_result asx_oracle_cancel_signal_ordering(const asx_lab *lab, void *ctx) {
+    (void)ctx;
+    return lab_oracle(lab, "cancel_signal_ordering", check_cancel_signal_ordering);
+}
+
 typedef struct {
     const char *name;
     oracle_check_fn check;
@@ -540,6 +684,8 @@ static const oracle_entry g_oracle_table[] = {
     {"cancel_debt", check_cancel_debt},
     {"task_counters", check_task_counters},
     {"arena_counters", check_arena_counters},
+    {"region_leak", check_region_leak},
+    {"cancel_signal_ordering", check_cancel_signal_ordering},
 };
 
 #define ORACLE_TABLE_COUNT (sizeof(g_oracle_table) / sizeof(g_oracle_table[0]))

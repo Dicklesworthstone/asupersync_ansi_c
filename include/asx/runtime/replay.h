@@ -110,7 +110,8 @@ ASX_API asx_oracle_result asx_oracle_replay_match(const asx_lab_result *r1,
 /* task_leak: no closed region has a live task. */
 ASX_API asx_oracle_result asx_oracle_task_leak(const asx_lab *lab, void *ctx);
 
-/* obligation_leak: no closed region holds a reserved obligation. */
+/* obligation_leak: no closed region holds a reserved obligation, and no
+ * reserved obligation's holder task has completed or is gone. */
 ASX_API asx_oracle_result asx_oracle_obligation_leak(const asx_lab *lab, void *ctx);
 
 /* quiescence: a closed region has no live task, no child that is not closed,
@@ -151,6 +152,18 @@ ASX_API asx_oracle_result asx_oracle_task_counters(const asx_lab *lab, void *ctx
  * lists hold exactly the released slots. */
 ASX_API asx_oracle_result asx_oracle_arena_counters(const asx_lab *lab, void *ctx);
 
+/* region_leak: no region is stuck closing: one in CLOSING, DRAINING or
+ * FINALIZING with no live task, no child not closed, no cleanup pending or
+ * running and no reserved obligation would never close. (Rust's version is
+ * the same idea with wall-clock thresholds; state has no clock.) */
+ASX_API asx_oracle_result asx_oracle_region_leak(const asx_lab *lab, void *ctx);
+
+/* cancel_signal_ordering: a region cancelled by its parent (a propagated
+ * ParentCancelled reason) has a parent that was cancelled, and the parent's
+ * region.cancelled event precedes the child's in the trace ring (checked
+ * while the ring dropped nothing). */
+ASX_API asx_oracle_result asx_oracle_cancel_signal_ordering(const asx_lab *lab, void *ctx);
+
 /* The kernel-state oracles are also reachable by Rust's registry name, for a
  * caller with no asx_lab (the conformance interpreter), over the default
  * runtime's kernel. The number of them. */
@@ -162,8 +175,9 @@ ASX_API const char *asx_oracle_kernel_name(uint32_t index);
 
 /* Run the named kernel-state oracle (task_leak, obligation_leak, quiescence,
  * finalizer, region_tree, deadline_monotone, cancellation_protocol,
- * cancel_correctness, cancel_debt, task_counters, arena_counters). An unknown
- * or NULL name fails with the oracle name "unknown". */
+ * cancel_correctness, cancel_debt, task_counters, arena_counters,
+ * region_leak, cancel_signal_ordering). An unknown or NULL name fails with
+ * the oracle name "unknown". */
 ASX_API asx_oracle_result asx_oracle_check_named(const char *name);
 
 /* Render a replay result as JSON for retained diagnostics/artifacts. */

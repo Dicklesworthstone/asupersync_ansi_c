@@ -63,12 +63,14 @@ TEST(kernel_oracles_carry_rusts_registry_names_and_unknown_names_fail) {
                                        "cancel_correctness",
                                        "cancel_debt",
                                        "task_counters",
-                                       "arena_counters"};
+                                       "arena_counters",
+                                       "region_leak",
+                                       "cancel_signal_ordering"};
     uint32_t i;
     asx_oracle_result r;
-    ASSERT_EQ(asx_oracle_kernel_count(), 11u);
-    for (i = 0; i < 11u; i++) { ASSERT_STR_EQ(asx_oracle_kernel_name(i), want[i]); }
-    ASSERT_TRUE(asx_oracle_kernel_name(11u) == NULL);
+    ASSERT_EQ(asx_oracle_kernel_count(), 13u);
+    for (i = 0; i < 13u; i++) { ASSERT_STR_EQ(asx_oracle_kernel_name(i), want[i]); }
+    ASSERT_TRUE(asx_oracle_kernel_name(13u) == NULL);
     r = check("no_such_oracle");
     ASSERT_EQ((int)r.verdict, (int)ASX_ORACLE_FAIL);
     ASSERT_STR_EQ(r.oracle_name, "unknown");
@@ -490,6 +492,141 @@ TEST(arena_counters_names_a_live_counter_or_free_list_that_disagrees_with_its_ar
     ASSERT_TRUE(all_pass());
 }
 
+TEST(obligation_leak_names_a_reserved_obligation_whose_holder_completed) {
+    asx_region_id rid;
+    asx_task_id holder;
+    asx_obligation_id oid;
+    asx_task_slot *ts = NULL;
+    asx_task_state was;
+    asx_oracle_result r;
+
+    fresh();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &holder), ASX_OK);
+    ASSERT_EQ(asx_obligation_reserve_ex(rid, ASX_OBLIGATION_KIND_GENERIC, holder, &oid), ASX_OK);
+    ASSERT_EQ(asx_task_slot_lookup(holder, &ts), ASX_OK);
+    ASSERT_TRUE(all_pass());
+
+    /* The holder completed and its obligation was not resolved with it
+     * (the kernel resolves them in asx_task_on_complete_internal). */
+    was = ts->state;
+    ts->state = ASX_TASK_COMPLETED;
+    r = check("obligation_leak");
+    ASSERT_EQ((int)r.verdict, (int)ASX_ORACLE_FAIL);
+    ASSERT_EQ(r.detail_count, 1u);
+    ASSERT_STR_EQ(r.message, "a reserved obligation's holder has completed");
+    ts->state = was;
+    ASSERT_EQ((int)check("obligation_leak").verdict, (int)ASX_ORACLE_PASS);
+
+    /* A holder whose slot is gone. */
+    ts->alive = 0;
+    r = check("obligation_leak");
+    ASSERT_EQ((int)r.verdict, (int)ASX_ORACLE_FAIL);
+    ASSERT_EQ(r.detail_count, 1u);
+    ts->alive = 1;
+    ASSERT_EQ((int)check("obligation_leak").verdict, (int)ASX_ORACLE_PASS);
+}
+
+TEST(region_leak_names_a_closing_region_with_nothing_left_to_wait_for) {
+    asx_region_id rid;
+    asx_task_id t;
+    asx_region_slot *region = NULL;
+    asx_task_slot *ts = NULL;
+    asx_cleanup_handle handle = ASX_CLEANUP_INVALID;
+    asx_oracle_result r;
+    int ran = 0;
+
+    fresh();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &t), ASX_OK);
+    ASSERT_EQ(asx_region_slot_lookup(rid, &region), ASX_OK);
+    ASSERT_EQ(asx_task_slot_lookup(t, &ts), ASX_OK);
+    ASSERT_TRUE(all_pass());
+
+    /* Closing, with a live task: it waits for the task. */
+    region->state = ASX_REGION_CLOSING;
+    ASSERT_EQ((int)check("region_leak").verdict, (int)ASX_ORACLE_PASS);
+
+    /* The task is gone and nobody advanced the region. */
+    ts->state = ASX_TASK_COMPLETED;
+    region->task_count = 0u;
+    r = check("region_leak");
+    ASSERT_EQ((int)r.verdict, (int)ASX_ORACLE_FAIL);
+    ASSERT_EQ(r.detail_count, 1u);
+    ASSERT_STR_EQ(r.message, "a closing region has nothing left to wait for and is not closed");
+    region->state = ASX_REGION_FINALIZING;
+    ASSERT_EQ((int)check("region_leak").verdict, (int)ASX_ORACLE_FAIL);
+
+    /* Containment keeps a poisoned region as it is; a pending finalizer is
+     * something to wait for; an open region is nothing to report. */
+    region->poisoned = 1;
+    ASSERT_EQ((int)check("region_leak").verdict, (int)ASX_ORACLE_PASS);
+    region->poisoned = 0;
+    asx_cleanup_init(&region->cleanup);
+    ASSERT_EQ(asx_cleanup_push(&region->cleanup, cleanup_mark, &ran, &handle), ASX_OK);
+    ASSERT_EQ((int)check("region_leak").verdict, (int)ASX_ORACLE_PASS);
+    asx_cleanup_init(&region->cleanup);
+    ASSERT_EQ((int)check("region_leak").verdict, (int)ASX_ORACLE_FAIL);
+    region->state = ASX_REGION_OPEN;
+    ASSERT_EQ((int)check("region_leak").verdict, (int)ASX_ORACLE_PASS);
+}
+
+TEST(cancel_signal_ordering_names_a_child_cancelled_by_a_parent_that_was_not) {
+    asx_region_id root;
+    asx_region_id child;
+    asx_region_slot *rs = NULL;
+    asx_region_slot *cs = NULL;
+    asx_cancel_reason req;
+    asx_oracle_result r;
+
+    /* The kernel's region cancel visits the parent first. */
+    fresh();
+    ASSERT_EQ(asx_region_open(&root), ASX_OK);
+    ASSERT_EQ(asx_region_open_child(root, &child), ASX_OK);
+    memset(&req, 0, sizeof(req));
+    req.kind = ASX_CANCEL_USER;
+    req.origin_region = root;
+    req.origin_task = ASX_INVALID_ID;
+    req.timestamp = 5u;
+    ASSERT_EQ(asx_region_cancel(root, &req, NULL), ASX_OK);
+    ASSERT_EQ(asx_region_slot_lookup(child, &cs), ASX_OK);
+    ASSERT_EQ((int)cs->cancel_reason.kind, (int)ASX_CANCEL_PARENT);
+    ASSERT_TRUE(cs->cancel_reason.cause != NULL);
+    ASSERT_EQ((int)check("cancel_signal_ordering").verdict, (int)ASX_ORACLE_PASS);
+
+    /* Orphaned: the child carries its parent's cancel, the parent has none. */
+    fresh();
+    ASSERT_EQ(asx_region_open(&root), ASX_OK);
+    ASSERT_EQ(asx_region_open_child(root, &child), ASX_OK);
+    ASSERT_EQ(asx_region_slot_lookup(root, &rs), ASX_OK);
+    ASSERT_EQ(asx_region_slot_lookup(child, &cs), ASX_OK);
+    cs->cancel_requested = 1;
+    cs->cancel_reason.kind = ASX_CANCEL_PARENT;
+    cs->cancel_reason.origin_region = root;
+    cs->cancel_reason.cause = &rs->cancel_reason;
+    r = check("cancel_signal_ordering");
+    ASSERT_EQ((int)r.verdict, (int)ASX_ORACLE_FAIL);
+    ASSERT_EQ(r.detail_count, 1u);
+    ASSERT_STR_EQ(r.message, "a region was cancelled by its parent, which was not cancelled");
+
+    /* A direct request that names kind PARENT carries no cause: not a
+     * propagation, not read. */
+    cs->cancel_reason.cause = NULL;
+    ASSERT_EQ((int)check("cancel_signal_ordering").verdict, (int)ASX_ORACLE_PASS);
+
+    /* Out of order: both are cancelled, but the ring recorded the child's
+     * region.cancelled with no earlier one of its parent's. */
+    cs->cancel_reason.cause = &rs->cancel_reason;
+    rs->cancel_requested = 1;
+    rs->cancel_reason = req;
+    asx_trace_emit(ASX_TRACE_REGION_CANCELLED, (uint64_t)child, (uint64_t)ASX_CANCEL_PARENT);
+    asx_trace_emit(ASX_TRACE_REGION_CANCELLED, (uint64_t)root, (uint64_t)ASX_CANCEL_USER);
+    r = check("cancel_signal_ordering");
+    ASSERT_EQ((int)r.verdict, (int)ASX_ORACLE_FAIL);
+    ASSERT_EQ(r.detail_count, 1u);
+    ASSERT_STR_EQ(r.message, "a region's cancel was recorded before its parent's");
+}
+
 int main(void) {
     fprintf(stderr, "=== test_oracle ===\n");
     RUN_TEST(kernel_oracles_carry_rusts_registry_names_and_unknown_names_fail);
@@ -506,6 +643,9 @@ int main(void) {
     RUN_TEST(cancel_debt_names_a_requested_cancel_that_nothing_will_run);
     RUN_TEST(task_counters_names_a_region_whose_counter_disagrees_with_its_tasks);
     RUN_TEST(arena_counters_names_a_live_counter_or_free_list_that_disagrees_with_its_arena);
+    RUN_TEST(obligation_leak_names_a_reserved_obligation_whose_holder_completed);
+    RUN_TEST(region_leak_names_a_closing_region_with_nothing_left_to_wait_for);
+    RUN_TEST(cancel_signal_ordering_names_a_child_cancelled_by_a_parent_that_was_not);
     TEST_REPORT();
     return test_failures;
 }
