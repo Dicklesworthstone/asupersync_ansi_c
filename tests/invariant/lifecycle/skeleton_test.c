@@ -294,7 +294,7 @@ TEST(region_drain_leak_audits_unresolved_obligations) {
     unresolved_ctx ctx;
 
     asx_runtime_set_leak_policy_internal(g_kernels[0], ASX_LEAK_LOG, NULL);
-    leaks_before = asx_obligation_leak_count();
+    leaks_before = asx_obligation_leak_count(test_runtime());
 
     st = asx_region_open(test_runtime(), &rid);
     ASSERT_EQ(st, ASX_OK);
@@ -305,7 +305,7 @@ TEST(region_drain_leak_audits_unresolved_obligations) {
     /* The holder's completion leaked it, once. */
     ASSERT_EQ(asx_obligation_get_state(ctx.oid, &ostate), ASX_OK);
     ASSERT_EQ(ostate, ASX_OBLIGATION_LEAKED);
-    ASSERT_EQ(asx_obligation_leak_count(), leaks_before + 1u);
+    ASSERT_EQ(asx_obligation_leak_count(test_runtime()), leaks_before + 1u);
 
     budget = asx_budget_infinite();
     st = asx_region_drain(rid, &budget);
@@ -316,7 +316,7 @@ TEST(region_drain_leak_audits_unresolved_obligations) {
     ASSERT_EQ(rstate, ASX_REGION_CLOSED);
     ASSERT_EQ(asx_obligation_get_state(ctx.oid, &ostate), ASX_OK);
     ASSERT_EQ(ostate, ASX_OBLIGATION_LEAKED);
-    ASSERT_EQ(asx_obligation_leak_count(), leaks_before + 1u);
+    ASSERT_EQ(asx_obligation_leak_count(test_runtime()), leaks_before + 1u);
     /* A leaked obligation cannot be resolved afterwards (Rust
      * ObligationAlreadyResolved, runtime/obligation_table.rs:577). */
     ASSERT_EQ(asx_obligation_abort(ctx.oid), ASX_E_OBLIGATION_ALREADY_RESOLVED);

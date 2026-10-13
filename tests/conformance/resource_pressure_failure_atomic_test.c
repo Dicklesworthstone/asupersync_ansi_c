@@ -103,9 +103,9 @@ static asx_status reset_all_with_hard_cleanup_bound(void) {
 static void metrics_capture(pressure_metrics *metrics) {
     if (metrics == NULL) return;
     memset(metrics, 0, sizeof(*metrics));
-    metrics->regions_used = asx_resource_used(ASX_RESOURCE_REGION);
-    metrics->tasks_used = asx_resource_used(ASX_RESOURCE_TASK);
-    metrics->obligations_used = asx_resource_used(ASX_RESOURCE_OBLIGATION);
+    metrics->regions_used = asx_resource_used(test_runtime(), ASX_RESOURCE_REGION);
+    metrics->tasks_used = asx_resource_used(test_runtime(), ASX_RESOURCE_TASK);
+    metrics->obligations_used = asx_resource_used(test_runtime(), ASX_RESOURCE_OBLIGATION);
     metrics->timer_active_count = asx_timer_active_count(asx_timer_wheel_global());
     metrics->scheduler_event_count = asx_scheduler_event_count();
 }

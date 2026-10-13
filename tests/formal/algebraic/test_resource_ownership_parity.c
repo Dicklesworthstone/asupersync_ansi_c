@@ -55,7 +55,7 @@ TEST(resource_snapshot_capacity_equals_sum) {
 
     for (i = 0; i < 3; i++) {
         asx_resource_snapshot snap;
-        ASSERT_EQ(asx_resource_snapshot_get(kinds[i], &snap), ASX_OK);
+        ASSERT_EQ(asx_resource_snapshot_get(test_runtime(), kinds[i], &snap), ASX_OK);
         ASSERT_EQ(snap.capacity, snap.used + snap.remaining);
     }
 }
@@ -66,9 +66,9 @@ TEST(resource_snapshot_after_allocation) {
 
     asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_resource_snapshot_get(ASX_RESOURCE_REGION, &before), ASX_OK);
+    ASSERT_EQ(asx_resource_snapshot_get(test_runtime(), ASX_RESOURCE_REGION, &before), ASX_OK);
     ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
-    ASSERT_EQ(asx_resource_snapshot_get(ASX_RESOURCE_REGION, &after), ASX_OK);
+    ASSERT_EQ(asx_resource_snapshot_get(test_runtime(), ASX_RESOURCE_REGION, &after), ASX_OK);
 
     ASSERT_EQ(after.used, before.used + 1);
     ASSERT_EQ(after.remaining, before.remaining - 1);
@@ -77,11 +77,13 @@ TEST(resource_snapshot_after_allocation) {
 
 TEST(resource_snapshot_invalid_kind) {
     asx_resource_snapshot snap;
-    ASSERT_EQ(asx_resource_snapshot_get((asx_resource_kind)99, &snap), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_resource_snapshot_get(test_runtime(), (asx_resource_kind)99, &snap),
+              ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(resource_snapshot_null_output) {
-    ASSERT_EQ(asx_resource_snapshot_get(ASX_RESOURCE_REGION, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_resource_snapshot_get(test_runtime(), ASX_RESOURCE_REGION, NULL),
+              ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(resource_queries_consistent) {
@@ -93,8 +95,8 @@ TEST(resource_queries_consistent) {
 
     for (i = 0; i < 3; i++) {
         uint32_t cap = asx_resource_capacity(kinds[i]);
-        uint32_t used = asx_resource_used(kinds[i]);
-        uint32_t rem = asx_resource_remaining(kinds[i]);
+        uint32_t used = asx_resource_used(test_runtime(), kinds[i]);
+        uint32_t rem = asx_resource_remaining(test_runtime(), kinds[i]);
         ASSERT_EQ(cap, used + rem);
     }
 }
@@ -109,20 +111,20 @@ TEST(admission_idempotent) {
 
     asx_runtime_reset(test_runtime());
 
-    s1 = asx_resource_admit(ASX_RESOURCE_REGION, 1);
-    s2 = asx_resource_admit(ASX_RESOURCE_REGION, 1);
+    s1 = asx_resource_admit(test_runtime(), ASX_RESOURCE_REGION, 1);
+    s2 = asx_resource_admit(test_runtime(), ASX_RESOURCE_REGION, 1);
     ASSERT_EQ(s1, s2);
     ASSERT_EQ(s1, ASX_OK);
 }
 
 TEST(admission_rejects_zero_count) {
     asx_runtime_reset(test_runtime());
-    ASSERT_EQ(asx_resource_admit(ASX_RESOURCE_REGION, 0), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_resource_admit(test_runtime(), ASX_RESOURCE_REGION, 0), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(admission_rejects_unknown_kind) {
     asx_runtime_reset(test_runtime());
-    ASSERT_EQ(asx_resource_admit((asx_resource_kind)99, 1), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_resource_admit(test_runtime(), (asx_resource_kind)99, 1), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(admission_rejects_over_capacity) {
@@ -131,7 +133,8 @@ TEST(admission_rejects_over_capacity) {
     asx_runtime_reset(test_runtime());
 
     cap = asx_resource_capacity(ASX_RESOURCE_REGION);
-    ASSERT_EQ(asx_resource_admit(ASX_RESOURCE_REGION, cap + 1), ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(asx_resource_admit(test_runtime(), ASX_RESOURCE_REGION, cap + 1),
+              ASX_E_RESOURCE_EXHAUSTED);
 }
 
 TEST(admission_tracks_allocation) {
@@ -143,14 +146,14 @@ TEST(admission_tracks_allocation) {
     asx_runtime_reset(test_runtime());
 
     cap = asx_resource_capacity(ASX_RESOURCE_REGION);
-    ASSERT_EQ(asx_resource_admit(ASX_RESOURCE_REGION, cap), ASX_OK);
+    ASSERT_EQ(asx_resource_admit(test_runtime(), ASX_RESOURCE_REGION, cap), ASX_OK);
 
     ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     /* Now one slot used — can't admit full capacity */
-    s = asx_resource_admit(ASX_RESOURCE_REGION, cap);
+    s = asx_resource_admit(test_runtime(), ASX_RESOURCE_REGION, cap);
     ASSERT_EQ(s, ASX_E_RESOURCE_EXHAUSTED);
     /* But can admit cap-1 */
-    ASSERT_EQ(asx_resource_admit(ASX_RESOURCE_REGION, cap - 1), ASX_OK);
+    ASSERT_EQ(asx_resource_admit(test_runtime(), ASX_RESOURCE_REGION, cap - 1), ASX_OK);
 }
 
 /* ================================================================== */
@@ -449,8 +452,8 @@ TEST(resource_exhaustion_all_regions) {
     for (i = 0; i < cap; i++) { ASSERT_EQ(asx_region_open(test_runtime(), &rids[i]), ASX_OK); }
 
     /* All slots used */
-    ASSERT_EQ(asx_resource_remaining(ASX_RESOURCE_REGION), 0u);
-    ASSERT_EQ(asx_resource_used(ASX_RESOURCE_REGION), cap);
+    ASSERT_EQ(asx_resource_remaining(test_runtime(), ASX_RESOURCE_REGION), 0u);
+    ASSERT_EQ(asx_resource_used(test_runtime(), ASX_RESOURCE_REGION), cap);
 
     /* Next allocation should fail */
     ASSERT_EQ(asx_region_open(test_runtime(), &extra), ASX_E_RESOURCE_EXHAUSTED);
