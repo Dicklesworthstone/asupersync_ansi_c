@@ -756,9 +756,9 @@ static asx_status sched_complete(asx_task_slot *t, asx_task_id tid, asx_region_s
 static void sched_enforce_budget(const asx_task_slot *t, asx_task_id tid, asx_time *now,
                                  int *have_now) {
     asx_status st;
-    /* Under lab dispatch the budget-deadline timer cancels the task, as
-     * Rust's lab does (lab_deadline_fire); it checks no deadline here. */
-    if (!asx_lab_dispatch_active() && !t->cancel_pending &&
+    /* Under lab dispatch the budget-deadline timer cancels the task (lab_deadline_fire),
+     * and a cleanup task has none in Rust (state.rs:4401): no deadline check here. */
+    if (!asx_lab_dispatch_active() && !t->cancel_pending && !t->cleanup_only &&
         t->budget.deadline != ASX_TIME_INFINITE) {
         if (!*have_now) {
             *now = sched_now();
@@ -1166,14 +1166,14 @@ static asx_status sched_poll_slot(uint32_t i, asx_region_slot *rslot, uint32_t r
     t->park_requested = 0;
     t->notified = 0;
     /* A parked task with a deadline must wake to be cancelled (under lab
-     * dispatch its budget-deadline timer does it). */
+     * dispatch its budget-deadline timer does it; a cleanup task has none). */
 #ifndef ASX_MUTANT_SWEEP_PARKED_DEADLINE_NO_WAKE
-    /* Oracle self-test mutant (tests/gates/test_oracle_mutants.sh, sweep
-     * mode): the parked task is never woken at its deadline, so it is
-     * cancelled only when its own wake comes. Lab dispatch never runs this
-     * line, so only the sweep comparison can see it. Never in a release
-     * build. */
-    if (!lab && t->parked && !t->cancel_pending && t->budget.deadline != ASX_TIME_INFINITE) {
+    /* Oracle self-test mutant (tests/gates/test_oracle_mutants.sh, sweep mode): the
+     * parked task is never woken at its deadline, so it is cancelled only when its
+     * own wake comes. Lab dispatch never runs this line, so only the sweep
+     * comparison can see it. Never in a release build. */
+    if (!lab && t->parked && !t->cancel_pending && !t->cleanup_only &&
+        t->budget.deadline != ASX_TIME_INFINITE) {
         timer_arm(i, t->budget.deadline);
     }
 #endif

@@ -646,6 +646,57 @@ TEST(scheduler_polls_a_task_in_a_region_opened_in_the_round_before_its_opener_re
     ASSERT_TRUE(g_scope_log[2] == 'O');
 }
 
+/* ---- A finalizer's time budget is advisory (bd-9kll.4.14) ---- */
+
+typedef struct {
+    asx_sleep_state sleep;
+    int started;
+    int done;
+    int cancel_seen;
+} fin_probe;
+
+/* Sleeps 6 s of virtual time; its budget's deadline is 5 s after it was
+ * spawned. Records whether a cancel was pending when the sleep ended. */
+static asx_status poll_fin_sleeps_past_its_budget(void *data, asx_task_id self) {
+    fin_probe *p = (fin_probe *)data;
+    asx_cancel_reason reason;
+    asx_status st;
+    if (!p->started) {
+        p->started = 1;
+        st = asx_sleep_init(&p->sleep, 6000000000ULL);
+        if (st != ASX_OK) return st;
+    }
+    st = asx_sleep_poll(&p->sleep, self);
+    if (st != ASX_OK) return st;
+    p->cancel_seen = asx_task_get_cancel_reason(self, &reason) == ASX_OK;
+    p->done = 1;
+    return ASX_OK;
+}
+
+/* Rust arms no deadline timer for a cleanup task (state.rs:4401), so a
+ * finalizer that outlives its time budget is not cancelled when it wakes;
+ * only a checkpoint evaluates the budget (cx.rs:3112-3160). The sweep
+ * cancelled it before the poll at the deadline. */
+TEST(scheduler_does_not_cancel_a_finalizer_at_its_time_budget_before_it_polls) {
+    asx_region_id rid;
+    asx_region_state rs;
+    asx_budget budget;
+    fin_probe p;
+
+    asx_runtime_reset();
+    asx_ghost_reset();
+    memset(&p, 0, sizeof(p));
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_defer_async(rid, poll_fin_sleeps_past_its_budget, &p), ASX_OK);
+    budget = asx_budget_infinite();
+    ASSERT_EQ(asx_region_drain(rid, &budget), ASX_OK);
+
+    ASSERT_TRUE(p.done);
+    ASSERT_FALSE(p.cancel_seen);
+    ASSERT_EQ(asx_region_get_state(rid, &rs), ASX_OK);
+    ASSERT_EQ((int)rs, (int)ASX_REGION_CLOSED);
+}
+
 /* ---- Poll quota enforced before a poll (bd-9kll.4.13) ---- */
 
 typedef struct {
@@ -751,6 +802,7 @@ int main(void) {
                 "needs 19 tasks: 16 cancel polls in a row, the ready task, two more");
     RUN_TEST(scheduler_polls_a_task_spawned_in_a_round_in_that_round);
     RUN_TEST(scheduler_polls_a_task_in_a_region_opened_in_the_round_before_its_opener_resumes);
+    RUN_TEST(scheduler_does_not_cancel_a_finalizer_at_its_time_budget_before_it_polls);
 
     /* Budget enforcement before a poll */
     RUN_TEST(scheduler_stamps_an_exhausted_poll_quota_with_the_poll_quota_defaults);

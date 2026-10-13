@@ -33,7 +33,6 @@ obligation-quota-refused-semaphore-permit-releases-001 lab-model: Rust's obligat
 race-deadline-wrapper-cx-reason-001 undiagnosed bd-9kll.4.16: the race's Deadline origin is t.2 under the sweep, the wrapper t.2/g1.timeout in Rust
 race-loser-abort-preserves-fail-fast-001 lab-model: the driver's finish_region is a lab command applied after due timers' wakes have run; the sweep cancels before the race members are polled
 race-owner-cancel-cx-reason-001 lab-model: group members spawned into a cancelled region are refused at the next step's admission; the sweep refuses at the spawn and the op cannot continue
-region-finalizer-time-budget-advisory-001 drift bd-9kll.4.14: pre-poll deadline enforcement cancels a finalizer, for which Rust arms no deadline timer
 region-lifecycle-closed-child-spawn-001 lab-model: region open from a poll is a deferred lab command, so a third dispatch finds the spent poll quota and cancels; the sweep opens at once and completes in its second poll
 region-limits-group-member-refused-001 lab-model: spawn mailbox: admission is at the next step; the sweep refuses at the spawn and the group op cannot continue
 region-limits-late-admission-001 lab-model: spawn mailbox: live tasks are counted at the next step's admission, the spawner done; the sweep counts at the spawn
