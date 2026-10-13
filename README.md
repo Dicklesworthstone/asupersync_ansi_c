@@ -9,14 +9,14 @@
 ![C99](https://img.shields.io/badge/C-C99-00599C)
 ![No external deps](https://img.shields.io/badge/dependencies-none-brightgreen)
 ![Deterministic replay](https://img.shields.io/badge/replay-deterministic-orange)
-![Public API declarations](https://img.shields.io/badge/public%20API-2%2C210%20declarations-blue)
+![Public API declarations](https://img.shields.io/badge/public%20API-2%2C214%20declarations-blue)
 ![C test programs](https://img.shields.io/badge/tests-237%20programs-brightgreen)
 ![9 profiles](https://img.shields.io/badge/profiles-9%20deployment%20targets-blue)
 [![License: MIT+Rider](https://img.shields.io/badge/License-MIT%2BOpenAI%2FAnthropic%20Rider-blue.svg)](./LICENSE)
 
 </div>
 
-Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->2,210<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->237<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
+Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->2,214<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->237<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
 
 <div align="center">
 <h3>Quick Source Build</h3>
@@ -59,7 +59,7 @@ The port targets asupersync commit `5e60b1c4c` (2026-10).
 
 | Feature | What It Gives You |
 |---|---|
-| **<!-- fact:api_declarations -->2,210<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> header families** | Async runtime API: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
+| **<!-- fact:api_declarations -->2,214<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> header families** | Async runtime API: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
 | **No external dependencies** | Pure C runtime core; ships into constrained and audited environments unchanged |
 | **Deterministic replay and trace hashing** | Deterministic builds replay a scenario exactly from its seed and input; trace digests let you diff behavior across builds, profiles, and codec modes |
 | **Structured cancellation with witness protocol** | 11 cancel kinds with severity lattice, witness phase tracking, and cleanup budgets (advisory as in Rust; an opt-in hard bound) |
@@ -706,7 +706,7 @@ macro is `-DASX_RESOURCE_CLASS=N`). The six arenas in this table
 (`ASX_MAX_REGIONS`, `ASX_MAX_TASKS`, `ASX_MAX_TIMERS`, `ASX_MAX_OBLIGATIONS`,
 `ASX_MAX_CHANNELS`, `ASX_TRACE_CAPACITY`) are then sized from that class: the
 class limit is both the compiled capacity and the point where allocation
-fails with `ASX_E_RESOURCE_EXHAUSTED`. The thirteen capacities of the next
+fails with `ASX_E_RESOURCE_EXHAUSTED`. The seventeen capacities of the next
 table are tightened by R1 only; every other capacity keeps its default, and
 an explicit `-DASX_MAX_*` still overrides the class. The class is a build
 choice, independent of `PROFILE`. Without a class, the arenas keep the
@@ -733,12 +733,22 @@ the in-memory network arenas holds a 4 KiB buffer):
 | Event log events | `ASX_EVENT_LOG_CAPACITY` | <!-- fact:class_r1_max_event_log -->64<!-- /fact --> | 512 |
 | Hindsight events | `ASX_HINDSIGHT_CAPACITY` | <!-- fact:class_r1_max_hindsight_events -->32<!-- /fact --> | 256 |
 | Scheduler event log events | `ASX_SCHED_EVENT_LOG_CAPACITY` | <!-- fact:class_r1_max_sched_events -->64<!-- /fact --> | 256 |
+| UDP datagrams queued per socket | `ASX_UDP_QUEUE_CAPACITY` | <!-- fact:class_r1_max_udp_queue -->2<!-- /fact --> | 4 |
+| UDP datagram payload, bytes | `ASX_UDP_PAYLOAD_CAPACITY` | <!-- fact:class_r1_max_udp_payload -->1536<!-- /fact --> | 4096 (`ASX_BUF_CAPACITY`) |
+| Unix datagrams queued per socket | `ASX_UNIX_DGRAM_QUEUE_CAPACITY` | <!-- fact:class_r1_max_unix_dgram_queue -->2<!-- /fact --> | 4 |
+| Unix datagram payload, bytes | `ASX_UNIX_DGRAM_PAYLOAD_CAPACITY` | <!-- fact:class_r1_max_unix_dgram_payload -->1536<!-- /fact --> | 4096 (`ASX_BUF_CAPACITY`) |
 
-With these, the R1 kernel-only quickstart links with about 286 KiB of bss
-(293,120 B) instead of 910 KiB (931,904 B) (`make size-report`, CORE,
-release, gcc 15 x86-64, before and after); the remaining bulk is
-the in-memory UDP and Unix datagram queues (4 datagrams of
-`ASX_BUF_CAPACITY` bytes per socket).
+With the first thirteen, the R1 kernel-only quickstart links with about 286
+KiB of bss (293,120 B) instead of 910 KiB (931,904 B) (`make size-report`,
+CORE, release, gcc 15 x86-64, before and after). The in-memory UDP and Unix
+datagram tables were then most of the rest: 100,208 B, four datagrams of
+`ASX_BUF_CAPACITY` bytes per socket. With the four datagram rows they are
+two datagrams of 1,536 bytes: 12,784 B and 6,864 B at R1's socket counts,
+80,576 B less in `net.o` (the refusals are the default's, `ASX_E_BUFFER_TOO_SMALL` for a larger datagram and
+`ASX_E_WOULD_BLOCK` for a third queued one, reached sooner). They are linked
+only by an application that uses sockets: since the network, file-system,
+process and signal modules register their reset when first used (`bd-dkfs`),
+the kernel-only quickstart does not link them.
 
 ### Capacity Macros
 
@@ -834,6 +844,10 @@ it drifts from the headers or a new capacity macro is missing.
 | `ASX_SESSION_MAX_CAPACITY` | 16 | `include/asx/asx_config.h` |
 | `ASX_SYMBOL_REGISTRY_CAPACITY` | 256 | `include/asx/asx_config.h` |
 | `ASX_TRACE_CAPACITY` | 1024 | `include/asx/asx_config.h` |
+| `ASX_UDP_PAYLOAD_CAPACITY` | 4096 | `include/asx/asx_config.h` |
+| `ASX_UDP_QUEUE_CAPACITY` | 4 | `include/asx/asx_config.h` |
+| `ASX_UNIX_DGRAM_PAYLOAD_CAPACITY` | 4096 | `include/asx/asx_config.h` |
+| `ASX_UNIX_DGRAM_QUEUE_CAPACITY` | 4 | `include/asx/asx_config.h` |
 | `ASX_WAIT_NODE_CAPACITY` | 256 | `src/sync/wait_queue.h` |
 | `ASX_WS_TX_CAPACITY` | 16896 | `include/asx/asx_config.h` |
 <!-- capacity-table:end -->
@@ -2644,7 +2658,7 @@ It has not been benchmarked against live builds here, and the two differ in more
 
 ### Can I embed this as a library without the CLI?
 
-Yes. The C API is first-class: <!-- fact:api_declarations -->2,210<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact -->
+Yes. The C API is first-class: <!-- fact:api_declarations -->2,214<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact -->
 public header families in the current `include/asx/` tree, and one umbrella
 `#include <asx/asx.h>`. The repository is library-first: `make install`
 installs only `libasx.a` and the headers. The `asx` CLI (`version`, `info`,
