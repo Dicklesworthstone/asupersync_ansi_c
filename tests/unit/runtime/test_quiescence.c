@@ -238,9 +238,20 @@ TEST(region_drain_advances_draining_region_to_closed_and_runs_cleanup) {
     ASSERT_EQ(cleaned, 1);
     event_count = asx_trace_event_count(test_runtime());
     ASSERT_TRUE(event_count > 0u);
-    ASSERT_TRUE(asx_trace_event_get(test_runtime(), event_count - 1u, &ev));
-    ASSERT_EQ(ev.kind, ASX_TRACE_REGION_CLOSED);
-    ASSERT_EQ(ev.entity_id, rid);
+    {
+        /* The callback is the region's finalizer task: its completion is
+         * recorded around the close, so the close is one event, not
+         * necessarily the last. */
+        uint32_t i;
+        uint32_t closed = 0u;
+        for (i = 0u; i < event_count; i++) {
+            if (asx_trace_event_get(test_runtime(), i, &ev) && ev.kind == ASX_TRACE_REGION_CLOSED &&
+                ev.entity_id == rid) {
+                closed++;
+            }
+        }
+        ASSERT_EQ(closed, 1u);
+    }
 }
 
 TEST(region_drain_recancels_uncancelled_tasks_before_scheduler_run) {
@@ -325,14 +336,16 @@ TEST(public_finalizer_cleanup_task_delays_close_until_it_completes) {
     spawn_ctx.spawn_status = ASX_E_INVALID_STATE;
     spawn_ctx.task_id = ASX_INVALID_ID;
     ASSERT_EQ(asx_region_defer_sync(rid, cleanup_spawn_immediate_task, &spawn_ctx), ASX_OK);
-    budget = asx_budget_from_polls(8);
-    ASSERT_EQ(asx_region_drain(rid, &budget), ASX_E_QUIESCENCE_TASKS_LIVE);
+    /* One poll: the finalizer's own task, which spawns the cleanup task. */
+    budget = asx_budget_from_polls(1);
+    ASSERT_EQ(asx_region_drain(rid, &budget), ASX_E_POLL_BUDGET_EXHAUSTED);
     ASSERT_EQ(spawn_ctx.spawn_status, ASX_OK);
     ASSERT_NE(spawn_ctx.task_id, ASX_INVALID_ID);
     ASSERT_EQ(region->state, ASX_REGION_FINALIZING);
     ASSERT_EQ(region->task_count, 1u);
     ASSERT_EQ(asx_task_get_state(spawn_ctx.task_id, &task_state), ASX_OK);
     ASSERT_EQ(task_state, ASX_TASK_CREATED);
+    budget = asx_budget_from_polls(8);
     ASSERT_EQ(asx_region_drain(rid, &budget), ASX_OK);
     ASSERT_EQ(asx_task_get_state(spawn_ctx.task_id, &task_state), ASX_OK);
     ASSERT_EQ(task_state, ASX_TASK_COMPLETED);
@@ -985,11 +998,13 @@ TEST(public_finalizer_captured_cleanup_executes_and_drops_once) {
     ASSERT_EQ(asx_region_open(test_runtime(), &ctx.spawn.region), ASX_OK);
     ASSERT_EQ(asx_region_defer_sync(ctx.spawn.region, finalizer_spawn_captured_cleanup, &ctx),
               ASX_OK);
-    budget = asx_budget_from_polls(8u);
-    ASSERT_EQ(asx_region_drain(ctx.spawn.region, &budget), ASX_E_QUIESCENCE_TASKS_LIVE);
+    /* One poll: the finalizer's own task, which spawns the captured cleanup. */
+    budget = asx_budget_from_polls(1u);
+    ASSERT_EQ(asx_region_drain(ctx.spawn.region, &budget), ASX_E_POLL_BUDGET_EXHAUSTED);
     ASSERT_EQ(ctx.spawn.spawn_status, ASX_OK);
     ASSERT_EQ(ctx.polls, 0);
     ASSERT_EQ(ctx.drops, 0);
+    budget = asx_budget_from_polls(8u);
     ASSERT_EQ(asx_region_drain(ctx.spawn.region, &budget), ASX_OK);
     ASSERT_EQ(ctx.polls, 1);
     ASSERT_EQ(ctx.drops, 1);
@@ -1525,7 +1540,8 @@ TEST(drain_cleanup_lifo_multiple) {
     ASSERT_EQ(asx_cleanup_push(&region->cleanup, cleanup_mark, &c2, &h2), ASX_OK);
     ASSERT_EQ(asx_cleanup_push(&region->cleanup, cleanup_mark, &c3, &h3), ASX_OK);
 
-    budget = asx_budget_from_polls(1);
+    /* Each callback is a finalizer task and takes one poll. */
+    budget = asx_budget_from_polls(3);
     ASSERT_EQ(asx_region_drain(rid, &budget), ASX_OK);
     ASSERT_EQ(region->state, ASX_REGION_CLOSED);
     ASSERT_EQ(c1, 1);
@@ -2093,8 +2109,10 @@ TEST(public_finalizer_runs_after_holder_resolves_and_handles_reentrancy) {
     ASSERT_EQ(holder.settle_status, ASX_OK);
     ASSERT_EQ(ctx.obligation_state, ASX_OBLIGATION_COMMITTED);
     ASSERT_EQ(ctx.region_state, ASX_REGION_FINALIZING);
-    ASSERT_EQ(ctx.recursive_drain, ASX_E_PENDING);
-    ASSERT_EQ(ctx.other_drain, ASX_OK);
+    /* The finalizer is a task of its region: a drain from its poll would
+     * re-enter the scheduler, of its own region or any other, and is refused. */
+    ASSERT_EQ(ctx.recursive_drain, ASX_E_INVALID_STATE);
+    ASSERT_EQ(ctx.other_drain, ASX_E_INVALID_STATE);
     ASSERT_EQ(ctx.calls, 1);
     ASSERT_EQ(remaining_calls, 1);
     ASSERT_EQ(asx_obligation_leak_count(test_runtime()), 0u);
@@ -2158,11 +2176,13 @@ TEST(region_leak_audit_waits_for_holder_and_cleanup_task) {
     ASSERT_EQ(asx_obligation_get_state(holder.obligation, &state), ASX_OK);
     ASSERT_EQ(state, ASX_OBLIGATION_COMMITTED);
     ASSERT_EQ(ctx.finalizer_calls, 0);
-    budget = asx_budget_from_polls(8u);
-    ASSERT_EQ(asx_region_drain(ctx.region, &budget), ASX_E_QUIESCENCE_TASKS_LIVE);
+    /* One poll: the finalizer's own task, which spawns the cleanup task. */
+    budget = asx_budget_from_polls(1u);
+    ASSERT_EQ(asx_region_drain(ctx.region, &budget), ASX_E_POLL_BUDGET_EXHAUSTED);
     ASSERT_EQ(ctx.spawn_status, ASX_OK);
     ASSERT_EQ(asx_obligation_leak_count(test_runtime()), 0u);
     ASSERT_EQ(ctx.polls, 0);
+    budget = asx_budget_from_polls(8u);
     ASSERT_EQ(asx_region_drain(ctx.region, &budget), ASX_OK);
     ASSERT_EQ(ctx.polls, 1);
     ASSERT_EQ(ctx.finalizer_calls, 1);
@@ -2207,10 +2227,12 @@ TEST(holder_completing_with_obligation_reserved_leaks_it_before_region_close) {
     ASSERT_EQ(state, ASX_OBLIGATION_LEAKED);
     ASSERT_EQ(asx_obligation_leak_count(test_runtime()), 1u);
     ASSERT_EQ(ctx.finalizer_calls, 0);
-    budget = asx_budget_from_polls(8u);
-    ASSERT_EQ(asx_region_drain(ctx.region, &budget), ASX_E_QUIESCENCE_TASKS_LIVE);
+    /* One poll: the finalizer's own task, which spawns the cleanup task. */
+    budget = asx_budget_from_polls(1u);
+    ASSERT_EQ(asx_region_drain(ctx.region, &budget), ASX_E_POLL_BUDGET_EXHAUSTED);
     ASSERT_EQ(ctx.spawn_status, ASX_OK);
     ASSERT_EQ(ctx.polls, 0);
+    budget = asx_budget_from_polls(8u);
     ASSERT_EQ(asx_region_drain(ctx.region, &budget), ASX_OK);
     ASSERT_EQ(ctx.polls, 1);
     ASSERT_EQ(ctx.finalizer_calls, 1);
@@ -2246,7 +2268,8 @@ TEST(public_finalizer_capacity_and_errors) {
         ASSERT_EQ(asx_region_defer_sync(rid, cleanup_mark, &calls), ASX_OK);
     }
     ASSERT_EQ(asx_region_defer_sync(rid, cleanup_mark, &calls), ASX_E_RESOURCE_EXHAUSTED);
-    budget = asx_budget_from_polls(8u);
+    /* Each finalizer is a task and takes a poll. */
+    budget = asx_budget_from_polls(ASX_CLEANUP_STACK_CAPACITY + 8u);
     ASSERT_EQ(asx_region_drain(rid, &budget), ASX_OK);
     ASSERT_EQ(calls, (int)ASX_CLEANUP_STACK_CAPACITY);
     ASSERT_EQ(asx_region_defer_sync(rid, cleanup_mark, &calls), ASX_E_REGION_CLOSED);
@@ -2326,6 +2349,7 @@ TEST(public_finalizer_nested_cancel_preserves_outer_subtree) {
     asx_region_id first;
     asx_region_id second;
     asx_region_id other_children[2];
+    asx_budget budget = asx_budget_from_polls(16u);
     uint32_t children = 0u;
     uint32_t i;
     asx_runtime_reset(test_runtime());
@@ -2348,6 +2372,8 @@ TEST(public_finalizer_nested_cancel_preserves_outer_subtree) {
      * the outer walk before the older sibling has been finalized. */
     ASSERT_EQ(asx_region_defer_sync(second, finalizer_cancel_other_tree, &ctx), ASX_OK);
     ASSERT_EQ(asx_region_cancel(parent, &ctx.reason, NULL), ASX_OK);
+    /* The callback is the second child's finalizer task: the drain runs it. */
+    ASSERT_EQ(asx_region_drain(parent, &budget), ASX_OK);
     ASSERT_EQ(ctx.calls, 1);
     ASSERT_EQ(ctx.status, ASX_OK);
     ASSERT_EQ(asx_quiescence_check(first), ASX_OK);
@@ -2714,11 +2740,20 @@ TEST(body_close_wait_runs_lifo_then_cleanup_before_leak_audit) {
     ASSERT_EQ(asx_region_defer_sync(ctx.region, finalizer_spawn_ordinary_task, &ordinary), ASX_OK);
     ASSERT_EQ(asx_region_defer_sync(ctx.region, finalizer_spawn_cleanup_task, &ctx), ASX_OK);
     ASSERT_EQ(asx_region_close_with_outcome(ctx.region, &body, NULL), ASX_OK);
+    /* Every finalizer is a task of the region (Rust promotes a sync one as
+     * well): with no poll to give none has been spawned or run. */
     budget = asx_budget_from_polls(0u);
-    ASSERT_EQ(asx_region_wait_closed(ctx.region, &budget), ASX_E_QUIESCENCE_TASKS_LIVE);
+    ASSERT_EQ(asx_region_wait_closed(ctx.region, &budget), ASX_E_POLL_BUDGET_EXHAUSTED);
+    ASSERT_EQ(ctx.finalizer_calls, 0);
+    ASSERT_EQ(g_finalizer_log.n, 0);
+    /* Polls for the five finalizer tasks and the cleanup task the top one
+     * spawns: the region closes only after all of them, and the leak audit
+     * after that. */
+    budget = asx_budget_from_polls(8u);
+    ASSERT_EQ(asx_region_wait_closed(ctx.region, &budget), ASX_OK);
     ASSERT_EQ(ctx.finalizer_calls, 1);
     ASSERT_EQ(ctx.spawn_status, ASX_OK);
-    ASSERT_EQ(ctx.polls, 0);
+    ASSERT_EQ(ctx.polls, 1);
     ASSERT_EQ(ordinary.spawn_status, ASX_E_REGION_CLOSED);
     ASSERT_EQ(ordinary.task_id, ASX_INVALID_ID);
     ASSERT_EQ(g_finalizer_log.n, 3);
@@ -2728,10 +2763,6 @@ TEST(body_close_wait_runs_lifo_then_cleanup_before_leak_audit) {
     ASSERT_EQ(asx_obligation_get_state(holder.obligation, &state), ASX_OK);
     ASSERT_EQ(state, ASX_OBLIGATION_COMMITTED);
     ASSERT_EQ(asx_obligation_leak_count(test_runtime()), 0u);
-    budget = asx_budget_from_polls(8u);
-    ASSERT_EQ(asx_region_wait_closed(ctx.region, &budget), ASX_OK);
-    ASSERT_EQ(ctx.polls, 1);
-    ASSERT_EQ(ctx.finalizer_calls, 1);
     ASSERT_EQ(asx_obligation_get_state(holder.obligation, &state), ASX_OK);
     ASSERT_EQ(state, ASX_OBLIGATION_COMMITTED);
     ASSERT_EQ(asx_obligation_leak_count(test_runtime()), 0u);

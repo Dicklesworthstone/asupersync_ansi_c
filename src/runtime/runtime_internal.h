@@ -55,14 +55,18 @@ typedef struct {
  * over this record, which counts its polls against the finalizer budget
  * (asx_runtime_config.finalizer_poll_budget / _time_budget_ns). */
 typedef struct {
-    int active;               /* 1 while the finalizer task is live */
-    uint32_t task_slot;       /* its slot, valid while active */
-    asx_cleanup_poll_fn poll; /* the finalizer's own poll function */
-    void *data;               /* its context */
-    uint32_t polls;           /* polls the finalizer has been given */
-    uint32_t poll_budget;     /* polls allowed; the config's, at admission */
-    asx_time deadline;        /* its absolute time budget, at admission */
-    int exhausted;            /* its budget was found spent (escalated once) */
+    int active;         /* 1 while the finalizer task is live */
+    uint32_t task_slot; /* its slot, valid while active */
+    union {
+        asx_cleanup_poll_fn poll; /* an async finalizer's own poll function */
+        asx_cleanup_fn fn;        /* a sync finalizer's callback (sync != 0) */
+    } run;
+    void *data;           /* its context */
+    uint32_t polls;       /* polls the finalizer has been given */
+    uint32_t poll_budget; /* polls allowed; the config's, at admission */
+    asx_time deadline;    /* its absolute time budget, at admission */
+    int exhausted;        /* its budget was found spent (escalated once) */
+    int sync;             /* run.fn is the entry: one call, no budget to spend */
 } asx_region_finalizer;
 
 typedef struct {
@@ -93,6 +97,13 @@ typedef struct {
      * ones. Descendants' reasons chain to their parent's via `cause`. */
     int cancel_requested;
     asx_cancel_reason cancel_reason;
+    /* Rust RegionRecord::shutdown_budget (record/region.rs:1203-1222): the
+     * ceiling a cancel with a shutdown budget leaves, the tightest of every
+     * one that reached the region (its own request's, and its ancestors'
+     * carried down by the cancel). Each task such a cancel cancels takes
+     * the cleanup budget of its reason met with it (state.rs:7829-7834). */
+    int has_shutdown_budget;
+    asx_budget shutdown_budget;
     /* Rust RegionRecord::close_outcome (record/region.rs:1139-1150): the
      * outcome of every task that completed in the region, joined. A region
      * that closes with none recorded reports Cancelled if it was cancelled,
@@ -1257,10 +1268,11 @@ const char *asx_channel_accounting_defect_internal(const asx_channel_accounting 
  * Budget::INFINITE and CapabilityBudget::UNSPECIFIED), and a child's, which
  * start as its parent's: create_child_with_capability_budget meets the
  * child's own envelope into the parent's (region_table.rs:292-325), and a
- * child that supplies none keeps the parent's. */
+ * child that supplies none keeps the parent's. No shutdown ceiling yet. */
 static inline void asx_region_budgets_reset_internal(asx_region_slot *r) {
     r->budget = asx_budget_infinite();
     r->capability_budget = asx_capability_budget_unspecified();
+    r->has_shutdown_budget = 0;
 }
 
 static inline void asx_region_budgets_inherit_internal(asx_region_slot *child,

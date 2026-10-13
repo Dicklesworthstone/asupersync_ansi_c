@@ -219,11 +219,11 @@ asx_status asx_scope_finish(asx_scope *scope, const asx_outcome *body,
     } else {
         asx_outcome previous = scope->body_outcome;
 
-        /* Cancellation may immediately run a finalizer, which can reenter
-         * this host API. Bind the first body before that callback so a
-         * retry only waits and cannot request or strengthen cancellation.
-         * Rejected requests never run callbacks, so restore the unused
-         * scope state on those failure-atomic validation paths. */
+        /* Bind the first body before the close request so a retry only
+         * waits and cannot request or strengthen cancellation (a finalizer
+         * is a task of the region: its call to this host API is refused).
+         * Rejected requests run no callbacks, so restore the unused scope
+         * state on those failure-atomic validation paths. */
         scope->finish_started = 1;
         scope->body_outcome = *body;
         st = asx_region_close_with_outcome(scope->region_id, body, reason);

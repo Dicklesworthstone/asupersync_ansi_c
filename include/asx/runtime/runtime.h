@@ -1226,8 +1226,9 @@ ASX_API int asx_region_is_quiescent(asx_region_id id);
  *
  * Preconditions: id must be a valid region handle; budget must not be NULL.
  * Postconditions: on success, region reaches CLOSED state; all tasks
- *   completed; finalizers (asx_region_defer_sync) run in LIFO order; then
- *   any obligation still Reserved leaked under the leak policy.
+ *   completed; finalizers (asx_region_defer_sync, _async) run as the
+ *   region's cleanup tasks, one at a time in LIFO order; then any
+ *   obligation still Reserved leaked under the leak policy.
  * Returns ASX_OK on success, ASX_E_NOT_FOUND if id is invalid,
  *   ASX_E_INVALID_ARGUMENT if budget is NULL,
  *   the scheduler's status when its run stops early (for example
@@ -1236,7 +1237,8 @@ ASX_API int asx_region_is_quiescent(asx_region_id id);
  *   ASX_E_PENDING while the region is closing but still waiting for
  *   child regions to close, ASX_E_UNRESOLVED_OBLIGATIONS when the PANIC
  *   leak policy fails the close's leak audit (the region stays
- *   Finalizing; a later drain closes it).
+ *   Finalizing; a later drain closes it), ASX_E_INVALID_STATE for a call
+ *   from a task poll (a finalizer is one) on a region not yet closed.
  * Thread-safety: not thread-safe; single-threaded mode only.
  * See: API_MISUSE_CATALOG.md § Region Lifecycle. */
 ASX_API ASX_MUST_USE asx_status asx_region_drain(asx_region_id id, asx_budget *budget);
@@ -1277,9 +1279,12 @@ typedef void (*asx_region_finalizer_fn)(void *user_data);
 /* Register a synchronous finalizer for a region, as Rust's
  * Scope::defer_sync does (RuntimeState::register_sync_finalizer,
  * runtime/state.rs:9046). It runs once when the region finalizes, after
- * its tasks and child regions are done: the region's finalizers run in
- * LIFO order, before the close's leak audit. A finalizer may spawn
- * cleanup work into the region; the close then waits for it. Registration
+ * its tasks and child regions are done: in the one poll of a masked
+ * cleanup task the runtime spawns for it, as Rust's drain promotes a sync
+ * finalizer (`async move { f() }`, state.rs:8612), one finalizer at a time
+ * in LIFO order, before the close's leak audit. The callback is a task
+ * poll: it may spawn cleanup work into the region, the close then waits
+ * for it, but a drain or a wait from it is refused. Registration
  * is accepted only while the region is Open (Rust refuses a closing or
  * closed region). It is the one registration of a sync finalizer: the
  * callback runs once and user_data, borrowed, must stay valid until it

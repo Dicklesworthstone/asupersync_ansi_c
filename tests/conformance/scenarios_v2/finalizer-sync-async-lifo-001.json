@@ -1,0 +1,20 @@
+{
+  "schema": "asx.scenario.v2",
+  "id": "finalizer-sync-async-lifo-001",
+  "description": "Sync and async finalizers share one LIFO stack and run one at a time: the last declared runs first whichever its kind, the next is spawned at a later step, after this one's task completed. Declared sync a, async b, sync c: c, b, a.",
+  "unit": "region_lifecycle",
+  "rules": ["rule.region.close_run_finalizer", "rule.region.close_complete", "inv.determinism.replayable"],
+  "seed": 42,
+  "lab": {"max_steps": 1000},
+  "regions": [{"name": "r.main", "parent": "root", "budget": null,
+    "finalizers": [
+      {"name": "f.a", "sync": true, "program": [{"op": "trace", "message": "a (sync, declared first, runs last)"}]},
+      {"name": "f.b", "program": [{"op": "yield"}, {"op": "trace", "message": "b (async)"}]},
+      {"name": "f.c", "sync": true, "program": [{"op": "trace", "message": "c (sync, declared last, runs first)"}]}
+    ]}],
+  "channels": [], "sync": [],
+  "tasks": [{"name": "t.work", "region": "r.main", "budget": null,
+    "program": [{"op": "trace", "message": "work done"}]}],
+  "script": [{"at_ns": 0, "op": {"op": "finish_region", "region": "r.main", "body": "ok"}}],
+  "expect": {"kind": "ok"}
+}

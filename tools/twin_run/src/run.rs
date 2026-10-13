@@ -1386,6 +1386,46 @@ fn run_program(
     })
 }
 
+/// A sync finalizer's program (DSL "Region finalizers"): the non-blocking
+/// steps, run to their end inside the one poll of the finalizer's task. The
+/// closure `register_sync_finalizer` takes is `FnOnce()`; the lab wraps it in
+/// `async move { f() }` and spawns that as the region's masked cleanup task
+/// (`drain_ready_async_finalizers_in`, state.rs:8612), so the Cx of the polled
+/// task is the ambient one.
+fn run_sync_program(cx: Cx, ctx: &Arc<TaskCtx>, steps: &[Value]) -> Body {
+    let mut local = Local {
+        _tokens: OwnedTokens {
+            tokens: ctx.tokens.clone(),
+        },
+        cx: Some(Box::new(cx.clone())),
+        ..Local::default()
+    };
+    for (i, step) in steps.iter().enumerate() {
+        let label = match str_field(step, "op") {
+            Ok(op) => op.to_string(),
+            Err(err) => {
+                harness_error(
+                    &ctx.shared,
+                    format!("finalizer {} step {}: {err}", ctx.me, i + 1),
+                );
+                return Body::Err("ASX_E_INVALID_STATE".to_string());
+            }
+        };
+        match exec_sync(&cx, ctx, &mut local, i + 1, &label, step) {
+            Ok(Flow::Continue) => {}
+            Ok(Flow::Return(body)) => return body,
+            Err(err) => {
+                harness_error(
+                    &ctx.shared,
+                    format!("finalizer {} step {}: {err}", ctx.me, i + 1),
+                );
+                return Body::Err("ASX_E_INVALID_STATE".to_string());
+            }
+        }
+    }
+    Body::Ok
+}
+
 /// The observation of a step naming an obligation, guard, semaphore permit
 /// or send permit the task does not hold, because the step that would have
 /// acquired it failed or it was already released (DSL §3).
@@ -4146,26 +4186,44 @@ fn run_scenario_inner(
                 s.obligation_tokens
                     .insert(fname.clone(), Arc::downgrade(&ctx.tokens));
             }
-            let future = async move {
+            // A sync finalizer (`"sync": true`, Scope::defer_sync) is a
+            // closure over the non-blocking steps: the lab promotes it to
+            // the same kind of cleanup task as an async one, which polls it
+            // once, so it never suspends.
+            let sync = f.get("sync").and_then(Value::as_bool).unwrap_or(false);
+            let begin = move |ctx: &TaskCtx| -> Option<Cx> {
                 let Some(cx) = Cx::current() else {
                     harness_error(&ctx.shared, format!("finalizer {}: no Cx", ctx.me));
-                    return;
+                    return None;
                 };
-                {
-                    let mut s = lock(&ctx.shared);
-                    let task = cx.task_id();
-                    s.self_ids.entry(ctx.me.clone()).or_insert(task);
-                    s.task_ids.insert(ctx.me.clone(), task);
-                    s.task_names.insert(task, ctx.me.clone());
-                }
-                // The finalizer's task is masked for its whole run, so its
-                // outcome is its body's: a finalizer future returns `()`.
-                let body = run_program(cx, Arc::clone(&ctx), program, Vec::new()).await;
-                lock(&ctx.shared)
-                    .raw_outcomes
-                    .insert(ctx.me.clone(), Ok(body));
+                let mut s = lock(&ctx.shared);
+                let task = cx.task_id();
+                s.self_ids.entry(ctx.me.clone()).or_insert(task);
+                s.task_ids.insert(ctx.me.clone(), task);
+                s.task_names.insert(task, ctx.me.clone());
+                drop(s);
+                Some(cx)
             };
-            if !lab.state.register_async_finalizer(id, future) {
+            // The finalizer's task is masked for its whole run, so its
+            // outcome is its body's: a finalizer future returns `()`.
+            let registered = if sync {
+                lab.state.register_sync_finalizer(id, move || {
+                    let Some(cx) = begin(&ctx) else { return };
+                    let body = run_sync_program(cx, &ctx, &program);
+                    lock(&ctx.shared)
+                        .raw_outcomes
+                        .insert(ctx.me.clone(), Ok(body));
+                })
+            } else {
+                lab.state.register_async_finalizer(id, async move {
+                    let Some(cx) = begin(&ctx) else { return };
+                    let body = run_program(cx, Arc::clone(&ctx), program, Vec::new()).await;
+                    lock(&ctx.shared)
+                        .raw_outcomes
+                        .insert(ctx.me.clone(), Ok(body));
+                })
+            };
+            if !registered {
                 return Err(format!(
                     "finalizer {fname:?} was refused by region {name:?} (closing or closed)"
                 ));

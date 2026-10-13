@@ -510,7 +510,7 @@ static asx_oracle_result check_region_leak(const asx_kernel *k) {
         /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
         if (!r->alive || r->state == ASX_REGION_OPEN || r->state == ASX_REGION_CLOSED) continue;
         if (r->poisoned || r->task_count != 0u || r->child_count != 0u) continue;
-        if (asx_cleanup_pending(&r->cleanup) != 0u || r->cleanup.draining != 0u) continue;
+        if (asx_cleanup_pending(&r->cleanup) != 0u) continue;
         if (r->finalizer.active) continue;
         if (region_has_live_task(k, i, r->generation) ||
             region_has_live_child(k, i, r->generation) ||

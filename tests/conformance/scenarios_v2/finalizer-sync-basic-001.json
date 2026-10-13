@@ -1,0 +1,21 @@
+{
+  "schema": "asx.scenario.v2",
+  "id": "finalizer-sync-basic-001",
+  "description": "A sync finalizer (Scope::defer_sync, register_sync_finalizer, state.rs:9046): the closure is not run inline by the close, the lab wraps it in a future and spawns it as the region's masked cleanup task (drain_ready_async_finalizers_in, state.rs:8612), so it is a task of the region with its own name, spawn and completion events, run in the one poll of the step after the region finished its tasks.",
+  "unit": "region_lifecycle",
+  "rules": ["rule.region.close_begin", "rule.region.close_run_finalizer", "rule.region.close_complete", "inv.determinism.replayable"],
+  "seed": 42,
+  "lab": {"max_steps": 1000},
+  "regions": [{"name": "r.main", "parent": "root", "budget": null,
+    "finalizers": [
+      {"name": "f.sync", "sync": true, "program": [
+        {"op": "is_cancel_requested"},
+        {"op": "checkpoint", "on_cancel": "continue"},
+        {"op": "trace", "message": "sync finalizer ran"}]}
+    ]}],
+  "channels": [], "sync": [],
+  "tasks": [{"name": "t.work", "region": "r.main", "budget": null,
+    "program": [{"op": "trace", "message": "work done"}]}],
+  "script": [{"at_ns": 0, "op": {"op": "finish_region", "region": "r.main", "body": "ok"}}],
+  "expect": {"kind": "ok"}
+}

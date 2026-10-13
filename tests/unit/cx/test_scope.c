@@ -819,7 +819,10 @@ TEST(scope_finish_finalizer_reentry_keeps_first_body_and_cancel_reason) {
             ASSERT_EQ(ctx.calls, 1);
             ASSERT_EQ(ctx.saved_at_entry, 1);
             ASSERT_EQ(ctx.body_at_entry, severities[severity]);
-            ASSERT_EQ(ctx.same_status, ASX_E_PENDING);
+            /* The finalizer is a task of the region, polled by the wait the
+             * finish drives: a finish from a task poll is refused, either
+             * way, and changes nothing. */
+            ASSERT_EQ(ctx.same_status, ASX_E_INVALID_STATE);
             ASSERT_EQ(ctx.changed_status, ASX_E_INVALID_STATE);
             ASSERT_EQ(ctx.cancel_events_before, 1u);
             ASSERT_EQ(ctx.cancel_events_after, ctx.cancel_events_before);

@@ -45,8 +45,9 @@ follows a monitor or link open where the holder can be cancelled (a refused
 open binds no name), `close_region` only names a region no task lives in (its
 drain does not move the clock), and the interpreter's tables (4 delay queues, 8
 intervals) are not exceeded. A second pass (`ext_declarations`) sets the
-options of declarations and steps the main stream never does: async finalizers
-on regions (not on one a driver `close_region` closes, nor below it), a mask
+options of declarations and steps the main stream never does: finalizers, async
+or `sync` (non-blocking steps only), on regions (not on one a driver
+`close_region` closes, nor below it), a mask
 `depth`, the obligation kinds `IoOp`, `SemaphorePermit` and `Transaction`, the
 server behaviors `latest`, `budgets` and `budgets_stop`, and a supervisor's
 `storm_threshold_milli`, explicit `stop`, `depends_on`, `required` and

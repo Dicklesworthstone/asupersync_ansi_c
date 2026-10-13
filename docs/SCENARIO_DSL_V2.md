@@ -173,6 +173,19 @@ that region (Rust `Scope::defer_async`):
   task's own `Cx`. Rust's finalizer future takes none, so the harness
   reads it ambiently: the lab installs the polled task's Cx for the poll
   (`Cx::current()`, `lab/runtime.rs:4735`).
+- **`sync`** (optional, `true`) declares a sync finalizer: Rust
+  `Scope::defer_sync` (`register_sync_finalizer`, `runtime/state.rs:9046`),
+  C `asx_region_defer_sync`. Its `program` holds only non-blocking steps (the
+  steps §3.2 allows inside `masked`, `masked` among them) with no `return`: it
+  is one call with no suspension point and ends `ok`. It is **not** run inline
+  by the close: `drain_ready_async_finalizers_in` wraps it
+  (`Box::pin(async move { f() })`, `state.rs:8612`) and spawns it as it does an
+  async one, so it is a masked cleanup task of the region under its own name,
+  on the same LIFO stack and one at a time with the async entries, which runs
+  to its end in its first poll (`finalizer-sync-basic-001`,
+  `finalizer-sync-async-lifo-001`, `finalizer-sync-spawn-refused-001`). The
+  harness runs the steps in the closure with the ambient `Cx`; C calls its
+  callback inside that task's poll (`finalizer_sync_run`).
 - **Registration.** At setup, right after the region is created and before
   any task, each entry is registered in array order: Rust
   `lab.state.register_async_finalizer(region, future)`

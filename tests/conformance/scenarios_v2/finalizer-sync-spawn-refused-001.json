@@ -1,0 +1,20 @@
+{
+  "schema": "asx.scenario.v2",
+  "id": "finalizer-sync-spawn-refused-001",
+  "description": "A sync finalizer runs in a task of its Finalizing region: a normal spawn into the region is refused (SpawnError::RegionClosed, record/region.rs:134-142), observed as ASX_E_REGION_CLOSED, and try_join of the refused child finds nothing to join.",
+  "unit": "region_lifecycle",
+  "rules": ["rule.region.close_run_finalizer", "rule.region.close_complete", "inv.determinism.replayable"],
+  "seed": 42,
+  "lab": {"max_steps": 1000},
+  "regions": [{"name": "r.main", "parent": "root", "budget": null,
+    "finalizers": [
+      {"name": "f.sync", "sync": true, "program": [
+        {"op": "spawn", "as": "late", "program": [{"op": "trace", "message": "never runs"}]},
+        {"op": "trace", "message": "after the refused spawn"}]}
+    ]}],
+  "channels": [], "sync": [],
+  "tasks": [{"name": "t.work", "region": "r.main", "budget": null,
+    "program": [{"op": "trace", "message": "work done"}]}],
+  "script": [{"at_ns": 0, "op": {"op": "finish_region", "region": "r.main", "body": "ok"}}],
+  "expect": {"kind": "ok"}
+}

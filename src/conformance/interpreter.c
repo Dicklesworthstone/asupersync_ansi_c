@@ -5025,17 +5025,45 @@ static asx_status finalizer_poll(void *user_data, asx_task_id self) {
     return interp_poll(t, self);
 }
 
+/* A sync region finalizer's callback (`"sync": true`): the non-blocking steps
+ * of its program, run to their end in the one call. The runtime runs it as
+ * the region's cleanup task, so the current task is the finalizer's own and
+ * its first call, as the async poll's, learns the identity. */
+static void finalizer_sync_run(void *user_data) {
+    it_task *t = (it_task *)user_data;
+    asx_task_id self = asx_task_current();
+    uint32_t n = asx_json_count(g_in, t->program);
+    uint32_t j;
+
+    if (!t->spawned) {
+        t->id = self;
+        t->spawned = 1;
+        (void)asx_cx_init(&t->cx, t->region, self, ASX_CAP_NONE);
+    }
+    for (j = 0; j < n && !g_failed; j++) {
+        uint32_t step = asx_json_item(g_in, t->program, j);
+        if (exec_sync(t, self, step, j + 1u, it_str(step, "op")) != STEP_NEXT) break;
+    }
+    drop_locals(t);
+}
+
 /* The `finalizers` of the region declaration `r`, registered in array
- * order: Rust Scope::defer_async, C asx_region_defer_async. */
+ * order: Rust Scope::defer_async or, for `"sync": true`, Scope::defer_sync;
+ * C asx_region_defer_async or asx_region_defer_sync. */
 static void register_finalizers(uint32_t r, const char *region_name, asx_region_id id) {
     uint32_t list = asx_json_get(g_in, r, "finalizers");
     uint32_t k;
     for (k = 0; k < asx_json_count(g_in, list) && !g_failed; k++) {
         uint32_t f = asx_json_item(g_in, list, k);
+        int sync = 0;
         it_task *t = add_task(it_str(f, "name"), region_name, id, asx_json_get(g_in, f, "program"));
+        asx_status st;
+        (void)asx_json_bool(g_in, asx_json_get(g_in, f, "sync"), &sync);
         if (t == NULL) return;
         t->finalizer = 1;
-        if (asx_region_defer_async(id, finalizer_poll, t) != ASX_OK) {
+        st = sync ? asx_region_defer_sync(id, finalizer_sync_run, t)
+                  : asx_region_defer_async(id, finalizer_poll, t);
+        if (st != ASX_OK) {
             it_fail("cannot register finalizer", t->name);
             return;
         }

@@ -31,10 +31,13 @@
       "type": "object", "required": ["name", "parent", "budget"], "additionalProperties": false,
       "properties": {
         "name": {"$ref": "#/$defs/name"}, "parent": {"$ref": "#/$defs/name"}, "budget": {"$ref": "#/$defs/budget_or_null"},
-        "finalizers": {"type": "array", "items": {
-          "type": "object", "required": ["name", "program"], "additionalProperties": false,
-          "properties": {"name": {"$ref": "#/$defs/name"}, "program": {"$ref": "#/$defs/program"}}
-        }}
+        "finalizers": {"type": "array", "items": {"oneOf": [
+          {"type": "object", "required": ["name", "program"], "additionalProperties": false,
+           "properties": {"name": {"$ref": "#/$defs/name"}, "program": {"$ref": "#/$defs/program"}}},
+          {"type": "object", "required": ["name", "sync", "program"], "additionalProperties": false,
+           "properties": {"name": {"$ref": "#/$defs/name"}, "sync": {"const": true},
+                          "program": {"type": "array", "items": {"$ref": "#/$defs/nonblocking_step"}}}}
+        ]}}
       }
     }},
     "channels": {"type": "array", "items": {"$ref": "#/$defs/channel_decl"}},

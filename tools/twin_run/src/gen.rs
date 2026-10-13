@@ -2010,7 +2010,8 @@ fn ext_visit(node: &mut Value, f: &mut dyn FnMut(&mut Value)) {
 }
 
 /// The options of declarations and steps the main stream never sets, from
-/// the extension stream after `extend`: async finalizers on regions, a mask
+/// the extension stream after `extend`: finalizers on regions (async, or
+/// `sync` over the non-blocking steps), a mask
 /// `depth`, the obligation kinds `IoOp`, `SemaphorePermit` and `Transaction`,
 /// the counter variants `latest`, `budgets` and `budgets_stop`, and a
 /// supervisor's storm threshold, explicit `stop`, dependencies between
@@ -2061,19 +2062,35 @@ fn ext_declarations(
         let mut finalizers = Vec::new();
         for i in 1..=1 + ext.below(2) {
             let mut program = Vec::new();
+            // A sync finalizer (Scope::defer_sync, `"sync": true`) is one
+            // call in the finalizer's task: non-blocking steps only, and no
+            // `return` (its outcome is Ok).
+            let sync = ext.chance(35);
             for _ in 0..ext.below(4) {
-                program.push(match ext.below(4) {
-                    0 => json!({"op": "yield"}),
-                    1 => json!({"op": "sleep", "ns": q * (1 + ext.below(3))}),
-                    2 => json!({"op": "trace", "message": format!("{name}.f{i}")}),
-                    _ => json!({"op": "checkpoint", "on_cancel": "continue"}),
+                program.push(if sync {
+                    match ext.below(3) {
+                        0 => json!({"op": "trace", "message": format!("{name}.f{i}")}),
+                        1 => json!({"op": "is_cancel_requested"}),
+                        _ => json!({"op": "checkpoint", "on_cancel": "continue"}),
+                    }
+                } else {
+                    match ext.below(4) {
+                        0 => json!({"op": "yield"}),
+                        1 => json!({"op": "sleep", "ns": q * (1 + ext.below(3))}),
+                        2 => json!({"op": "trace", "message": format!("{name}.f{i}")}),
+                        _ => json!({"op": "checkpoint", "on_cancel": "continue"}),
+                    }
                 });
             }
-            if ext.chance(15) {
+            if !sync && ext.chance(15) {
                 program.push(json!({"op": "return",
                                     "outcome": {"tag": "err", "status": *ext.pick(&ERR_STATUSES)}}));
             }
-            finalizers.push(json!({"name": format!("f.{name}.{i}"), "program": program}));
+            let mut finalizer = json!({"name": format!("f.{name}.{i}"), "program": program});
+            if sync {
+                finalizer["sync"] = json!(true);
+            }
+            finalizers.push(finalizer);
         }
         region["finalizers"] = Value::Array(finalizers);
     }

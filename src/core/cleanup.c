@@ -144,17 +144,21 @@ void asx_cleanup_drain(asx_cleanup_stack *stack) {
     if (stack->count == 0u) stack->drained = 1;
 }
 
-asx_status asx_cleanup_take_async(asx_cleanup_stack *stack, asx_cleanup_poll_fn *out_poll,
-                                  void **out_data) {
+asx_status asx_cleanup_take(asx_cleanup_stack *stack, asx_cleanup_fn *out_fn,
+                            asx_cleanup_poll_fn *out_poll, void **out_data) {
     uint32_t top;
 
-    if (stack == NULL || out_poll == NULL || out_data == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (stack == NULL || out_fn == NULL || out_poll == NULL || out_data == NULL) {
+        return ASX_E_INVALID_ARGUMENT;
+    }
     if (stack->draining || stack->count == 0u) return ASX_E_NOT_FOUND;
     top = stack->count - 1u;
-    if (stack->polls[top] == NULL) return ASX_E_NOT_FOUND;
+    if (!cleanup_entry_live(stack, top)) return ASX_E_NOT_FOUND;
 
+    *out_fn = stack->fns[top];
     *out_poll = stack->polls[top];
     *out_data = stack->data[top];
+    stack->fns[top] = NULL;
     stack->polls[top] = NULL;
     stack->data[top] = NULL;
     stack->count--;
