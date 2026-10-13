@@ -198,7 +198,7 @@ TEST(sem_grants_by_arrival_not_slot_index) {
     asx_semaphore_waiter wc;
 
     ASSERT_TRUE(setup());
-    ASSERT_EQ(asx_semaphore_create(1, &h), ASX_OK);
+    ASSERT_EQ(asx_semaphore_create(&g_rt, 1, &h), ASX_OK);
     ASSERT_EQ(asx_semaphore_try_acquire(h, &p), ASX_OK);
 
     /* A waiter joins the line at its first poll that has to wait (Rust
@@ -232,7 +232,7 @@ TEST(sem_later_arrival_cannot_overtake_at_poll) {
     asx_semaphore_waiter w2;
 
     ASSERT_TRUE(setup());
-    ASSERT_EQ(asx_semaphore_create(1, &h), ASX_OK);
+    ASSERT_EQ(asx_semaphore_create(&g_rt, 1, &h), ASX_OK);
     ASSERT_EQ(asx_semaphore_try_acquire(h, &p0), ASX_OK);
     ASSERT_EQ(asx_semaphore_acquire_begin(h, &w1), ASX_OK);
     ASSERT_EQ(asx_semaphore_acquire_begin(h, &w2), ASX_OK);
@@ -261,7 +261,7 @@ TEST(sem_tasks_acquire_in_arrival_order) {
 
     ASSERT_TRUE(setup());
     reset_sem_fixtures();
-    ASSERT_EQ(asx_semaphore_create(1, &h), ASX_OK);
+    ASSERT_EQ(asx_semaphore_create(&g_rt, 1, &h), ASX_OK);
     ASSERT_EQ(asx_semaphore_try_acquire(h, &held), ASX_OK);
     for (i = 0; i < 3u; i++) {
         g_sem[i].id = i;
@@ -293,7 +293,7 @@ TEST(sem_cancel_of_woken_waiter_passes_permit_on) {
 
     ASSERT_TRUE(setup());
     reset_sem_fixtures();
-    ASSERT_EQ(asx_semaphore_create(1, &h), ASX_OK);
+    ASSERT_EQ(asx_semaphore_create(&g_rt, 1, &h), ASX_OK);
     ASSERT_EQ(asx_semaphore_try_acquire(h, &held), ASX_OK);
     for (i = 0; i < 2u; i++) {
         g_sem[i].id = i;
@@ -326,7 +326,7 @@ TEST(sem_cancel_pending_front_waiter_leaves_when_polled) {
 
     ASSERT_TRUE(setup());
     reset_sem_fixtures();
-    ASSERT_EQ(asx_semaphore_create(1, &h), ASX_OK);
+    ASSERT_EQ(asx_semaphore_create(&g_rt, 1, &h), ASX_OK);
     ASSERT_EQ(asx_semaphore_try_acquire(h, &held), ASX_OK);
     for (i = 0; i < 2u; i++) {
         g_sem[i].id = i;
@@ -358,7 +358,7 @@ TEST(sem_waiter_of_dead_task_is_reclaimed) {
 
     ASSERT_TRUE(setup());
     reset_sem_fixtures();
-    ASSERT_EQ(asx_semaphore_create(1, &h), ASX_OK);
+    ASSERT_EQ(asx_semaphore_create(&g_rt, 1, &h), ASX_OK);
     ASSERT_EQ(asx_semaphore_try_acquire(h, &held), ASX_OK);
     for (i = 0; i < 2u; i++) {
         g_sem[i].id = i;
@@ -425,7 +425,7 @@ TEST(sem_permit_polled_with_cx_is_an_obligation_until_release) {
     ASSERT_TRUE(setup());
     reset_sem_fixtures();
     leaks_before = asx_obligation_leak_count(&g_rt);
-    ASSERT_EQ(asx_semaphore_create(1, &h), ASX_OK);
+    ASSERT_EQ(asx_semaphore_create(&g_rt, 1, &h), ASX_OK);
     for (i = 0; i < 2u; i++) {
         g_sem[i].id = i;
         g_sem[i].sem = h;
@@ -454,7 +454,7 @@ TEST(sem_permit_held_past_task_completion_is_dropped_with_it) {
     ASSERT_TRUE(setup());
     reset_sem_fixtures();
     leaks_before = asx_obligation_leak_count(&g_rt);
-    ASSERT_EQ(asx_semaphore_create(1, &h), ASX_OK);
+    ASSERT_EQ(asx_semaphore_create(&g_rt, 1, &h), ASX_OK);
     g_sem[0].sem = h;
     g_sem[0].use_cx = 1;
     g_sem[0].keep = 1;
@@ -495,7 +495,7 @@ TEST(sem_holders_ending_with_permits_and_tokens_under_each_leak_policy) {
         ASSERT_TRUE(setup_with_leak_response(policies[p]));
         reset_sem_fixtures();
         leaks_before = asx_obligation_leak_count(&g_rt);
-        ASSERT_EQ(asx_semaphore_create(8, &h), ASX_OK);
+        ASSERT_EQ(asx_semaphore_create(&g_rt, 8, &h), ASX_OK);
         for (i = 0; i < 8u; i++) {
             g_sem[i].sem = h;
             g_sem[i].use_cx = 1;
@@ -535,7 +535,7 @@ static void check_untracked_permits_hold_no_obligation(asx_task_id holder) {
     asx_cx cx;
 
     asx_cx_init(&cx, g_region, holder, ASX_CAP_NONE);
-    ASSERT_EQ(asx_semaphore_create(2, &h), ASX_OK);
+    ASSERT_EQ(asx_semaphore_create(&g_rt, 2, &h), ASX_OK);
     ASSERT_EQ(asx_semaphore_try_acquire(h, &p), ASX_OK);
     ASSERT_EQ(p.obligation, ASX_INVALID_ID);
     ASSERT_EQ(asx_semaphore_release(p), ASX_OK);
@@ -551,7 +551,7 @@ static void check_untracked_permits_hold_no_obligation(asx_task_id holder) {
     ASSERT_EQ(asx_semaphore_release(p), ASX_OK);
     ASSERT_TRUE(sem_obligation_is(p.obligation, holder, ASX_OBLIGATION_COMMITTED));
 
-    ASSERT_EQ(asx_mutex_create(&m), ASX_OK);
+    ASSERT_EQ(asx_mutex_create(&g_rt, &m), ASX_OK);
     ASSERT_EQ(asx_mutex_lock_begin(m, &mw), ASX_OK);
     ASSERT_EQ(asx_mutex_poll_lock(&mw, &g, &cx), ASX_OK);
     ASSERT_EQ(g.permit.obligation, ASX_INVALID_ID);
@@ -574,7 +574,7 @@ static void check_tracked_permit_released_or_forgotten_once(asx_task_id holder) 
     uint32_t i;
 
     asx_cx_init(&cx, g_region, holder, ASX_CAP_NONE);
-    ASSERT_EQ(asx_semaphore_create(3, &h), ASX_OK);
+    ASSERT_EQ(asx_semaphore_create(&g_rt, 3, &h), ASX_OK);
     for (i = 0; i < 3u; i++) {
         ASSERT_EQ(asx_semaphore_acquire_begin(h, &w), ASX_OK);
         ASSERT_EQ(asx_semaphore_poll_acquire(&w, &p[i], &cx), ASX_OK);
@@ -658,7 +658,7 @@ static uint32_t run_mutex_handoff(void) {
     g_order_len = 0;
     g_holders = 0;
     g_max_holders = 0;
-    if (asx_mutex_create(&m) != ASX_OK) return 0;
+    if (asx_mutex_create(&g_rt, &m) != ASX_OK) return 0;
     if (asx_mutex_try_lock(m, &held) != ASX_OK) return 0;
     for (i = 0; i < 3u; i++) {
         g_mtx[i].id = i;
@@ -770,7 +770,7 @@ TEST(mutex_flood_serves_every_waiter_in_arrival_order) {
         memset(g_flood, 0, sizeof(g_flood));
         g_flood_arrived = 0;
         g_flood_len = 0;
-        ASSERT_EQ(asx_mutex_create(&m), ASX_OK);
+        ASSERT_EQ(asx_mutex_create(&g_rt, &m), ASX_OK);
         ASSERT_EQ(asx_mutex_try_lock(m, &held), ASX_OK);
         for (i = 0; i < FLOOD_TASKS; i++) {
             g_flood[i].id = i;
@@ -837,7 +837,7 @@ TEST(mutex_unlock_hands_the_lock_to_a_cancel_pending_front_waiter) {
     ASSERT_TRUE(setup());
     memset(g_flood, 0, sizeof(g_flood));
     g_flood_len = 0;
-    ASSERT_EQ(asx_mutex_create(&m), ASX_OK);
+    ASSERT_EQ(asx_mutex_create(&g_rt, &m), ASX_OK);
     ASSERT_EQ(asx_mutex_try_lock(m, &held), ASX_OK);
     for (i = 0; i < 2u; i++) {
         g_flood[i].id = i;
@@ -1029,7 +1029,7 @@ TEST(mutex_lock_until_past_its_deadline_times_out_even_when_free) {
     asx_mutex_guard g;
 
     ASSERT_TRUE(setup());
-    ASSERT_EQ(asx_mutex_create(&m), ASX_OK);
+    ASSERT_EQ(asx_mutex_create(&g_rt, &m), ASX_OK);
     asx_runtime_virtual_advance(&g_rt, 10u * MS);
     ASSERT_EQ(asx_mutex_lock_until_begin(m, 10u * MS, &w), ASX_OK);
     ASSERT_EQ(asx_mutex_poll_lock(&w, &g, NULL), ASX_E_TIMED_OUT);
@@ -1051,7 +1051,7 @@ TEST(mutex_lock_until_gives_up_and_a_handed_lock_passes_on) {
     int round;
 
     ASSERT_TRUE(setup());
-    ASSERT_EQ(asx_mutex_create(&m), ASX_OK);
+    ASSERT_EQ(asx_mutex_create(&g_rt, &m), ASX_OK);
     for (round = 0; round < 2; round++) {
         asx_time start = asx_runtime_virtual_now(&g_rt);
         ASSERT_EQ(asx_mutex_try_lock(m, &held), ASX_OK);
@@ -1156,7 +1156,7 @@ TEST(mutex_lock_until_wakes_its_task_at_the_deadline) {
     ASSERT_TRUE(setup());
     memset(&h, 0, sizeof(h));
     memset(u, 0, sizeof(u));
-    ASSERT_EQ(asx_mutex_create(&m), ASX_OK);
+    ASSERT_EQ(asx_mutex_create(&g_rt, &m), ASX_OK);
     ASSERT_EQ(asx_mutex_try_lock(m, &h.guard), ASX_OK);
     h.hold_ns = 10u * MS;
     u[0].mutex = m;
@@ -1195,7 +1195,7 @@ TEST(mutex_lock_until_acquired_at_once_drops_its_registered_timer) {
 
     ASSERT_TRUE(setup());
     memset(u, 0, sizeof(u));
-    ASSERT_EQ(asx_mutex_create(&m), ASX_OK);
+    ASSERT_EQ(asx_mutex_create(&g_rt, &m), ASX_OK);
     u[0].mutex = m;
     u[0].deadline = 3u * MS;
     u[1].mutex = m;
@@ -1275,7 +1275,7 @@ TEST(close_wakes_all_sync_waiters) {
 
     ASSERT_TRUE(setup());
     memset(tasks, 0, sizeof(tasks));
-    ASSERT_EQ(asx_semaphore_create(0, &sem), ASX_OK);
+    ASSERT_EQ(asx_semaphore_create(&g_rt, 0, &sem), ASX_OK);
     ASSERT_EQ(asx_notify_create(&nh), ASX_OK);
     ASSERT_EQ(asx_rwlock_create(&rh), ASX_OK);
     ASSERT_EQ(asx_rwlock_try_write(rh, &wg), ASX_OK);

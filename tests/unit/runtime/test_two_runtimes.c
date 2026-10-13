@@ -130,6 +130,11 @@ TEST(two_runtimes_have_independent_regions_tasks_and_quiescence) {
     asx_deadline dl;
     asx_wait_queue wq;
     uint32_t wid;
+    asx_semaphore_handle sa;
+    asx_semaphore_handle sb;
+    asx_semaphore_permit pb;
+    asx_mutex_handle mb;
+    asx_mutex_guard gb;
 
     memset(&a, 0, sizeof(a));
     memset(&b, 0, sizeof(b));
@@ -218,6 +223,27 @@ TEST(two_runtimes_have_independent_regions_tasks_and_quiescence) {
     ASSERT_EQ(g_kernels[1]->waits.in_use, 0u);
     ASSERT_EQ(asx_wait_queue_len(&wq), 0u);
 
+    /* Semaphores and mutexes are each runtime's own: the same arena index in
+     * each, told apart by the tag, and one's permits are not the other's. */
+    ASSERT_EQ(asx_semaphore_create(&a, 1u, &sa), ASX_OK);
+    ASSERT_EQ(asx_semaphore_create(&b, 2u, &sb), ASX_OK);
+    ASSERT_EQ(sa.slot, 0u);
+    ASSERT_EQ(sb.slot, 1u << 16);
+    ASSERT_EQ(asx_semaphore_available(sa), 1u);
+    ASSERT_EQ(asx_semaphore_available(sb), 2u);
+    ASSERT_EQ(asx_semaphore_try_acquire(sb, &pb), ASX_OK);
+    ASSERT_EQ(asx_semaphore_available(sb), 1u);
+    ASSERT_EQ(asx_semaphore_available(sa), 1u);
+    ASSERT_EQ(asx_semaphore_release(pb), ASX_OK);
+    ASSERT_EQ(asx_mutex_create(&b, &mb), ASX_OK);
+    ASSERT_EQ(asx_mutex_try_lock(mb, &gb), ASX_OK);
+    ASSERT_TRUE(asx_mutex_is_locked(mb));
+    ASSERT_EQ(asx_mutex_unlock(gb), ASX_OK);
+    ASSERT_EQ(asx_mutex_close(mb), ASX_OK);
+    ASSERT_EQ(asx_semaphore_close(sa), ASX_OK);
+    ASSERT_EQ(asx_semaphore_close(sb), ASX_OK);
+    ASSERT_EQ(asx_semaphore_create(NULL, 1u, &sa), ASX_E_INVALID_ARGUMENT);
+
     /* A handle of the other runtime is no member of this one's world. */
     ASSERT_EQ(asx_task_watch(ta, tb), ASX_E_NOT_FOUND);
     ASSERT_EQ(asx_obligation_reserve_ex(ra, ASX_OBLIGATION_KIND_GENERIC, tb, &ob), ASX_E_NOT_FOUND);
@@ -265,6 +291,7 @@ TEST(a_second_runtime_is_refused_by_name_while_a_shared_subsystem_is_in_use) {
     asx_region_id ra;
     asx_channel_id ch;
     asx_semaphore_handle sem;
+    asx_rwlock_handle rw;
     asx_task_id tid;
 
     memset(&a, 0, sizeof(a));
@@ -305,8 +332,10 @@ TEST(a_second_runtime_is_refused_by_name_while_a_shared_subsystem_is_in_use) {
     ASSERT_EQ(asx_region_open(&a, &ra), ASX_OK);
     ASSERT_EQ(asx_channel_create(ra, 4u, &ch), ASX_E_INVALID_STATE);
     ASSERT_TRUE(reason_names("channels"));
-    ASSERT_EQ(asx_semaphore_create(1u, &sem), ASX_E_INVALID_STATE);
-    ASSERT_TRUE(reason_names("semaphores"));
+    ASSERT_EQ(asx_rwlock_create(&rw), ASX_E_INVALID_STATE);
+    ASSERT_TRUE(reason_names("rwlocks"));
+    ASSERT_EQ(asx_semaphore_create(&a, 1u, &sem), ASX_OK);
+    ASSERT_EQ(asx_semaphore_close(sem), ASX_OK);
     ASSERT_EQ(asx_task_spawn(ra, done_poll, NULL, &tid), ASX_OK);
 
     /* One runtime again: the subsystem takes state, as before. */

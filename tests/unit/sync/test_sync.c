@@ -26,7 +26,7 @@ static asx_status st_sink_;
 
 static void setup(void) {
     asx_notify_reset();
-    asx_semaphore_reset();
+    asx_semaphore_reset(test_runtime());
     asx_barrier_reset();
     asx_once_reset();
 }
@@ -234,16 +234,23 @@ TEST(notify_waiter_slot_bounds_checked) {
 TEST(sem_create_close) {
     asx_semaphore_handle h;
     setup();
-    ASSERT_EQ(asx_semaphore_create(3, &h), ASX_OK);
+    ASSERT_EQ(asx_semaphore_create(test_runtime(), 3, &h), ASX_OK);
     ASSERT_EQ(asx_semaphore_available(h), 3u);
     ASSERT_EQ(asx_semaphore_close(h), ASX_OK);
+}
+
+TEST(sem_create_null_args_fail) {
+    asx_semaphore_handle h;
+    setup();
+    ASSERT_EQ(asx_semaphore_create(test_runtime(), 1, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_semaphore_create(NULL, 1u, &h), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(sem_try_acquire_release) {
     asx_semaphore_handle h;
     asx_semaphore_permit p;
     setup();
-    MUST_OK(asx_semaphore_create(1, &h));
+    MUST_OK(asx_semaphore_create(test_runtime(), 1, &h));
     ASSERT_EQ(asx_semaphore_try_acquire(h, &p), ASX_OK);
     ASSERT_EQ(asx_semaphore_available(h), 0u);
     ASSERT_EQ(asx_semaphore_release(p), ASX_OK);
@@ -255,7 +262,7 @@ TEST(sem_try_acquire_would_block) {
     asx_semaphore_handle h;
     asx_semaphore_permit p1, p2;
     setup();
-    MUST_OK(asx_semaphore_create(1, &h));
+    MUST_OK(asx_semaphore_create(test_runtime(), 1, &h));
     MUST_OK(asx_semaphore_try_acquire(h, &p1));
     ASSERT_EQ(asx_semaphore_try_acquire(h, &p2), ASX_E_WOULD_BLOCK);
     MUST_OK(asx_semaphore_release(p1));
@@ -266,7 +273,7 @@ TEST(sem_multiple_permits) {
     asx_semaphore_handle h;
     asx_semaphore_permit p1, p2, p3, p4;
     setup();
-    MUST_OK(asx_semaphore_create(3, &h));
+    MUST_OK(asx_semaphore_create(test_runtime(), 3, &h));
     MUST_OK(asx_semaphore_try_acquire(h, &p1));
     MUST_OK(asx_semaphore_try_acquire(h, &p2));
     MUST_OK(asx_semaphore_try_acquire(h, &p3));
@@ -286,7 +293,7 @@ TEST(sem_async_acquire) {
     asx_semaphore_permit p1, p2;
     asx_semaphore_waiter w;
     setup();
-    MUST_OK(asx_semaphore_create(1, &h));
+    MUST_OK(asx_semaphore_create(test_runtime(), 1, &h));
     MUST_OK(asx_semaphore_try_acquire(h, &p1));
 
     /* All permits taken, async acquire should pend */
@@ -306,7 +313,7 @@ TEST(sem_fifo_fairness) {
     asx_semaphore_permit p, pw1, pw2;
     asx_semaphore_waiter w1, w2;
     setup();
-    MUST_OK(asx_semaphore_create(1, &h));
+    MUST_OK(asx_semaphore_create(test_runtime(), 1, &h));
     MUST_OK(asx_semaphore_try_acquire(h, &p));
 
     /* Two waiters queue up */
@@ -331,7 +338,7 @@ TEST(sem_acquire_cancel) {
     asx_semaphore_permit p;
     asx_semaphore_waiter w;
     setup();
-    MUST_OK(asx_semaphore_create(1, &h));
+    MUST_OK(asx_semaphore_create(test_runtime(), 1, &h));
     MUST_OK(asx_semaphore_try_acquire(h, &p));
     MUST_OK(asx_semaphore_acquire_begin(h, &w));
     MUST_OK(asx_semaphore_acquire_cancel(&w));
@@ -346,7 +353,7 @@ TEST(sem_close_disconnects) {
     asx_semaphore_permit p_dummy;
     asx_semaphore_waiter w;
     setup();
-    MUST_OK(asx_semaphore_create(0, &h));
+    MUST_OK(asx_semaphore_create(test_runtime(), 0, &h));
     MUST_OK(asx_semaphore_acquire_begin(h, &w));
     MUST_OK(asx_semaphore_close(h));
     ASSERT_EQ(asx_semaphore_poll_acquire(&w, &p_dummy, NULL), ASX_E_DISCONNECTED);
@@ -356,7 +363,7 @@ TEST(sem_stale_handle) {
     asx_semaphore_handle h;
     asx_semaphore_permit p;
     setup();
-    MUST_OK(asx_semaphore_create(1, &h));
+    MUST_OK(asx_semaphore_create(test_runtime(), 1, &h));
     MUST_OK(asx_semaphore_close(h));
     ASSERT_EQ(asx_semaphore_try_acquire(h, &p), ASX_E_STALE_HANDLE);
 }
@@ -365,7 +372,7 @@ TEST(sem_zero_permits) {
     asx_semaphore_handle h;
     asx_semaphore_permit p;
     setup();
-    MUST_OK(asx_semaphore_create(0, &h));
+    MUST_OK(asx_semaphore_create(test_runtime(), 0, &h));
     ASSERT_EQ(asx_semaphore_available(h), 0u);
     ASSERT_EQ(asx_semaphore_try_acquire(h, &p), ASX_E_WOULD_BLOCK);
     ASSERT_EQ(asx_semaphore_close(h), ASX_OK);
@@ -379,7 +386,7 @@ TEST(sem_acquire_many_all_or_nothing_in_line) {
     asx_semaphore_permit held, p2, p1, extra;
     asx_semaphore_waiter w2, w1;
     setup();
-    MUST_OK(asx_semaphore_create(3, &h));
+    MUST_OK(asx_semaphore_create(test_runtime(), 3, &h));
     ASSERT_EQ(asx_semaphore_try_acquire_many(h, 2, &held), ASX_OK);
     ASSERT_EQ(held.count, 2u);
     ASSERT_EQ(asx_semaphore_available(h), 1u);
@@ -413,7 +420,7 @@ TEST(sem_acquire_zero_and_mutex_count) {
     asx_semaphore_waiter w;
     asx_mutex_handle m;
     setup();
-    MUST_OK(asx_semaphore_create(0, &h));
+    MUST_OK(asx_semaphore_create(test_runtime(), 0, &h));
     ASSERT_EQ(asx_semaphore_try_acquire_many(h, 0, &p), ASX_OK);
     ASSERT_EQ(p.count, 0u);
     MUST_OK(asx_semaphore_acquire_many_begin(h, 0, &w));
@@ -423,7 +430,7 @@ TEST(sem_acquire_zero_and_mutex_count) {
     ASSERT_EQ(asx_semaphore_available(h), 0u);
     ASSERT_EQ(asx_semaphore_close(h), ASX_OK);
 
-    MUST_OK(asx_mutex_create(&m));
+    MUST_OK(asx_mutex_create(test_runtime(), &m));
     ASSERT_EQ(asx_semaphore_try_acquire_many(m.sem, 2, &p), ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_semaphore_acquire_many_begin(m.sem, 2, &w), ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_mutex_close(m), ASX_OK);
@@ -439,7 +446,7 @@ TEST(sem_double_release_is_refused) {
     asx_mutex_guard g;
     asx_mutex_guard g2;
     setup();
-    MUST_OK(asx_semaphore_create(2, &h));
+    MUST_OK(asx_semaphore_create(test_runtime(), 2, &h));
     ASSERT_EQ(asx_semaphore_try_acquire_many(h, 2, &p), ASX_OK);
     ASSERT_EQ(asx_semaphore_release(p), ASX_OK);
     ASSERT_EQ(asx_semaphore_available(h), 2u);
@@ -447,7 +454,7 @@ TEST(sem_double_release_is_refused) {
     ASSERT_EQ(asx_semaphore_available(h), 2u);
     ASSERT_EQ(asx_semaphore_close(h), ASX_OK);
 
-    MUST_OK(asx_mutex_create(&m));
+    MUST_OK(asx_mutex_create(test_runtime(), &m));
     ASSERT_EQ(asx_mutex_try_lock(m, &g), ASX_OK);
     ASSERT_EQ(asx_mutex_unlock(g), ASX_OK);
     ASSERT_EQ(asx_mutex_unlock(g), ASX_E_INVALID_STATE);
@@ -470,7 +477,7 @@ TEST(mutex_stale_guard_does_not_unlock_a_later_holder) {
     asx_mutex_guard other;
     asx_mutex_lock_waiter w;
     setup();
-    MUST_OK(asx_mutex_create(&m));
+    MUST_OK(asx_mutex_create(test_runtime(), &m));
     ASSERT_EQ(asx_mutex_try_lock(m, &first), ASX_OK);
     ASSERT_EQ(asx_mutex_unlock(first), ASX_OK);
     ASSERT_EQ(asx_mutex_try_lock(m, &second), ASX_OK);
@@ -501,7 +508,7 @@ TEST(sem_forget_keeps_permits_out_of_the_pool) {
     asx_mutex_handle m;
     asx_mutex_guard g;
     setup();
-    MUST_OK(asx_semaphore_create(3, &h));
+    MUST_OK(asx_semaphore_create(test_runtime(), 3, &h));
     ASSERT_EQ(asx_semaphore_try_acquire_many(h, 2, &p), ASX_OK);
     ASSERT_EQ(asx_semaphore_forget(p), ASX_OK);
     ASSERT_EQ(asx_semaphore_available(h), 1u);
@@ -511,7 +518,7 @@ TEST(sem_forget_keeps_permits_out_of_the_pool) {
     ASSERT_EQ(asx_semaphore_close(h), ASX_OK);
     ASSERT_EQ(asx_semaphore_forget(p), ASX_E_STALE_HANDLE);
 
-    MUST_OK(asx_mutex_create(&m));
+    MUST_OK(asx_mutex_create(test_runtime(), &m));
     ASSERT_EQ(asx_mutex_try_lock(m, &g), ASX_OK);
     ASSERT_EQ(asx_semaphore_forget(g.permit), ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_mutex_unlock(g), ASX_OK);
@@ -529,7 +536,7 @@ TEST(sem_add_permits_serves_the_front_of_the_line) {
     asx_semaphore_waiter w1;
     asx_mutex_handle m;
     setup();
-    MUST_OK(asx_semaphore_create(0, &h));
+    MUST_OK(asx_semaphore_create(test_runtime(), 0, &h));
     MUST_OK(asx_semaphore_acquire_many_begin(h, 2, &w2));
     ASSERT_EQ(asx_semaphore_poll_acquire(&w2, &p2, NULL), ASX_E_PENDING);
     MUST_OK(asx_semaphore_acquire_begin(h, &w1));
@@ -553,7 +560,7 @@ TEST(sem_add_permits_serves_the_front_of_the_line) {
     ASSERT_EQ(asx_semaphore_close(h), ASX_OK);
     ASSERT_EQ(asx_semaphore_add_permits(h, 1), ASX_E_STALE_HANDLE);
 
-    MUST_OK(asx_mutex_create(&m));
+    MUST_OK(asx_mutex_create(test_runtime(), &m));
     ASSERT_EQ(asx_semaphore_add_permits(m.sem, 1), ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_mutex_close(m), ASX_OK);
 }
@@ -565,16 +572,23 @@ TEST(sem_add_permits_serves_the_front_of_the_line) {
 TEST(mutex_create_close) {
     asx_mutex_handle h;
     setup();
-    ASSERT_EQ(asx_mutex_create(&h), ASX_OK);
+    ASSERT_EQ(asx_mutex_create(test_runtime(), &h), ASX_OK);
     ASSERT_FALSE(asx_mutex_is_locked(h));
     ASSERT_EQ(asx_mutex_close(h), ASX_OK);
+}
+
+TEST(mutex_create_null_args_fail) {
+    asx_mutex_handle m;
+    setup();
+    ASSERT_EQ(asx_mutex_create(test_runtime(), NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_mutex_create(NULL, &m), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(mutex_try_lock_unlock) {
     asx_mutex_handle h;
     asx_mutex_guard g;
     setup();
-    MUST_OK(asx_mutex_create(&h));
+    MUST_OK(asx_mutex_create(test_runtime(), &h));
     ASSERT_EQ(asx_mutex_try_lock(h, &g), ASX_OK);
     ASSERT_TRUE(asx_mutex_is_locked(h));
     ASSERT_EQ(asx_mutex_unlock(g), ASX_OK);
@@ -586,7 +600,7 @@ TEST(mutex_double_lock_blocks) {
     asx_mutex_handle h;
     asx_mutex_guard g1, g2;
     setup();
-    MUST_OK(asx_mutex_create(&h));
+    MUST_OK(asx_mutex_create(test_runtime(), &h));
     MUST_OK(asx_mutex_try_lock(h, &g1));
     ASSERT_EQ(asx_mutex_try_lock(h, &g2), ASX_E_WOULD_BLOCK);
     MUST_OK(asx_mutex_unlock(g1));
@@ -598,7 +612,7 @@ TEST(mutex_async_lock) {
     asx_mutex_guard g1, g2;
     asx_mutex_lock_waiter w;
     setup();
-    MUST_OK(asx_mutex_create(&h));
+    MUST_OK(asx_mutex_create(test_runtime(), &h));
     MUST_OK(asx_mutex_try_lock(h, &g1));
 
     MUST_OK(asx_mutex_lock_begin(h, &w));
@@ -616,7 +630,7 @@ TEST(mutex_lock_cancel) {
     asx_mutex_guard g1;
     asx_mutex_lock_waiter w;
     setup();
-    MUST_OK(asx_mutex_create(&h));
+    MUST_OK(asx_mutex_create(test_runtime(), &h));
     MUST_OK(asx_mutex_try_lock(h, &g1));
     MUST_OK(asx_mutex_lock_begin(h, &w));
     MUST_OK(asx_mutex_lock_cancel(&w));
@@ -632,7 +646,7 @@ TEST(mutex_unlock_poisoned_poisons) {
     asx_mutex_guard g1, g2;
     asx_mutex_lock_waiter w;
     setup();
-    MUST_OK(asx_mutex_create(&h));
+    MUST_OK(asx_mutex_create(test_runtime(), &h));
     MUST_OK(asx_mutex_try_lock(h, &g1));
     MUST_OK(asx_mutex_lock_begin(h, &w));
     ASSERT_EQ(asx_mutex_poll_lock(&w, &g2, NULL), ASX_E_PENDING);
@@ -657,7 +671,7 @@ TEST(mutex_plain_unlock_does_not_poison) {
     asx_mutex_guard g;
     asx_mutex_guard stale;
     setup();
-    MUST_OK(asx_mutex_create(&h));
+    MUST_OK(asx_mutex_create(test_runtime(), &h));
     MUST_OK(asx_mutex_try_lock(h, &g));
     stale = g;
     MUST_OK(asx_mutex_unlock(g));
@@ -798,9 +812,9 @@ static void check_sync_foreign_settlement(sync_access_operation operation) {
     memset(&c, 0, sizeof(c));
     c.operation = operation;
     ASSERT_EQ(asx_region_open(test_runtime(), &c.region), ASX_OK);
-    ASSERT_EQ(asx_semaphore_create(1u, &c.sem), ASX_OK);
+    ASSERT_EQ(asx_semaphore_create(test_runtime(), 1u, &c.sem), ASX_OK);
     if (operation == SYNC_ACCESS_POISON_FOREIGN_CREDIT) {
-        ASSERT_EQ(asx_mutex_create(&c.mutex), ASX_OK);
+        ASSERT_EQ(asx_mutex_create(test_runtime(), &c.mutex), ASX_OK);
     }
     ASSERT_EQ(asx_task_spawn(c.region, poll_sync_access_holder, &c, &owner), ASX_OK);
     budget = asx_budget_from_polls(10u);
@@ -911,7 +925,7 @@ TEST(equal_count_permits_reject_another_reservations_credit) {
     ASSERT_EQ(asx_region_open(test_runtime(), &region), ASX_OK);
     ASSERT_EQ(asx_task_spawn(region, poll_binding_holder, NULL, &holder), ASX_OK);
     ASSERT_EQ(asx_cx_init(&cx, region, holder, ASX_CAP_NONE), ASX_OK);
-    ASSERT_EQ(asx_semaphore_create(2u, &sem), ASX_OK);
+    ASSERT_EQ(asx_semaphore_create(test_runtime(), 2u, &sem), ASX_OK);
     ASSERT_EQ(asx_semaphore_acquire_begin(sem, &waiter), ASX_OK);
     ASSERT_EQ(asx_semaphore_poll_acquire(&waiter, &first, &cx), ASX_OK);
     ASSERT_EQ(asx_semaphore_acquire_begin(sem, &waiter), ASX_OK);
@@ -1278,7 +1292,7 @@ TEST(sem_cx_budget_exhaustion) {
     budget = asx_budget_zero();
     MUST_OK(asx_cx_bind_budget(&cx, &budget));
 
-    MUST_OK(asx_semaphore_create(1, &h));
+    MUST_OK(asx_semaphore_create(test_runtime(), 1, &h));
     MUST_OK(asx_semaphore_try_acquire(h, &p));
     MUST_OK(asx_semaphore_acquire_begin(h, &w));
 
@@ -1313,6 +1327,7 @@ int main(void) {
 
     /* Semaphore */
     RUN_TEST(sem_create_close);
+    RUN_TEST(sem_create_null_args_fail);
     RUN_TEST(sem_try_acquire_release);
     RUN_TEST(sem_try_acquire_would_block);
     RUN_TEST(sem_multiple_permits);
@@ -1331,6 +1346,7 @@ int main(void) {
 
     /* Mutex */
     RUN_TEST(mutex_create_close);
+    RUN_TEST(mutex_create_null_args_fail);
     RUN_TEST(mutex_try_lock_unlock);
     RUN_TEST(mutex_double_lock_blocks);
     RUN_TEST(mutex_async_lock);

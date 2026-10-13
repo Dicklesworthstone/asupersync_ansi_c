@@ -5,10 +5,11 @@
  */
 
 #include "../../test_harness.h"
+#include "../../test_runtime.h"
 #include <asx/sync/contended_mutex.h>
 
 static void setup(void) {
-    asx_semaphore_reset();
+    asx_semaphore_reset(test_runtime());
     asx_contended_mutex_reset();
 }
 
