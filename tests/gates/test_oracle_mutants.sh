@@ -30,6 +30,11 @@
 #                              must fail, each on its own
 #                              -> watch-borrow-vs-borrow-and-update-*,
 #                                 watch-receiver-clone-continues-*
+#   - STUCK_TASK_OMITTED       the stuck-task report leaves out a parked
+#                              running task, so a run that ends with one is
+#                              not named (bd-9kll.9.6)
+#                              -> quiescence-parked-task-*,
+#                                 oneshot-closed-send-no-wake-*
 # A mutant the corpus does not catch means the fixtures stopped exercising
 # that rule: the gate fails.
 # The raw-ID authorization bypass is tested through actual polling tasks:
@@ -132,6 +137,13 @@ run_mutant CODEC_BIN_SNAPSHOT_TRUNCATED '.'
 # a clone that continues from the same version.
 run_mutant WATCH_BORROW_MARKS_SEEN 'watch-borrow-vs-borrow-and-update-'
 run_mutant WATCH_BORROW_MARKS_SEEN 'watch-receiver-clone-continues-'
+
+# A run that ends with a task parked names it: the runner compares C's
+# asx_scheduler_stuck_tasks with the tasks Rust's snapshot leaves not
+# Completed, on every fixture (18 of the corpus end that way). Each of the two
+# fixtures below must fail the mutant by itself.
+run_mutant STUCK_TASK_OMITTED 'quiescence-parked-task-001'
+run_mutant STUCK_TASK_OMITTED 'oneshot-closed-send-no-wake-001'
 
 # The scenario parser cannot reach depth 64; the actual public boundary
 # test must catch acceptance of depth 65, without a compile/empty-run pass.

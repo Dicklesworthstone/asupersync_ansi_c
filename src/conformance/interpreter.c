@@ -5525,6 +5525,24 @@ static void project_refused_admissions(void) {
     }
 }
 
+/* The tasks the run ended waiting on, by scenario name, in arena order:
+ * what asx_scheduler_stuck_tasks reports once nothing is left to run them
+ * (bd-9kll.9.6). Rust names none (StuckBailout is a termination, not a task
+ * list), so the runner compares this with the non-terminal tasks of the
+ * fixture's snapshot that own no pending timer. */
+static asx_stuck_task g_stuck[IT_MAX_TASKS];
+
+static uint32_t stuck_tasks_node(asx_region_id root) {
+    uint32_t arr = asx_json_new_array(g_out);
+    uint32_t n = asx_scheduler_stuck_tasks(root, g_stuck, IT_MAX_TASKS);
+    uint32_t i;
+    for (i = 0; i < n && i < IT_MAX_TASKS; i++) {
+        it_task *t = task_by_id(g_stuck[i].task);
+        if (t != NULL) asx_json_push(g_out, arr, asx_json_new_string(g_out, t->name));
+    }
+    return arr;
+}
+
 static uint32_t build_snapshot(uint32_t obligations) {
     uint32_t snap = asx_json_new_object(g_out);
     uint32_t tasks = asx_json_new_object(g_out);
@@ -5915,6 +5933,7 @@ static asx_status conformance_run(const asx_json_doc *in, uint32_t scenario, asx
     uint32_t snapshot;
     uint32_t observations;
     uint32_t dispatches;
+    uint32_t stuck;
     uint32_t result;
     uint32_t semantic;
     const char *schema;
@@ -6163,6 +6182,7 @@ static asx_status conformance_run(const asx_json_doc *in, uint32_t scenario, asx
     }
     project_refused_admissions();
     snapshot = build_snapshot(obligations);
+    stuck = stuck_tasks_node(root);
     observations = sorted_observations();
     dispatches = project_dispatches();
     if (!g_failed) check_expectation(scenario, observations);
@@ -6181,6 +6201,7 @@ static asx_status conformance_run(const asx_json_doc *in, uint32_t scenario, asx
     asx_json_set(out, result, "snapshot", snapshot);
     asx_json_set(out, result, "observations", observations);
     asx_json_set(out, result, "dispatches", dispatches);
+    asx_json_set(out, result, "stuck_tasks", stuck);
     {
         /* Rust's ScheduleCertificate and its decision count (bd-9kll.4.8),
          * compared with the fixture's schedule.certificate_hash/decisions. */

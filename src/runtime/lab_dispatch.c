@@ -1855,6 +1855,9 @@ uint32_t asx_scheduler_stuck_tasks(asx_region_id region, asx_stuck_task *out, ui
         const asx_task_slot *t = &lab_kernel()->tasks[i];
         ASX_CHECKPOINT_WAIVER("bounded: task_count <= ASX_MAX_TASKS");
         if (!lab_task_waiting(t)) continue;
+#ifdef ASX_MUTANT_STUCK_TASK_OMITTED
+        if (t->state == ASX_TASK_RUNNING) continue; /* planted bug: a parked task is not stuck */
+#endif
         if (!g_lab_active) {
             uint32_t r;
             uint32_t slot = (uint32_t)asx_handle_slot(t->region);

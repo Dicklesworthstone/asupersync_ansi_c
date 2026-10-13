@@ -413,6 +413,52 @@ static void diff_dispatches(uint32_t want, uint32_t got) {
  * name, so two runs can agree on them and still have polled different arena
  * slots; the certificate also counts the dispatches. Returns 1 when the run's
  * hash and count equal the fixture's, else prints both and returns 0. */
+/* Whether the names array of the C run lists `name`. */
+static int names_contain(uint32_t names, const char *name) {
+    uint32_t i;
+    for (i = 0; i < asx_json_count(&g_run, names); i++) {
+        const char *s = asx_json_string(&g_run, asx_json_item(&g_run, names, i));
+        if (s != NULL && strcmp(s, name) == 0) return 1;
+    }
+    return 0;
+}
+
+/* The tasks C's run ended waiting on (asx_scheduler_stuck_tasks,
+ * bd-9kll.9.6) against Rust's final state. Rust names no stuck task: its
+ * run ends StuckBailout (or quiescent) and a capture does not call
+ * check_invariants, so Rust's side is read from the fixture's snapshot,
+ * the top-level tasks that are not Completed (a fixture's run auto-advances
+ * the clock, so none owns a pending timer). C's names the snapshot does not
+ * list (a group's members, supervised tasks) are reported through their
+ * group or supervisor and not compared here. */
+static int stuck_matches(const char *id, uint32_t want_snapshot, uint32_t run) {
+    uint32_t got = asx_json_get(&g_run, run, "stuck_tasks");
+    uint32_t tasks = asx_json_get(&g_fixture, want_snapshot, "tasks");
+    uint32_t m;
+    int ok = 1;
+
+    if (got == ASX_JSON_NONE || tasks == ASX_JSON_NONE) {
+        fprintf(stdout, "FAIL %s: the C run reported no stuck_tasks\n", id);
+        return 0;
+    }
+    for (m = asx_json_item(&g_fixture, tasks, 0); m != ASX_JSON_NONE; m = g_fixture.nodes[m].next) {
+        const char *name = asx_json_key(&g_fixture, m);
+        const char *state = asx_json_get_string(&g_fixture, m, "state");
+        int rust_stuck = state != NULL && strcmp(state, "Completed") != 0;
+        int c_stuck = names_contain(got, name);
+        if (rust_stuck && !c_stuck) {
+            fprintf(stdout, "FAIL %s: Rust's run ends with %s %s; C does not name it stuck\n", id,
+                    name, state);
+            ok = 0;
+        } else if (!rust_stuck && c_stuck) {
+            fprintf(stdout, "FAIL %s: C names %s stuck; Rust's run ends with it %s\n", id, name,
+                    state != NULL ? state : "?");
+            ok = 0;
+        }
+    }
+    return ok;
+}
+
 static int certificate_matches(const char *id, uint32_t want_schedule, uint32_t run) {
     const char *want_hash = asx_json_get_string(&g_fixture, want_schedule, "certificate_hash");
     const char *got_hash = asx_json_get_string(&g_run, run, "certificate_hash");
@@ -1008,6 +1054,7 @@ static cmp_result compare_one(const char *path, int mutate) {
         diff_dispatches(want_dispatches, asx_json_get(&g_run, run, "dispatches"));
     }
     if (!certificate_matches(id, schedule, run)) ok = 0;
+    if (!mutate && !stuck_matches(id, want_snapshot, run)) ok = 0;
     /* Not under the self-test, like the ghost check above. It replaces the
      * runtime, so it follows everything that reads the first run. */
     if (!mutate && !ghost_rerun_stable(id, scenario, want_trace, run)) ok = 0;
