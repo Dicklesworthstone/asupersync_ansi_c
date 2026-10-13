@@ -192,11 +192,11 @@ uint32_t asx_ghost_check_obligation_leaks(asx_region_id region) {
          * follows a handoff). A scan of one region leaves the others
          * alone: they may still hold reserved obligations that resolve
          * before they finalize, and are asked when they do. ASX_INVALID_ID
-         * asks about every region. Handles compare by slot and
-         * generation, not state tag.
+         * asks about every region. Handles compare by runtime, slot and
+         * generation, not state tag; a region of another runtime is
+         * another region.
          */
-        if (region != ASX_INVALID_ID &&
-            asx_handle_index(entry->region) != asx_handle_index(region)) {
+        if (region != ASX_INVALID_ID && !asx_handle_same_entity(entry->region, region)) {
             continue;
         }
 

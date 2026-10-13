@@ -39,10 +39,8 @@ static asx_monitor_ref g_next_ref = 1u;
 
 /* A task handle carries the task's state in its tag, so the handle the
  * runtime holds at completion is not bit-equal to the one a monitor was made
- * with: tasks are the same when slot and generation are. */
-static int same_task(asx_task_id a, asx_task_id b) {
-    return asx_handle_index(a) == asx_handle_index(b);
-}
+ * with: tasks are the same when runtime, slot and generation are. */
+static int same_task(asx_task_id a, asx_task_id b) { return asx_handle_same_entity(a, b); }
 
 /* Rust's live_owner (state.rs:4973): a task is live while its record exists
  * and is not terminal. */

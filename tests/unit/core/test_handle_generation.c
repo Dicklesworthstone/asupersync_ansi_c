@@ -248,6 +248,30 @@ TEST(handle_of_another_runtime_is_not_found_through_a_coincident_slot) {
     ASSERT_EQ(ostate, ASX_OBLIGATION_RESERVED);
 }
 
+/* Two handles name one entity when kind, runtime, slot and generation agree;
+ * the state bits move with the entity and take no part. */
+TEST(handle_same_entity_ignores_state_bits_and_tells_runtimes_apart) {
+    uint64_t a = asx_handle_pack(ASX_TYPE_TASK, (uint16_t)(1u << 1), asx_handle_pack_index(3u, 7u));
+    uint64_t same_other_state =
+        asx_handle_pack(ASX_TYPE_TASK, (uint16_t)(1u << 4), asx_handle_pack_index(3u, 7u));
+
+    ASSERT_TRUE(asx_handle_same_entity(a, a));
+    ASSERT_TRUE(asx_handle_same_entity(a, same_other_state));
+    /* Another slot, another generation, another kind. */
+    ASSERT_FALSE(asx_handle_same_entity(a, asx_handle_pack(ASX_TYPE_TASK, (uint16_t)(1u << 1),
+                                                           asx_handle_pack_index(3u, 8u))));
+    ASSERT_FALSE(asx_handle_same_entity(a, asx_handle_pack(ASX_TYPE_TASK, (uint16_t)(1u << 1),
+                                                           asx_handle_pack_index(4u, 7u))));
+    ASSERT_FALSE(asx_handle_same_entity(a, asx_handle_pack(ASX_TYPE_REGION, (uint16_t)(1u << 1),
+                                                           asx_handle_pack_index(3u, 7u))));
+    /* Another runtime's handle with the same slot and generation, in any
+     * state, is another entity. */
+    ASSERT_FALSE(asx_handle_same_entity(a, asx_handle_with_runtime_tag(a, 1u)));
+    ASSERT_FALSE(asx_handle_same_entity(a, asx_handle_with_runtime_tag(same_other_state, 2u)));
+    ASSERT_TRUE(asx_handle_same_entity(asx_handle_with_runtime_tag(a, 1u),
+                                       asx_handle_with_runtime_tag(same_other_state, 1u)));
+}
+
 int main(void) {
     fprintf(stderr, "=== test_handle_generation ===\n");
     RUN_TEST(handle_pack_index_roundtrip);
@@ -262,6 +286,7 @@ int main(void) {
     RUN_TEST(task_lookup_validates_generation);
     RUN_TEST(unjoined_task_keeps_closed_region_slot);
     RUN_TEST(handle_of_another_runtime_is_not_found_through_a_coincident_slot);
+    RUN_TEST(handle_same_entity_ignores_state_bits_and_tells_runtimes_apart);
     TEST_REPORT();
     return test_failures;
 }

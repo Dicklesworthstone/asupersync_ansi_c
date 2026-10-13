@@ -266,8 +266,8 @@ static const char *outcome_word(asx_outcome_severity o) {
 }
 
 /* Handles carry a state bitmask, so one entity can appear under different
- * values: its identity is the generation-tagged slot. */
-static int same_id(uint64_t a, uint64_t b) { return asx_handle_index(a) == asx_handle_index(b); }
+ * values: its identity is the runtime and the generation-tagged slot. */
+static int same_id(uint64_t a, uint64_t b) { return asx_handle_same_entity(a, b); }
 
 static int same_generation(const asx_supervisor_generation *a, const asx_supervisor_generation *b) {
     return a->number == b->number && same_id(a->region, b->region) && same_id(a->task, b->task);

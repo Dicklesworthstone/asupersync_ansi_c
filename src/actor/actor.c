@@ -978,11 +978,8 @@ void asx_actor_op_drop(asx_actor_handle actor, asx_actor_op *op) {
 
 /* The same task or region: a handle carries its entity's state in its tag,
  * so one entity appears under different values over its life; its identity
- * is the type tag and the generation-tagged slot. */
-static int name_same(uint64_t a, uint64_t b) {
-    return asx_handle_type_tag(a) == asx_handle_type_tag(b) &&
-           asx_handle_index(a) == asx_handle_index(b);
-}
+ * is the type tag, the runtime and the generation-tagged slot. */
+static int name_same(uint64_t a, uint64_t b) { return asx_handle_same_entity(a, b); }
 
 /* The index of the entry holding `name`, or ASX_NAME_REGISTRY_CAPACITY. */
 static uint32_t name_index(const asx_name_registry *registry, const char *name) {
@@ -1438,7 +1435,7 @@ void asx_actor_task_finished(asx_task_id task) {
     for (i = 0; i < ASX_MAX_ACTORS; i++) {
         asx_actor_slot *s = &g_actors[i];
         if (!s->in_use || s->state == ASX_ACTOR_STOPPED || s->task_id == ASX_INVALID_ID) continue;
-        if (asx_handle_index(s->task_id) != asx_handle_index(task)) continue;
+        if (!asx_handle_same_entity(s->task_id, task)) continue;
         actor_cell_drop(s);
     }
 }

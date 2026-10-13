@@ -34,10 +34,10 @@ void asx_wait_pool_reset(void) {
 
 uint32_t asx_wait_nodes_in_use(void) { return g_in_use; }
 
+/* One task of one runtime: slot, generation and runtime tag, not state bits. */
 int asx_wait_same_task(asx_task_id a, asx_task_id b) {
     if (!asx_handle_is_valid(a) || !asx_handle_is_valid(b)) return 0;
-    return asx_handle_type_tag(a) == asx_handle_type_tag(b) &&
-           asx_handle_index(a) == asx_handle_index(b);
+    return asx_handle_same_entity(a, b);
 }
 
 asx_wait_task_liveness_kind asx_wait_task_liveness(asx_task_id task) {

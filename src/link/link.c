@@ -45,10 +45,8 @@ static asx_link_ref g_next_ref = 1u;
 static asx_cancel_reason g_cause[ASX_MAX_TASKS];
 
 /* A task handle carries the task's state in its tag: tasks are the same
- * when slot and generation are (as asx/monitor/monitor.c). */
-static int same_task(asx_task_id a, asx_task_id b) {
-    return asx_handle_index(a) == asx_handle_index(b);
-}
+ * when runtime, slot and generation are (as asx/monitor/monitor.c). */
+static int same_task(asx_task_id a, asx_task_id b) { return asx_handle_same_entity(a, b); }
 
 static int task_is_live(asx_task_id task) {
     asx_task_state state;

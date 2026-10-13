@@ -268,4 +268,13 @@ static inline const char *asx_handle_type_str(uint16_t tag) {
     }
 }
 
+/* Whether `a` and `b` name the same entity: the same kind, of the same
+ * runtime, in the same slot at the same generation. The state bits, which
+ * move as the entity's state does, do not take part. */
+static inline int asx_handle_same_entity(uint64_t a, uint64_t b) {
+    return asx_handle_type_tag(a) == asx_handle_type_tag(b) &&
+           asx_handle_runtime_tag(a) == asx_handle_runtime_tag(b) &&
+           asx_handle_index(a) == asx_handle_index(b);
+}
+
 #endif /* ASX_IDS_H */
