@@ -346,10 +346,10 @@ TEST(kill_sleep_reports_signal_termination) {
     k->h = w->h;
     ASSERT_EQ(asx_sleep_init(&k->sleep, 20u * 1000000u), ASX_OK);
 
-    ASSERT_EQ(asx_runtime_now_ns(&start), ASX_OK);
+    ASSERT_EQ(asx_runtime_now_ns(&g_rt, &start), ASX_OK);
     budget = asx_budget_from_polls(100);
     ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
-    ASSERT_EQ(asx_runtime_now_ns(&end), ASX_OK);
+    ASSERT_EQ(asx_runtime_now_ns(&g_rt, &end), ASX_OK);
     ASSERT_TRUE(k->killed);
     ASSERT_EQ(w->status.state, ASX_PROCESS_TERMINATED);
     ASSERT_EQ(w->status.signal, (int32_t)SIGKILL);

@@ -20,6 +20,7 @@
 #endif
 
 #include "test_harness.h"
+#include "test_runtime.h"
 #include <asx/asx.h>
 #include <asx/runtime/rt.h>
 #include <asx/runtime/runtime.h>
@@ -298,7 +299,7 @@ static asx_status server_main_poll(void *ud, asx_task_id self) {
     }
     if (!m->armed) {
         m->armed = 1;
-        if (asx_runtime_now_ns(&now) != ASX_OK) return ASX_E_INVALID_STATE;
+        if (asx_runtime_now_ns(test_runtime(), &now) != ASX_OK) return ASX_E_INVALID_STATE;
         if (asx_task_arm_timer(self, now + 20u * 1000000u) != ASX_OK) return ASX_E_INVALID_STATE;
     } else if (!m->raised) {
         m->raised = 1;

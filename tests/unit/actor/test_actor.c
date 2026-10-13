@@ -358,7 +358,7 @@ static void test_refused_server_reply_does_not_repoll_following_sleep(void) {
     ASSERT(asx_scheduler_run_until_idle(g_root, &budget) == ASX_E_PENDING,
            "caller sleeps at time zero");
     ASSERT(c.polls == 1u, "exactly the initial sleep poll");
-    asx_runtime_virtual_advance(250u);
+    asx_runtime_virtual_advance(&g_refused_lab.rt, 250u);
     ASSERT(asx_lab_advance_to_next_timer(&g_refused_lab, NULL) == ASX_OK,
            "the actual first timer wakes the caller at the driver time");
     ASSERT(asx_region_close_with_outcome(region, &body, NULL) == ASX_OK,

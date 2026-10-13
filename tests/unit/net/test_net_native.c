@@ -421,10 +421,10 @@ TEST(real_clock_sleep_blocks_in_reactor_without_spinning) {
               ASX_OK);
     ASSERT_EQ(asx_sleep_init(&s->sleep, 30u * 1000000u), ASX_OK);
 
-    ASSERT_EQ(asx_runtime_now_ns(&start), ASX_OK);
+    ASSERT_EQ(asx_runtime_now_ns(&g_rt, &start), ASX_OK);
     budget = asx_budget_from_polls(10);
     ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
-    ASSERT_EQ(asx_runtime_now_ns(&end), ASX_OK);
+    ASSERT_EQ(asx_runtime_now_ns(&g_rt, &end), ASX_OK);
     ASSERT_TRUE(end - start >= (asx_time)(30u * 1000000u));
     ASSERT_TRUE(s->polls <= 3u);
 }
@@ -467,11 +467,11 @@ TEST(run_deadline_bounds_reactor_wait) {
               ASX_OK);
     ASSERT_EQ(asx_tcp_listener_bind(&a->listener, &any), ASX_OK);
 
-    ASSERT_EQ(asx_runtime_now_ns(&start), ASX_OK);
+    ASSERT_EQ(asx_runtime_now_ns(&g_rt, &start), ASX_OK);
     budget = asx_budget_from_polls(1000);
     budget.deadline = start + 200u * 1000000u; /* now + 200 ms */
     ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_E_TIMED_OUT);
-    ASSERT_EQ(asx_runtime_now_ns(&end), ASX_OK);
+    ASSERT_EQ(asx_runtime_now_ns(&g_rt, &end), ASX_OK);
 
     ASSERT_TRUE(end - start >= (asx_time)(200u * 1000000u));
     /* Not stuck in epoll, and parked rather than spinning. */

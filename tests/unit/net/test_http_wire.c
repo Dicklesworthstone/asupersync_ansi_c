@@ -2178,7 +2178,7 @@ TEST(e2e_idle_timeout_wakes_the_server_task) {
     ASSERT_TRUE(e2e_setup(18094u, &cfg));
     addr = asx_socket_addr_loopback(18094u);
     ASSERT_EQ(asx_tcp_connect(&stream, &addr), ASX_OK);
-    start = asx_runtime_virtual_now();
+    start = asx_runtime_virtual_now(test_runtime());
 
     ASSERT_EQ(asx_region_open(test_runtime(), &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, http_server_task, NULL, &t), ASX_OK);
@@ -2186,7 +2186,7 @@ TEST(e2e_idle_timeout_wakes_the_server_task) {
     ASSERT_EQ(asx_scheduler_run(r, &b), ASX_E_WOULD_BLOCK);
     ASSERT_EQ(g_hs.connections_timed_out, 1u);
     ASSERT_EQ(asx_http_server_active_conns(&g_hs), 0u);
-    ASSERT_TRUE(asx_runtime_virtual_now() >= start + (asx_time)5000u * 1000000u);
+    ASSERT_TRUE(asx_runtime_virtual_now(test_runtime()) >= start + (asx_time)5000u * 1000000u);
     ASSERT_TRUE(peer_closed(stream));
     (void)asx_tcp_stream_close(stream);
     asx_runtime_reset(test_runtime());

@@ -685,7 +685,7 @@ TEST(mutex_handoff_between_three_tasks) {
         ASSERT_EQ(g_mtx[i].polls, 3u); /* park, acquire+hold, unlock */
     }
     ASSERT_EQ(g_max_holders, 1u);
-    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)(3u * MS));
+    ASSERT_EQ(asx_runtime_virtual_now(&g_rt), (asx_time)(3u * MS));
 }
 
 TEST(mutex_handoff_is_deterministic) {
@@ -696,12 +696,12 @@ TEST(mutex_handoff_is_deterministic) {
 
     polls1 = run_mutex_handoff();
     memcpy(order1, g_order, sizeof(order1));
-    end1 = asx_runtime_virtual_now();
+    end1 = asx_runtime_virtual_now(&g_rt);
     polls2 = run_mutex_handoff();
     ASSERT_TRUE(polls1 > 0u);
     ASSERT_EQ(polls1, polls2);
     ASSERT_EQ(memcmp(order1, g_order, sizeof(order1)), 0);
-    ASSERT_EQ(end1, asx_runtime_virtual_now());
+    ASSERT_EQ(end1, asx_runtime_virtual_now(&g_rt));
 }
 
 /* ------------------------------------------------------------------ */
@@ -1030,7 +1030,7 @@ TEST(mutex_lock_until_past_its_deadline_times_out_even_when_free) {
 
     ASSERT_TRUE(setup());
     ASSERT_EQ(asx_mutex_create(&m), ASX_OK);
-    asx_runtime_virtual_advance(10u * MS);
+    asx_runtime_virtual_advance(&g_rt, 10u * MS);
     ASSERT_EQ(asx_mutex_lock_until_begin(m, 10u * MS, &w), ASX_OK);
     ASSERT_EQ(asx_mutex_poll_lock(&w, &g, NULL), ASX_E_TIMED_OUT);
     ASSERT_FALSE(asx_mutex_is_locked(m));
@@ -1053,14 +1053,14 @@ TEST(mutex_lock_until_gives_up_and_a_handed_lock_passes_on) {
     ASSERT_TRUE(setup());
     ASSERT_EQ(asx_mutex_create(&m), ASX_OK);
     for (round = 0; round < 2; round++) {
-        asx_time start = asx_runtime_virtual_now();
+        asx_time start = asx_runtime_virtual_now(&g_rt);
         ASSERT_EQ(asx_mutex_try_lock(m, &held), ASX_OK);
         ASSERT_EQ(asx_mutex_lock_until_begin(m, start + 5u * MS, &w1), ASX_OK);
         ASSERT_EQ(asx_mutex_lock_begin(m, &w2), ASX_OK);
         ASSERT_EQ(asx_mutex_poll_lock(&w1, &g, NULL), ASX_E_PENDING);
         ASSERT_EQ(asx_mutex_poll_lock(&w2, &g, NULL), ASX_E_PENDING);
         if (round == 1) ASSERT_EQ(asx_mutex_unlock(held), ASX_OK); /* handed to w1 */
-        asx_runtime_virtual_advance(start + 5u * MS);              /* to the deadline */
+        asx_runtime_virtual_advance(&g_rt, start + 5u * MS);       /* to the deadline */
         ASSERT_EQ(asx_mutex_poll_lock(&w1, &g, NULL), ASX_E_TIMED_OUT);
         if (round == 0) ASSERT_EQ(asx_mutex_unlock(held), ASX_OK);
         ASSERT_EQ(asx_mutex_poll_lock(&w2, &g, NULL), ASX_OK);
@@ -1108,7 +1108,7 @@ static asx_status poll_lock_until_task(void *ud, asx_task_id self) {
     st = asx_mutex_poll_lock(&u->waiter, &u->guard, NULL);
     if (st == ASX_E_PENDING) return st;
     u->result = st;
-    u->at = asx_runtime_virtual_now();
+    u->at = asx_runtime_virtual_now(&g_rt);
     return st == ASX_OK ? asx_mutex_unlock(u->guard) : ASX_OK;
 }
 
@@ -1512,7 +1512,7 @@ TEST(rwlock_serves_the_line_in_arrival_order) {
         ASSERT_EQ(r[i].polls, 3u);
     }
     /* 1 ms per holder: 4 ms of virtual time in total. */
-    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)(4u * MS));
+    ASSERT_EQ(asx_runtime_virtual_now(&g_rt), (asx_time)(4u * MS));
 }
 
 /* Write-lock without a Cx (a cancel request does not make it give up),

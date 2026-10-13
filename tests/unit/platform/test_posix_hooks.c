@@ -269,9 +269,9 @@ TEST(posix_runtime_security_draw_comes_from_os_source) {
     /* Live and deterministic builds alike: the platform source is a real
      * source, so its security draws are served and are not a replayable
      * stream. */
-    ASSERT_EQ(asx_runtime_random_secure_u64(&first), ASX_OK);
+    ASSERT_EQ(asx_runtime_random_secure_u64(test_runtime(), &first), ASX_OK);
     for (i = 0; i < 64u && !differs; ++i) {
-        ASSERT_EQ(asx_runtime_random_secure_u64(&next), ASX_OK);
+        ASSERT_EQ(asx_runtime_random_secure_u64(test_runtime(), &next), ASX_OK);
         differs = (next != first);
     }
     ASSERT_TRUE(differs);
@@ -279,7 +279,7 @@ TEST(posix_runtime_security_draw_comes_from_os_source) {
     /* Reset must restore the pristine table: a second runtime in the same
      * process does not inherit this one's source. */
     asx_runtime_reset(test_runtime());
-    ASSERT_EQ(asx_runtime_random_secure_u64(&next), ASX_E_HOOK_MISSING);
+    ASSERT_EQ(asx_runtime_random_secure_u64(test_runtime(), &next), ASX_E_HOOK_MISSING);
 }
 
 #if defined(__linux__)

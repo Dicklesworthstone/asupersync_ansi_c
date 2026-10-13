@@ -222,7 +222,7 @@ TEST(receiver_parks_until_sender_sends) {
     ASSERT_EQ(g_rx[0].values[0], (uint64_t)77);
     ASSERT_EQ(g_tx[0].polls, 2u);
     ASSERT_EQ(polls_used(100, &budget), 4u);
-    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)(5u * MS));
+    ASSERT_EQ(asx_runtime_virtual_now(&g_rt), (asx_time)(5u * MS));
 }
 
 TEST(receiver_without_sender_would_block) {

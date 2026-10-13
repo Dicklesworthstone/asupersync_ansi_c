@@ -517,7 +517,7 @@ static void test_the_runtime_fires_a_servers_monitor_at_completion(void) {
     ASSERT(asx_handle_index(s.got[0].task) == asx_handle_index(target),
            "for the monitored task (its handle's state tag has changed since)");
     ASSERT(s.got[0].reason.severity == ASX_OUTCOME_OK, "Normal");
-    ASSERT(s.got[0].vt == asx_runtime_virtual_now(), "at the runtime's virtual time");
+    ASSERT(s.got[0].vt == asx_runtime_virtual_now(test_runtime()), "at the runtime's virtual time");
     ASSERT(asx_monitor_count() == 0u, "and it is gone");
 }
 

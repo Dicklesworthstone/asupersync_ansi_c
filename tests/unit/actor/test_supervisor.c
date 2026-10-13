@@ -102,7 +102,8 @@ static uint32_t g_order;
 
 static asx_time now_ns(void) {
     asx_time t = 0;
-    if (asx_runtime_now_ns(&t) != ASX_OK) t = asx_runtime_virtual_now();
+    if (asx_runtime_now_ns(test_runtime(), &t) != ASX_OK)
+        t = asx_runtime_virtual_now(test_runtime());
     return t;
 }
 
