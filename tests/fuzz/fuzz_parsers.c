@@ -40,6 +40,18 @@
  *   ASX_FUZZ_JSON_READER    the conformance JSON reader (scenario and
  *                           fixture files)
  *
+ * Differential mode (bd-9kll.16.2), not a fuzz target: -DASX_DIFF_<TARGET>
+ * with -DASX_FUZZ_STANDALONE prints, for each file named on the command
+ * line, one JSON line {"input": <name>, "outcome": {...}} describing what the
+ * C parser made of the whole file, in the shape twin_run parse-diff prints
+ * for asupersync's parser (tools/twin_run/src/parsediff.rs), so
+ * tools/ci/parser_differential.py can compare the two:
+ *   ASX_DIFF_HTTP_REQUEST   the first HTTP/1.1 request in the file, fed in
+ *                           one piece and then end of input. ASX_DIFF_
+ *                           REQUIRE_HOST=0 in the environment turns off
+ *                           the parser's Host requirement, so a divergence
+ *                           it hides can be reached.
+ *
  * SPDX-License-Identifier: MIT
  */
 
@@ -73,6 +85,9 @@ FUZZ_HELPER void touch(const void *p, size_t n) {
 FUZZ_HELPER void touch_str(const char *s) {
     if (s != NULL) touch(s, strlen(s) + 1u);
 }
+
+/* The file being run, for the differential mode (set by the standalone main). */
+FUZZ_HELPER const char *g_input_name = "";
 
 /* A violated property of a parser: abort, which the fuzzer reports. */
 FUZZ_HELPER void fuzz_fail(const char *what) {
@@ -660,8 +675,159 @@ static void fuzz_one(const uint8_t *data, size_t size) {
     }
 }
 
+#elif defined(ASX_DIFF_HTTP_REQUEST)
+
+#include <asx/net/http.h>
+
+#ifndef ASX_FUZZ_STANDALONE
+#error "ASX_DIFF_HTTP_REQUEST needs ASX_FUZZ_STANDALONE (one outcome line per file)"
+#endif
+
+static uint8_t g_head[8192];
+
+/* The JSON string whose code points are the n bytes of s (Latin-1), so equal
+ * bytes print equal on both sides whatever they hold. */
+static void diff_put_string(const char *s, size_t n) {
+    size_t i;
+    putchar('"');
+    for (i = 0; i < n; i++) {
+        unsigned b = (unsigned char)s[i];
+        if (b == (unsigned)'"' || b == (unsigned)'\\') {
+            putchar('\\');
+            putchar((int)b);
+        } else if (b < 0x20u) {
+            printf("\\u%04x", b);
+        } else if (b < 0x80u) {
+            putchar((int)b);
+        } else {
+            putchar((int)(0xC0u | (b >> 6)));
+            putchar((int)(0x80u | (b & 0x3Fu)));
+        }
+    }
+    putchar('"');
+}
+
+static void diff_put_cstr(const char *s) { diff_put_string(s, strlen(s)); }
+
+static void diff_put_fields(const asx_http_parser *p, int trailers) {
+    uint32_t n = trailers ? asx_http_parser_trailer_count(p) : asx_http_parser_header_count(p);
+    uint32_t i;
+    putchar('[');
+    for (i = 0; i < n; i++) {
+        const char *name = "";
+        const char *value = "";
+        asx_status st = trailers ? asx_http_parser_trailer_at(p, i, &name, &value)
+                                 : asx_http_parser_header_at(p, i, &name, &value);
+        if (st != ASX_OK) fuzz_fail("http field index below its count");
+        if (i > 0u) putchar(',');
+        putchar('[');
+        diff_put_cstr(name);
+        putchar(',');
+        diff_put_cstr(value);
+        putchar(']');
+    }
+    putchar(']');
+}
+
+/* One line: {"input": <file>, "outcome": <outcome>} */
+static void diff_begin(void) {
+    fputs("{\"input\":", stdout);
+    diff_put_cstr(g_input_name);
+    fputs(",\"outcome\":", stdout);
+}
+
+static void diff_end(void) { fputs("}\n", stdout); }
+
+static void diff_error(const char *detail) {
+    fputs("{\"kind\":\"error\",\"detail\":", stdout);
+    diff_put_cstr(detail);
+    putchar('}');
+    diff_end();
+}
+
+static void diff_complete(const asx_http_parser *p, uint64_t body_len, uint64_t body_fnv,
+                          uint32_t consumed) {
+    fputs("{\"kind\":\"complete\",\"method\":", stdout);
+    diff_put_cstr(asx_http_method_str(asx_http_parser_method(p)));
+    fputs(",\"target\":", stdout);
+    diff_put_cstr(asx_http_parser_target(p));
+    fputs(",\"version\":", stdout);
+    diff_put_cstr(asx_http_version_str(asx_http_parser_version(p)));
+    fputs(",\"headers\":", stdout);
+    diff_put_fields(p, 0);
+    fputs(",\"trailers\":", stdout);
+    diff_put_fields(p, 1);
+    printf(",\"body_len\":%llu,\"body_fnv\":\"%016llx\",\"consumed\":%lu}",
+           (unsigned long long)body_len, (unsigned long long)body_fnv, (unsigned long)consumed);
+    diff_end();
+}
+
+/* The first request in the input, fed in one piece and then end of input.
+ * Accepted means the parser reported MESSAGE_COMPLETE; anything else (a
+ * protocol error, a limit, input cut short, input that holds no message)
+ * is an error with the parser's own reason in "detail". */
+static void fuzz_one(const uint8_t *data, size_t size) {
+    asx_http_limits limits;
+    asx_http_parser p;
+    asx_http_event ev;
+    const char *env = getenv("ASX_DIFF_REQUIRE_HOST");
+    uint32_t pos = 0;
+    uint32_t guard;
+    uint64_t body_len = 0;
+    uint64_t fnv = UINT64_C(0xcbf29ce484222325);
+    asx_status st;
+
+    diff_begin();
+    if (size == 0u) {
+        fputs("{\"kind\":\"empty\"}", stdout);
+        diff_end();
+        return;
+    }
+    if (size > (1u << 20)) {
+        diff_error("input too large");
+        return;
+    }
+    asx_http_limits_init(&limits);
+    if (env != NULL && env[0] == '0') limits.require_host = 0u;
+    if (asx_http_parser_init(&p, ASX_HTTP_PARSE_REQUEST, &limits, g_head,
+                             (uint32_t)sizeof(g_head)) != ASX_OK) {
+        fuzz_fail("http parser init");
+    }
+    guard = 4u * (uint32_t)size + 64u;
+    for (;;) {
+        uint32_t used = 0;
+        if (guard-- == 0u) fuzz_fail("http parser makes no progress");
+        st = asx_http_parser_feed(&p, data + pos, (uint32_t)size - pos, &used, &ev);
+        if (st != ASX_OK) {
+            diff_error(asx_http_parse_error_str(asx_http_parser_error(&p)));
+            return;
+        }
+        pos += used;
+        if (ev.kind == ASX_HTTP_EVENT_BODY) {
+            uint32_t i;
+            for (i = 0; i < ev.len; i++) {
+                fnv = (fnv ^ (uint64_t)ev.data[i]) * UINT64_C(0x00000100000001b3);
+            }
+            body_len += ev.len;
+        } else if (ev.kind == ASX_HTTP_EVENT_MESSAGE_COMPLETE) {
+            diff_complete(&p, body_len, fnv, pos);
+            return;
+        } else if (ev.kind == ASX_HTTP_EVENT_NONE) {
+            break;
+        }
+    }
+    st = asx_http_parser_finish(&p, &ev);
+    if (st != ASX_OK) {
+        diff_error(asx_http_parse_error_str(asx_http_parser_error(&p)));
+    } else if (ev.kind == ASX_HTTP_EVENT_MESSAGE_COMPLETE) {
+        diff_complete(&p, body_len, fnv, pos);
+    } else {
+        diff_error("no message in the input");
+    }
+}
+
 #else
-#error "define one ASX_FUZZ_<TARGET> (see the header comment)"
+#error "define one ASX_FUZZ_<TARGET> or ASX_DIFF_<TARGET> (see the header comment)"
 #endif
 
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
@@ -692,6 +858,7 @@ int main(int argc, char **argv) {
             return 2;
         }
         fclose(f);
+        g_input_name = argv[i];
         (void)LLVMFuzzerTestOneInput(buf, (size_t)len);
         free(buf);
     }

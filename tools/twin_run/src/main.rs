@@ -10,6 +10,7 @@
 mod canon;
 mod constants;
 mod minimize;
+mod parsediff;
 mod run;
 // `gen` is a reserved keyword in edition 2024.
 #[path = "gen.rs"]
@@ -28,7 +29,9 @@ fn usage() -> ExitCode {
          twin_run canon-fuzz --seed <u64> --count <n> --out <file.jsonl>\n       \
          twin_run minimize <scenario.json> --runner <asx-conformance> --out <dir>\n       \
          twin_run trace <scenario.json>   (raw lab trace, for diagnosis)\n       \
-         twin_run constants --source <asupersync crate dir> --out <file.json>"
+         twin_run constants --source <asupersync crate dir> --out <file.json>\n       \
+         twin_run parse-fuzz http-request --seed <u64> --count <n> --out <dir>\n       \
+         twin_run parse-diff http-request <input>..."
     );
     ExitCode::from(2)
 }
@@ -248,6 +251,8 @@ fn capture(paths: &[PathBuf], out: &PathBuf) -> ExitCode {
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
+        // Differential parsing against the C parsers (bd-9kll.16.2).
+        Some("parse-fuzz" | "parse-diff") => parsediff::cli(&args),
         Some("capture") => {
             let mut paths = Vec::new();
             let mut out = None;
