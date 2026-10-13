@@ -2,9 +2,10 @@
  * e2e_native_record_replay.c — RP3: a real native HTTP server run, recorded
  * to a journal and replayed without sockets (bd-9kll.11.3)
  *
- * One binary, five modes, driven by native_record_replay.sh (record, load,
- * replay) and native_crash_continuity.sh (record-crash, load, replay-prefix).
- * Built against a live POSIX library (DETERMINISTIC=0).
+ * One binary, five modes (and a sixth in a -DASX_TEST_RACE build), driven
+ * by native_record_replay.sh (record, load, replay, and the planted race)
+ * and native_crash_continuity.sh (record-crash, load, replay-prefix). Built
+ * against a live POSIX library (DETERMINISTIC=0).
  *
  *   record JOURNAL
  *       Run the HTTP server (GET /hello, POST /echo) on a loopback port with
@@ -48,6 +49,19 @@
  *       complete journal, "REPLAY_DIGEST" and "REPLAY_OK"; else
  *       "REPLAY_REFUSED ...").
  *
+ *   -DASX_TEST_RACE                              (bd-9kll.11.3, step 5)
+ *       Plants an order dependence in the server program: POST /register
+ *       sets a flag and GET /lookup answers 500 when the flag is not set.
+ *       "load-race PORT" runs one client of each, started together, then the
+ *       held connection of "load"; whether the lookup arrives first is the
+ *       kernel's accept order. "load-race PORT serial" runs them one after
+ *       the other, register first: the order the program assumes, which
+ *       never triggers it. record prints "RACE hits=N events=E
+ *       digest=D" (lookups served before the register; the trace's event
+ *       count and digest at the first), replay prints "REPLAY_RACE" with the
+ *       same three, which a replay of a recording that triggered it must
+ *       reproduce exactly.
+ *
  * Exit status: 0 on success, 1 on a failure, 2 on a usage error.
  *
  * SPDX-License-Identifier: MIT
@@ -70,6 +84,9 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
+#ifdef ASX_TEST_RACE
+#include <pthread.h>
+#endif
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -101,6 +118,9 @@ typedef struct {
     uint32_t timed_out;
     uint32_t drain_closed;
     uint32_t rejected;
+    uint32_t race_hits;   /* -DASX_TEST_RACE: lookups served before the register */
+    uint32_t race_events; /* the trace's event count at the first one */
+    uint64_t race_digest; /* the trace digest at the first one */
     asx_status run_status;
 } serve_ctx;
 
@@ -110,6 +130,42 @@ static asx_http_router g_router;
 static asx_signal_subscription g_sub;
 static asx_task_id g_server_task;
 static int g_announce;
+
+#ifdef ASX_TEST_RACE
+/* A planted order dependence (bd-9kll.11.3, step 5): GET /lookup assumes
+ * POST /register has been served and answers 500 when it has not. Which of
+ * the two a concurrent pair of clients gets in first is up to the kernel's
+ * accept order, so a recording may or may not trigger it; the state the
+ * handler reads is the program's own, so a replay of a recording that
+ * triggered it must trigger it at the same trace position, every time. */
+static uint32_t g_registered;
+static uint32_t g_race_hits;
+static uint32_t g_race_events;
+static uint64_t g_race_digest;
+
+static asx_status h_register(asx_http_request_context *ctx, asx_http_response *resp, void *ud) {
+    (void)ctx;
+    (void)ud;
+    g_registered = 1u;
+    asx_http_response_init(resp, ASX_HTTP_200_OK);
+    return asx_http_body_set_bytes(&resp->body, "ok", 2u);
+}
+
+static asx_status h_lookup(asx_http_request_context *ctx, asx_http_response *resp, void *ud) {
+    (void)ctx;
+    (void)ud;
+    if (g_registered != 0u) {
+        asx_http_response_init(resp, ASX_HTTP_200_OK);
+        return asx_http_body_set_bytes(&resp->body, "found", 5u);
+    }
+    if (g_race_hits++ == 0u) {
+        g_race_events = asx_trace_event_count();
+        g_race_digest = asx_trace_digest();
+    }
+    asx_http_response_init(resp, ASX_HTTP_500_INTERNAL_ERROR);
+    return asx_http_body_set_bytes(&resp->body, "race", 4u);
+}
+#endif
 
 static asx_status h_hello(asx_http_request_context *ctx, asx_http_response *resp, void *ud) {
     (void)ctx;
@@ -162,6 +218,17 @@ static asx_status serve_program(void *obs) {
     if (st != ASX_OK) return st;
     st = asx_http_router_add_route(&g_router, ASX_HTTP_POST, "/echo", h_echo, NULL, NULL, NULL);
     if (st != ASX_OK) return st;
+#ifdef ASX_TEST_RACE
+    g_registered = 0u;
+    g_race_hits = 0u;
+    g_race_events = 0u;
+    g_race_digest = 0u;
+    st = asx_http_router_add_route(&g_router, ASX_HTTP_POST, "/register", h_register, NULL, NULL,
+                                   NULL);
+    if (st != ASX_OK) return st;
+    st = asx_http_router_add_route(&g_router, ASX_HTTP_GET, "/lookup", h_lookup, NULL, NULL, NULL);
+    if (st != ASX_OK) return st;
+#endif
 
     asx_server_config_init(&scfg);
     scfg.listen_addr = asx_socket_addr_loopback(0u);
@@ -199,6 +266,11 @@ static asx_status serve_program(void *obs) {
     c->timed_out = g_hs.connections_timed_out;
     c->drain_closed = g_hs.connections_drain_closed;
     c->rejected = asx_server_total_rejected(&g_srv);
+#ifdef ASX_TEST_RACE
+    c->race_hits = g_race_hits;
+    c->race_events = g_race_events;
+    c->race_digest = g_race_digest;
+#endif
     st = asx_signal_unsubscribe(g_sub);
     if (c->run_status != ASX_OK) return c->run_status;
     return st;
@@ -279,6 +351,10 @@ static int run_record(const char *journal_path) {
            (unsigned)ctx.served, (unsigned)ctx.accepted, (unsigned)ctx.timed_out,
            (unsigned)ctx.drain_closed, (unsigned)ctx.rejected);
     printf("DIGEST %016llx\n", (unsigned long long)ctx.digest);
+#ifdef ASX_TEST_RACE
+    printf("RACE hits=%u events=%u digest=%016llx\n", (unsigned)ctx.race_hits,
+           (unsigned)ctx.race_events, (unsigned long long)ctx.race_digest);
+#endif
     printf("JOURNAL %ld\n", bytes);
     fflush(stdout);
     if (st != ASX_OK) return fail("server run", st);
@@ -485,6 +561,10 @@ static int run_replay(const char *journal_path, const char *digest_hex, const ch
 
     printf("REPLAY_DIGEST %016llx\n", (unsigned long long)ctx.digest);
     printf("REPLAY_SERVED %u\n", (unsigned)ctx.served);
+#ifdef ASX_TEST_RACE
+    printf("REPLAY_RACE hits=%u events=%u digest=%016llx\n", (unsigned)ctx.race_hits,
+           (unsigned)ctx.race_events, (unsigned long long)ctx.race_digest);
+#endif
     printf("REAL_NET_CALLS %u\n", (unsigned)calls);
     if (err != ASX_REPLAY_OK) {
         printf("REPLAY_REFUSED %s seq=%llu kind=%u what=%s program_status=%s\n", error_name(err),
@@ -647,12 +727,38 @@ static int expect_get(int fd, const char *what) {
     return 1;
 }
 
+/* A keep-alive connection held open: the SIGTERM drain closes it. Prints
+ * READY once its request is answered (the script then sends SIGTERM) and
+ * DRAINED when the server closes it. 0 on success. */
+static int hold_until_drained(uint16_t port) {
+    int held = dial(port, 10);
+    char b;
+    ssize_t r;
+
+    if (held < 0) {
+        printf("LOAD_FAIL D: connect\n");
+        return 1;
+    }
+    if (!expect_get(held, "D")) return 1;
+    printf("READY\n");
+    fflush(stdout);
+    r = recv(held, &b, 1u, 0);
+    if (r != 0) {
+        printf("LOAD_FAIL D: the drain did not close the idle connection (recv=%ld errno=%d)\n",
+               (long)r, errno);
+        return 1;
+    }
+    (void)close(held);
+    printf("DRAINED\n");
+    fflush(stdout);
+    return 0;
+}
+
 static int run_load(uint16_t port) {
     char body[64];
     int status = 0;
     int fd;
     struct linger lg;
-    int held;
 
     (void)signal(SIGPIPE, SIG_IGN);
 
@@ -701,28 +807,102 @@ static int run_load(uint16_t port) {
     (void)close(fd);
 
     /* D: a keep-alive connection held open: the SIGTERM drain closes it. */
-    held = dial(port, 10);
-    if (held < 0) {
-        printf("LOAD_FAIL D: connect\n");
+    return hold_until_drained(port);
+}
+
+#ifdef ASX_TEST_RACE
+/* The racing pair of -DASX_TEST_RACE: one client POSTs /register, the other
+ * GETs /lookup, started together. Both dial after a rendezvous and send after
+ * a second one, so the order the server sees them in is the kernel's accept
+ * order. */
+typedef struct {
+    pthread_mutex_t mu;
+    pthread_cond_t cv;
+    int arrived;
+    int parties;
+    int generation;
+} rendezvous;
+
+static void rendezvous_wait(rendezvous *r) {
+    int gen;
+    (void)pthread_mutex_lock(&r->mu);
+    gen = r->generation;
+    if (++r->arrived == r->parties) {
+        r->arrived = 0;
+        r->generation++;
+        (void)pthread_cond_broadcast(&r->cv);
+    } else {
+        while (gen == r->generation) (void)pthread_cond_wait(&r->cv, &r->mu);
+    }
+    (void)pthread_mutex_unlock(&r->mu);
+}
+
+typedef struct {
+    uint16_t port;
+    rendezvous *rv;
+    int lookup; /* 1: GET /lookup; 0: POST /register */
+    int status; /* the response's status, 0 when there was none */
+} race_client;
+
+static void *race_client_main(void *arg) {
+    race_client *c = (race_client *)arg;
+    char body[64];
+    int fd;
+
+    rendezvous_wait(c->rv);
+    fd = dial(c->port, 5);
+    rendezvous_wait(c->rv);
+    if (fd < 0) return NULL;
+    if (send_all(fd, c->lookup
+                         ? "GET /lookup HTTP/1.1\r\nHost: t\r\n\r\n"
+                         : "POST /register HTTP/1.1\r\nHost: t\r\nContent-Length: 0\r\n\r\n")) {
+        (void)read_response(fd, &c->status, body, sizeof(body));
+    }
+    (void)close(fd);
+    return NULL;
+}
+
+/* serial: the register, then the lookup, one after the other in this
+ * thread: the order the program assumes, which never triggers it (the
+ * control recording). Otherwise the pair races. */
+static int run_load_race(uint16_t port, int serial) {
+    pthread_t th[2];
+    race_client cl[2];
+    rendezvous rv;
+    int i;
+
+    (void)signal(SIGPIPE, SIG_IGN);
+    memset(&rv, 0, sizeof(rv));
+    rv.parties = serial ? 1 : 2;
+    (void)pthread_mutex_init(&rv.mu, NULL);
+    (void)pthread_cond_init(&rv.cv, NULL);
+    for (i = 0; i < 2; i++) {
+        memset(&cl[i], 0, sizeof(cl[i]));
+        cl[i].port = port;
+        cl[i].rv = &rv;
+        cl[i].lookup = i;
+    }
+    if (serial) {
+        (void)race_client_main(&cl[0]);
+        (void)race_client_main(&cl[1]);
+    } else {
+        for (i = 0; i < 2; i++) {
+            if (pthread_create(&th[i], NULL, race_client_main, &cl[i]) != 0) {
+                printf("LOAD_FAIL race: thread\n");
+                return 1;
+            }
+        }
+        for (i = 0; i < 2; i++) (void)pthread_join(th[i], NULL);
+    }
+    printf("RACE_CLIENTS register=%d lookup=%d\n", cl[0].status, cl[1].status);
+    fflush(stdout);
+    if (cl[0].status != 200 || (cl[1].status != 200 && cl[1].status != 500)) {
+        printf("LOAD_FAIL race: no answer\n");
         return 1;
     }
-    if (!expect_get(held, "D")) return 1;
-    printf("READY\n");
-    fflush(stdout);
-    {
-        char b;
-        ssize_t r = recv(held, &b, 1u, 0);
-        if (r != 0) {
-            printf("LOAD_FAIL D: the drain did not close the idle connection (recv=%ld errno=%d)\n",
-                   (long)r, errno);
-            return 1;
-        }
-    }
-    (void)close(held);
-    printf("DRAINED\n");
-    fflush(stdout);
-    return 0;
+    return hold_until_drained(port);
 }
+#endif
 
 /* ------------------------------------------------------------------ */
 /* main                                                                */
@@ -734,8 +914,9 @@ static int usage(const char *argv0) {
             "       %s load PORT\n"
             "       %s replay JOURNAL DIGEST SERVED [RUST_REV]\n"
             "       %s record-crash JOURNAL CKPTLOG KILL_AT\n"
-            "       %s replay-prefix JOURNAL [RUST_REV]\n",
-            argv0, argv0, argv0, argv0, argv0);
+            "       %s replay-prefix JOURNAL [RUST_REV]\n"
+            "       %s load-race PORT [serial]    (built with -DASX_TEST_RACE)\n",
+            argv0, argv0, argv0, argv0, argv0, argv0);
     return 2;
 }
 
@@ -752,6 +933,13 @@ int main(int argc, char **argv) {
         if (port == 0ul || port > 65535ul) return usage(argv[0]);
         return run_load((uint16_t)port);
     }
+#ifdef ASX_TEST_RACE
+    if (argc >= 3 && strcmp(argv[1], "load-race") == 0) {
+        unsigned long port = strtoul(argv[2], NULL, 10);
+        if (port == 0ul || port > 65535ul) return usage(argv[0]);
+        return run_load_race((uint16_t)port, argc >= 4 && strcmp(argv[3], "serial") == 0);
+    }
+#endif
     if (argc >= 5 && strcmp(argv[1], "replay") == 0) {
         return run_replay(argv[2], argv[3], argv[4], argc >= 6 ? argv[5] : NULL);
     }
