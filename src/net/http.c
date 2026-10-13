@@ -3020,6 +3020,18 @@ static int http_is_wait_status(asx_status st) {
 /* Bound on state-machine steps per poll call (keeps polls cooperative). */
 #define HTTP_CONN_POLL_STEPS 64u
 
+/* A poll that ran out of steps with work in hand: the peer keeps the stream
+ * busy, the next request or the next part of the body is readable as soon as
+ * the last was handled. Nothing is armed for that work (the last read
+ * returned data), and a wait earlier in the same poll (the accept that found
+ * no client) has asked to park the task, so returning PENDING would park it
+ * on a listener with the connection's bytes unserved and no event to come.
+ * Wake the task: it polls again, as the end of the accept loop does. */
+static void http_poll_again(void) {
+    asx_status woke = asx_task_wake(asx_task_current());
+    (void)woke;
+}
+
 /* ------------------------------------------------------------------ */
 /* Client connection                                                   */
 /* ------------------------------------------------------------------ */
@@ -3316,6 +3328,7 @@ asx_status asx_http_client_conn_poll(asx_http_client_conn *c, asx_http_response 
         http_client_fail(c);
         return st;
     }
+    http_poll_again();
     return ASX_E_PENDING;
 }
 
@@ -3650,6 +3663,7 @@ static asx_status http_server_conn_step(asx_http_server_conn *c) {
         http_server_close(c);
         return st;
     }
+    http_poll_again();
     return ASX_E_PENDING;
 }
 

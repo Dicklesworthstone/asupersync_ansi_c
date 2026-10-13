@@ -608,6 +608,125 @@ TEST(http_keepalive_exchange_over_real_sockets) {
     ASSERT_TRUE(c->polls < 40u);
 }
 
+/* A connection a peer keeps busy (bd-9kll.11.1): the client writes 60
+ * requests in one send, more than one poll's step budget serves
+ * (HTTP_CONN_POLL_STEPS is 64 and a request takes two steps once its bytes
+ * are in). The server task polls its listener first, whose accept finds no
+ * client and asks to park the task; the poll then runs out of steps with
+ * requests unserved and no readiness event to come, because the last read
+ * returned data. Returning PENDING there parked the task for good (the live
+ * overhead bench stalled with a request sitting in the connection's buffer).
+ * The task must be woken to poll again and the whole pipeline answered. */
+#define PIPE_REQS 60u
+#define PIPE_REQ "GET /hello HTTP/1.1\r\nHost: localhost\r\n\r\n"
+
+typedef struct {
+    asx_co_state co;
+    asx_socket_addr addr;
+    asx_tcp_stream stream;
+    uint8_t reqs[PIPE_REQS * (sizeof(PIPE_REQ) - 1u)];
+    uint8_t rx[16384];
+    uint32_t sent;
+    uint32_t rx_len;
+    uint32_t answered;
+} pipe_client_state;
+
+static pipe_client_state g_pipe_client;
+
+static uint32_t pipe_count_ok(const uint8_t *p, uint32_t len) {
+    uint32_t i;
+    uint32_t n = 0u;
+    for (i = 0u; i + 12u <= len; i++) {
+        if (memcmp(p + i, "HTTP/1.1 200", 12u) == 0) n++;
+    }
+    return n;
+}
+
+static asx_status pipe_client_task(void *ud, asx_task_id self) {
+    pipe_client_state *c = (pipe_client_state *)ud;
+    asx_status st;
+    (void)self;
+    ASX_CO_BEGIN(&c->co);
+    st = asx_tcp_connect(&c->stream, &c->addr);
+    if (st != ASX_OK) return st;
+    while (c->sent < (uint32_t)sizeof(c->reqs)) {
+        asx_buf src = asx_buf_from(c->reqs + c->sent, (uint32_t)sizeof(c->reqs) - c->sent);
+        uint32_t n = 0u;
+        st = asx_tcp_stream_poll_write(c->stream, &src, &n);
+        if (st == ASX_OK) {
+            c->sent += n;
+            continue;
+        }
+        if (st != ASX_E_PENDING) return st;
+        ASX_CO_YIELD(&c->co);
+    }
+    while (c->answered < PIPE_REQS) {
+        asx_buf_mut tmp;
+        uint32_t n = 0u;
+        asx_buf_mut_init(&tmp);
+        st = asx_tcp_stream_poll_read(c->stream, &tmp, &n);
+        if (st == ASX_OK && n > 0u) {
+            asx_buf readable = asx_buf_mut_readable(&tmp);
+            if (c->rx_len + readable.len > (uint32_t)sizeof(c->rx)) return ASX_E_BUFFER_TOO_SMALL;
+            memcpy(c->rx + c->rx_len, readable.ptr, readable.len);
+            c->rx_len += readable.len;
+            c->answered = pipe_count_ok(c->rx, c->rx_len);
+            continue;
+        }
+        if (st == ASX_OK) return ASX_E_DISCONNECTED; /* EOF before every answer */
+        if (st != ASX_E_PENDING) return st;
+        ASX_CO_YIELD(&c->co);
+    }
+    (void)asx_tcp_stream_close(c->stream);
+    (void)asx_server_shutdown(&g_srv);
+    ASX_CO_END(&c->co);
+}
+
+TEST(http_pipeline_longer_than_one_poll_is_answered_in_full) {
+    asx_region_id r;
+    asx_task_id t;
+    pipe_client_state *c = &g_pipe_client;
+    asx_server_config scfg;
+    asx_http_server_config hcfg;
+    asx_budget budget;
+    asx_time start;
+    uint32_t i;
+
+    ASSERT_TRUE(setup());
+    g_http_server_polls = 0;
+    asx_http_router_init(&g_router);
+    ASSERT_EQ(asx_http_router_add_route(&g_router, ASX_HTTP_GET, "/hello", h_hello, NULL, NULL,
+                                        NULL),
+              ASX_OK);
+    asx_server_config_init(&scfg);
+    scfg.listen_addr = asx_socket_addr_loopback(0u);
+    asx_server_init(&g_srv, &scfg);
+    ASSERT_EQ(asx_server_listen(&g_srv), ASX_OK);
+    asx_http_server_config_init(&hcfg, &g_router);
+    hcfg.idle_timeout_ms = 0u;
+    hcfg.max_requests = 0u;
+    ASSERT_EQ(asx_http_server_init(&g_hs, &g_srv, &hcfg), ASX_OK);
+
+    memset(c, 0, sizeof(*c));
+    for (i = 0u; i < PIPE_REQS; i++) {
+        memcpy(c->reqs + (size_t)i * (sizeof(PIPE_REQ) - 1u), PIPE_REQ, sizeof(PIPE_REQ) - 1u);
+    }
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(r, http_server_task, NULL, &t), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(r, pipe_client_task, c, &t), ASX_OK);
+    ASSERT_EQ(asx_tcp_listener_local_addr(g_srv.listener, &c->addr), ASX_OK);
+
+    /* A run deadline: a server parked for good ends the run TIMED_OUT here
+     * instead of waiting in the reactor for an event that never comes. */
+    ASSERT_EQ(asx_runtime_now_ns(&g_rt, &start), ASX_OK);
+    budget = asx_budget_from_polls(5000);
+    budget.deadline = start + 5000u * 1000000u;
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
+    ASSERT_EQ(c->answered, PIPE_REQS);
+    ASSERT_EQ(asx_http_server_requests_served(&g_hs), PIPE_REQS);
+    ASSERT_EQ(asx_server_get_state(&g_srv), ASX_SERVER_STATE_STOPPED);
+}
+
 /* -------------------------------------------------------------------
  * DNS: getaddrinfo on the blocking pool, completion wakes the task
  * ------------------------------------------------------------------- */
@@ -707,6 +826,7 @@ static int run_native(void) {
     RUN_TEST(async_resolve_cancel_discards_in_flight_lookup);
     RUN_TEST(tcp_echo_over_real_sockets_parks_instead_of_spinning);
     RUN_TEST(http_keepalive_exchange_over_real_sockets);
+    RUN_TEST(http_pipeline_longer_than_one_poll_is_answered_in_full);
     RUN_TEST(tcp_fanout_many_clients_one_server);
     RUN_TEST(tcp_connect_refused_reports_disconnected);
     RUN_TEST(udp_datagram_between_real_sockets);

@@ -17,7 +17,9 @@
 # The arguments are bench_journal_http's: --requests N, --rounds R, --modes
 # off,null,file, --budget-pct P, --gate (exit 1 over budget), --dir DIR (the
 # "file" mode's scratch directory, default /tmp; its file is unlinked once
-# opened). On a worker: rch exec -- make bench-journal-overhead.
+# opened), --timeout-s S (a run without progress ends after S seconds plus
+# N/2000, default 60, and the bench exits 1 instead of waiting). On a worker:
+# rch exec -- make bench-journal-overhead.
 #
 # Exit: the bench's (0; 1 with --gate over budget or on a failure; 2 when
 # the build has no native sockets).

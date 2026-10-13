@@ -30,9 +30,13 @@
  * bench-journal-overhead` builds one and runs this.
  *
  * Usage: bench_journal_http [--requests N] [--rounds R] [--modes off,null,file]
- *                           [--budget-pct P] [--gate] [--dir DIR]
+ *                           [--budget-pct P] [--gate] [--dir DIR] [--timeout-s S]
  * Exit:  0; 1 with --gate when "null" loses more than the budget, or on a
- *        workload failure; 2 when the build has no native sockets.
+ *        workload failure or a run that made no progress within its deadline
+ *        (S seconds plus N/2000, default S 60: the client's sockets carry the
+ *        timeout and the server's run budget the deadline, so no wait is
+ *        unbounded); 2 when the build has no native sockets.
+ * Each completed run prints a progress line on stderr.
  *
  * SPDX-License-Identifier: MIT
  */
@@ -52,6 +56,7 @@
 #include <string.h>
 #include <strings.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -86,8 +91,15 @@ static uint64_t now_ns(void) {
 /* The client (a forked process: plain blocking sockets)               */
 /* ------------------------------------------------------------------ */
 
+/* No wait of this program is unbounded: a run that makes no progress ends,
+ * reported, after this many seconds (--timeout-s). The client's sends and
+ * receives carry it as a socket timeout, the server side as the run
+ * budget's deadline. */
+static uint32_t g_timeout_s = 60u;
+
 static int dial(uint16_t port) {
     struct sockaddr_in a;
+    struct timeval tv;
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     int one = 1;
     if (fd < 0) return -1;
@@ -95,6 +107,10 @@ static int dial(uint16_t port) {
     a.sin_family = AF_INET;
     a.sin_port = htons(port);
     a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    tv.tv_sec = (time_t)g_timeout_s;
+    tv.tv_usec = 0;
+    (void)setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    (void)setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
     (void)setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
     if (connect(fd, (struct sockaddr *)&a, sizeof(a)) != 0) {
         (void)close(fd);
@@ -347,8 +363,24 @@ static int run_once(int mode, uint32_t n, const char *dir, run_result *out) {
     }
     (void)close(pipefd[1]);
 
+    /* The run's deadline: the timeout, plus what `n` requests need at a
+     * floor of 2000 per second. A server that is parked for good (a lost
+     * wake: the stall bd-9kll.11.1 found) ends the run TIMED_OUT instead of
+     * waiting in the reactor for ever. */
     budget = asx_budget_infinite();
+    {
+        asx_time now = 0u;
+        if (asx_runtime_now_ns(&rt, &now) == ASX_OK) {
+            budget.deadline =
+                now + ((asx_time)g_timeout_s + (asx_time)(n / 2000u)) * UINT64_C(1000000000);
+        }
+    }
     st = asx_scheduler_run(region, &budget);
+    if (st == ASX_E_TIMED_OUT) {
+        fprintf(stderr, "bench_journal_http: mode %s made no progress within the deadline\n",
+                k_mode_name[mode]);
+        (void)kill(pid, SIGKILL);
+    }
     if (read(pipefd[0], &elapsed, sizeof(elapsed)) != (ssize_t)sizeof(elapsed)) elapsed = 0u;
     (void)close(pipefd[0]);
     (void)waitpid(pid, &child_status, 0);
@@ -417,6 +449,9 @@ int main(int argc, char **argv) {
             rounds = (uint32_t)strtoul(argv[++i], NULL, 10);
         } else if (i + 1 < argc && strcmp(argv[i], "--budget-pct") == 0) {
             budget_pct = strtod(argv[++i], NULL);
+        } else if (i + 1 < argc && strcmp(argv[i], "--timeout-s") == 0) {
+            g_timeout_s = (uint32_t)strtoul(argv[++i], NULL, 10);
+            if (g_timeout_s == 0u) g_timeout_s = 1u;
         } else if (i + 1 < argc && strcmp(argv[i], "--dir") == 0) {
             dir = argv[++i];
         } else if (i + 1 < argc && strcmp(argv[i], "--modes") == 0) {
@@ -428,7 +463,7 @@ int main(int argc, char **argv) {
         } else {
             fprintf(stderr,
                     "usage: %s [--requests N] [--rounds R] [--modes off,null,file] "
-                    "[--budget-pct P] [--gate] [--dir DIR]\n",
+                    "[--budget-pct P] [--gate] [--dir DIR] [--timeout-s S]\n",
                     argv[0]);
             return 2;
         }
@@ -438,8 +473,9 @@ int main(int argc, char **argv) {
     if (requests == 0u) requests = 1u;
     modes_mask |= 1u << MODE_OFF; /* the baseline */
 
-    printf("bench_journal_http: %u requests per run, %u rounds, interleaved\n", (unsigned)requests,
-           (unsigned)rounds);
+    printf("bench_journal_http: %u requests per run, %u rounds, interleaved, %u s timeout\n",
+           (unsigned)requests, (unsigned)rounds, (unsigned)g_timeout_s);
+    (void)fflush(stdout);
     memset(done, 0, sizeof(done));
     for (r = 0; r < rounds; r++) {
         for (m = 0; m < MODE_COUNT; m++) {
@@ -461,6 +497,10 @@ int main(int argc, char **argv) {
             rec[m][done[m]] = res.records;
             byt[m][done[m]] = res.bytes;
             done[m]++;
+            /* Progress, so a slow run is told from a stuck one. */
+            fprintf(stderr, "  round %u/%u %-4s %.0f requests/s\n", (unsigned)(r + 1u),
+                    (unsigned)rounds, k_mode_name[m],
+                    1e9 * (double)requests / (double)res.elapsed_ns);
         }
     }
 
