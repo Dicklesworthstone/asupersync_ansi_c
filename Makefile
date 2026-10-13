@@ -870,6 +870,17 @@ test-unit: $(UNIT_TEST_BIN)
 		[ $$fail -eq 0 ] || exit 1; \
 	fi
 
+# metamorphic — the relations M1 (permute independent tasks) and M2 (add a
+# no-op task) over tests/conformance/scenarios_v2 on the C interpreter
+# (bd-9kll.12.1). The same binary runs in test-unit; this runs it alone.
+# tests/gates/test_metamorphic_mutants.sh plants an order dependence and
+# expects both relations to report it.
+.PHONY: metamorphic
+metamorphic: $(TEST_DIR)/unit/conformance/test_metamorphic
+	@echo "[asx] metamorphic: M1 and M2 over tests/conformance/scenarios_v2..."
+	@$(TEST_EXEC) $(TEST_DIR)/unit/conformance/test_metamorphic
+	@echo "[asx] metamorphic: PASS"
+
 COMBINATOR_CONTRACT_TEST_BIN := \
 	$(TEST_DIR)/unit/core/test_combinator \
 	$(TEST_DIR)/unit/core/test_combinator2 \

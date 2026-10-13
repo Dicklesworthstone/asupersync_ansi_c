@@ -10,7 +10,7 @@
 ![No external deps](https://img.shields.io/badge/dependencies-none-brightgreen)
 ![Deterministic replay](https://img.shields.io/badge/replay-deterministic-orange)
 ![Public API declarations](https://img.shields.io/badge/public%20API-2%2C155%20declarations-blue)
-![C test programs](https://img.shields.io/badge/tests-232%20programs-brightgreen)
+![C test programs](https://img.shields.io/badge/tests-233%20programs-brightgreen)
 ![9 profiles](https://img.shields.io/badge/profiles-9%20deployment%20targets-blue)
 [![License: MIT+Rider](https://img.shields.io/badge/License-MIT%2BOpenAI%2FAnthropic%20Rider-blue.svg)](./LICENSE)
 
@@ -69,7 +69,7 @@ The port targets asupersync commit `5e60b1c4c` (2026-10).
 | **<!-- fact:status_codes -->67<!-- /fact --> typed error codes with recovery guidance** | Each error has a category, recoverability class, recovery action, and backoff hints |
 | **Resource contracts instead of silent degradation** | Explicit memory/queue/timer ceilings with deterministic failure taxonomy per resource class (R1/R2/R3) |
 | **9 deployment profiles** | CORE, POSIX, WIN32, FREESTANDING, EMBEDDED_ROUTER, HFT, AUTOMOTIVE, PARALLEL, BROWSER |
-| **<!-- fact:test_programs -->232<!-- /fact --> tracked C test programs across 7 categories** | <!-- fact:test_unit -->170<!-- /fact --> unit, <!-- fact:test_e2e -->23<!-- /fact --> e2e, <!-- fact:test_invariant -->3<!-- /fact --> invariant, <!-- fact:test_vignettes -->12<!-- /fact --> vignette, <!-- fact:test_conformance -->6<!-- /fact --> conformance, <!-- fact:test_fuzz -->5<!-- /fact --> fuzz, and <!-- fact:test_formal -->13<!-- /fact --> formal files in the current tree |
+| **<!-- fact:test_programs -->233<!-- /fact --> tracked C test programs across 7 categories** | <!-- fact:test_unit -->171<!-- /fact --> unit, <!-- fact:test_e2e -->23<!-- /fact --> e2e, <!-- fact:test_invariant -->3<!-- /fact --> invariant, <!-- fact:test_vignettes -->12<!-- /fact --> vignette, <!-- fact:test_conformance -->6<!-- /fact --> conformance, <!-- fact:test_fuzz -->5<!-- /fact --> fuzz, and <!-- fact:test_formal -->13<!-- /fact --> formal files in the current tree |
 | **Cross-profile checks** | Profiles are meant to change limits and defaults, never semantics. `make profile-parity` executes every Rust-captured fixture under CORE, POSIX, FREESTANDING, EMBEDDED_ROUTER, HFT, AUTOMOTIVE, PARALLEL and BROWSER builds, each compared with the same Rust captures; CI also runs them under EMBEDDED_ROUTER on five ISAs (QEMU) and on 32-bit x86 |
 
 The current repository is library-first: it ships the static library, public
@@ -918,7 +918,7 @@ The tree holds <!-- fact:header_files -->130<!-- /fact --> public headers
 C sources (<!-- fact:sources_core -->19<!-- /fact --> in `core/`,
 <!-- fact:sources_runtime -->41<!-- /fact --> in `runtime/`,
 <!-- fact:sources_platform -->7<!-- /fact --> in `platform/`),
-<!-- fact:test_programs -->232<!-- /fact --> C test programs and
+<!-- fact:test_programs -->233<!-- /fact --> C test programs and
 <!-- fact:examples -->14<!-- /fact --> examples (`make lint-docs` checks these numbers
 against `tools/count_inventory.sh`).
 
@@ -969,14 +969,14 @@ make profile-parity
 
 ## Testing and Quality Gates
 
-`asx` currently ships with <!-- fact:test_programs -->232<!-- /fact --> tracked C test programs across 7 categories in
+`asx` currently ships with <!-- fact:test_programs -->233<!-- /fact --> tracked C test programs across 7 categories in
 the checked-in `tests/` tree. Individual assertion counts evolve over time; see
 `tests/TEST.md` for the current indexed suite inventory and per-suite case
 totals where tracked.
 
 | Category | Files | Coverage |
 |---|---|---|
-| **Unit tests** | <!-- fact:test_unit -->170<!-- /fact --> | Broad public API and subsystem coverage across the current tree |
+| **Unit tests** | <!-- fact:test_unit -->171<!-- /fact --> | Broad public API and subsystem coverage across the current tree |
 | **End-to-end scenarios** | <!-- fact:test_e2e -->23<!-- /fact --> | Core lifecycle, automotive, HFT, codec parity, continuity, network surfaces, POSIX adapter, HTTP server on real sockets (browser and CLI lanes are shell families) |
 | **Invariant tests** | <!-- fact:test_invariant -->3<!-- /fact --> | Lifecycle transition legality, quiescence, obligation linearity |
 | **API vignettes** | <!-- fact:test_vignettes -->12<!-- /fact --> | Ergonomics and usage pattern demonstrations |

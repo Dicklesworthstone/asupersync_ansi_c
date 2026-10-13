@@ -42,6 +42,18 @@ static volatile uint32_t g_mutant_oob_index = 4u;
 static volatile uint8_t g_mutant_oob_sink;
 #endif
 
+/* Planted order dependence (bd-9kll.12.1), compiled only in the gate build
+ * tests/gates/test_metamorphic_mutants.sh: the third task a run spawns
+ * cancels the first. A task's outcome then depends on how many tasks were
+ * spawned before it and in what order, which no scenario step says: the
+ * metamorphic relations M1 (permute independent tasks) and M2 (add a
+ * no-op task) both change what the run produces. */
+#ifdef ASX_MUTANT_SPAWN_ORDINAL_CANCEL
+#include <asx/runtime/runtime.h>
+static asx_task_id g_mutant_first_task;
+static uint32_t g_mutant_spawns;
+#endif
+
 /* ------------------------------------------------------------------ */
 /* Internal: hash a single byte into the chain                         */
 /* ------------------------------------------------------------------ */
@@ -78,6 +90,9 @@ void asx_event_log_reset(void) {
     memset(g_event_log, 0, (size_t)used * sizeof(g_event_log[0]));
     g_event_count = 0;
     g_hash_chain = FNV_OFFSET;
+#ifdef ASX_MUTANT_SPAWN_ORDINAL_CANCEL
+    g_mutant_spawns = 0u;
+#endif
 }
 
 uint32_t asx_event_emit(asx_event_kind kind, uint64_t entity_id, uint64_t parent_id,
@@ -103,6 +118,16 @@ uint32_t asx_event_emit(asx_event_kind kind, uint64_t entity_id, uint64_t parent
     if (kind == ASX_EVENT_TASK_SPAWN) {
         (void)asx_ghost_check_task_transition((asx_task_id)entity_id, ASX_TASK_COMPLETED,
                                               ASX_TASK_CREATED);
+    }
+#endif
+#ifdef ASX_MUTANT_SPAWN_ORDINAL_CANCEL
+    if (kind == ASX_EVENT_TASK_SPAWN) {
+        if (g_mutant_spawns == 0u) g_mutant_first_task = (asx_task_id)entity_id;
+        g_mutant_spawns++;
+        if (g_mutant_spawns == 3u) {
+            asx_status cancel_st_ = asx_task_cancel(g_mutant_first_task, ASX_CANCEL_USER);
+            (void)cancel_st_;
+        }
     }
 #endif
 #ifdef ASX_MUTANT_GHOST_UNEXPECTED_LEAK
