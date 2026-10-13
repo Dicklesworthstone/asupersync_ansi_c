@@ -648,6 +648,22 @@ TEST(scheduler_polls_a_task_in_a_region_opened_in_the_round_before_its_opener_re
 
 /* ---- A cleanup task's time budget is advisory (bd-9kll.4.14) ---- */
 
+/* A runtime with the default hooks, whose clock is the virtual one: a Sleep
+ * reads the time through asx_runtime_now_ns, which is ASX_E_HOOK_MISSING (and
+ * ends the task failed) when no hooks are installed. */
+static asx_runtime g_rt;
+
+static asx_status setup_with_clock(void) {
+    asx_runtime_config cfg;
+    asx_runtime_hooks hooks;
+    asx_status st;
+    asx_runtime_shutdown(&g_rt);
+    asx_runtime_config_init(&cfg);
+    st = asx_runtime_hooks_init(&hooks);
+    if (st == ASX_OK) st = asx_runtime_init(&g_rt, &cfg, &hooks);
+    return st;
+}
+
 typedef struct {
     asx_sleep_state sleep;
     int started;
@@ -699,7 +715,7 @@ TEST(scheduler_does_not_cancel_a_cleanup_task_at_its_budget_deadline_before_it_p
     asx_budget run;
     cleanup_spawner s;
 
-    asx_runtime_reset();
+    ASSERT_EQ(setup_with_clock(), ASX_OK);
     asx_ghost_reset();
     memset(&s, 0, sizeof(s));
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
@@ -715,6 +731,7 @@ TEST(scheduler_does_not_cancel_a_cleanup_task_at_its_budget_deadline_before_it_p
     ASSERT_TRUE(s.probe.done);
     ASSERT_FALSE(s.probe.cancel_seen);
     ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)150u);
+    asx_runtime_shutdown(&g_rt);
 }
 
 /* ---- A passed budget deadline strengthens a pending cancel (bd-9kll.4.15) ---- */
@@ -772,7 +789,7 @@ TEST(scheduler_a_passed_deadline_strengthens_a_user_cancel_that_arrived_first) {
     canceller_state c;
     sleeper_state s;
 
-    asx_runtime_reset();
+    ASSERT_EQ(setup_with_clock(), ASX_OK);
     asx_ghost_reset();
     memset(&c, 0, sizeof(c));
     memset(&s, 0, sizeof(s));
@@ -790,6 +807,7 @@ TEST(scheduler_a_passed_deadline_strengthens_a_user_cancel_that_arrived_first) {
     ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)150u);
     ASSERT_EQ(asx_task_get_cancel_reason(victim, &reason), ASX_OK);
     ASSERT_EQ((int)reason.kind, (int)ASX_CANCEL_DEADLINE);
+    asx_runtime_shutdown(&g_rt);
 }
 
 /* ---- Poll quota enforced before a poll (bd-9kll.4.13) ---- */
