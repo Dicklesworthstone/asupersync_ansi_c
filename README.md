@@ -962,8 +962,34 @@ Design properties (these describe the code; none of them is a benchmark result):
 - deterministic digest stability across repeated runs with identical seed/input (deterministic builds),
 - deterministic exhaustion behavior at each resource class's limits.
 
-Library size and RAM use are not published as measurements here. The perf
-workflow (`.github/workflows/perf.yml`, pushes to `main`) uses separate
+### Measured footprint
+
+`make size-report` builds the kernel-only archive (`make kernel-only`: the
+library without the conformance interpreter, the CLI and the protocol models)
+and `examples/ex_quickstart.c` linked against it, and reads text, data and bss
+back from `size`. These figures are its report at `771d46c` (x86-64, gcc 15,
+release; a cross-compiled target differs). Flash is text + data, RAM is bss;
+the plan's targets are the kernel-only archive under 64 KiB for CORE and
+128 KiB for EMBEDDED_ROUTER; the hard threshold is twice the target.
+
+| Build | Kernel archive, flash | Quickstart, flash | Quickstart, bss | Target (hard) | Verdict |
+|---|---|---|---|---|---|
+| CORE, default class | 704,747 B (688 KiB) | 439,168 B (429 KiB) | 1,171,472 B (1,144 KiB) | 64 KiB (128 KiB) | over hard |
+| CORE, R1 | 704,335 B (688 KiB) | 438,832 B (429 KiB) | 931,696 B (910 KiB) | 64 KiB (128 KiB) | over hard |
+| EMBEDDED_ROUTER, default class | 703,875 B (687 KiB) | 438,400 B (428 KiB) | 1,167,856 B (1,140 KiB) | 128 KiB (256 KiB) | over hard |
+| EMBEDDED_ROUTER, R1 | 703,463 B (687 KiB) | 438,064 B (428 KiB) | 928,080 B (906 KiB) | 128 KiB (256 KiB) | over hard |
+
+Neither target is met: the CORE kernel archive is 5.4 times its hard
+threshold and the EMBEDDED_ROUTER one 2.7 times. A resource class does not
+change flash, only the arenas. R1 bss in the table predates `049f83b`, where
+R1 began to size the network, actor, supervisor, capture, ledger and ring
+arenas too; after it the CORE R1 kernel-only quickstart links with 293,120 B
+(286 KiB) of bss, the figure the R1 table above gives. The footprint
+reduction is tracked in `bd-dkfs`, and the report's per-object ranking
+(`report.txt`, `--bss-top`) says where the remaining bss is. These are host
+numbers: nothing here has been measured on a device.
+
+The perf workflow (`.github/workflows/perf.yml`, pushes to `main`) uses separate
 `build/perf-core` and `build/perf-hft` directories. A CORE SLO failure no
 longer suppresses HFT or CORE size/cold-start collection when their build
 and benchmark prerequisites succeed. Size checks measure the CORE release
@@ -2572,7 +2598,7 @@ Check whether `asx_deadline_monitor_check()` is being called frequently enough i
 - There is no WebAssembly build target. The BROWSER profile compiles natively with browser surface gating, and `tools/ci/wasm32_oracle_probe.sh`, which CI does not run, only test-compiles some sources for `wasm32-unknown-unknown` (`docs/WASM32_ORACLE_EVALUATION.md`).
 - Rust parity covers what the DSL v2 scenarios can express (see `make conformance`). Networking, files, processes, HTTP and live builds are not compared with Rust, and `docs/SCENARIO_DSL_V2.md` §7 lists the open C-side gaps.
 - Deterministic guarantees assume matching scenario, profile, seed, and compatible runtime version.
-- Library size and RAM use per resource class have not been measured on a device; R1's limits are arena sizes, not a RAM figure.
+- The footprint targets are not met. On the build host the CORE kernel-only archive is 688 KiB of flash against a 64 KiB target (128 KiB hard), and a class changes the arenas, not the code (see "Measured footprint"). Nothing has been measured on a device.
 - Binary codec schema compatibility follows explicit versioning; cross-major interoperability is not guaranteed without migration tooling.
 
 ## FAQ
@@ -2631,9 +2657,12 @@ the unchanged 1,250,000-byte archive limit in
 [hosted run 38220166433](https://github.com/Dicklesworthstone/asupersync_ansi_c/actions/runs/38220166433).
 That is the complete static archive; a linked application's footprint depends on the
 objects it uses. The perf workflow checks archive, `.text`, `.data`, `.bss` and cold-start
-budgets on every push to `main`; run `make size-gate` for your own build. The plan's
-CORE kernel target under 64 KB remains unproven (`docs/REALITY_CHECK_AND_BRIDGE_PLAN.md`,
-V31), and RAM use per resource class has not been measured on a device.
+budgets on every push to `main`; run `make size-gate` for your own build. What a
+kernel-only application pays is measured by `make size-report` (see "Measured footprint"):
+at `771d46c` the CORE kernel-only archive is 688 KiB of flash and the linked quickstart
+429 KiB, against the plan's 64 KiB target (128 KiB hard), so that target is not met
+(`docs/REALITY_CHECK_AND_BRIDGE_PLAN.md`, V31). RAM use per resource class has been
+measured on the build host only, not on a device.
 
 ### What about thread safety?
 

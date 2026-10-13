@@ -11,6 +11,14 @@
 #   - a library build that fails, --require-builds   -> FAILS, naming the row
 #   - the same run without --require-builds          -> exits 0 (observe-only)
 #   - the same run with --strict                     -> FAILS (the stricter gate)
+# and the report's own code, which those cases never reach (a failing make
+# produces an ERROR row, no sizes, so text_report's size paths did not run;
+# on the first real run it crashed with `'int' object is not subscriptable`,
+# a per-object list that the archive totals had overwritten with a count):
+#   - --selftest on the script                       -> PASSES
+#   - --selftest on a copy with that bug put back    -> FAILS (the negative
+#     control: the selftest would have caught it)
+#   - --render of a recorded report.json             -> prints the report
 #
 # Scratch files live under build/test-gates/<run_id>/; tracked files are never
 # touched. Logs JSONL to build/test-logs/gates.jsonl. Nothing is deleted.
@@ -46,7 +54,7 @@ run_case() {
     local name="$1" expect="$2" pattern="$3"
     shift 3
     local out rc observed status
-    out="$(PATH="$WORK/bin:$PATH" python3 "$REPO_ROOT/tools/ci/size_report.py" \
+    out="$(PATH="$WORK/bin:$PATH" python3 "${SIZE_REPORT_PY:-$REPO_ROOT/tools/ci/size_report.py}" \
         --out "$WORK/$name" --profiles CORE --classes default --types release \
         --jobs 1 "$@" 2>&1)"
     rc=$?
@@ -75,6 +83,35 @@ run_case failed_build_names_its_row nonzero '  CORE-default-release: full librar
 run_case failed_build_is_observed_without_the_gate 0 \
     'CORE-default-release +ERROR full library build failed'
 run_case failed_build_fails_strict nonzero 'FAIL \(strict\): 1 build error' --strict
+
+# The report's own code, without a build.
+run_case selftest_passes 0 'size_report selftest: PASS' --selftest
+
+# The original bug put back: the archive totals' object count under the key
+# that holds the per-object list. Written to scratch; the tracked script is
+# only read. The copy's ROOT is wrong and the selftest does not use it.
+sed 's/"bss": sum(r\["bss"\] for r in rows), "object_count": len(rows)}/"bss": sum(r["bss"] for r in rows), "objects": len(rows)}/' \
+    "$REPO_ROOT/tools/ci/size_report.py" >"$WORK/size_report_mutant.py"
+if cmp -s "$REPO_ROOT/tools/ci/size_report.py" "$WORK/size_report_mutant.py"; then
+    echo "  FAIL: selftest_mutant_is_a_mutant (the sed did not change the script)"
+    failures=$((failures + 1))
+else
+    SIZE_REPORT_PY="$WORK/size_report_mutant.py" \
+        run_case selftest_fails_when_the_list_is_overwritten nonzero \
+        'size_report selftest: FAIL' --selftest
+fi
+
+# --render of a recorded report: the selftest's synthetic report, written
+# out and read back by the script itself.
+python3 -B - "$REPO_ROOT/tools/ci" "$WORK/recorded.json" <<'EOF'
+import json, sys
+sys.path.insert(0, sys.argv[1])
+import size_report
+with open(sys.argv[2], "w", encoding="utf-8") as fh:
+    json.dump(size_report.synthetic_report(), fh)
+EOF
+run_case render_prints_a_recorded_report 0 \
+    'largest kernel objects by bss, KiB \(top 20 of every row' --render "$WORK/recorded.json"
 
 echo ""
 if [ "$failures" -eq 0 ]; then

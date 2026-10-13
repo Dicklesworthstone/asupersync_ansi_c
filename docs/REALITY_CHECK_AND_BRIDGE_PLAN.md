@@ -632,7 +632,7 @@ defensible project completion percentage.
 | V28 Automotive deadline/watchdog/degraded behavior | Plan §8.8, §10.6 | PARTIAL: application-fed instruments and domain scenario tests work; runtime integration and complete evidence bundle are not established | `bd-udlh`, `.14.2`, `.18.3`, owner assurance decision |
 | V29 Crash/restart and native record/replay | Plan phase 7, §10.6 | PARTIAL: deterministic trace import/export continuity tests exist; complete native boundary journal/replay is absent | `.11.1`–`.11.4` |
 | V30 Formal assurance | Plan §10.7.3; README formal methods | PARTIAL: native harnesses pass; no actual bounded-checker/interleaving result or complete Lean/TLA crosswalk | `.2.14`, new `.2.20`; `.12` law witnesses |
-| V31 Kernel footprint/cold-start | Plan §11 | UNPROVEN against kernel-only target; CI size lane skipped and no isolated kernel target | `.13.3`, owner D6; archive measurement below is contextual only |
+| V31 Kernel footprint/cold-start | Plan §11 | NOT MET, measured: the CI `size-report` lane builds the isolated kernel-only archive; at `771d46c` CORE is 688 KiB of flash (64 KiB target, 128 KiB hard) and EMBEDDED_ROUTER 687 KiB (128 KiB, 256 KiB hard), every row over-hard; README "Measured footprint" has the table | `.13.3`, `bd-dkfs` (reduction), owner D6 (targets are the owner's) |
 | V32 Allocation discipline/static storage | Plan §7.5–§7.6 | WORKING for static kernel arenas and tested allocator seal; codec uses allocation and callers own some state | Preserve explicit ownership limits; instance isolation V40 |
 | V33 Comparable performance vs Rust | Plan optimization governance | NOT_STARTED as an executed same-host comparison; C-only benchmark numbers are available | `.14.1`, `.14.3` |
 | V34 Provenance/baseline/upstream drift | Plan §1.1, §9.5 | WORKING for current pinned capture/freshness checks; nightly comparison against upstream main is missing | `.2.11`, `.18.4` |
@@ -1026,7 +1026,7 @@ there are 0 open beads.
 | V28 | Automotive deadline/watchdog gate | Plan §10.6 | PARTIAL | Instrumentation real; e2e lanes pass locally; never ran in CI |
 | V29 | Crash/restart replay continuity | Plan §10.6 | PARTIAL | `continuity_restart.sh` passes locally; no Rust oracle |
 | V30 | Formal verification (CBMC, algebraic, litmus) | README L1546 | PARTIAL / WRONG-SPEC | Harnesses exist; algebraic budget suite proves the *old* priority semiring; `formal-check` not in CI |
-| V31 | Footprint: CORE kernel <64KB (hard <128KB), ROUTER <128KB | Plan §11 | UNPROVEN | Debug archive text 712KB/bss 1.46MB; release not measured in CI; `size-gate` not in CI |
+| V31 | Footprint: CORE kernel <64KB (hard <128KB), ROUTER <128KB | Plan §11 | NOT MET (measured) | Release kernel-only archive at `771d46c`: CORE 688 KiB flash, bss 1,144 KiB quickstart (R1 910 KiB, then 286 KiB at `049f83b`); the `size-report` CI lane measures it per push |
 | V32 | Zero dynamic allocation in core / static arenas | README L926 | PARTIAL | Static arrays in bss; DEC-004 says static-arena backend deferred; claim needs precise wording |
 | V33 | Performance evidence vs reference | Gauntlet perf pillar; README L600 | NOT_STARTED | No C-vs-Rust benchmark; Rust ships `benches/runtime_vs_tokio.rs` with per-op rows |
 | V34 | Baseline freeze + rebase protocol | Plan §1.1 | NOT_STARTED (for 0.6.0) | Inventory pinned to `a9e737d8`; rebase blocked by provenance check + destructive capture script |
