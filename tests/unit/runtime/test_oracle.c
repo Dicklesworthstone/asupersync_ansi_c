@@ -62,12 +62,13 @@ TEST(kernel_oracles_carry_rusts_registry_names_and_unknown_names_fail) {
                                        "cancellation_protocol",
                                        "cancel_correctness",
                                        "cancel_debt",
-                                       "task_counters"};
+                                       "task_counters",
+                                       "arena_counters"};
     uint32_t i;
     asx_oracle_result r;
-    ASSERT_EQ(asx_oracle_kernel_count(), 10u);
-    for (i = 0; i < 10u; i++) { ASSERT_STR_EQ(asx_oracle_kernel_name(i), want[i]); }
-    ASSERT_TRUE(asx_oracle_kernel_name(10u) == NULL);
+    ASSERT_EQ(asx_oracle_kernel_count(), 11u);
+    for (i = 0; i < 11u; i++) { ASSERT_STR_EQ(asx_oracle_kernel_name(i), want[i]); }
+    ASSERT_TRUE(asx_oracle_kernel_name(11u) == NULL);
     r = check("no_such_oracle");
     ASSERT_EQ((int)r.verdict, (int)ASX_ORACLE_FAIL);
     ASSERT_STR_EQ(r.oracle_name, "unknown");
@@ -434,6 +435,61 @@ TEST(task_counters_names_a_region_whose_counter_disagrees_with_its_tasks) {
     ASSERT_EQ((int)check("task_counters").verdict, (int)ASX_ORACLE_PASS);
 }
 
+TEST(arena_counters_names_a_live_counter_or_free_list_that_disagrees_with_its_arena) {
+    asx_region_id rid;
+    asx_task_id a;
+    asx_task_id b;
+    asx_outcome out;
+    asx_budget budget;
+    asx_kernel *k = g_kernels[0];
+    asx_oracle_result r;
+
+    /* Two completed tasks, one joined: its slot is released and on the free list. */
+    fresh();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &a), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &b), ASX_OK);
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
+    ASSERT_EQ(asx_task_join(a, &out), ASX_OK);
+    ASSERT_TRUE(k->task_free_head != 0u);
+    ASSERT_TRUE(all_pass());
+
+    /* A live counter off by one, for each arena. */
+    k->task_live += 1u;
+    r = check("arena_counters");
+    ASSERT_EQ((int)r.verdict, (int)ASX_ORACLE_FAIL);
+    ASSERT_EQ(r.detail_count, 1u);
+    ASSERT_STR_EQ(r.message, "the live task counter disagrees with the live tasks");
+    k->task_live -= 1u;
+    k->region_live += 1u;
+    r = check("arena_counters");
+    ASSERT_EQ((int)r.verdict, (int)ASX_ORACLE_FAIL);
+    ASSERT_STR_EQ(r.message, "the live region counter disagrees with the live regions");
+    k->region_live -= 1u;
+    k->obligation_live += 1u;
+    r = check("arena_counters");
+    ASSERT_EQ((int)r.verdict, (int)ASX_ORACLE_FAIL);
+    ASSERT_STR_EQ(r.message, "the live obligation counter disagrees with the live obligations");
+    k->obligation_live -= 1u;
+    ASSERT_TRUE(all_pass());
+
+    /* A free list that lost its released slot, and one that names a live one. */
+    {
+        uint32_t head = k->task_free_head;
+        k->task_free_head = 0u;
+        r = check("arena_counters");
+        ASSERT_EQ((int)r.verdict, (int)ASX_ORACLE_FAIL);
+        ASSERT_STR_EQ(r.message, "a free list does not hold exactly the released slots");
+        k->task_free_head = (uint32_t)asx_handle_slot(b) + 1u;
+        r = check("arena_counters");
+        ASSERT_EQ((int)r.verdict, (int)ASX_ORACLE_FAIL);
+        ASSERT_STR_EQ(r.message, "a free-list entry is not a released slot");
+        k->task_free_head = head;
+    }
+    ASSERT_TRUE(all_pass());
+}
+
 int main(void) {
     fprintf(stderr, "=== test_oracle ===\n");
     RUN_TEST(kernel_oracles_carry_rusts_registry_names_and_unknown_names_fail);
@@ -449,6 +505,7 @@ int main(void) {
     RUN_TEST(cancel_correctness_names_a_witness_that_is_not_its_tasks);
     RUN_TEST(cancel_debt_names_a_requested_cancel_that_nothing_will_run);
     RUN_TEST(task_counters_names_a_region_whose_counter_disagrees_with_its_tasks);
+    RUN_TEST(arena_counters_names_a_live_counter_or_free_list_that_disagrees_with_its_arena);
     TEST_REPORT();
     return test_failures;
 }

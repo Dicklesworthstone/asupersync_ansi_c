@@ -104,8 +104,8 @@ ASX_API asx_oracle_result asx_oracle_replay_match(const asx_lab_result *r1,
  * oracles of the same names over the region, task and obligation arenas, each
  * one pass that writes nothing. They check what the kernel enforces by
  * construction, so a FAIL is a kernel bug. A NULL lab fails and an
- * uninitialized one is inconclusive, as above; the state read is the
- * runtime's. detail_count is the number of violating entities. */
+ * uninitialized one is inconclusive, as above; the state read is the kernel
+ * of the lab's runtime. detail_count is the number of violating entities. */
 
 /* task_leak: no closed region has a live task. */
 ASX_API asx_oracle_result asx_oracle_task_leak(const asx_lab *lab, void *ctx);
@@ -146,8 +146,14 @@ ASX_API asx_oracle_result asx_oracle_cancel_debt(const asx_lab *lab, void *ctx);
  * live, not completed tasks that name it. */
 ASX_API asx_oracle_result asx_oracle_task_counters(const asx_lab *lab, void *ctx);
 
+/* arena_counters (no Rust twin): the kernel's live counts of regions, tasks
+ * and obligations equal their live slots, and the task and obligation free
+ * lists hold exactly the released slots. */
+ASX_API asx_oracle_result asx_oracle_arena_counters(const asx_lab *lab, void *ctx);
+
 /* The kernel-state oracles are also reachable by Rust's registry name, for a
- * caller with no asx_lab (the conformance interpreter). The number of them. */
+ * caller with no asx_lab (the conformance interpreter), over the default
+ * runtime's kernel. The number of them. */
 ASX_API uint32_t asx_oracle_kernel_count(void);
 
 /* The index-th kernel-state oracle's name (index < asx_oracle_kernel_count()),
@@ -156,8 +162,8 @@ ASX_API const char *asx_oracle_kernel_name(uint32_t index);
 
 /* Run the named kernel-state oracle (task_leak, obligation_leak, quiescence,
  * finalizer, region_tree, deadline_monotone, cancellation_protocol,
- * cancel_correctness, cancel_debt, task_counters). An unknown or NULL name
- * fails with the oracle name "unknown". */
+ * cancel_correctness, cancel_debt, task_counters, arena_counters). An unknown
+ * or NULL name fails with the oracle name "unknown". */
 ASX_API asx_oracle_result asx_oracle_check_named(const char *name);
 
 /* Render a replay result as JSON for retained diagnostics/artifacts. */

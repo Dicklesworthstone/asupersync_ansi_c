@@ -8,6 +8,9 @@
  * (a region cannot close with live tasks, a child's budget is its parent's
  * met, ...), as a regression net: a FAIL is a kernel bug, not a program error.
  *
+ * An oracle reads one kernel: the one a lab's runtime holds (asx_oracle_*
+ * with a lab), or the default runtime's (asx_oracle_check_named).
+ *
  * SPDX-License-Identifier: MIT
  */
 
@@ -85,8 +88,8 @@ static int region_holds_reserved_obligation(const asx_kernel *k, uint32_t slot,
 #define ORACLE_OBLIGATIONS 4u
 #define ORACLE_CLEANUP 8u
 
-static asx_oracle_result check_closed_regions(const char *name, uint32_t checks) {
-    const asx_kernel *k = g_kernels[0];
+static asx_oracle_result check_closed_regions(const asx_kernel *k, const char *name,
+                                              uint32_t checks) {
     const char *first = NULL;
     uint32_t bad = 0;
     uint32_t i;
@@ -116,28 +119,28 @@ static asx_oracle_result check_closed_regions(const char *name, uint32_t checks)
     return oracle_verdict(ASX_ORACLE_PASS, name, "every closed region is quiescent", 0u);
 }
 
-static asx_oracle_result check_task_leak(void) {
-    return check_closed_regions("task_leak", ORACLE_TASKS);
+static asx_oracle_result check_task_leak(const asx_kernel *k) {
+    return check_closed_regions(k, "task_leak", ORACLE_TASKS);
 }
 
-static asx_oracle_result check_obligation_leak(void) {
-    return check_closed_regions("obligation_leak", ORACLE_OBLIGATIONS);
+static asx_oracle_result check_obligation_leak(const asx_kernel *k) {
+    return check_closed_regions(k, "obligation_leak", ORACLE_OBLIGATIONS);
 }
 
-static asx_oracle_result check_quiescence(void) {
-    return check_closed_regions("quiescence", ORACLE_TASKS | ORACLE_CHILDREN | ORACLE_OBLIGATIONS |
-                                                  ORACLE_CLEANUP);
+static asx_oracle_result check_quiescence(const asx_kernel *k) {
+    return check_closed_regions(k, "quiescence",
+                                ORACLE_TASKS | ORACLE_CHILDREN | ORACLE_OBLIGATIONS |
+                                    ORACLE_CLEANUP);
 }
 
-static asx_oracle_result check_finalizer(void) {
-    return check_closed_regions("finalizer", ORACLE_CLEANUP);
+static asx_oracle_result check_finalizer(const asx_kernel *k) {
+    return check_closed_regions(k, "finalizer", ORACLE_CLEANUP);
 }
 
 /* INV-TREE: every region but the one root names a live parent that lists it,
  * every listed child is a live region that names the region back, and a
  * parent walk ends. A closed region is no longer listed by its parent. */
-static asx_oracle_result check_region_tree(void) {
-    const asx_kernel *k = g_kernels[0];
+static asx_oracle_result check_region_tree(const asx_kernel *k) {
     const char *first = NULL;
     uint32_t bad = 0;
     uint32_t roots = 0;
@@ -197,8 +200,7 @@ static asx_oracle_result check_region_tree(void) {
 }
 
 /* INV-DEADLINE-MONOTONE: a child's deadline is no later than its parent's. */
-static asx_oracle_result check_deadline_monotone(void) {
-    const asx_kernel *k = g_kernels[0];
+static asx_oracle_result check_deadline_monotone(const asx_kernel *k) {
     uint32_t bad = 0;
     uint32_t i;
     for (i = 0; i < k->region_count; i++) {
@@ -221,8 +223,7 @@ static asx_oracle_result check_deadline_monotone(void) {
  * cancel requested has a cancel requested too (asx_region_cancel walks the
  * subtree; a cancelled region takes no new child). The task-level request,
  * drain, finalize order is the transition table's. */
-static asx_oracle_result check_cancel_propagation(void) {
-    const asx_kernel *k = g_kernels[0];
+static asx_oracle_result check_cancel_propagation(const asx_kernel *k) {
     uint32_t bad = 0;
     uint32_t i;
     for (i = 0; i < k->region_count; i++) {
@@ -259,15 +260,12 @@ static int oracle_names_task(const asx_kernel *k, asx_task_id id, uint32_t slot,
  * epoch: validate_transition's TaskMismatch, RegionMismatch and EpochMismatch
  * cases), that its phase is not ahead of the task's (a regression is the
  * reverse), and that a completed task has released it. A witness the task
- * record names that is no longer active is released and is not read. The
- * scan covers the whole arena: a slot past the high-water mark is never
- * alive. */
-static asx_oracle_result check_cancel_correctness(void) {
-    const asx_kernel *k = g_kernels[0];
+ * record names that is no longer active is released and is not read. */
+static asx_oracle_result check_cancel_correctness(const asx_kernel *k) {
     const char *first = NULL;
     uint32_t bad = 0;
     uint32_t i;
-    for (i = 0; i < ASX_MAX_TASKS; i++) {
+    for (i = 0; i < k->task_count; i++) {
         const asx_task_slot *t = &k->tasks[i];
         asx_cancel_witness_info w;
         const char *why = NULL;
@@ -307,15 +305,14 @@ static asx_oracle_result check_cancel_correctness(void) {
  * wake: the cancel is owed and nobody will pay it. The sweep scheduler's idle
  * handling unparks such a task on its own (sched_unpark_cancelled), so there
  * the state is not a violation and the oracle does not look. */
-static asx_oracle_result check_cancel_debt(void) {
-    const asx_kernel *k = g_kernels[0];
+static asx_oracle_result check_cancel_debt(const asx_kernel *k) {
     uint32_t bad = 0;
     uint32_t i;
     if (!asx_lab_dispatch_active()) {
         return oracle_verdict(ASX_ORACLE_PASS, "cancel_debt",
                               "no lab dispatch: the sweep's idle handling delivers a cancel", 0u);
     }
-    for (i = 0; i < ASX_MAX_TASKS; i++) {
+    for (i = 0; i < k->task_count; i++) {
         const asx_task_slot *t = &k->tasks[i];
         /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
         if (!t->alive || t->state != ASX_TASK_CANCEL_REQUESTED) continue;
@@ -338,18 +335,17 @@ static asx_oracle_result check_cancel_debt(void) {
  * counter counts a task from its spawn, a lab admission still pending
  * included, to its completion, so every such task is a live slot in a state
  * that is not terminal. Rust has no oracle of this name: the counter is the
- * ground under task_leak and quiescence. The scan covers the whole arena. */
-static asx_oracle_result check_task_counters(void) {
-    const asx_kernel *k = g_kernels[0];
+ * ground under task_leak and quiescence. */
+static asx_oracle_result check_task_counters(const asx_kernel *k) {
     uint32_t bad = 0;
     uint32_t i;
-    for (i = 0; i < ASX_MAX_REGIONS; i++) {
+    for (i = 0; i < k->region_count; i++) {
         const asx_region_slot *r = &k->regions[i];
         uint32_t j;
         uint32_t n = 0;
         /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
         if (!r->alive) continue;
-        for (j = 0; j < ASX_MAX_TASKS; j++) {
+        for (j = 0; j < k->task_count; j++) {
             const asx_task_slot *t = &k->tasks[j];
             /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
             if (!t->alive || asx_task_is_terminal(t->state)) continue;
@@ -365,93 +361,171 @@ static asx_oracle_result check_task_counters(void) {
                           "every region's live-task counter matches its tasks", 0u);
 }
 
+/* Walk a released-slot free list: every entry is a released slot below the
+ * high-water mark, the walk ends, and it holds every released slot (the
+ * kernel pushes each release and pops each reuse, so the list is exactly the
+ * released slots). Returns the defects found and sets *why for the first. */
+static uint32_t free_list_defects(const asx_kernel *k, int tasks, const char **why) {
+    uint32_t count = tasks ? k->task_count : k->obligation_count;
+    uint32_t head = tasks ? k->task_free_head : k->obligation_free_head;
+    uint32_t idx = head == 0u ? ASX_SLOT_NONE : head - 1u;
+    uint32_t steps = 0;
+    uint32_t released = 0;
+    uint32_t i;
+    for (i = 0; i < count; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
+        if (!(tasks ? k->tasks[i].alive : k->obligations[i].alive)) released++;
+    }
+    while (idx != ASX_SLOT_NONE) {
+        /* ASX_CHECKPOINT_WAIVER("bounded: a walk of at most count entries") */
+        if (idx >= count || (tasks ? k->tasks[idx].alive : k->obligations[idx].alive)) {
+            *why = "a free-list entry is not a released slot";
+            return 1u;
+        }
+        if (++steps > count) {
+            *why = "a free list has a cycle";
+            return 1u;
+        }
+        idx = tasks ? k->tasks[idx].next_free : k->obligations[idx].next_free;
+    }
+    if (steps != released) {
+        *why = "a free list does not hold exactly the released slots";
+        return 1u;
+    }
+    return 0u;
+}
+
+/* The kernel's counters against the arenas they summarize: the live count of
+ * each of the three arenas against its live slots, and the task and
+ * obligation free lists. (Each region's own live-task counter is
+ * task_counters'.) Rust has no oracle of this name; the live counters are what
+ * the resource gauges read (asx_runtime_*_live, resource.c) and the free
+ * lists are where a spawn or a reserve finds its slot. */
+static asx_oracle_result check_arena_counters(const asx_kernel *k) {
+    const char *first = NULL;
+    uint32_t bad = 0;
+    uint32_t live_regions = 0;
+    uint32_t live_tasks = 0;
+    uint32_t live_obligations = 0;
+    uint32_t i;
+    const char *why = NULL;
+    uint32_t d;
+    for (i = 0; i < k->region_count; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
+        if (k->regions[i].alive) live_regions++;
+    }
+    for (i = 0; i < k->task_count; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
+        if (k->tasks[i].alive) live_tasks++;
+    }
+    for (i = 0; i < k->obligation_count; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
+        if (k->obligations[i].alive) live_obligations++;
+    }
+    if (live_regions != k->region_live) {
+        bad++;
+        first = "the live region counter disagrees with the live regions";
+    }
+    if (live_tasks != k->task_live) {
+        bad++;
+        if (first == NULL) first = "the live task counter disagrees with the live tasks";
+    }
+    if (live_obligations != k->obligation_live) {
+        bad++;
+        if (first == NULL) {
+            first = "the live obligation counter disagrees with the live obligations";
+        }
+    }
+    d = free_list_defects(k, 1, &why);
+    if (d != 0u) {
+        bad += d;
+        if (first == NULL) first = why;
+    }
+    d = free_list_defects(k, 0, &why);
+    if (d != 0u) {
+        bad += d;
+        if (first == NULL) first = why;
+    }
+    if (bad != 0u) return oracle_verdict(ASX_ORACLE_FAIL, "arena_counters", first, bad);
+    return oracle_verdict(ASX_ORACLE_PASS, "arena_counters",
+                          "the kernel's live counters and free lists match its arenas", 0u);
+}
+
+typedef asx_oracle_result (*oracle_check_fn)(const asx_kernel *k);
+
 /* The lab contract the older oracles have: NULL fails, an uninitialized lab
- * is inconclusive. The state itself is the runtime's, not the lab's. */
-static int oracle_lab_refused(const asx_lab *lab, const char *name, asx_oracle_result *out) {
-    if (lab == NULL) {
-        *out = oracle_verdict(ASX_ORACLE_FAIL, name, "null lab", 0u);
-        return 1;
-    }
+ * is inconclusive; the state read is the lab's runtime's kernel. */
+static asx_oracle_result lab_oracle(const asx_lab *lab, const char *name, oracle_check_fn check) {
+    const asx_kernel *k;
+    if (lab == NULL) return oracle_verdict(ASX_ORACLE_FAIL, name, "null lab", 0u);
     if (!lab->initialized) {
-        *out = oracle_verdict(ASX_ORACLE_INCONCLUSIVE, name, "lab not initialized", 0u);
-        return 1;
+        return oracle_verdict(ASX_ORACLE_INCONCLUSIVE, name, "lab not initialized", 0u);
     }
-    return 0;
+    k = asx_kernel_for_tag(lab->rt.tag);
+    if (k == NULL) {
+        return oracle_verdict(ASX_ORACLE_INCONCLUSIVE, name, "the lab's runtime is not held", 0u);
+    }
+    return check(k);
 }
 
 asx_oracle_result asx_oracle_task_leak(const asx_lab *lab, void *ctx) {
-    asx_oracle_result r;
     (void)ctx;
-    if (oracle_lab_refused(lab, "task_leak", &r)) return r;
-    return check_task_leak();
+    return lab_oracle(lab, "task_leak", check_task_leak);
 }
 
 asx_oracle_result asx_oracle_obligation_leak(const asx_lab *lab, void *ctx) {
-    asx_oracle_result r;
     (void)ctx;
-    if (oracle_lab_refused(lab, "obligation_leak", &r)) return r;
-    return check_obligation_leak();
+    return lab_oracle(lab, "obligation_leak", check_obligation_leak);
 }
 
 asx_oracle_result asx_oracle_region_quiescence(const asx_lab *lab, void *ctx) {
-    asx_oracle_result r;
     (void)ctx;
-    if (oracle_lab_refused(lab, "quiescence", &r)) return r;
-    return check_quiescence();
+    return lab_oracle(lab, "quiescence", check_quiescence);
 }
 
 asx_oracle_result asx_oracle_finalizer(const asx_lab *lab, void *ctx) {
-    asx_oracle_result r;
     (void)ctx;
-    if (oracle_lab_refused(lab, "finalizer", &r)) return r;
-    return check_finalizer();
+    return lab_oracle(lab, "finalizer", check_finalizer);
 }
 
 asx_oracle_result asx_oracle_region_tree(const asx_lab *lab, void *ctx) {
-    asx_oracle_result r;
     (void)ctx;
-    if (oracle_lab_refused(lab, "region_tree", &r)) return r;
-    return check_region_tree();
+    return lab_oracle(lab, "region_tree", check_region_tree);
 }
 
 asx_oracle_result asx_oracle_deadline_monotone(const asx_lab *lab, void *ctx) {
-    asx_oracle_result r;
     (void)ctx;
-    if (oracle_lab_refused(lab, "deadline_monotone", &r)) return r;
-    return check_deadline_monotone();
+    return lab_oracle(lab, "deadline_monotone", check_deadline_monotone);
 }
 
 asx_oracle_result asx_oracle_cancel_propagation(const asx_lab *lab, void *ctx) {
-    asx_oracle_result r;
     (void)ctx;
-    if (oracle_lab_refused(lab, "cancellation_protocol", &r)) return r;
-    return check_cancel_propagation();
+    return lab_oracle(lab, "cancellation_protocol", check_cancel_propagation);
 }
 
 asx_oracle_result asx_oracle_cancel_correctness(const asx_lab *lab, void *ctx) {
-    asx_oracle_result r;
     (void)ctx;
-    if (oracle_lab_refused(lab, "cancel_correctness", &r)) return r;
-    return check_cancel_correctness();
+    return lab_oracle(lab, "cancel_correctness", check_cancel_correctness);
 }
 
 asx_oracle_result asx_oracle_cancel_debt(const asx_lab *lab, void *ctx) {
-    asx_oracle_result r;
     (void)ctx;
-    if (oracle_lab_refused(lab, "cancel_debt", &r)) return r;
-    return check_cancel_debt();
+    return lab_oracle(lab, "cancel_debt", check_cancel_debt);
 }
 
 asx_oracle_result asx_oracle_task_counters(const asx_lab *lab, void *ctx) {
-    asx_oracle_result r;
     (void)ctx;
-    if (oracle_lab_refused(lab, "task_counters", &r)) return r;
-    return check_task_counters();
+    return lab_oracle(lab, "task_counters", check_task_counters);
+}
+
+asx_oracle_result asx_oracle_arena_counters(const asx_lab *lab, void *ctx) {
+    (void)ctx;
+    return lab_oracle(lab, "arena_counters", check_arena_counters);
 }
 
 typedef struct {
     const char *name;
-    asx_oracle_result (*check)(void);
+    oracle_check_fn check;
 } oracle_entry;
 
 static const oracle_entry g_oracle_table[] = {
@@ -465,6 +539,7 @@ static const oracle_entry g_oracle_table[] = {
     {"cancel_correctness", check_cancel_correctness},
     {"cancel_debt", check_cancel_debt},
     {"task_counters", check_task_counters},
+    {"arena_counters", check_arena_counters},
 };
 
 #define ORACLE_TABLE_COUNT (sizeof(g_oracle_table) / sizeof(g_oracle_table[0]))
@@ -480,7 +555,7 @@ asx_oracle_result asx_oracle_check_named(const char *name) {
     if (name == NULL) return oracle_verdict(ASX_ORACLE_FAIL, "unknown", "null oracle name", 0u);
     for (i = 0; i < ORACLE_TABLE_COUNT; i++) {
         /* ASX_CHECKPOINT_WAIVER("bounded: a constant-size table") */
-        if (strcmp(g_oracle_table[i].name, name) == 0) return g_oracle_table[i].check();
+        if (strcmp(g_oracle_table[i].name, name) == 0) return g_oracle_table[i].check(g_kernels[0]);
     }
     return oracle_verdict(ASX_ORACLE_FAIL, "unknown", "unknown oracle", 0u);
 }
