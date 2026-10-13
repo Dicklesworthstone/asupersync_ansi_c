@@ -111,6 +111,8 @@ ASX_API void asx_waker_reset(const asx_runtime *rt);
 }
 #endif
 
+#endif /* ASX_RUNTIME_WAKER_H */
+
 /* -------------------------------------------------------------------
  * Runtime-internal layout (not API)
  *
@@ -143,5 +145,3 @@ typedef struct {
 } asx_waker_state;
 
 #endif /* ASX_INTERNAL_WAKER_ACCESS */
-
-#endif /* ASX_RUNTIME_WAKER_H */
