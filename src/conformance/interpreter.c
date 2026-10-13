@@ -5930,9 +5930,16 @@ static uint32_t build_snapshot(uint32_t obligations) {
         const char *state = "Closed";
         if (asx_region_get_state(r->id, &s) == ASX_OK) {
             state = region_state_name(s);
-            /* Rust is_quiescent: no region may still be closing
-             * (state.rs:7407-7413). */
+            /* Rust is_quiescent: no region may still be closing, nor hold a
+             * finalizer that has not run (finalizers_empty, state.rs:7407-7413). */
             if (s != ASX_REGION_OPEN && s != ASX_REGION_CLOSED) quiescent = 0;
+            if (s != ASX_REGION_CLOSED) {
+                asx_quiescence_report drain;
+                if (asx_quiescence_check_detailed(r->id, &drain) == ASX_OK &&
+                    !drain.q4_cleanup_drained) {
+                    quiescent = 0;
+                }
+            }
         }
         asx_json_set(g_out, rec, "state", asx_json_new_string(g_out, state));
         asx_json_set(g_out, rec, "parent",

@@ -192,6 +192,14 @@ that region (Rust `Scope::defer_async`):
   for its whole run (`MaskedFinalizer`, `state.rs:1781`). The next
   finalizer is spawned at a later step, after this one's task completed.
   The region closes when its stack is empty and its tasks are done.
+- **Quiescence.** A region that still holds a finalizer is not quiescent
+  (`RegionRecord::finalizers_empty`, required of every region by
+  `RuntimeState::is_quiescent`, `state.rs:7407-7413`), also when it is open
+  and idle: a scenario that registers one and never closes the region ends
+  with `quiescent: false` in both engines
+  (`region-finalizer-pending-not-quiescent-001`). Rust's capture steps until
+  the run is quiescent or `lab.max_steps` is spent: such a scenario needs the
+  generated scenarios' 2000, not a few hundred.
 - **Admission.** A normal spawn into a Finalizing region is refused
   (`SpawnError::RegionClosed`, `record/region.rs:134-142`, Rust commit
   `59bdc2baa`): a finalizer program that `spawn`s a child observes the

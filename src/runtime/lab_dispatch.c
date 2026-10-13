@@ -1582,6 +1582,12 @@ static int lab_is_quiescent(void) {
             lab_kernel()->regions[i].state != ASX_REGION_CLOSED) {
             return 0;
         }
+        /* A finalizer still on the stack of a region that is not closing:
+         * RegionRecord::finalizers_empty (state.rs:7407-7413). */
+        if (lab_kernel()->regions[i].alive &&
+            asx_cleanup_pending(&lab_kernel()->regions[i].cleanup) != 0u) {
+            return 0;
+        }
     }
     for (i = 0; i < lab_kernel()->obligation_count; i++) {
         ASX_CHECKPOINT_WAIVER("bounded: obligation_count <= ASX_MAX_OBLIGATIONS");
