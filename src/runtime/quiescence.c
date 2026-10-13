@@ -66,8 +66,8 @@ static asx_status asx_region_obligations_resolved(asx_region_id id) {
     return ASX_OK;
 }
 
-static int asx_region_has_uncancelled_tasks(asx_region_id id) {
-    const asx_kernel *k = asx_kernel_of(id);
+/* Whether a live task of region `id` of kernel `k` has no cancel request yet. */
+static int asx_region_has_uncancelled_tasks(const asx_kernel *k, asx_region_id id) {
     uint32_t i;
 
     for (i = 0; i < k->task_count; i++) {
@@ -413,7 +413,7 @@ asx_status asx_region_drain(asx_region_id id, asx_budget *budget) {
     asx_region_id drain_regions[ASX_MAX_REGIONS];
 
     if (budget == NULL) return ASX_E_INVALID_ARGUMENT;
-    st = asx_region_slot_lookup(id, &r);
+    st = k != NULL ? asx_region_slot_lookup(id, &r) : ASX_E_NOT_FOUND;
     if (st != ASX_OK) return st;
     if (r->state == ASX_REGION_CLOSED) return ASX_OK;
     if (r->cleanup.draining) return ASX_E_PENDING;
@@ -427,7 +427,7 @@ asx_status asx_region_drain(asx_region_id id, asx_budget *budget) {
             if (st != ASX_OK) return st;
             need_cancel = 1;
         }
-        if (rs->task_count > 0u && asx_region_has_uncancelled_tasks(drain_regions[i])) {
+        if (rs->task_count > 0u && asx_region_has_uncancelled_tasks(k, drain_regions[i])) {
             need_cancel = 1;
         }
     }
@@ -612,7 +612,7 @@ static asx_status asx_finalizer_task_poll(void *user_data, asx_task_id self) {
     asx_region_slot *r = (asx_region_slot *)user_data;
     asx_region_finalizer *f = &r->finalizer;
     int spent = f->polls >= f->poll_budget || asx_cancel_now_internal(k) >= f->deadline;
-
+    if (k == NULL) return ASX_E_INVALID_STATE; /* the scheduler polls a task of its own kernel */
     if (spent && !f->exhausted) {
         f->exhausted = 1;
         if (finalizer_escalation_of(k) != ASX_FINALIZER_SOFT) {

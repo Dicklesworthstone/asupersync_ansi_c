@@ -514,6 +514,30 @@ TEST(parallel_run_single_task_completes) {
     asx_parallel_reset();
 }
 
+/* K18: a region handle whose runtime tag no runtime holds names no region of
+ * any kernel: the run refuses it with the lookup's answer before it scans a
+ * kernel's tasks into lanes, and the runtime's own region still runs. */
+TEST(parallel_run_refuses_a_region_of_a_runtime_no_one_holds) {
+    asx_region_id rid;
+    asx_region_id foreign;
+    asx_task_id tid;
+    asx_budget budget;
+    asx_parallel_config cfg = default_config();
+
+    reset_all();
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &tid), ASX_OK);
+
+    foreign = asx_handle_with_runtime_tag(rid, 3u); /* a tag no runtime holds */
+    ASSERT_NE(foreign, rid);
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_parallel_run(foreign, &budget), ASX_E_NOT_FOUND);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
+
+    asx_parallel_reset();
+}
+
 TEST(parallel_run_task_yields_then_completes) {
     asx_region_id rid;
     asx_task_id tid;
@@ -2515,6 +2539,7 @@ int main(void) {
 
     /* Parallel run */
     RUN_TEST(parallel_run_single_task_completes);
+    RUN_TEST(parallel_run_refuses_a_region_of_a_runtime_no_one_holds);
     RUN_TEST(parallel_run_task_yields_then_completes);
     RUN_TEST(parallel_run_cancelled_task_sets_completed_cancel_phase);
     RUN_TEST(parallel_run_finalizing_task_sets_completed_cancel_phase);

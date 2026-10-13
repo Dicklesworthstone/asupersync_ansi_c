@@ -291,6 +291,28 @@ static void test_inspect_copied_stale_runtime_fails_closed(void) {
     asx_runtime_shutdown(&b);
 }
 
+/* K18: an object that says it is initialized but names a tag no runtime
+ * holds (a copy of a runtime of another configuration, a corrupted tag) has
+ * no kernel to count: every gauge is zero, as for a stale object, and no
+ * kernel is read. */
+static void test_inspect_tag_no_runtime_holds_reports_zero(void) {
+    asx_runtime rt;
+    asx_inspection_report rpt;
+
+    memset(&rt, 0, sizeof(rt));
+    rt.initialized = 1;
+    rt.generation = 1u;
+    rt.tag = (uint16_t)ASX_MAX_RUNTIMES;
+    MUST_OK(asx_inspect(&rt, &rpt));
+    ASSERT(!rpt.initialized, "unheld tag not initialized");
+    ASSERT(rpt.regions.active_count == 0 && rpt.regions.peak_count == 0, "unheld tag regions");
+    ASSERT(rpt.tasks.active_count == 0 && rpt.tasks.peak_count == 0, "unheld tag tasks");
+    ASSERT(rpt.obligations.active_count == 0 && rpt.obligations.peak_count == 0,
+           "unheld tag obligations");
+    ASSERT(rpt.trace.event_count == 0 && rpt.trace.digest == 0u, "unheld tag trace");
+    ASSERT(!rpt.any_poisoned, "unheld tag poisoned flag");
+}
+
 /* ================================================================== */
 /* Evidence sink tests                                                */
 /* ================================================================== */
@@ -534,6 +556,7 @@ int main(void) {
     RUN(test_inspect_uninitialized);
     RUN(test_inspect_stale_runtime_fails_closed);
     RUN(test_inspect_copied_stale_runtime_fails_closed);
+    RUN(test_inspect_tag_no_runtime_holds_reports_zero);
 
     /* Evidence sink */
     RUN(test_evidence_init);

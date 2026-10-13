@@ -211,6 +211,8 @@ TEST(handle_of_another_runtime_is_not_found_through_a_coincident_slot) {
     asx_region_id child;
     asx_task_id other;
     asx_obligation_id extra;
+    asx_cancel_reason req;
+    asx_budget drain_budget;
 
     asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
@@ -240,6 +242,12 @@ TEST(handle_of_another_runtime_is_not_found_through_a_coincident_slot) {
     ASSERT_EQ(asx_obligation_reserve_ex(rid, ASX_OBLIGATION_KIND_GENERIC, foreign_task, &extra),
               ASX_E_NOT_FOUND);
     ASSERT_EQ(asx_obligation_commit(foreign_obligation), ASX_E_NOT_FOUND);
+    /* A region cancel and a drain of it name no kernel to read: the same
+     * refusal, before either walks a subtree. */
+    req = asx_cancel_reason_default(test_runtime(), ASX_CANCEL_SHUTDOWN, NULL);
+    drain_budget = asx_budget_infinite();
+    ASSERT_EQ(asx_region_cancel(foreign_region, &req, NULL), ASX_E_NOT_FOUND);
+    ASSERT_EQ(asx_region_drain(foreign_region, &drain_budget), ASX_E_NOT_FOUND);
 
     /* The runtime's own handles are untouched by all of it. */
     ASSERT_EQ(asx_region_get_state(rid, &rstate), ASX_OK);

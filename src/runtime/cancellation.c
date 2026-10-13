@@ -534,7 +534,7 @@ asx_status asx_region_cancel(asx_region_id region, const asx_cancel_reason *reas
     asx_status st;
 
     if (reason == NULL) return ASX_E_INVALID_ARGUMENT;
-    st = asx_region_slot_lookup(region, &root);
+    st = k != NULL ? asx_region_slot_lookup(region, &root) : ASX_E_NOT_FOUND;
     if (st != ASX_OK) return st;
 
     /* Rust RuntimeState::cancel_request (state.rs:7625-7900). First pass,

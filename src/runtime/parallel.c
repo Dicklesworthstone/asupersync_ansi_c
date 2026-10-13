@@ -1227,7 +1227,7 @@ static asx_status parallel_run_impl(asx_region_id region, asx_budget *budget) {
     if (budget == NULL) return ASX_E_INVALID_ARGUMENT;
     if (!g_initialized) return ASX_E_INVALID_STATE;
 
-    st = asx_region_slot_lookup(region, &rslot);
+    st = k != NULL ? asx_region_slot_lookup(region, &rslot) : ASX_E_NOT_FOUND;
     if (st != ASX_OK) return st;
 
     parallel_mark_workers_running();

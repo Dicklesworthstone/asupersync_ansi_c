@@ -557,6 +557,42 @@ TEST(defer_async_finalizer_runs_as_a_masked_cleanup_task_before_close) {
     ASSERT_EQ(out.severity, ASX_OUTCOME_OK);
 }
 
+/* K18: the poll the kernel gives a finalizer task refuses an id of a runtime
+ * no one holds instead of reading a kernel it does not have. The scheduler
+ * never passes one, so the finalizer re-enters its own task slot's poll
+ * function with its own id carrying another tag; the refusal comes before
+ * the finalizer's poll is counted or run again. */
+static asx_status async_fin_reenter_poll(void *ud, asx_task_id self) {
+    async_fin *f = (async_fin *)ud;
+    asx_task_slot *t = NULL;
+
+    f->polls++;
+    f->ordinary_spawn = asx_task_slot_lookup(self, &t);
+    if (f->ordinary_spawn == ASX_OK) {
+        f->cleanup_spawn = t->poll_fn(t->user_data, asx_handle_with_runtime_tag(self, 3u));
+    }
+    return ASX_OK;
+}
+
+TEST(defer_async_finalizer_poll_refuses_a_task_id_no_runtime_holds) {
+    asx_region_id rid;
+    asx_region_state rs;
+    asx_budget budget;
+    async_fin f;
+
+    asx_runtime_reset(test_runtime());
+    memset(&f, 0, sizeof(f));
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
+    ASSERT_EQ(asx_region_defer_async(rid, async_fin_reenter_poll, &f), ASX_OK);
+    budget = asx_budget_infinite();
+    ASSERT_EQ(asx_region_drain(rid, &budget), ASX_OK);
+    ASSERT_EQ(asx_region_get_state(rid, &rs), ASX_OK);
+    ASSERT_EQ(rs, ASX_REGION_CLOSED);
+    ASSERT_EQ(f.ordinary_spawn, ASX_OK);             /* its own slot was found */
+    ASSERT_EQ(f.cleanup_spawn, ASX_E_INVALID_STATE); /* the foreign id was refused */
+    ASSERT_EQ(f.polls, 1);                           /* and the finalizer ran once */
+}
+
 TEST(defer_async_finalizers_run_one_at_a_time_in_lifo_order_with_sync_ones) {
     asx_region_id rid;
     asx_budget budget;
@@ -3003,6 +3039,7 @@ int main(void) {
     RUN_TEST(defer_sync_refused_once_the_region_is_closing);
     RUN_TEST(defer_sync_argument_errors_and_capacity);
     RUN_TEST(defer_async_finalizer_runs_as_a_masked_cleanup_task_before_close);
+    RUN_TEST(defer_async_finalizer_poll_refuses_a_task_id_no_runtime_holds);
     RUN_TEST(defer_async_finalizers_run_one_at_a_time_in_lifo_order_with_sync_ones);
     RUN_TEST(defer_async_region_finalizing_refuses_ordinary_spawn_but_takes_cleanup);
     RUN_TEST(defer_async_runs_after_the_region_tasks_complete);

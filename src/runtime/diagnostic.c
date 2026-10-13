@@ -100,8 +100,8 @@ asx_status asx_inspect(const asx_runtime *rt, asx_inspection_report *out) {
     if (rt == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
 
     memset(out, 0, sizeof(*out));
-    initialized = asx_runtime_is_initialized(rt);
     k = asx_kernel_for_tag(rt->tag); /* the kernel this runtime holds, when it is initialized */
+    initialized = k != NULL && asx_runtime_is_initialized(rt); /* no kernel, no gauges */
 
     /* Entity gauges */
     out->regions.active_count = initialized ? count_alive_regions(k) : 0u;
