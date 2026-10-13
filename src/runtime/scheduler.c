@@ -1168,10 +1168,10 @@ static asx_status sched_poll_slot(uint32_t i, asx_region_slot *rslot, uint32_t r
     /* A parked task with a deadline must wake to be cancelled (under lab
      * dispatch its budget-deadline timer does it; a cleanup task has none). */
 #ifndef ASX_MUTANT_SWEEP_PARKED_DEADLINE_NO_WAKE
-    /* Oracle self-test mutant (tests/gates/test_oracle_mutants.sh, sweep mode): the
-     * parked task is never woken at its deadline, so it is cancelled only when its
-     * own wake comes. Lab dispatch never runs this line, so only the sweep
-     * comparison can see it. Never in a release build. */
+    /* Oracle self-test mutant (tests/gates/test_oracle_mutants.sh, sweep mode): with
+     * the round-start pass (sched_fire_budget_deadlines), which skips parked tasks
+     * under this macro too, a parked task is never woken at its deadline and is
+     * cancelled only when its own wake comes. Never in a release build. */
     if (!lab && t->parked && !t->cancel_pending && !t->cleanup_only &&
         t->budget.deadline != ASX_TIME_INFINITE) {
         timer_arm(i, t->budget.deadline);
@@ -1683,6 +1683,9 @@ static void sched_fire_budget_deadlines(asx_time now) {
         if (!t->alive || asx_task_is_terminal(t->state) || t->cancel_pending) continue;
         if (t->cleanup_only || t->budget.deadline == ASX_TIME_INFINITE) continue;
         if (now < t->budget.deadline || sched_scope_region(t) == NULL) continue;
+#ifdef ASX_MUTANT_SWEEP_PARKED_DEADLINE_NO_WAKE
+        if (t->parked) continue; /* oracle mutant: the deadline waits for the task's wake */
+#endif
         if (asx_task_cancel_budget_internal(asx_task_handle_for_slot(i), ASX_CANCEL_DEADLINE,
                                             t->budget.deadline) == ASX_OK) {
             asx_task_wake_slot_internal(t);

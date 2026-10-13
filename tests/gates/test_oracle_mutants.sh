@@ -13,8 +13,10 @@
 #   - OK_BODY_CANCELS          an Ok body cancels its normal children -> region-body-ok-*
 #   - EXCEPTIONAL_BODY_NO_CANCEL Err/Panicked close without FailFast    -> region-body-(err|panic)-*
 #   - MASKED_SKIP_UNMASK       callback masking fails to restore       -> cancel-masked-*
-#   - SWEEP_PARKED_DEADLINE_NO_WAKE the sweep never wakes a parked task at its
-#                              deadline (sweep only, compare-sweep)    -> any fixture
+#   - SWEEP_PARKED_DEADLINE_NO_WAKE the sweep never acts on a parked task's
+#                              deadline before its own wake: neither the wake
+#                              timer nor the round-start deadline pass reaches
+#                              it (sweep only, compare-sweep)          -> any fixture
 #                              the baseline sweep passes
 # A mutant the corpus does not catch means the fixtures stopped exercising
 # that rule: the gate fails.
@@ -95,9 +97,14 @@ run_mutant OBLIGATION_DROP_COMMITS 'obligation-'
 run_mutant OK_BODY_CANCELS 'region-body-ok-'
 run_mutant EXCEPTIONAL_BODY_NO_CANCEL 'region-body-(err|panic)-'
 run_mutant MASKED_SKIP_UNMASK 'cancel-masked-'
-# Lab dispatch never runs the sweep's parked-deadline wake, so only the sweep
+# Lab dispatch never runs the sweep's parked-deadline paths, so only the sweep
 # comparison can see this one; the list's divergences keep failing as KNOWN,
-# so any FAIL line is a fixture the baseline passes.
+# so any FAIL line is a fixture the baseline passes. The macro disables both
+# paths: the wake timer a task arms when it parks, and the round-start pass
+# of sched_fire_budget_deadlines (d9a6e51), which cancels and wakes a parked
+# task whenever another timer has moved the clock past its deadline. With the
+# pass in place, dropping the timer alone is seen by no fixture in the corpus
+# (batch #7): only a lone parked task, which nothing else wakes, needs it.
 run_mutant SWEEP_PARKED_DEADLINE_NO_WAKE '.' compare-sweep
 
 # The scenario parser cannot reach depth 64; the actual public boundary
