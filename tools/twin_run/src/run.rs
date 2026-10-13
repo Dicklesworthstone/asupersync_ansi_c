@@ -39,7 +39,10 @@ use asupersync::sync as asx_sync;
 use asupersync::time::delay_queue::Key as DelayKey;
 use asupersync::time::{DelayQueue, Interval, MissedTickBehavior, interval, interval_at};
 use asupersync::trace::{CompactTaskId, TraceData, TraceEvent, TraceEventKind};
-use asupersync::{Budget, CancelKind, CancelReason, Cx, RegionId, TaskId, Time};
+use asupersync::{
+    Budget, CancelKind, CancelReason, CapabilityBudget, CapabilityBudgetRefusal,
+    CapabilityBudgetRequirements, Cx, RegionId, TaskId, Time,
+};
 use serde_json::{Value, json};
 
 use crate::canon;
@@ -220,6 +223,75 @@ fn budget(v: Option<&Value>) -> RunResult<Budget> {
         b = b.with_priority(u8::try_from(p).map_err(|_| format!("priority out of range: {p}"))?);
     }
     Ok(b)
+}
+
+/// DSL §1 capability budget: `memory_bytes`, `cpu_units`, `io_bytes`,
+/// `artifact_bytes` and `cleanup_poll_quota` (the cleanup budget: a
+/// `Budget::new()` with that poll quota), each optional. Absent or null is
+/// `CapabilityBudget::UNSPECIFIED`.
+fn capability_budget(v: Option<&Value>) -> RunResult<CapabilityBudget> {
+    let mut b = CapabilityBudget::new();
+    let Some(v) = v.filter(|v| !v.is_null()) else {
+        return Ok(b);
+    };
+    if let Some(x) = v.get("memory_bytes").and_then(Value::as_u64) {
+        b = b.with_memory_bytes(x);
+    }
+    if let Some(x) = v.get("cpu_units").and_then(Value::as_u64) {
+        b = b.with_cpu_units(x);
+    }
+    if let Some(x) = v.get("io_bytes").and_then(Value::as_u64) {
+        b = b.with_io_bytes(x);
+    }
+    if let Some(x) = v.get("artifact_bytes").and_then(Value::as_u64) {
+        b = b.with_artifact_bytes(x);
+    }
+    if let Some(p) = v.get("cleanup_poll_quota").and_then(Value::as_u64) {
+        let polls =
+            u32::try_from(p).map_err(|_| format!("cleanup_poll_quota out of range: {p}"))?;
+        b = b.with_cleanup_budget(Budget::new().with_poll_quota(polls));
+    }
+    Ok(b)
+}
+
+/// DSL §1 requirements: an array of dimension names (`as_str`).
+fn capability_requirements(v: Option<&Value>) -> RunResult<CapabilityBudgetRequirements> {
+    let mut r = CapabilityBudgetRequirements::NONE;
+    let Some(list) = v.and_then(Value::as_array) else {
+        return Ok(r);
+    };
+    for d in list {
+        r = match d.as_str() {
+            Some("memory_bytes") => r.require_memory_bytes(),
+            Some("cpu_units") => r.require_cpu_units(),
+            Some("io_bytes") => r.require_io_bytes(),
+            Some("cleanup") => r.require_cleanup(),
+            Some("artifact_bytes") => r.require_artifact_bytes(),
+            other => return Err(format!("unknown capability dimension {other:?}")),
+        };
+    }
+    Ok(r)
+}
+
+/// An envelope as an observation value: the five keys, null where the
+/// dimension has none.
+fn capability_budget_json(b: &CapabilityBudget) -> Value {
+    json!({
+        "memory_bytes": b.memory_bytes,
+        "cpu_units": b.cpu_units,
+        "io_bytes": b.io_bytes,
+        "cleanup_poll_quota": b.cleanup_budget.map(|c| c.poll_quota),
+        "artifact_bytes": b.artifact_bytes,
+    })
+}
+
+/// A refusal as an observation value.
+fn capability_refusal_json(r: &CapabilityBudgetRefusal) -> Value {
+    let (kind, dimension) = match r {
+        CapabilityBudgetRefusal::MissingRequired(d) => ("missing_required", d),
+        CapabilityBudgetRefusal::Exhausted(d) => ("exhausted", d),
+    };
+    json!({"kind": kind, "dimension": dimension.as_str()})
 }
 
 fn cancel_kind(name: &str) -> RunResult<CancelKind> {
@@ -1371,6 +1443,46 @@ fn exec_sync(
                 Value::Bool(requested),
             );
         }
+        "capability_budget" => {
+            // cx.capability_budget() (cx.rs:2516), or a held child region's
+            // (ChildRegion::cx(): the envelope its record admitted).
+            let (status, value) = match step.get("region").and_then(Value::as_str) {
+                None => ("ASX_OK", capability_budget_json(&cx.capability_budget())),
+                Some(name) => match local.regions.get(name) {
+                    Some(region) => (
+                        "ASX_OK",
+                        capability_budget_json(&region.cx().capability_budget()),
+                    ),
+                    None => (NOT_HELD, Value::Null),
+                },
+            };
+            observe(&ctx.shared, me, idx, label, status, value);
+        }
+        "apply_capability_budget" => {
+            // cx.apply_child_capability_budget (cx.rs:2606): the Cx carries
+            // the effective envelope afterwards, and is unchanged on a
+            // refusal.
+            let envelope = capability_budget(step.get("capability_budget"))?;
+            let requirements = capability_requirements(step.get("requirements"))?;
+            match cx.apply_child_capability_budget(envelope, requirements) {
+                Ok(effective) => observe(
+                    &ctx.shared,
+                    me,
+                    idx,
+                    label,
+                    "ASX_OK",
+                    capability_budget_json(&effective),
+                ),
+                Err(refusal) => observe(
+                    &ctx.shared,
+                    me,
+                    idx,
+                    label,
+                    "ASX_E_CAPABILITY_BUDGET_REFUSED",
+                    capability_refusal_json(&refusal),
+                ),
+            }
+        }
         "trace" => {
             cx.trace(str_field(step, "message")?);
             observe(&ctx.shared, me, idx, label, "ASX_OK", Value::Null);
@@ -2231,6 +2343,7 @@ fn child_region_status(err: &asupersync::cx::ChildRegionError) -> RunResult<Stri
         E::Create(C::ParentNotFound(_)) => "ASX_E_REGION_NOT_FOUND",
         E::Create(C::ParentClosed { .. }) => "ASX_E_REGION_CLOSED",
         E::Create(C::ParentAtCapacity { .. }) => "ASX_E_ADMISSION_LIMIT",
+        E::Create(C::CapabilityBudgetRefused { .. }) => "ASX_E_CAPABILITY_BUDGET_REFUSED",
         #[allow(unreachable_patterns)]
         other => {
             return Err(format!(
@@ -3311,6 +3424,12 @@ async fn exec_step(
             if step.get("budget").is_some() {
                 spec = spec.with_budget(budget(step.get("budget"))?);
             }
+            // The envelope and requirements of the spec (child_region.rs:55);
+            // the request meets the Cx's own into them (cx.rs:4514-4516).
+            if step.get("capability_budget").is_some_and(|v| !v.is_null()) {
+                spec.capability_budget = Some(capability_budget(step.get("capability_budget"))?);
+            }
+            spec.requirements = capability_requirements(step.get("requirements"))?;
             match cx.open_child_region(spec).await {
                 Ok(child) => {
                     let mut s = lock(&ctx.shared);
@@ -3322,14 +3441,18 @@ async fn exec_step(
                     local.regions.insert(name, child);
                     observe(&ctx.shared, me, idx, op, "ASX_OK", Value::Null);
                 }
-                Err(e) => observe(
-                    &ctx.shared,
-                    me,
-                    idx,
-                    op,
-                    &child_region_status(&e)?,
-                    Value::Null,
-                ),
+                Err(e) => {
+                    let value = match &e {
+                        asupersync::cx::ChildRegionError::Create(
+                            asupersync::runtime::region_table::RegionCreateError::CapabilityBudgetRefused {
+                                reason,
+                                ..
+                            },
+                        ) => capability_refusal_json(reason),
+                        _ => Value::Null,
+                    };
+                    observe(&ctx.shared, me, idx, op, &child_region_status(&e)?, value);
+                }
             }
         }
         "close_region" => {

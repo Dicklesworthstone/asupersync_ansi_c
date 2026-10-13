@@ -94,6 +94,20 @@
       }
     },
     "budget_or_null": {"oneOf": [{"$ref": "#/$defs/budget"}, {"type": "null"}]},
+    "capability_budget": {
+      "type": "object", "additionalProperties": false, "minProperties": 1,
+      "properties": {
+        "memory_bytes": {"$ref": "#/$defs/u64"},
+        "cpu_units": {"$ref": "#/$defs/u64"},
+        "io_bytes": {"$ref": "#/$defs/u64"},
+        "cleanup_poll_quota": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+        "artifact_bytes": {"$ref": "#/$defs/u64"}
+      }
+    },
+    "capability_requirements": {
+      "type": "array", "uniqueItems": true, "minItems": 1,
+      "items": {"enum": ["memory_bytes", "cpu_units", "io_bytes", "cleanup", "artifact_bytes"]}
+    },
     "outcome": {"oneOf": [
       {"type": "object", "required": ["tag"], "additionalProperties": false, "properties": {"tag": {"const": "ok"}}},
       {"type": "object", "required": ["tag", "status"], "additionalProperties": false,
@@ -132,6 +146,7 @@
     "program": {"type": "array", "items": {"$ref": "#/$defs/step"}},
     "nonblocking_step": {"oneOf": [
       {"$ref": "#/$defs/s_checkpoint"}, {"$ref": "#/$defs/s_is_cancel_requested"},
+      {"$ref": "#/$defs/s_capability_budget"}, {"$ref": "#/$defs/s_apply_capability_budget"},
       {"$ref": "#/$defs/s_trace"}, {"$ref": "#/$defs/s_reserve"},
       {"$ref": "#/$defs/s_obligation_ref"}, {"$ref": "#/$defs/s_abort"}, {"$ref": "#/$defs/s_handoff"}, {"$ref": "#/$defs/s_try_join"},
       {"$ref": "#/$defs/s_abort_task"}, {"$ref": "#/$defs/s_spawn"}, {"$ref": "#/$defs/s_permit_send"},
@@ -199,7 +214,15 @@
       "properties": {"op": {"const": "abort_task"}, "task": {"$ref": "#/$defs/name"}, "kind": {"$ref": "#/$defs/cancel_kind"},
                      "message": {"type": "string"}}},
     "s_open_region": {"type": "object", "required": ["op", "as"], "additionalProperties": false,
-      "properties": {"op": {"const": "open_region"}, "as": {"$ref": "#/$defs/name"}, "budget": {"$ref": "#/$defs/budget"}}},
+      "properties": {"op": {"const": "open_region"}, "as": {"$ref": "#/$defs/name"}, "budget": {"$ref": "#/$defs/budget"},
+                     "capability_budget": {"$ref": "#/$defs/capability_budget"},
+                     "requirements": {"$ref": "#/$defs/capability_requirements"}}},
+    "s_capability_budget": {"type": "object", "required": ["op"], "additionalProperties": false,
+      "properties": {"op": {"const": "capability_budget"}, "region": {"$ref": "#/$defs/name"}}},
+    "s_apply_capability_budget": {"type": "object", "required": ["op"], "additionalProperties": false,
+      "properties": {"op": {"const": "apply_capability_budget"},
+                     "capability_budget": {"$ref": "#/$defs/capability_budget"},
+                     "requirements": {"$ref": "#/$defs/capability_requirements"}}},
     "s_cancel_region": {"type": "object", "required": ["op", "region", "kind"], "additionalProperties": false,
       "properties": {"op": {"const": "cancel_region"}, "region": {"$ref": "#/$defs/name"}, "kind": {"$ref": "#/$defs/cancel_kind"},
                      "message": {"type": "string"}}},

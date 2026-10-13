@@ -1328,6 +1328,98 @@ static int parse_budget(uint32_t node, asx_budget *out) {
     return 1;
 }
 
+/* DSL §1 capability budget (bd-xumt): memory_bytes, cpu_units, io_bytes,
+ * artifact_bytes and cleanup_poll_quota (the cleanup Budget, Budget::new()
+ * with that poll quota), each optional. Returns 0 when the node is absent
+ * or null (no envelope). */
+static int parse_capability_budget(uint32_t node, asx_capability_budget *out) {
+    uint64_t v;
+    *out = asx_capability_budget_unspecified();
+    if (node == ASX_JSON_NONE || asx_json_is_null(g_in, node)) return 0;
+    if (asx_json_u64(g_in, asx_json_get(g_in, node, "memory_bytes"), &v)) {
+        *out = asx_capability_budget_with_memory_bytes(*out, v);
+    }
+    if (asx_json_u64(g_in, asx_json_get(g_in, node, "cpu_units"), &v)) {
+        *out = asx_capability_budget_with_cpu_units(*out, v);
+    }
+    if (asx_json_u64(g_in, asx_json_get(g_in, node, "io_bytes"), &v)) {
+        *out = asx_capability_budget_with_io_bytes(*out, v);
+    }
+    if (asx_json_u64(g_in, asx_json_get(g_in, node, "artifact_bytes"), &v)) {
+        *out = asx_capability_budget_with_artifact_bytes(*out, v);
+    }
+    if (asx_json_u64(g_in, asx_json_get(g_in, node, "cleanup_poll_quota"), &v)) {
+        asx_budget cleanup;
+        if (v > UINT32_MAX) it_fail("cleanup_poll_quota out of range", NULL);
+        cleanup = asx_budget_from_polls((uint32_t)v);
+        *out = asx_capability_budget_with_cleanup_budget(*out, &cleanup);
+    }
+    return 1;
+}
+
+/* DSL §1 requirements: an array of dimension names (Rust
+ * CapabilityBudgetDimension::as_str). Returns 0 when it names none. */
+static int parse_capability_requirements(uint32_t node, asx_capability_requirements *out) {
+    uint32_t n;
+    uint32_t i;
+    memset(out, 0, sizeof(*out));
+    if (node == ASX_JSON_NONE || asx_json_type_of(g_in, node) != ASX_JSON_ARRAY) return 0;
+    n = asx_json_count(g_in, node);
+    for (i = 0; i < n; i++) {
+        const char *d = asx_json_string(g_in, asx_json_item(g_in, node, i));
+        if (d == NULL) {
+            it_fail("requirements must be dimension names", NULL);
+        } else if (strcmp(d, "memory_bytes") == 0) {
+            out->memory_bytes = 1u;
+        } else if (strcmp(d, "cpu_units") == 0) {
+            out->cpu_units = 1u;
+        } else if (strcmp(d, "io_bytes") == 0) {
+            out->io_bytes = 1u;
+        } else if (strcmp(d, "cleanup") == 0) {
+            out->cleanup = 1u;
+        } else if (strcmp(d, "artifact_bytes") == 0) {
+            out->artifact_bytes = 1u;
+        } else {
+            it_fail("unknown capability dimension", d);
+        }
+    }
+    return n > 0u;
+}
+
+/* The envelope as the observation value: the five keys, null where the
+ * dimension has none. */
+static uint32_t capability_budget_node(const asx_capability_budget *b) {
+    uint32_t o = asx_json_new_object(g_out);
+    asx_json_set(g_out, o, "memory_bytes",
+                 b->has_memory_bytes ? asx_json_new_u64(g_out, b->memory_bytes)
+                                     : asx_json_new_null(g_out));
+    asx_json_set(g_out, o, "cpu_units",
+                 b->has_cpu_units ? asx_json_new_u64(g_out, b->cpu_units)
+                                  : asx_json_new_null(g_out));
+    asx_json_set(g_out, o, "io_bytes",
+                 b->has_io_bytes ? asx_json_new_u64(g_out, b->io_bytes) : asx_json_new_null(g_out));
+    asx_json_set(g_out, o, "cleanup_poll_quota",
+                 b->has_cleanup_budget ? asx_json_new_u64(g_out, b->cleanup_budget.poll_quota)
+                                       : asx_json_new_null(g_out));
+    asx_json_set(g_out, o, "artifact_bytes",
+                 b->has_artifact_bytes ? asx_json_new_u64(g_out, b->artifact_bytes)
+                                       : asx_json_new_null(g_out));
+    return o;
+}
+
+/* A refusal as the observation value: Rust's CapabilityBudgetRefusal,
+ * MissingRequired(dim) or Exhausted(dim). */
+static uint32_t capability_refusal_node(const asx_capability_refusal *r) {
+    uint32_t o = asx_json_new_object(g_out);
+    asx_json_set(g_out, o, "kind",
+                 asx_json_new_string(g_out, r->kind == ASX_CAPABILITY_MISSING_REQUIRED
+                                                ? "missing_required"
+                                                : "exhausted"));
+    asx_json_set(g_out, o, "dimension",
+                 asx_json_new_string(g_out, asx_capability_dimension_str(r->dimension)));
+    return o;
+}
+
 /* ------------------------------------------------------------------ */
 /* Steps                                                               */
 /* ------------------------------------------------------------------ */
@@ -3459,6 +3551,44 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
                 asx_json_new_bool(g_out, asx_cx_is_cancelled(&cx) ? 1 : 0));
         return STEP_NEXT;
     }
+    if (strcmp(op, "capability_budget") == 0) {
+        /* cx.capability_budget() (cx.rs:2516), or a held child region's
+         * (child.cx().capability_budget(): the envelope its record admitted). */
+        asx_capability_budget b;
+        const char *region = it_str(step, "region");
+        if (region == NULL) {
+            b = asx_cx_capability_budget(&t->cx);
+        } else {
+            it_local_region *lr = local_region(t, region);
+            if (lr == NULL) {
+                observe_status(t, idx, label, ASX_E_NOT_FOUND);
+                return STEP_NEXT;
+            }
+            st = asx_region_capability_budget(lr->id, &b);
+            if (st != ASX_OK) {
+                observe_status(t, idx, label, st);
+                return STEP_NEXT;
+            }
+        }
+        observe(t, idx, label, status_node(ASX_OK), capability_budget_node(&b));
+        return STEP_NEXT;
+    }
+    if (strcmp(op, "apply_capability_budget") == 0) {
+        /* cx.apply_child_capability_budget(envelope, requirements)
+         * (cx.rs:2606): the Cx carries the effective envelope afterwards,
+         * and is unchanged on a refusal. */
+        asx_capability_budget spec;
+        asx_capability_budget effective;
+        asx_capability_requirements req;
+        asx_capability_refusal refusal = {ASX_CAPABILITY_REFUSAL_NONE, ASX_CAPABILITY_MEMORY_BYTES};
+        (void)parse_capability_budget(asx_json_get(g_in, step, "capability_budget"), &spec);
+        (void)parse_capability_requirements(asx_json_get(g_in, step, "requirements"), &req);
+        st = asx_cx_apply_child_capability_budget(&t->cx, &spec, &req, &effective, &refusal);
+        observe(t, idx, label, status_node(st),
+                st == ASX_OK ? capability_budget_node(&effective)
+                             : capability_refusal_node(&refusal));
+        return STEP_NEXT;
+    }
     if (strcmp(op, "trace") == 0) {
         const char *message = it_str(step, "message");
         if (message == NULL) {
@@ -3880,6 +4010,10 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
             child->id = id;
             child->spawned = 1;
             (void)asx_cx_init(&child->cx, child->region, id, ASX_CAP_NONE);
+            /* cx.spawn passes the spawner's own envelope to the child's Cx
+             * (scope.rs:1542, cx.rs:4898); child.cx().spawn, the held
+             * region's, which asx_cx_init just loaded. */
+            if (lr == NULL) child->cx.capability_budget = t->cx.capability_budget;
         } else {
             child->refused = st;
             child->refusal = asx_scheduler_last_spawn_refusal();
@@ -4790,14 +4924,35 @@ static step_result exec_step(it_task *t, asx_task_id self, uint32_t step, uint32
         const char *name = it_str(step, "as");
         asx_budget budget;
         int has_budget = parse_budget(asx_json_get(g_in, step, "budget"), &budget);
+        asx_capability_budget spec;
+        asx_capability_budget held;
+        asx_capability_requirements req;
+        asx_capability_refusal refusal = {ASX_CAPABILITY_REFUSAL_NONE, ASX_CAPABILITY_MEMORY_BYTES};
+        int has_spec;
+        int has_req;
         asx_region_id id = ASX_INVALID_ID;
         if (name == NULL || t->n_regions >= IT_MAX_LOCAL) {
             it_fail_task(t, idx, "open_region needs `as` (and a free local slot)");
             return STEP_END;
         }
         /* Cx::open_child_region: a command the scheduler applies at its
-         * next step; the task waits parked for the result. */
-        st = asx_region_open_child_poll(self, t->region, has_budget ? &budget : NULL, &id);
+         * next step; the task waits parked for the result. A spec that
+         * carries an envelope or requirements, or a Cx that narrowed its
+         * own, goes through the Cx call, whose request is the Cx's envelope
+         * met with the spec's (cx.rs:4514-4516). */
+        has_spec = parse_capability_budget(asx_json_get(g_in, step, "capability_budget"), &spec);
+        has_req = parse_capability_requirements(asx_json_get(g_in, step, "requirements"), &req);
+        held = asx_cx_capability_budget(&t->cx);
+        if (has_spec || has_req || held.has_memory_bytes || held.has_cpu_units ||
+            held.has_io_bytes || held.has_cleanup_budget || held.has_artifact_bytes) {
+            asx_cx opener = t->cx;
+            opener.caps |= ASX_CAP_SPAWN;
+            opener.task_id = self;
+            st = asx_cx_open_child_region(&opener, has_budget ? &budget : NULL, &spec, &req, &id,
+                                          &refusal);
+        } else {
+            st = asx_region_open_child_poll(self, t->region, has_budget ? &budget : NULL, &id);
+        }
         if (st == ASX_E_PENDING) return STEP_PENDING;
         if (st == ASX_OK) {
             if (!add_region(name, t->region_name, id)) return STEP_END;
@@ -4805,7 +4960,11 @@ static step_result exec_step(it_task *t, asx_task_id self, uint32_t step, uint32
             t->regions[t->n_regions].id = id;
             t->n_regions++;
         }
-        observe_status(t, idx, op, st);
+        if (st == ASX_E_CAPABILITY_BUDGET_REFUSED) {
+            observe(t, idx, op, status_node(st), capability_refusal_node(&refusal));
+        } else {
+            observe_status(t, idx, op, st);
+        }
         return STEP_NEXT;
     }
     if (strcmp(op, "close_region") == 0) {

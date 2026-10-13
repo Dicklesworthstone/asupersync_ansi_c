@@ -123,6 +123,37 @@ The lab charges one `poll_quota` unit per poll (`lab/runtime.rs:4664`). An
 exhausted quota or a passed deadline is turned into a cancel by the next
 `checkpoint` (`cx/cx.rs:3112-3160`).
 
+### Capability budgets
+
+A capability budget (Rust `CapabilityBudget`, `types/budget.rs:924`; C
+`asx_capability_budget`) is a resource envelope, separate from the poll/cost
+budget. It is written as:
+
+```json
+{"memory_bytes": 1024, "cpu_units": 100, "io_bytes": 10000, "cleanup_poll_quota": 50, "artifact_bytes": 4096}
+```
+
+- Every field is optional; an absent one is no envelope for that dimension
+  (`None`). `0` is an envelope, and a spent one.
+- `cleanup_poll_quota` is the cleanup budget: `Budget::new()` with that poll
+  quota (`with_cleanup_budget`, `:981`).
+- `requirements` is an array of dimension names (`memory_bytes`, `cpu_units`,
+  `io_bytes`, `cleanup`, `artifact_bytes`, `CapabilityBudgetDimension::as_str`,
+  `:806`): admission fails closed when a required one is missing or spent.
+- A child's envelope is `meet(parent, child)`: a dimension only one side has is
+  kept, both give the smaller, so an envelope can only tighten (`meet` `:998`,
+  `plan_child` `:1019`, `validate` `:1031`).
+- A refusal is observed as `ASX_E_CAPABILITY_BUDGET_REFUSED` (vocabulary row
+  1701, lossy) with the value `{"kind": "missing_required" | "exhausted",
+  "dimension": <name>}`, the Rust `CapabilityBudgetRefusal`.
+- An envelope as an observation value has all five keys, `null` where there is
+  none.
+- What carries an envelope: a task declared in `tasks` starts with none (Rust's
+  host-created task Cx is `UNSPECIFIED`, `state.rs:4461`); a task a task spawns
+  carries the spawner's own (`cx.spawn`, `cx.rs:4898`, `scope.rs:1542`), and one
+  spawned into a held child region (`child.cx().spawn`) that region's
+  (`state.rs:5123-5130`, the principal Cx).
+
 ### Region finalizers
 
 A `regions` entry may declare `finalizers`, async finalizers registered on
@@ -291,6 +322,8 @@ observes `ASX_E_NOT_FOUND`: the abort consumed the token.
 | `yield` | — | `runtime::yield_now().await` (`runtime/yield_now.rs:36`) | return `ASX_E_PENDING` with the task left runnable | once | ignored |
 | `checkpoint` | `on_cancel`: `"return"` (default) or `"continue"` | `cx.checkpoint()` (`cx.rs:2749`) | `asx_checkpoint(self, &cr)` | no | Acknowledges the cancel and returns `ASX_E_CANCELLED`. With `"return"` the program ends; with `"continue"` it goes on. A masked task gets `ASX_OK`. |
 | `is_cancel_requested` | — | `cx.is_cancel_requested()` (`cx.rs:2641`) | `asx_cx_is_cancelled(&cx)` with the task's Cx | no | Observes `ASX_OK` with `value` `true` once a cancel was requested of the task, a budget cancel a checkpoint raised included, masked or not; acknowledges nothing. |
+| `capability_budget` | optional `region` (a child region this task opened) | `cx.capability_budget()` (`cx.rs:2516`), or the held child's `child.cx().capability_budget()` (`child_region.rs:334`) | `asx_cx_capability_budget(&cx)`, or `asx_region_capability_budget(region, &b)` | no | Observes `ASX_OK` with the five-key envelope as `value`; a `region` the task does not hold observes `ASX_E_NOT_FOUND`. |
+| `apply_capability_budget` | optional `capability_budget`, `requirements` | `cx.apply_child_capability_budget(envelope, requirements)` (`cx.rs:2606`) | `asx_cx_apply_child_capability_budget(&cx, &spec, &req, &effective, &refusal)` | no | `ASX_OK` with the effective envelope (the Cx's met with `envelope`: it can only tighten) as `value`, or `ASX_E_CAPABILITY_BUDGET_REFUSED` with the refusal, the Cx unchanged. Tasks spawned afterwards carry the narrowed envelope. |
 | `sleep` | `ns` | `time::sleep(cx.now(), Duration::from_nanos(ns)).await` (`time/sleep.rs:1182`) | `asx_task_wait_until(self, now + ns)` | until virtual time ≥ now+ns | If the kind is neither `Timeout` nor `Deadline` and the task is unmasked, the step checkpoints (acknowledging) and completes early with `ASX_OK`. If it is first polled after the cancel, it takes one extra scheduler trip (`sleep.rs:789-812`). Otherwise it keeps sleeping. |
 | `sleep_until` | `at_ns` | `time::sleep_until(Time::from_nanos(at_ns)).await` (`sleep.rs:1203`) | `asx_task_wait_until(self, at_ns)` | until virtual time ≥ at_ns | as `sleep` |
 | `trace` | `message` | `cx.trace(message)` (`cx.rs:3362`) | `asx_trace_user(self, message)`: vocabulary `user.trace` | no | ignored |
@@ -355,7 +388,7 @@ concurrent transfer interleavings.
 | `join` | `task` | `handle.join(&cx).await` (`runtime/task_handle.rs:793`) | `asx_task_join_poll(self, target, &outcome)` until done | until the child completes | Ignored: join is uninterruptible (`task_handle.rs:1080-1126`). The observation `value` is the child's outcome (vocabulary §4); a refused child (`spawn` above) is observed as `ASX_E_REGION_CLOSED` with no value. |
 | `try_join` | `task` | `handle.try_join()` (`:863`) | `asx_task_join(target, &outcome)` | no | ignored. A running child gives `ASX_E_TASK_NOT_COMPLETED`; a refused child `ASX_E_REGION_CLOSED` once the next lab step's admission refused it, and before that (in the poll that spawned it) `ASX_E_TASK_NOT_COMPLETED`, as Rust's `try_join` reports not-ready while the admission is pending (`asx_task_refusal_delivered`). |
 | `abort_task` | `task`, `kind`, optional `message` | `handle.abort_with_reason(reason)` (`task_handle.rs:1005`), reason attributed to the requester (§4, "Reason attribution") | `asx_task_abort_request(target, &reason)` | no; the next lab step applies it (`drain_handle_cancel_requests`). A child spawned in the same step caches it until its admission, which queues it as one handle-cancel command behind those already queued (`runtime/spawn_mailbox.rs:629-660`). A refused child's handle only caches it: `ASX_OK`, and its spawn and joins then observe `ASX_E_REGION_CLOSED` (§4, `region_limits`). A child may be aborted more than once, in the poll that spawned it or after its refusal (`spawn-refused-child-aborted-twice-001`, `spawn-refused-child-aborted-twice-quorum-001`): each abort is `ASX_OK` and the one refusal stays what the spawn and the joins observe. A handle's `try_join` consumes the refusal, so twin_run takes it at the first abort and keeps it; a second abort does not replace it with `PolledAfterCompletion` (bd-c129; fuzz seed 275 index 53 failed capture that way). | ignored |
-| `open_region` | `as`, optional `budget` | `cx.open_child_region(ChildRegionSpec::inherit().with_budget(b)).await` (`cx.rs:4491`; `child_region.rs:76`, `:87`) | `asx_region_open_child_poll(self, own_region, budget, &id)` until done | parked until the next lab step applies the Create command and wakes it | ignored. A closing parent gives `ASX_E_REGION_CLOSED`. |
+| `open_region` | `as`, optional `budget`, `capability_budget`, `requirements` | `cx.open_child_region(ChildRegionSpec::inherit().with_budget(b)).await` (`cx.rs:4491`; `child_region.rs:76`, `:87`); `spec.capability_budget` and `spec.requirements` when given (`child_region.rs:65`, `:68`) | `asx_region_open_child_poll(self, own_region, budget, &id)` until done; with an envelope or requirements, or a Cx that narrowed its own, `asx_cx_open_child_region` (the Cx's envelope met with the spec's, `cx.rs:4514-4516`) | parked until the next lab step applies the Create command and wakes it | ignored. A closing parent gives `ASX_E_REGION_CLOSED`. A required dimension the request's envelope lacks or has spent is refused at that step with `ASX_E_CAPABILITY_BUDGET_REFUSED` (see Capability budgets): the opener has parked first, nothing is minted, and the value is the refusal. |
 | `cancel_region` | `region` (one this task opened), `kind`, optional `message` | `child.cancel(reason)` (`child_region.rs:381`), reason attributed to the requester (§4, "Reason attribution") | `asx_region_cancel_request(region, &reason)` | no; the next lab step applies the Cancel command | ignored |
 | `close_region` | `region` (one this task opened) | `child.close().await` (`child_region.rs:424`): a Close command, then a wait for Closed | `asx_region_close_poll(self, region)` until done: the next lab step applies the Close (a region cancel with the User reason Rust's Close carries, `"owned child region body finished"`, `lab/runtime.rs:4195`); the region's Closed transition wakes the task | parked until Closed | Ignored: the closer's own cancellation is not observed. |
 

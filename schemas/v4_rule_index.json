@@ -415,7 +415,7 @@
       "construct": "no body section",
       "kind": "definition",
       "index_line": 72,
-      "scenario_tag": null
+      "scenario_tag": "def.capability.cx_scope"
     },
     {
       "name": "inv.determinism.replayable",
