@@ -852,7 +852,7 @@ static void parallel_promote_ready_task(asx_region_id region, asx_task_id tid) {
     }
 }
 
-static void parallel_drain_ready_sources(asx_region_id region, uint32_t round) {
+static void parallel_drain_ready_sources(asx_kernel *k, asx_region_id region, uint32_t round) {
     asx_task_id ready_tasks[ASX_LANE_TASK_CAPACITY];
     uint32_t ready_count;
     uint32_t i;
@@ -871,7 +871,7 @@ static void parallel_drain_ready_sources(asx_region_id region, uint32_t round) {
 #endif
 
     (void)round;
-    ready_count = asx_waker_drain_signaled(ready_tasks, ASX_LANE_TASK_CAPACITY);
+    ready_count = asx_waker_drain_signaled_internal(k, ready_tasks, ASX_LANE_TASK_CAPACITY);
     for (i = 0; i < ready_count;
          i++) { /* ASX_CHECKPOINT_WAIVER("bounded by ASX_LANE_TASK_CAPACITY") */
         parallel_promote_ready_task(region, ready_tasks[i]);
@@ -1030,13 +1030,13 @@ static int parallel_external_pending(void) {
 
 /* Block for up to timeout_ms waiting for I/O, a cross-thread wake or just
  * time to pass; returns at once when a waker is already signaled. */
-static void parallel_block(uint32_t timeout_ms) {
-    if (!asx_waker_prepare_block_internal()) { return; }
+static void parallel_block(asx_kernel *k, uint32_t timeout_ms) {
+    if (!asx_waker_prepare_block_internal(k)) { return; }
 #if ASX_HAS_NATIVE_IO_DRIVER
     if (asx_io_driver_is_initialized() && asx_io_armed_count() > 0u) {
         asx_io_event events[8];
         (void)asx_io_driver_poll(events, 8u, timeout_ms);
-        asx_waker_finish_block_internal();
+        asx_waker_finish_block_internal(k);
         return;
     }
 #endif
@@ -1044,7 +1044,7 @@ static void parallel_block(uint32_t timeout_ms) {
         uint32_t ready = 0u;
         (void)asx_runtime_reactor_wait(timeout_ms, &ready, 0u);
     }
-    asx_waker_finish_block_internal();
+    asx_waker_finish_block_internal(k);
 }
 
 /* Milliseconds to block before `deadline`, capped at the idle wait bound;
@@ -1091,14 +1091,14 @@ static int parallel_idle_step(asx_kernel *k, asx_time run_deadline, asx_time *la
             return 1;
         }
         if (now < target) {
-            parallel_block(parallel_ms_until(target, now));
+            parallel_block(k, parallel_ms_until(target, now));
             now = parallel_now(k);
         }
     }
 #if PARALLEL_EXTERNAL_WAKES
     else if (parallel_external_pending()) {
         if (run_deadline != ASX_TIME_INFINITE && now >= run_deadline) { return 1; }
-        parallel_block(parallel_ms_until(run_deadline, now));
+        parallel_block(k, parallel_ms_until(run_deadline, now));
         now = parallel_now(k);
     }
 #endif
@@ -1304,7 +1304,7 @@ static asx_status parallel_run_impl(asx_region_id region, asx_budget *budget) {
         if (asx_scheduler_next_timer_internal(k, &next_timer)) {
             (void)asx_scheduler_fire_due_timers_internal(k);
         }
-        parallel_drain_ready_sources(region, round);
+        parallel_drain_ready_sources(k, region, round);
         parallel_promote_cancelled(k);
         now = g_lanes[ASX_LANE_TIMED].count > 0u ? parallel_now(k) : 0u;
 

@@ -138,6 +138,7 @@ void asx_runtime_clear_internal(asx_kernel *k) {
     asx_error_ledger_reset_runtime_internal(k->tag);
     asx_cancel_reset_internal(k->tag);
     asx_region_finalizers_reset_internal(k);
+    asx_waker_reset_internal(k);
     if (asx_kernel_other_held(k)) { /* the subsystems below are process-wide */
         asx_trace_reset_internal(k);
         return;
@@ -155,7 +156,6 @@ void asx_runtime_clear_internal(asx_kernel *k) {
     asx_broadcast_reset();
     asx_session_reset();
     asx_timer_wheel_reset(asx_timer_wheel_global());
-    asx_waker_reset();
 #if ASX_HAS_NATIVE_IO_DRIVER
     asx_io_driver_reset();
 #endif

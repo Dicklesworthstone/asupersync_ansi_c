@@ -20,6 +20,8 @@
 #include <asx/platform/atomics.h>
 #define ASX_INTERNAL_TIMER_WHEEL_ACCESS 1
 #include <asx/time/timer_wheel.h>
+#define ASX_INTERNAL_WAKER_ACCESS 1
+#include <asx/runtime/waker.h>
 #define ASX_INTERNAL_TRACE_FAMILY_ACCESS 1
 #include <asx/runtime/trace.h>
 #undef ASX_INTERNAL_TRACE_FAMILY_ACCESS
@@ -443,6 +445,9 @@ typedef struct asx_kernel {
     asx_timer_wheel wheel;
     tw_entry wheel_entries[TW_RUNTIME_CAPACITY];
     uint16_t wheel_overflow[TW_RUNTIME_CAPACITY];
+    /* The wake registrations (waker.c): a waker names this kernel by the
+     * tag in its slot. */
+    asx_waker_state wakers;
     /* The runtime's trace: ring, digest, counters, observer. */
     asx_trace_state trace;
     uint32_t rt_generation; /* nonzero while an initialized runtime holds it */
@@ -1063,13 +1068,18 @@ asx_status asx_runtime_take_pending_fault_internal(asx_kernel *k);
  * PANIC policy routed the leaks through the region's containment. */
 asx_status asx_region_audit_leaks_internal(asx_region_id region);
 
-/* Scheduler block handshake with cross-thread wakers (waker.c). Call
- * prepare right before a blocking reactor wait: it returns 0 (do not
- * block) when a waker is already signaled, else marks the scheduler as
- * blocking so later wakes call asx_runtime_reactor_notify(). Call finish
- * after the wait returns. */
-int asx_waker_prepare_block_internal(void);
-void asx_waker_finish_block_internal(void);
+/* Scheduler block handshake with cross-thread wakers (waker.c), on kernel
+ * `k`'s arena. Call prepare right before a blocking reactor wait: it
+ * returns 0 (do not block) when a waker is already signaled, else marks
+ * the scheduler as blocking so later wakes call
+ * asx_runtime_reactor_notify(). Call finish after the wait returns. The
+ * drain is asx_waker_drain_signaled for a kernel at hand; the reset
+ * invalidates every waker of the kernel (a clear). */
+int asx_waker_prepare_block_internal(asx_kernel *k);
+void asx_waker_finish_block_internal(asx_kernel *k);
+uint32_t asx_waker_drain_signaled_internal(asx_kernel *k, asx_task_id *out_tasks,
+                                           uint32_t max_tasks);
+void asx_waker_reset_internal(asx_kernel *k);
 
 /* Reset private hook installation state during runtime teardown. */
 void asx_runtime_hooks_reset_internal(void);

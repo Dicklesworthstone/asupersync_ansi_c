@@ -232,7 +232,6 @@ int asx_runtime_shared_state_refused_internal(const char *subsystem) {
 
 static int runtime_p_timers(void) { return asx_timer_active_count(asx_timer_wheel_global()) != 0u; }
 static int runtime_p_wait_queues(void) { return asx_wait_nodes_in_use() != 0u; }
-static int runtime_p_wakers(void) { return asx_waker_active_count() != 0u; }
 static int runtime_p_links(void) { return asx_link_count() != 0u; }
 static int runtime_p_monitors(void) { return asx_monitor_count() != 0u; }
 static int runtime_p_lab_dispatch(void) { return asx_lab_dispatch_active() != 0; }
@@ -279,7 +278,6 @@ typedef struct {
 static const runtime_shared_subsystem g_shared_subsystems[] = {
     {"application timers", runtime_p_timers},
     {"wait queues", runtime_p_wait_queues},
-    {"wakers", runtime_p_wakers},
     {"semaphores", asx_semaphore_in_use_internal},
     {"rwlocks", asx_rwlock_in_use_internal},
     {"barriers", asx_barrier_in_use_internal},

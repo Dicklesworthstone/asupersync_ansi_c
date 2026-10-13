@@ -842,7 +842,7 @@ static asx_status sched_transition(asx_task_slot *t, asx_task_id tid, asx_task_s
  * ------------------------------------------------------------------- */
 
 /* Wake every task whose waker was signaled. Returns the count woken. */
-static uint32_t sched_drain_wakers(void) {
+static uint32_t sched_drain_wakers(asx_kernel *k) {
     asx_task_id woken[16];
     uint32_t total = 0;
     uint32_t n;
@@ -850,7 +850,7 @@ static uint32_t sched_drain_wakers(void) {
     do {
         uint32_t i;
         ASX_CHECKPOINT_WAIVER("bounded: each pass clears up to 16 signaled wakers");
-        n = asx_waker_drain_signaled(woken, 16u);
+        n = asx_waker_drain_signaled_internal(k, woken, 16u);
         for (i = 0; i < n; i++) {
             ASX_CHECKPOINT_WAIVER("bounded: n <= 16");
             if (asx_task_wake(woken[i]) == ASX_OK) total++;
@@ -914,13 +914,13 @@ static void sched_poll_io_nonblocking(void) {
 /* Block for up to timeout_ms waiting for I/O, a cross-thread wake
  * (blocking-pool completion), or just time to pass. Returns at once when
  * a waker is already signaled. */
-static void sched_block(uint32_t timeout_ms) {
-    if (!asx_waker_prepare_block_internal()) return;
+static void sched_block(asx_kernel *k, uint32_t timeout_ms) {
+    if (!asx_waker_prepare_block_internal(k)) return;
 #if ASX_HAS_NATIVE_IO_DRIVER
     if (sched_io_pending()) {
         asx_io_event events[8];
         (void)asx_io_driver_poll(events, 8u, timeout_ms);
-        asx_waker_finish_block_internal();
+        asx_waker_finish_block_internal(k);
         return;
     }
 #endif
@@ -928,7 +928,7 @@ static void sched_block(uint32_t timeout_ms) {
         uint32_t ready = 0;
         (void)asx_runtime_reactor_wait(timeout_ms, &ready, 0u);
     }
-    asx_waker_finish_block_internal();
+    asx_waker_finish_block_internal(k);
 }
 
 /* A live, unparked task in scope: a round has work. Rust's lab steps, and
@@ -977,7 +977,7 @@ static asx_status sched_idle(asx_kernel *k, asx_time *last_idle_now, uint32_t *s
     asx_time now;
 
     if (sched_unpark_cancelled(k, 0) > 0u) return ASX_OK;
-    if (sched_drain_wakers() > 0u) return ASX_OK;
+    if (sched_drain_wakers(k) > 0u) return ASX_OK;
 
     /* Run-until-idle: nothing is runnable, so the run ends, due timers
      * unfired: the lab processes timers only within a step, and steps only
@@ -1001,8 +1001,8 @@ static asx_status sched_idle(asx_kernel *k, asx_time *last_idle_now, uint32_t *s
         }
         if (timers_fire(k, now) > 0u) return ASX_OK;
         if (now < target) {
-            sched_block(sched_ms_until(target, now, ASX_SCHED_MAX_IDLE_WAIT_MS));
-            (void)sched_drain_wakers();
+            sched_block(k, sched_ms_until(target, now, ASX_SCHED_MAX_IDLE_WAIT_MS));
+            (void)sched_drain_wakers(k);
             now = sched_now(k);
             (void)timers_fire(k, now);
         }
@@ -1010,8 +1010,8 @@ static asx_status sched_idle(asx_kernel *k, asx_time *last_idle_now, uint32_t *s
     } else if (sched_external_pending()) {
         now = sched_now(k);
         if (run_deadline != ASX_TIME_INFINITE && now >= run_deadline) return ASX_OK;
-        sched_block(sched_ms_until(run_deadline, now, ASX_SCHED_MAX_IDLE_WAIT_MS));
-        (void)sched_drain_wakers();
+        sched_block(k, sched_ms_until(run_deadline, now, ASX_SCHED_MAX_IDLE_WAIT_MS));
+        (void)sched_drain_wakers(k);
         now = sched_now(k);
     } else if (asx_cleanup_hard_bound_internal(k) && sched_unpark_cancelled(k, 1) > 0u) {
         return ASX_OK;
@@ -1262,7 +1262,7 @@ static asx_status sched_lab_step(asx_kernel *k, uint32_t step, int *out_dispatch
     if (asx_lab_handle_cancels_pending() || asx_lab_deferred_cancels_pending()) return ASX_OK;
     r = asx_lab_step_draw_internal();
     if (sched_timers_pending(k)) (void)timers_fire(k, sched_now(k));
-    (void)sched_drain_wakers();
+    (void)sched_drain_wakers(k);
     (void)asx_region_admit_finalizers_internal(k); /* schedule_async_finalizers, LR:4513 */
     if (asx_lab_dispatch_overflowed()) return ASX_E_RESOURCE_EXHAUSTED;
     if (asx_lab_forced_active()) {
@@ -1585,7 +1585,7 @@ static asx_status sched_run(asx_region_id region, asx_budget *budget, int advanc
 
         sched_compute_scope(region);
         sched_poll_io_nonblocking();
-        (void)sched_drain_wakers();
+        (void)sched_drain_wakers(k);
         /* Due timers and budget deadlines fire at the start of a round, before any
          * task polls, as in a lab step; run-until-idle fires none with nothing runnable. */
         if (advance_clock || sched_any_runnable(k)) {
