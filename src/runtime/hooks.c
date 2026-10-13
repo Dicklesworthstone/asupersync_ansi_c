@@ -253,6 +253,32 @@ static asx_time default_wall_clock(void *ctx) {
     return g_kernels[0]->virtual_now;
 }
 
+/* The clock hooks the native boundary journal wraps, and the hooks under its
+ * wrappers: a journaled run of the default clock is still a virtual one, so
+ * asx_runtime_clock_is_virtual() looks through them. Reads themselves keep
+ * going through the wrapper, which is what records them. */
+static asx_clock_now_ns_fn g_wrapper_now;
+static asx_clock_now_ns_fn g_wrapped_now;
+static asx_clock_now_ns_fn g_wrapper_logical;
+static asx_clock_now_ns_fn g_wrapped_logical;
+
+void asx_runtime_note_clock_wrappers_internal(asx_clock_now_ns_fn wrapper_now,
+                                              asx_clock_now_ns_fn wrapped_now,
+                                              asx_clock_now_ns_fn wrapper_logical,
+                                              asx_clock_now_ns_fn wrapped_logical) {
+    g_wrapper_now = wrapper_now;
+    g_wrapped_now = wrapped_now;
+    g_wrapper_logical = wrapper_logical;
+    g_wrapped_logical = wrapped_logical;
+}
+
+/* The hook under `fn` when `fn` is a journal wrapper, else `fn`. */
+static asx_clock_now_ns_fn clock_hook_under(asx_clock_now_ns_fn fn) {
+    if (fn != NULL && fn == g_wrapper_now) return g_wrapped_now;
+    if (fn != NULL && fn == g_wrapper_logical) return g_wrapped_logical;
+    return fn;
+}
+
 asx_time asx_kernel_virtual_now(const asx_kernel *k) { return k->virtual_now; }
 
 void asx_kernel_virtual_advance(asx_kernel *k, asx_time to) {
@@ -622,10 +648,12 @@ int asx_runtime_clock_is_virtual(void) {
     if (!g_hooks_installed) return 1;
 #if ASX_DETERMINISTIC
     if (g_hooks.clock.logical_now_ns_fn) {
-        return g_hooks.clock.logical_now_ns_fn == default_logical_clock;
+        return clock_hook_under(g_hooks.clock.logical_now_ns_fn) == default_logical_clock;
     }
 #endif
-    if (g_hooks.clock.now_ns_fn) return g_hooks.clock.now_ns_fn == default_wall_clock;
+    if (g_hooks.clock.now_ns_fn) {
+        return clock_hook_under(g_hooks.clock.now_ns_fn) == default_wall_clock;
+    }
     return 1;
 }
 

@@ -1006,6 +1006,13 @@ void asx_waker_finish_block_internal(void);
 
 /* Reset private hook installation state during runtime teardown. */
 void asx_runtime_hooks_reset_internal(void);
+/* The native boundary journal names the wrappers it put over the clock hooks
+ * and the hooks they forward to, so asx_runtime_clock_is_virtual() sees a
+ * default clock under a wrapper (journal.c, asx_journal_wrap_hooks). */
+void asx_runtime_note_clock_wrappers_internal(asx_clock_now_ns_fn wrapper_now,
+                                              asx_clock_now_ns_fn wrapped_now,
+                                              asx_clock_now_ns_fn wrapper_logical,
+                                              asx_clock_now_ns_fn wrapped_logical);
 /* Invalidate the bootstrap token of the runtime that holds `k` during
  * explicit raw reset; the process-wide io backend choice goes with the last
  * held kernel. */

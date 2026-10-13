@@ -18,6 +18,7 @@
 #include <asx/runtime/journal.h>
 #include <asx/runtime/trace.h>
 #undef ASX_INTERNAL_TRACE_FAMILY_ACCESS
+#include "runtime_internal.h"
 #include <string.h>
 
 /* ------------------------------------------------------------------ */
@@ -1080,5 +1081,8 @@ asx_status asx_journal_wrap_hooks(asx_journal *j, asx_runtime_hooks *hooks) {
         g_orig.poll = hooks->reactor.poll_fn;
         hooks->reactor.poll_fn = wrap_reactor_poll;
     }
+    /* A default clock under the wrappers is still a virtual one. */
+    asx_runtime_note_clock_wrappers_internal(wrap_clock_now, g_orig.now, wrap_clock_logical,
+                                             g_orig.logical);
     return ASX_OK;
 }

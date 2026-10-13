@@ -26,6 +26,8 @@
 #endif
 #include <asx/runtime/journal.h>
 #include <asx/runtime/trace.h>
+#include <asx/runtime/virtual_time.h>
+#include <asx/time/sleep.h>
 #include <string.h>
 
 /* ------------------------------------------------------------------ */
@@ -741,6 +743,82 @@ TEST(wrapped_hooks_forward_unchanged_and_record_raw_results) {
     ASSERT_EQ(asx_journal_get_u32(rec.payload + 20), (uint32_t)ASX_REACTOR_READABLE);
     ASSERT_EQ(asx_journal_get_u64(rec.payload + 24), (uint64_t)1u);
     ASSERT_EQ(asx_journal_get_u32(rec.payload + 32), (uint32_t)ASX_REACTOR_ERROR);
+}
+
+/* The journal wraps the clock hooks; a wrapper over the default (virtual)
+ * clock is still a virtual clock, so the scheduler moves it to the next timer
+ * (bd-lnrc: it did not, and a sleeping task of a journaled run never woke). A
+ * wrapper over any other clock is not one. */
+typedef struct {
+    asx_sleep_state s;
+    asx_status result;
+} journaled_sleeper;
+
+static asx_status poll_journaled_sleeper(void *user_data, asx_task_id self) {
+    journaled_sleeper *t = (journaled_sleeper *)user_data;
+    t->result = asx_sleep_poll(&t->s, self);
+    return t->result == ASX_E_PENDING ? ASX_E_PENDING : ASX_OK;
+}
+
+TEST(a_journal_over_the_default_clock_keeps_it_virtual_and_a_sleep_completes) {
+    asx_runtime rt;
+    asx_runtime_hooks hooks;
+    asx_runtime_config cfg;
+    asx_journal j;
+    asx_journal_record rec;
+    asx_region_id r;
+    asx_task_id id;
+    asx_budget budget;
+    journaled_sleeper t;
+
+    sink_reset();
+    memset(&rt, 0, sizeof(rt));
+    asx_runtime_shutdown(&rt);
+    ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
+    ASSERT_EQ(asx_runtime_config_init(&cfg), ASX_OK);
+    ASSERT_EQ(open_journal(&j, 4096u, 0u, 0u), ASX_OK);
+    ASSERT_EQ(asx_journal_wrap_hooks(&j, &hooks), ASX_OK);
+    ASSERT_EQ(asx_runtime_init(&rt, &cfg, &hooks), ASX_OK);
+    ASSERT_TRUE(asx_runtime_clock_is_virtual());
+
+    memset(&t, 0, sizeof(t));
+    ASSERT_EQ(asx_sleep_init(&t.s, 5000000ULL), ASX_OK);
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(r, poll_journaled_sleeper, &t, &id), ASX_OK);
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
+    ASSERT_EQ(t.result, ASX_OK);
+    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)5000000u);
+
+    asx_runtime_shutdown(&rt);
+    asx_journal_uninstall();
+    ASSERT_EQ(asx_journal_finish(&j), ASX_OK);
+    /* The reads still went through the wrapper: they are in the stream. */
+    ASSERT_TRUE(find_record(g_out, g_out_len, ASX_JOURNAL_KIND_CLOCK, 0u, &rec));
+}
+
+TEST(a_journal_over_a_custom_clock_is_not_a_virtual_clock) {
+    asx_runtime rt;
+    asx_runtime_hooks hooks;
+    asx_runtime_config cfg;
+    asx_journal j;
+
+    sink_reset();
+    memset(&rt, 0, sizeof(rt));
+    asx_runtime_shutdown(&rt);
+    g_fake_clock = 0u;
+    ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
+    hooks.clock.now_ns_fn = fake_now;
+    hooks.clock.logical_now_ns_fn = fake_now;
+    ASSERT_EQ(asx_runtime_config_init(&cfg), ASX_OK);
+    ASSERT_EQ(open_journal(&j, 4096u, 0u, 0u), ASX_OK);
+    ASSERT_EQ(asx_journal_wrap_hooks(&j, &hooks), ASX_OK);
+    ASSERT_EQ(asx_runtime_init(&rt, &cfg, &hooks), ASX_OK);
+    ASSERT_FALSE(asx_runtime_clock_is_virtual());
+
+    asx_runtime_shutdown(&rt);
+    asx_journal_uninstall();
+    ASSERT_EQ(asx_journal_finish(&j), ASX_OK);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1575,6 +1653,8 @@ int main(void) {
     RUN_TEST(only_one_journal_is_active_at_a_time);
     RUN_TEST(the_ring_sink_keeps_the_most_recent_bytes);
     RUN_TEST(wrapped_hooks_forward_unchanged_and_record_raw_results);
+    RUN_TEST(a_journal_over_the_default_clock_keeps_it_virtual_and_a_sleep_completes);
+    RUN_TEST(a_journal_over_a_custom_clock_is_not_a_virtual_clock);
     RUN_TEST(a_poll_larger_than_the_buffer_is_stored_truncated_and_flagged);
     RUN_TEST(commit_points_hand_the_prefix_to_the_sink_before_commit_fn_runs);
     RUN_TEST(a_buffered_journal_never_calls_commit_fn);
