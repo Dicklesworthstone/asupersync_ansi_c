@@ -168,10 +168,12 @@ library's own is refused before anything is bound or reset, and a refused init
 never rebinds a live runtime. With `ASX_MAX_RUNTIMES` above 1 a second runtime
 with its own storage block is admitted, and its handles carry its tag, so the
 first runtime's lookups answer `ASX_E_NOT_FOUND` for them. The virtual clock,
-entropy stream, scheduler, timer wheel and trace are the runtime's own. Hooks,
-the io backend and the cancel chain limits are process-wide and must equal the
-live runtime's; channels, synchronization tables, actors, links, monitors, the
-lab and parallel modes and the native adapters still are too, so a second init
+entropy stream, scheduler, timer wheel, trace, wakers, synchronization
+primitives and the mpsc, oneshot and watch channels are the runtime's own.
+Hooks, the io backend and the cancel chain limits are process-wide and must
+equal the live runtime's; broadcast and session channels, actors,
+supervisors, links, monitors, the lab and parallel modes and the native
+adapters still are too, so a second init
 while one holds state, and the acquisition of such state while two runtimes are
 live, answer `ASX_E_INVALID_STATE` with `asx_runtime_last_refusal_reason()`
 naming the subsystem. Threading them is the remaining work of `bd-9kll.3.20`.
