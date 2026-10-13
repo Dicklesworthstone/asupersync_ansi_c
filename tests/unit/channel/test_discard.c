@@ -12,6 +12,7 @@
  */
 
 #include "../../test_harness.h"
+#include "../../test_runtime.h"
 #include <asx/asx.h>
 #include <asx/core/broadcast.h>
 #include <asx/core/channel.h>
@@ -54,13 +55,13 @@ static void rec_fn(void *ctx, uint64_t value) {
 static asx_region_id g_rid;
 
 static void setup(void) {
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_channel_reset();
     asx_oneshot_reset();
     asx_broadcast_reset();
     asx_watch_reset();
     rec_reset();
-    MUST_OK(asx_region_open(&g_rid));
+    MUST_OK(asx_region_open(test_runtime(), &g_rid));
 }
 
 static asx_channel_id make_channel(uint32_t capacity) {

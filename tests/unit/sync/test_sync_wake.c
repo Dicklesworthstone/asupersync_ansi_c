@@ -42,7 +42,7 @@ static int setup_with_leak_response(asx_leak_response leak_response) {
     cfg.leak_response = leak_response;
     st = asx_runtime_hooks_init(&hooks);
     if (st == ASX_OK) st = asx_runtime_init(&g_rt, &cfg, &hooks);
-    if (st == ASX_OK) st = asx_region_open(&g_region);
+    if (st == ASX_OK) st = asx_region_open(&g_rt, &g_region);
     return st == ASX_OK;
 }
 

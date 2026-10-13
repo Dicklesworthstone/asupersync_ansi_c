@@ -17,6 +17,7 @@
 
 #if defined(ASX_PROFILE_POSIX)
 
+#include "../../test_runtime.h"
 #include <asx/platform/posix.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -261,7 +262,7 @@ TEST(posix_runtime_security_draw_comes_from_os_source) {
     int differs = 0;
     unsigned int i;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(install_posix_hooks(&hooks), ASX_OK);
     ASSERT_EQ(asx_runtime_set_hooks(&hooks), ASX_OK);
 
@@ -277,7 +278,7 @@ TEST(posix_runtime_security_draw_comes_from_os_source) {
 
     /* Reset must restore the pristine table: a second runtime in the same
      * process does not inherit this one's source. */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_runtime_random_secure_u64(&next), ASX_E_HOOK_MISSING);
 }
 

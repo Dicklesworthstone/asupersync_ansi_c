@@ -24,7 +24,7 @@ TEST(open_and_exchange_roundtrip) {
     uint64_t value;
 
     setup();
-    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &region), ASX_OK);
     ASSERT_EQ(asx_session_link_open(region, 4u, &link), ASX_OK);
     ASSERT_EQ(asx_session_link_send_request(&link, 11u), ASX_OK);
     ASSERT_EQ(asx_session_link_recv_request(&link, &value), ASX_OK);
@@ -43,7 +43,7 @@ TEST(summary_tracks_counts_and_obligations) {
     uint64_t value;
 
     setup();
-    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &region), ASX_OK);
     ASSERT_EQ(asx_session_link_open(region, 4u, &link), ASX_OK);
     ASSERT_EQ(asx_session_link_send_request(&link, 7u), ASX_OK);
     ASSERT_EQ(asx_session_link_capture_summary(&link, &summary), ASX_OK);
@@ -69,7 +69,7 @@ TEST(close_transitions_state) {
     asx_session_link_summary summary;
 
     setup();
-    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &region), ASX_OK);
     ASSERT_EQ(asx_session_link_open(region, 4u, &link), ASX_OK);
     ASSERT_EQ(asx_session_link_capture_summary(&link, &summary), ASX_OK);
     ASSERT_EQ(summary.state, ASX_SESSION_OPEN);

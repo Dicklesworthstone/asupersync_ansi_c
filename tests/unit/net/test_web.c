@@ -6,6 +6,7 @@
  */
 
 #include "../../test_harness.h"
+#include "../../test_runtime.h"
 #include <asx/asx_config.h>
 #include <asx/net/web.h>
 #include <asx/runtime/runtime.h>
@@ -30,7 +31,7 @@ static uint64_t web_test_entropy(void *ctx) {
 
 static void install_seeded_entropy(uint64_t seed) {
     asx_runtime_hooks hooks;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     (void)asx_runtime_hooks_init(&hooks);
     hooks.entropy.random_u64_fn = web_test_entropy;
     hooks.deterministic_seeded_prng = 1u;
@@ -295,7 +296,7 @@ TEST(session_create_fails_closed_without_entropy) {
     char id[ASX_WEB_SESSION_ID_LEN + 1];
     uint32_t i;
 
-    asx_runtime_reset(); /* no hooks installed */
+    asx_runtime_reset(test_runtime()); /* no hooks installed */
     asx_web_session_store_init(&store);
     ASSERT_EQ(asx_web_session_create(&store, id, sizeof(id)), ASX_E_HOOK_MISSING);
     for (i = 0u; i < ASX_WEB_MAX_SESSIONS; i++) ASSERT_FALSE(store.sessions[i].active);
@@ -565,7 +566,7 @@ TEST(csrf_reject_bad_token) {
 
 TEST(csrf_init_fails_closed_without_entropy) {
     asx_web_csrf csrf;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_web_csrf_init(&csrf), ASX_E_HOOK_MISSING);
     ASSERT_STR_EQ(asx_web_csrf_token(&csrf), "");
     ASSERT_FALSE(asx_web_csrf_validate(&csrf, ""));
@@ -598,7 +599,7 @@ TEST(session_and_csrf_report_os_entropy_failure) {
     asx_web_csrf csrf;
     char id[ASX_WEB_SESSION_ID_LEN + 1];
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
     hooks.entropy.try_u64_fn = web_failing_try_entropy;
     ASSERT_EQ(asx_runtime_set_hooks(&hooks), ASX_OK);
@@ -627,7 +628,7 @@ TEST(session_and_csrf_refuse_builtin_seeded_prng_in_live_builds) {
 
     /* The default hook table, as a live profile with no platform source
      * holds it: session IDs and CSRF tokens would be recomputable. */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
     ASSERT_EQ(asx_runtime_set_hooks(&hooks), ASX_OK);
 

@@ -166,7 +166,7 @@ TEST(sh_output_and_exit_code_with_parked_task) {
     asx_budget budget;
 
     ASSERT_TRUE(setup());
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn_captured(r, capture_poll, (uint32_t)sizeof(capture_state), NULL, &t,
                                       (void **)&c),
               ASX_OK);
@@ -262,7 +262,7 @@ TEST(stdin_piped_to_cat_round_trips) {
     uint32_t n = 0;
 
     ASSERT_TRUE(setup());
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn_captured(r, cat_poll, (uint32_t)sizeof(cat_state), NULL, &t,
                                       (void **)&c),
               ASX_OK);
@@ -331,7 +331,7 @@ TEST(kill_sleep_reports_signal_termination) {
     asx_time end = 0;
 
     ASSERT_TRUE(setup());
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn_captured(r, waiter_poll, (uint32_t)sizeof(waiter_state), NULL, &t,
                                       (void **)&w),
               ASX_OK);

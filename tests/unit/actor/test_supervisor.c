@@ -9,6 +9,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../../test_runtime.h"
 #include <asx/actor/supervisor.h>
 #include <asx/core/budget.h>
 #include <asx/core/cancel.h>
@@ -214,10 +215,10 @@ static asx_region_id g_root;
 static asx_region_id g_owner_region;
 
 static void setup(void) {
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     g_n_bodies = 0;
     g_order = 0;
-    MUST_OK(asx_region_open(&g_root));
+    MUST_OK(asx_region_open(test_runtime(), &g_root));
     MUST_OK(asx_region_open_child(g_root, &g_owner_region));
 }
 

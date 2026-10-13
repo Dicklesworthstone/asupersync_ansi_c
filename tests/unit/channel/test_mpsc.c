@@ -9,6 +9,7 @@
  */
 
 #include "test_harness.h"
+#include "test_runtime.h"
 #include <asx/asx.h>
 #include <asx/core/channel.h>
 #include <asx/platform/atomics.h>
@@ -40,9 +41,9 @@
 static asx_region_id g_rid;
 
 static void setup(void) {
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_channel_reset();
-    CH_IGNORE(asx_region_open(&g_rid));
+    CH_IGNORE(asx_region_open(test_runtime(), &g_rid));
 }
 
 /* -------------------------------------------------------------------
@@ -101,7 +102,7 @@ TEST(create_rejects_closed_region) {
     asx_budget budget;
     setup();
 
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     budget = asx_budget_infinite();
     ASSERT_EQ(asx_region_drain(rid, &budget), ASX_OK);
     ASSERT_EQ(asx_channel_create(rid, 4, &ch), ASX_E_INVALID_STATE);
@@ -1506,7 +1507,7 @@ TEST(create_accepts_a_closing_region) {
     asx_channel_id ch;
     asx_cancel_reason reason;
     setup();
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_idle, NULL, &t), ASX_OK);
     reason = asx_cancel_reason_default(ASX_CANCEL_USER, NULL);
     ASSERT_EQ(asx_region_cancel(r, &reason, NULL), ASX_OK);

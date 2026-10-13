@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../../test_runtime.h"
 #include <asx/app/doctor.h>
 #include <asx/console/console.h>
 #include <asx/runtime/runtime.h>
@@ -31,7 +32,7 @@ static asx_status st_sink_;
 #define RUN(fn)                                                                                    \
     do {                                                                                           \
         printf("  " #fn "...\n");                                                                  \
-        asx_runtime_reset();                                                                       \
+        asx_runtime_reset(test_runtime());                                                         \
         fn();                                                                                      \
         g_pass++;                                                                                  \
     } while (0)

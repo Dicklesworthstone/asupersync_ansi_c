@@ -17,6 +17,7 @@
 #include <string.h>
 
 #include "../../../src/runtime/runtime_internal.h"
+#include "../../test_runtime.h"
 
 static int g_pass, g_fail;
 static asx_status st_sink_;
@@ -49,10 +50,10 @@ static asx_region_id g_root;
 static asx_region_id g_idle;
 
 static void setup(void) {
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_monitor_reset();
-    MUST_OK(asx_region_open(&g_root));
-    MUST_OK(asx_region_open(&g_idle));
+    MUST_OK(asx_region_open(test_runtime(), &g_root));
+    MUST_OK(asx_region_open(test_runtime(), &g_idle));
 }
 
 static void run(asx_region_id region) {
@@ -585,7 +586,7 @@ static void test_a_runtime_reset_forgets_monitors(void) {
     watcher = spawn_task();
     target = spawn_task();
     MUST_OK(asx_monitor_establish(watcher, target, &ref));
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT(asx_monitor_count() == 0u, "the runtime reset reaches the monitors");
 }
 

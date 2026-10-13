@@ -10,6 +10,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../../test_runtime.h"
 #include <asx/actor/actor.h>
 #include <asx/core/budget.h>
 #include <asx/core/cancel.h>
@@ -57,8 +58,8 @@ static asx_region_id g_root;
 
 /* A fresh runtime with one root region. */
 static void setup(void) {
-    asx_runtime_reset();
-    MUST_OK(asx_region_open(&g_root));
+    asx_runtime_reset(test_runtime());
+    MUST_OK(asx_region_open(test_runtime(), &g_root));
 }
 
 static asx_region_id child_region(void) {
@@ -341,7 +342,7 @@ static void test_refused_server_reply_does_not_repoll_following_sleep(void) {
     asx_lab_config_init(&config);
     config.seed = 502117u;
     ASSERT(asx_lab_init(&g_refused_lab, &config) == ASX_OK, "real virtual-clock runtime");
-    ASSERT(asx_region_open(&g_root) == ASX_OK, "root in the initialized lab");
+    ASSERT(asx_region_open(&g_refused_lab.rt, &g_root) == ASX_OK, "root in the initialized lab");
     region = child_region();
     /* asx_lab_init seeded the dispatch with config.seed, the real witness
      * dispatch seed (bd-9kll.9.5); this test used to switch it on here. */
@@ -431,7 +432,7 @@ static void test_reseed_refuses_pending_actor_admission_then_cleanup_completes(v
     asx_lab_config_init(&config);
     config.seed = 42u;
     ASSERT(asx_lab_init(&g_refused_lab, &config) == ASX_OK, "real lab runtime");
-    ASSERT(asx_region_open(&g_root) == ASX_OK, "root after lab initialization");
+    ASSERT(asx_region_open(&g_refused_lab.rt, &g_root) == ASX_OK, "root after lab initialization");
     /* asx_lab_init already admitted the dispatch seed (bd-9kll.9.5); the
      * refused reseed below still has to find a captured cell pending. */
     memset(&c, 0, sizeof(c));

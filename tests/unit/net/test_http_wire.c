@@ -2007,6 +2007,8 @@ TEST(e2e_drain_deadline_closes_stuck_connections) {
 }
 
 #if ASX_DETERMINISTIC
+#include "../../test_runtime.h"
+
 static asx_status http_server_task(void *ud, asx_task_id self) {
     (void)ud;
     (void)self;
@@ -2026,7 +2028,7 @@ TEST(e2e_idle_timeout_wakes_the_server_task) {
     asx_time start;
 
     if (!server_available()) return;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     restore_default_clock();
     asx_http_server_config_init(&cfg, NULL);
     cfg.idle_timeout_ms = 5000u;
@@ -2035,7 +2037,7 @@ TEST(e2e_idle_timeout_wakes_the_server_task) {
     ASSERT_EQ(asx_tcp_connect(&stream, &addr), ASX_OK);
     start = asx_runtime_virtual_now();
 
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, http_server_task, NULL, &t), ASX_OK);
     b = asx_budget_from_polls(100);
     ASSERT_EQ(asx_scheduler_run(r, &b), ASX_E_WOULD_BLOCK);
@@ -2044,7 +2046,7 @@ TEST(e2e_idle_timeout_wakes_the_server_task) {
     ASSERT_TRUE(asx_runtime_virtual_now() >= start + (asx_time)5000u * 1000000u);
     ASSERT_TRUE(peer_closed(stream));
     (void)asx_tcp_stream_close(stream);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 }
 #endif
 

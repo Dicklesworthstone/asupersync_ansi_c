@@ -9,6 +9,7 @@
  */
 
 #include "../../test_harness.h"
+#include "../../test_runtime.h"
 #include <asx/net/net.h>
 #include <asx/runtime/runtime.h>
 #include <string.h>
@@ -321,7 +322,7 @@ TEST(tcp_memory_read_parks_until_data_or_eof) {
     uint32_t written;
     uint32_t polls;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_net_reset();
     if (asx_net_get_backend() != ASX_NET_BACKEND_MEMORY) return;
     ASSERT_EQ(asx_tcp_listener_bind(&lis, &addr), ASX_OK);
@@ -329,7 +330,7 @@ TEST(tcp_memory_read_parks_until_data_or_eof) {
     ASSERT_EQ(asx_tcp_listener_poll_accept(lis, &server, NULL), ASX_OK);
     memset(&rl, 0, sizeof(rl));
     rl.stream = server;
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, read_loop_poll, &rl, &t), ASX_OK);
 
     b = asx_budget_from_polls(1000000);

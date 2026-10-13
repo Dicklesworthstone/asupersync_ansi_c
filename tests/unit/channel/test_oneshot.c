@@ -5,6 +5,7 @@
  */
 
 #include "../../test_harness.h"
+#include "../../test_runtime.h"
 #include <asx/core/oneshot.h>
 #include <asx/runtime/runtime.h>
 #include <asx/runtime/trace.h>
@@ -243,9 +244,9 @@ static asx_status poll_idle(void *ud, asx_task_id self) {
 static asx_task_id cx_task(asx_cx *cx) {
     asx_region_id r = ASX_INVALID_ID;
     asx_task_id t = ASX_INVALID_ID;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     setup();
-    MUST_OK(asx_region_open(&r));
+    MUST_OK(asx_region_open(test_runtime(), &r));
     MUST_OK(asx_task_spawn(r, poll_idle, NULL, &t));
     MUST_OK(asx_cx_init(cx, r, t, ASX_CAP_NONE));
     return t;
@@ -309,9 +310,9 @@ TEST(tracked_permit_resolves_its_obligation) {
     tracked_permit_context ctx;
     asx_task_id holder;
     asx_budget budget = asx_budget_from_polls(8u);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     setup();
-    ASSERT_EQ(asx_region_open(&ctx.region), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &ctx.region), ASX_OK);
     ASSERT_EQ(asx_task_spawn(ctx.region, poll_tracked_permit_resolution, &ctx, &holder), ASX_OK);
     ASSERT_EQ(asx_scheduler_run(ctx.region, &budget), ASX_OK);
 }
@@ -473,12 +474,12 @@ static void run_tracked_oneshot_misuse(int abort_after_rejection, int settle_in_
     asx_task_id other;
     asx_budget budget = asx_budget_from_polls(8u);
     uint64_t value = 0u;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     setup();
     memset(&ctx, 0, sizeof(ctx));
     ctx.abort_after_rejection = abort_after_rejection;
     ctx.settle_in_other_task = settle_in_other_task;
-    ASSERT_EQ(asx_region_open(&ctx.region), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &ctx.region), ASX_OK);
     ASSERT_EQ(asx_oneshot_create(&ctx.sender, &ctx.receiver), ASX_OK);
     ASSERT_EQ(asx_task_spawn(ctx.region, poll_tracked_oneshot_holder, &ctx, &ctx.holder), ASX_OK);
     ASSERT_EQ(asx_task_spawn(ctx.region, poll_wrong_task_oneshot_attempts, &ctx, &other), ASX_OK);
@@ -617,10 +618,10 @@ TEST(closed_waiters_wake_as_rust_wakers_do) {
     asx_budget budget;
     uint64_t val = 0;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     setup();
     memset(w, 0, sizeof(w));
-    MUST_OK(asx_region_open(&r));
+    MUST_OK(asx_region_open(test_runtime(), &r));
     MUST_OK(asx_oneshot_create(&tx_a, &rx_a));
     MUST_OK(asx_oneshot_create(&tx_b, &rx_b));
     w[0].tx = tx_a;
@@ -663,10 +664,10 @@ TEST(receiver_closed_waiter_wakes_on_sender_drop_and_abort) {
     asx_task_id t;
     asx_budget budget;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     setup();
     memset(w, 0, sizeof(w));
-    MUST_OK(asx_region_open(&r));
+    MUST_OK(asx_region_open(test_runtime(), &r));
     MUST_OK(asx_oneshot_create(&tx_a, &rx_a));
     MUST_OK(asx_oneshot_create(&tx_b, &rx_b));
     w[0].rx = rx_a;

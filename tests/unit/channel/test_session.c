@@ -33,7 +33,7 @@ TEST(create_null_initiator_fails) {
     asx_session_endpoint resp;
     asx_region_id rid;
     setup();
-    MUST_OK(asx_region_open(&rid));
+    MUST_OK(asx_region_open(&g_rt, &rid));
     ASSERT_EQ(asx_session_create(rid, 4, NULL, &resp), ASX_E_INVALID_ARGUMENT);
     teardown();
 }
@@ -42,7 +42,7 @@ TEST(create_null_responder_fails) {
     asx_session_endpoint init;
     asx_region_id rid;
     setup();
-    MUST_OK(asx_region_open(&rid));
+    MUST_OK(asx_region_open(&g_rt, &rid));
     ASSERT_EQ(asx_session_create(rid, 4, &init, NULL), ASX_E_INVALID_ARGUMENT);
     teardown();
 }
@@ -51,7 +51,7 @@ TEST(create_zero_capacity_fails) {
     asx_session_endpoint init, resp;
     asx_region_id rid;
     setup();
-    MUST_OK(asx_region_open(&rid));
+    MUST_OK(asx_region_open(&g_rt, &rid));
     ASSERT_EQ(asx_session_create(rid, 0, &init, &resp), ASX_E_INVALID_ARGUMENT);
     teardown();
 }
@@ -67,7 +67,7 @@ TEST(create_closed_region_fails) {
     asx_session_endpoint init, resp;
     asx_region_id rid;
     setup();
-    MUST_OK(asx_region_open(&rid));
+    MUST_OK(asx_region_open(&g_rt, &rid));
     MUST_OK(asx_region_close(rid));
     ASSERT_EQ(asx_session_create(rid, 4, &init, &resp), ASX_E_INVALID_STATE);
     teardown();
@@ -77,7 +77,7 @@ TEST(create_success) {
     asx_session_endpoint init, resp;
     asx_region_id rid;
     setup();
-    MUST_OK(asx_region_open(&rid));
+    MUST_OK(asx_region_open(&g_rt, &rid));
     ASSERT_EQ(asx_session_create(rid, 4, &init, &resp), ASX_OK);
     ASSERT_EQ(init.slot, resp.slot);
     ASSERT_TRUE(init.is_initiator);
@@ -95,7 +95,7 @@ TEST(initiator_sends_responder_receives) {
     asx_region_id rid;
     uint64_t val;
     setup();
-    MUST_OK(asx_region_open(&rid));
+    MUST_OK(asx_region_open(&g_rt, &rid));
     MUST_OK(asx_session_create(rid, 4, &init, &resp));
     MUST_OK(asx_session_send(&init, 100));
     ASSERT_EQ(asx_session_try_recv(&resp, &val), ASX_OK);
@@ -108,7 +108,7 @@ TEST(responder_sends_initiator_receives) {
     asx_region_id rid;
     uint64_t val;
     setup();
-    MUST_OK(asx_region_open(&rid));
+    MUST_OK(asx_region_open(&g_rt, &rid));
     MUST_OK(asx_session_create(rid, 4, &init, &resp));
     MUST_OK(asx_session_send(&resp, 200));
     ASSERT_EQ(asx_session_try_recv(&init, &val), ASX_OK);
@@ -121,7 +121,7 @@ TEST(bidirectional_exchange) {
     asx_region_id rid;
     uint64_t val;
     setup();
-    MUST_OK(asx_region_open(&rid));
+    MUST_OK(asx_region_open(&g_rt, &rid));
     MUST_OK(asx_session_create(rid, 4, &init, &resp));
     /* Initiator sends request */
     MUST_OK(asx_session_send(&init, 10));
@@ -144,7 +144,7 @@ TEST(obligations_increment_on_initiator_send) {
     asx_session_endpoint init, resp;
     asx_region_id rid;
     setup();
-    MUST_OK(asx_region_open(&rid));
+    MUST_OK(asx_region_open(&g_rt, &rid));
     MUST_OK(asx_session_create(rid, 4, &init, &resp));
     ASSERT_EQ(asx_session_obligations(init.slot, init.generation), 0u);
     MUST_OK(asx_session_send(&init, 1));
@@ -159,7 +159,7 @@ TEST(obligations_stay_outstanding_until_response) {
     asx_region_id rid;
     uint64_t val;
     setup();
-    MUST_OK(asx_region_open(&rid));
+    MUST_OK(asx_region_open(&g_rt, &rid));
     MUST_OK(asx_session_create(rid, 4, &init, &resp));
     MUST_OK(asx_session_send(&init, 1));
     MUST_OK(asx_session_send(&init, 2));
@@ -176,7 +176,7 @@ TEST(obligations_decrement_on_initiator_response_recv) {
     asx_region_id rid;
     uint64_t val;
     setup();
-    MUST_OK(asx_region_open(&rid));
+    MUST_OK(asx_region_open(&g_rt, &rid));
     MUST_OK(asx_session_create(rid, 4, &init, &resp));
     MUST_OK(asx_session_send(&init, 50));
     MUST_OK(asx_session_try_recv(&resp, &val));
@@ -195,7 +195,7 @@ TEST(initiator_drop_half_closes) {
     asx_session_endpoint init, resp;
     asx_region_id rid;
     setup();
-    MUST_OK(asx_region_open(&rid));
+    MUST_OK(asx_region_open(&g_rt, &rid));
     MUST_OK(asx_session_create(rid, 4, &init, &resp));
     asx_session_endpoint_drop(&init);
     ASSERT_EQ(asx_session_get_state(resp.slot, resp.generation), ASX_SESSION_HALF_CLOSED);
@@ -206,7 +206,7 @@ TEST(both_drop_closes) {
     asx_session_endpoint init, resp;
     asx_region_id rid;
     setup();
-    MUST_OK(asx_region_open(&rid));
+    MUST_OK(asx_region_open(&g_rt, &rid));
     MUST_OK(asx_session_create(rid, 4, &init, &resp));
     asx_session_endpoint_drop(&init);
     asx_session_endpoint_drop(&resp);
@@ -218,7 +218,7 @@ TEST(send_to_dropped_peer_disconnected) {
     asx_session_endpoint init, resp;
     asx_region_id rid;
     setup();
-    MUST_OK(asx_region_open(&rid));
+    MUST_OK(asx_region_open(&g_rt, &rid));
     MUST_OK(asx_session_create(rid, 4, &init, &resp));
     asx_session_endpoint_drop(&resp);
     ASSERT_EQ(asx_session_send(&init, 1), ASX_E_DISCONNECTED);
@@ -230,7 +230,7 @@ TEST(recv_from_dropped_peer_empty_disconnected) {
     asx_region_id rid;
     uint64_t val;
     setup();
-    MUST_OK(asx_region_open(&rid));
+    MUST_OK(asx_region_open(&g_rt, &rid));
     MUST_OK(asx_session_create(rid, 4, &init, &resp));
     asx_session_endpoint_drop(&init);
     ASSERT_EQ(asx_session_try_recv(&resp, &val), ASX_E_DISCONNECTED);
@@ -242,7 +242,7 @@ TEST(recv_drains_before_disconnected) {
     asx_region_id rid;
     uint64_t val;
     setup();
-    MUST_OK(asx_region_open(&rid));
+    MUST_OK(asx_region_open(&g_rt, &rid));
     MUST_OK(asx_session_create(rid, 4, &init, &resp));
     MUST_OK(asx_session_send(&init, 99));
     asx_session_endpoint_drop(&init);
@@ -262,7 +262,7 @@ TEST(peer_alive_true_initially) {
     asx_session_endpoint init, resp;
     asx_region_id rid;
     setup();
-    MUST_OK(asx_region_open(&rid));
+    MUST_OK(asx_region_open(&g_rt, &rid));
     MUST_OK(asx_session_create(rid, 4, &init, &resp));
     ASSERT_TRUE(asx_session_peer_alive(&init));
     ASSERT_TRUE(asx_session_peer_alive(&resp));
@@ -273,7 +273,7 @@ TEST(peer_alive_false_after_drop) {
     asx_session_endpoint init, resp;
     asx_region_id rid;
     setup();
-    MUST_OK(asx_region_open(&rid));
+    MUST_OK(asx_region_open(&g_rt, &rid));
     MUST_OK(asx_session_create(rid, 4, &init, &resp));
     asx_session_endpoint_drop(&resp);
     ASSERT_FALSE(asx_session_peer_alive(&init));
@@ -303,7 +303,7 @@ TEST(channel_full_on_capacity) {
     asx_region_id rid;
     uint32_t i;
     setup();
-    MUST_OK(asx_region_open(&rid));
+    MUST_OK(asx_region_open(&g_rt, &rid));
     MUST_OK(asx_session_create(rid, 4, &init, &resp));
     for (i = 0; i < 4; i++) { MUST_OK(asx_session_send(&init, i)); }
     ASSERT_EQ(asx_session_send(&init, 99), ASX_E_CHANNEL_FULL);
@@ -319,7 +319,7 @@ TEST(recv_empty_would_block) {
     asx_region_id rid;
     uint64_t val;
     setup();
-    MUST_OK(asx_region_open(&rid));
+    MUST_OK(asx_region_open(&g_rt, &rid));
     MUST_OK(asx_session_create(rid, 4, &init, &resp));
     ASSERT_EQ(asx_session_try_recv(&resp, &val), ASX_E_WOULD_BLOCK);
     teardown();

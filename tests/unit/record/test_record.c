@@ -25,7 +25,7 @@ TEST(event_view_tracks_runtime_emissions) {
     asx_record_event event;
 
     setup();
-    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &region), ASX_OK);
     ASSERT_TRUE(asx_record_event_count() > 0u);
     ASSERT_TRUE(asx_record_event_get(0u, &event));
     ASSERT_EQ(event.kind, ASX_EVENT_REGION_OPEN);
@@ -44,7 +44,7 @@ TEST(summary_capture_reports_live_obligation_counts) {
     asx_record_summary summary;
 
     setup();
-    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &region), ASX_OK);
     /* An obligation is held by a task of its region. */
     ASSERT_EQ(asx_task_spawn(region, poll_idle, NULL, &holder), ASX_OK);
     ASSERT_EQ(asx_obligation_reserve_ex(region, ASX_OBLIGATION_KIND_GENERIC, holder, &obligation),
@@ -62,7 +62,7 @@ TEST(snapshot_json_is_nonempty) {
     asx_codec_buffer buf;
 
     setup();
-    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &region), ASX_OK);
     asx_record_snapshot_init(&snapshot);
     ASSERT_EQ(asx_record_snapshot_capture(&snapshot), ASX_OK);
     asx_codec_buffer_init(&buf);

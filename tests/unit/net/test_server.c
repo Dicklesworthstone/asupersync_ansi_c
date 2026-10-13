@@ -5,6 +5,7 @@
  */
 
 #include "../../test_harness.h"
+#include "../../test_runtime.h"
 #include <asx/net/server.h>
 #include <asx/runtime/browser_boundary.h>
 #include <asx/runtime/runtime.h>
@@ -258,7 +259,7 @@ TEST(memory_accept_parks_until_a_client_connects) {
     asx_tcp_stream client;
     asx_socket_addr addr;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_net_reset();
     asx_server_config_init(&cfg);
     cfg.listen_addr = asx_socket_addr_loopback(14100);
@@ -267,7 +268,7 @@ TEST(memory_accept_parks_until_a_client_connects) {
     ASSERT_EQ(asx_server_listen(&srv), ASX_OK);
     memset(&a, 0, sizeof(a));
     a.srv = &srv;
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, accept_loop_poll, &a, &t), ASX_OK);
 
     b = asx_budget_from_polls(1000000);

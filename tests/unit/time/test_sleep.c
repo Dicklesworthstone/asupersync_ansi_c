@@ -482,7 +482,7 @@ TEST(sleep_beyond_the_wheel_horizon_fires_early_and_registers_again) {
     asx_trace_reset();
     memset(&t, 0, sizeof(t));
     MUST_OK(asx_sleep_init(&t.s, eight_days));
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_long_sleep, &t, &id), ASX_OK);
     budget = asx_budget_from_polls(100);
 
@@ -493,7 +493,7 @@ TEST(sleep_beyond_the_wheel_horizon_fires_early_and_registers_again) {
     ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_TIMER_SET), (uint64_t)2u);
     ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_TIMER_CANCEL), (uint64_t)1u);
     ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_TIMER_FIRE), (uint64_t)1u);
-    asx_runtime_reset();
+    asx_runtime_reset(&rt);
 }
 
 /* A sleep inside the maximum is registered once: no early wake, no second
@@ -514,7 +514,7 @@ TEST(sleep_within_the_wheel_horizon_registers_once) {
     asx_trace_reset();
     memset(&t, 0, sizeof(t));
     MUST_OK(asx_sleep_init(&t.s, six_days));
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_long_sleep, &t, &id), ASX_OK);
     budget = asx_budget_from_polls(100);
 
@@ -525,7 +525,7 @@ TEST(sleep_within_the_wheel_horizon_registers_once) {
     ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_TIMER_SET), (uint64_t)1u);
     ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_TIMER_CANCEL), (uint64_t)0u);
     ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_TIMER_FIRE), (uint64_t)1u);
-    asx_runtime_reset();
+    asx_runtime_reset(&rt);
 }
 
 /* ------------------------------------------------------------------ */

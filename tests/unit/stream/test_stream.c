@@ -10,6 +10,7 @@
  */
 
 #include "../../test_harness.h"
+#include "../../test_runtime.h"
 #include <asx/core/channel.h>
 #include <asx/core/watch.h>
 #include <asx/runtime/runtime.h>
@@ -1154,8 +1155,8 @@ TEST(receiver_stream_keeps_full_channel_handle) {
     uint64_t buf = 0;
     void *item = NULL;
 
-    asx_runtime_reset();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_channel_create(rid, 4, &ch), ASX_OK);
     ASSERT_TRUE(ch > (asx_channel_id)0xFFFFu); /* tag + generation above bit 16 */
 

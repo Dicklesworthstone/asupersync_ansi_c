@@ -5,6 +5,7 @@
  */
 
 #include "../../test_harness.h"
+#include "../../test_runtime.h"
 #include <asx/core/budget.h>
 #include <asx/cx/cx.h>
 #include <asx/runtime/runtime.h>
@@ -792,11 +793,11 @@ static void check_sync_foreign_settlement(sync_access_operation operation) {
     int moved = sync_access_moves_permit(operation);
     int forgotten = sync_access_forgets_permit(operation);
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     setup();
     memset(&c, 0, sizeof(c));
     c.operation = operation;
-    ASSERT_EQ(asx_region_open(&c.region), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &c.region), ASX_OK);
     ASSERT_EQ(asx_semaphore_create(1u, &c.sem), ASX_OK);
     if (operation == SYNC_ACCESS_POISON_FOREIGN_CREDIT) {
         ASSERT_EQ(asx_mutex_create(&c.mutex), ASX_OK);
@@ -905,9 +906,9 @@ TEST(equal_count_permits_reject_another_reservations_credit) {
     asx_semaphore_permit first = {0}, second = {0}, mixed;
     asx_obligation_info info;
     uint64_t digest;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     setup();
-    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &region), ASX_OK);
     ASSERT_EQ(asx_task_spawn(region, poll_binding_holder, NULL, &holder), ASX_OK);
     ASSERT_EQ(asx_cx_init(&cx, region, holder, ASX_CAP_NONE), ASX_OK);
     ASSERT_EQ(asx_semaphore_create(2u, &sem), ASX_OK);

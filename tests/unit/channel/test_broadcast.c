@@ -5,6 +5,7 @@
  */
 
 #include "../../test_harness.h"
+#include "../../test_runtime.h"
 #include <asx/core/broadcast.h>
 #include <asx/runtime/runtime.h>
 #include <asx/runtime/trace.h>
@@ -354,9 +355,9 @@ TEST(tracked_permit_authenticates_each_reservation_and_moves) {
     uint64_t digest;
     uint64_t value;
     uint32_t reached = 99u;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     setup();
-    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &region), ASX_OK);
     ASSERT_EQ(asx_task_spawn(region, broadcast_holder_poll, NULL, &holder), ASX_OK);
     ASSERT_EQ(asx_cx_init(&cx, region, holder, ASX_CAP_NONE), ASX_OK);
     ASSERT_EQ(asx_broadcast_create(4, &tx, &rx), ASX_OK);
@@ -438,9 +439,9 @@ TEST(tracked_permit_drops_with_its_holder_without_publication) {
     asx_budget budget = asx_budget_infinite();
     asx_obligation_info info;
     uint64_t value;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     setup();
-    ASSERT_EQ(asx_region_open(&probe.region), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &probe.region), ASX_OK);
     ASSERT_EQ(asx_broadcast_create(4, &probe.sender, &rx), ASX_OK);
     ASSERT_EQ(asx_task_spawn(probe.region, broadcast_drop_poll, &probe, &holder), ASX_OK);
     ASSERT_EQ(asx_scheduler_run(probe.region, &budget), ASX_OK);
@@ -597,10 +598,10 @@ TEST(registration_observer_cannot_reuse_the_credit_being_registered) {
     uint64_t value = 0u;
     asx_status status;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     memset(&observer, 0, sizeof(observer));
     observer.status = ASX_E_PENDING;
-    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &region), ASX_OK);
     ASSERT_EQ(asx_task_spawn(region, broadcast_holder_poll, NULL, &holder), ASX_OK);
     ASSERT_EQ(asx_cx_init(&cx, region, holder, ASX_CAP_NONE), ASX_OK);
     ASSERT_EQ(asx_broadcast_create(2u, &observer.sender, &receiver), ASX_OK);

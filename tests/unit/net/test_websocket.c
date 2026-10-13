@@ -15,6 +15,7 @@
  */
 
 #include "../../test_harness.h"
+#include "../../test_runtime.h"
 #include <asx/asx_config.h>
 #include <asx/net/websocket.h>
 #include <asx/runtime/runtime.h>
@@ -74,7 +75,7 @@ static uint64_t live_test_entropy(void *ctx) {
 
 static void install_entropy(void) {
     asx_runtime_hooks hooks;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     (void)asx_runtime_hooks_init(&hooks);
 #if !ASX_DETERMINISTIC
     hooks.entropy.random_u64_fn = live_test_entropy;
@@ -665,7 +666,7 @@ static asx_status failing_try_entropy(void *ctx, uint64_t *out) {
 
 static void install_default_hooks(void) {
     asx_runtime_hooks hooks;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     (void)asx_runtime_hooks_init(&hooks);
     (void)asx_runtime_set_hooks(&hooks);
 }
@@ -682,7 +683,7 @@ TEST(client_engine_default_random_reports_entropy_source_failure) {
     asx_runtime_hooks hooks;
     asx_ws_config cfg = default_random_client_config();
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
     hooks.entropy.try_u64_fn = failing_try_entropy;
     ASSERT_EQ(asx_runtime_set_hooks(&hooks), ASX_OK);
@@ -698,7 +699,7 @@ TEST(client_engine_masking_key_failure_queues_no_frame) {
     asx_runtime_hooks hooks;
     asx_ws_config cfg;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
     hooks.entropy.try_u64_fn = failing_try_entropy;
     ASSERT_EQ(asx_runtime_set_hooks(&hooks), ASX_OK);

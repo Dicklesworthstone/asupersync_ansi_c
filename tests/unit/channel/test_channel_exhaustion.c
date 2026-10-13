@@ -11,6 +11,7 @@
 
 #include "test_harness.h"
 #include "test_log.h"
+#include "test_runtime.h"
 #include <asx/asx.h>
 #include <asx/core/channel.h>
 #include <asx/runtime/runtime.h>
@@ -20,7 +21,7 @@
  * ------------------------------------------------------------------- */
 
 static void reset_all(void) {
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_channel_reset();
 }
 
@@ -36,7 +37,7 @@ TEST(reserve_at_capacity_returns_full) {
     uint32_t i;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_channel_create(rid, 4, &cid), ASX_OK);
 
     /* Reserve all 4 slots */
@@ -61,7 +62,7 @@ TEST(abort_frees_capacity_for_new_reserve) {
     uint32_t i;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_channel_create(rid, 4, &cid), ASX_OK);
 
     /* Fill capacity */
@@ -98,7 +99,7 @@ TEST(recv_frees_capacity_for_new_reserve) {
     uint32_t i;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_channel_create(rid, 4, &cid), ASX_OK);
 
     /* Fill queue with committed messages */
@@ -134,7 +135,7 @@ TEST(rapid_reserve_abort_churn_at_boundary) {
     uint32_t reserved;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_channel_create(rid, 2, &cid), ASX_OK);
 
     /* Rapid reserve-abort cycles at boundary */
@@ -161,7 +162,7 @@ TEST(interleaved_send_recv_at_capacity) {
     uint32_t qlen;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_channel_create(rid, 2, &cid), ASX_OK);
 
     /* Send-recv interleave for 50 cycles with capacity 2 */
@@ -197,7 +198,7 @@ TEST(queue_plus_reserved_equals_capacity_invariant) {
     uint32_t qlen, reserved;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_channel_create(rid, 4, &cid), ASX_OK);
 
     /* Reserve 2, send 1, abort 1 */
@@ -236,7 +237,7 @@ TEST(channel_slot_exhaustion_and_recovery) {
     uint32_t i;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     /* Create max channels */
     for (i = 0; i < ASX_MAX_CHANNELS; i++) {
@@ -273,7 +274,7 @@ TEST(max_capacity_channel_fill_and_drain) {
     uint32_t qlen;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_channel_create(rid, ASX_CHANNEL_MAX_CAPACITY, &cid), ASX_OK);
 
     /* Fill to max capacity */
@@ -317,7 +318,7 @@ TEST(disconnect_during_reserve_storm) {
     uint32_t i;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_channel_create(rid, 4, &cid), ASX_OK);
 
     /* Reserve all slots */

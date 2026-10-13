@@ -5,6 +5,7 @@
  */
 
 #include "test_io_fd.h"
+#include "test_runtime.h"
 #include <asx/observability/health.h>
 #include <asx/observability/observability.h>
 #include <asx/runtime/browser_boundary.h>
@@ -33,7 +34,7 @@ static asx_status st_sink_;
 #define RUN(fn)                                                                                    \
     do {                                                                                           \
         printf("  " #fn "...\n");                                                                  \
-        asx_runtime_reset();                                                                       \
+        asx_runtime_reset(test_runtime());                                                         \
         asx_auto_instrument_reset();                                                               \
         fn();                                                                                      \
         g_pass++;                                                                                  \
@@ -225,7 +226,7 @@ static void test_health_stale_runtime_fails_closed(void) {
     ASSERT(asx_runtime_init_default(&a) == ASX_OK, "first runtime initialized");
     /* Intentionally retain a's generation across a raw kernel reset so
      * this test exercises stale-object diagnostics, not conflicting init. */
-    asx_runtime_reset();
+    asx_runtime_reset(&a);
     ASSERT(asx_runtime_init_default(&b) == ASX_OK, "replacement runtime initialized");
     asx_health_policy_init_default(&policy);
     MUST_OK(asx_health_evaluate(&a, &policy, &report, &sink));

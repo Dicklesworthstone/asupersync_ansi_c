@@ -54,7 +54,7 @@ static asx_cx g_cx;
 
 static void setup(void) {
     MUST_OK(asx_runtime_init_default(&g_rt));
-    MUST_OK(asx_region_open(&g_rid));
+    MUST_OK(asx_region_open(&g_rt, &g_rid));
     MUST_OK(asx_cx_init(&g_cx, g_rid, ASX_INVALID_ID, ASX_CAP_ALL));
     g_poll_count = 0;
 }
@@ -673,7 +673,7 @@ TEST(scope_finish_uninitialized_or_invalid_authority_refuses_before_close) {
     ASSERT_EQ(asx_scope_finish(&scope, &body, NULL), ASX_E_INVALID_STATE);
     setup();
     ASSERT_EQ(asx_scope_init(&valid, g_rid, &g_cx, asx_budget_from_polls(8u)), ASX_OK);
-    ASSERT_EQ(asx_region_open(&other), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &other), ASX_OK);
     ASSERT_EQ(asx_cx_init(&other_cx, other, ASX_INVALID_ID, ASX_CAP_ALL), ASX_OK);
     memcpy(&scope, &valid, sizeof(scope));
     scope.cx = other_cx;
@@ -713,7 +713,7 @@ TEST(scope_finish_poison_and_stale_region_preserve_saved_body_and_budget) {
     ASSERT_EQ(asx_scope_init(&stale, g_rid, &g_cx, asx_budget_from_polls(8u)), ASX_OK);
     ASSERT_EQ(asx_region_close_with_outcome(g_rid, &body, NULL), ASX_OK);
     ASSERT_EQ(asx_region_wait_closed(g_rid, &budget), ASX_OK);
-    ASSERT_EQ(asx_region_open(&g_rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &g_rid), ASX_OK);
     ASSERT_EQ(asx_handle_slot(stale.region_id), asx_handle_slot(g_rid));
     ASSERT_NE(asx_handle_generation(stale.region_id), asx_handle_generation(g_rid));
     ASSERT_EQ(asx_cx_init(&g_cx, g_rid, ASX_INVALID_ID, ASX_CAP_ALL), ASX_OK);

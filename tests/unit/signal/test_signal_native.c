@@ -221,7 +221,7 @@ TEST(raised_sigusr1_wakes_parked_task) {
     asx_budget budget;
 
     ASSERT_TRUE(setup());
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_TRUE(spawn_receiver(r, ASX_SIGNAL_USR1, &rx));
     ASSERT_TRUE(spawn_sender(r, 20u, SIGUSR1, ASX_SIGNAL_USR1));
     budget = asx_budget_from_polls(50);
@@ -239,7 +239,7 @@ TEST(one_signal_wakes_every_subscriber) {
     asx_budget budget;
 
     ASSERT_TRUE(setup());
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_TRUE(spawn_receiver(r, ASX_SIGNAL_USR2, &a));
     ASSERT_TRUE(spawn_receiver(r, ASX_SIGNAL_USR2, &b));
     ASSERT_TRUE(spawn_receiver(r, ASX_SIGNAL_HUP, &other));
@@ -264,7 +264,7 @@ TEST(injected_raise_wakes_parked_native_subscriber) {
     asx_budget budget;
 
     ASSERT_TRUE(setup());
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_TRUE(spawn_receiver(r, ASX_SIGNAL_HUP, &rx));
     ASSERT_TRUE(spawn_sender(r, 20u, 0, ASX_SIGNAL_HUP));
     budget = asx_budget_from_polls(50);

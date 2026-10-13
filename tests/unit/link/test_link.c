@@ -10,6 +10,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../../test_runtime.h"
 #include <asx/actor/actor.h>
 #include <asx/core/budget.h>
 #include <asx/link/link.h>
@@ -48,10 +49,10 @@ static asx_region_id g_root;
 static asx_region_id g_idle;
 
 static void setup(void) {
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_link_reset();
-    MUST_OK(asx_region_open(&g_root));
-    MUST_OK(asx_region_open(&g_idle));
+    MUST_OK(asx_region_open(test_runtime(), &g_root));
+    MUST_OK(asx_region_open(test_runtime(), &g_idle));
 }
 
 static void run(asx_region_id region) {
@@ -452,7 +453,7 @@ static void test_a_runtime_reset_forgets_links(void) {
     a = spawn_task();
     b = spawn_task();
     MUST_OK(asx_link_establish(a, b, ASX_EXIT_PROPAGATE, &ref));
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     ASSERT(asx_link_count() == 0u, "the runtime reset reaches the links");
 }
 

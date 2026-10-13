@@ -14,6 +14,7 @@
 /* ASX_CHECKPOINT_WAIVER_FILE() -- spike equivalence test, no checkpoint coverage needed */
 
 #include "test_harness.h"
+#include "test_runtime.h"
 #include <asx/asx.h>
 #include <asx/core/channel.h>
 #include <asx/platform/atomics.h>
@@ -264,9 +265,9 @@ static asx_status spike_channel_close_receiver(spike_channel *ch) {
 static asx_region_id g_rid;
 
 static void eq_setup(void) {
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_channel_reset();
-    EQ_IGNORE(asx_region_open(&g_rid));
+    EQ_IGNORE(asx_region_open(test_runtime(), &g_rid));
 }
 
 /* ------------------------------------------------------------------ */

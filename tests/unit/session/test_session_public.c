@@ -29,7 +29,7 @@ TEST(open_null_pair_fails) {
     asx_region_id region;
 
     setup();
-    MUST_OK(asx_region_open(&region));
+    MUST_OK(asx_region_open(&g_rt, &region));
     ASSERT_EQ(asx_session_open(region, 4u, NULL), ASX_E_INVALID_ARGUMENT);
     teardown();
 }
@@ -40,7 +40,7 @@ TEST(open_request_response_roundtrip) {
     uint64_t value;
 
     setup();
-    MUST_OK(asx_region_open(&region));
+    MUST_OK(asx_region_open(&g_rt, &region));
     ASSERT_EQ(asx_session_open(region, 4u, &pair), ASX_OK);
     ASSERT_EQ(asx_session_pair_state(&pair), ASX_SESSION_OPEN);
 
@@ -68,7 +68,7 @@ TEST(close_helpers_transition_pair_state) {
     asx_session_pair pair;
 
     setup();
-    MUST_OK(asx_region_open(&region));
+    MUST_OK(asx_region_open(&g_rt, &region));
     ASSERT_EQ(asx_session_open(region, 4u, &pair), ASX_OK);
 
     asx_session_close_initiator(&pair);

@@ -11,6 +11,8 @@
 
 #if !defined(ASX_PROFILE_BROWSER) || ASX_HAS_BROWSER_TRACE
 
+#include "../../test_runtime.h"
+
 static int g_pass, g_fail;
 static asx_status st_sink_;
 static int g_sink_count;
@@ -33,7 +35,7 @@ static char g_last_record[256];
 #define RUN(fn)                                                                                    \
     do {                                                                                           \
         printf("  " #fn "...\n");                                                                  \
-        asx_runtime_reset();                                                                       \
+        asx_runtime_reset(test_runtime());                                                         \
         g_sink_count = 0;                                                                          \
         g_last_record[0] = '\0';                                                                   \
         fn();                                                                                      \
@@ -84,7 +86,7 @@ static void test_tracing_export_current(void) {
     uint32_t out_count = 0;
 
     MUST_OK(asx_runtime_init_default(&rt));
-    MUST_OK(asx_region_open(&region));
+    MUST_OK(asx_region_open(&rt, &region));
 
     MUST_OK(asx_tracing_compat_export_current(tracing_sink, NULL, &out_count));
     ASSERT(g_sink_count > 0, "current trace exported");

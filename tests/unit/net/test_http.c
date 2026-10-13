@@ -498,7 +498,7 @@ TEST(router_session_policy_requires_session) {
     const char *cookie;
 
     setup_web();
-    MUST_OK(asx_region_open(&region));
+    MUST_OK(asx_region_open(&g_rt, &region));
     MUST_OK(asx_session_open(region, 4u, &pair));
 
     asx_http_router_init(&router);

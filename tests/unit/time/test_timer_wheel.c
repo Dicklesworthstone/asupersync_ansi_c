@@ -18,6 +18,7 @@
 
 #include "../../../src/runtime/runtime_internal.h"
 #include "../../test_harness.h"
+#include "../../test_runtime.h"
 #include <asx/runtime/trace.h>
 #include <asx/time/timer_wheel.h>
 #include <string.h>
@@ -1094,7 +1095,7 @@ TEST(timer_runtime_wheel_is_separate_and_silent) {
     asx_timer_handle h;
     void *wakers[4];
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     rt = &g_kernels[0]->wheel;
     ASSERT_TRUE(app != rt);
     asx_timer_wheel_reset(app);

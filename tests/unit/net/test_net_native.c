@@ -153,7 +153,7 @@ TEST(tcp_echo_over_real_sockets_parks_instead_of_spinning) {
     asx_budget budget;
 
     ASSERT_TRUE(setup());
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn_captured(r, server_poll, (uint32_t)sizeof(server_state), NULL, &ts,
                                       (void **)&s),
               ASX_OK);
@@ -259,7 +259,7 @@ TEST(tcp_fanout_many_clients_one_server) {
     uint32_t i;
 
     ASSERT_TRUE(setup());
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn_captured(r, multi_server_poll, (uint32_t)sizeof(multi_server_state),
                                       NULL, &t, (void **)&s),
               ASX_OK);
@@ -324,7 +324,7 @@ TEST(tcp_connect_refused_reports_disconnected) {
     ASSERT_TRUE(setup());
     /* Grab a free port, then close it so nothing listens there. */
     ASSERT_EQ(asx_tcp_listener_bind(&l, &any), ASX_OK);
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn_captured(r, refuse_poll, (uint32_t)sizeof(refuse_state), NULL, &t,
                                       (void **)&s),
               ASX_OK);
@@ -376,7 +376,7 @@ TEST(udp_datagram_between_real_sockets) {
     asx_budget budget;
 
     ASSERT_TRUE(setup());
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn_captured(r, udp_poll, (uint32_t)sizeof(udp_state), NULL, &t,
                                       (void **)&s),
               ASX_OK);
@@ -415,7 +415,7 @@ TEST(real_clock_sleep_blocks_in_reactor_without_spinning) {
 
     ASSERT_TRUE(setup());
     ASSERT_EQ(asx_runtime_clock_is_virtual(), 0);
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn_captured(r, sleeper_poll, (uint32_t)sizeof(sleeper), NULL, &t,
                                       (void **)&s),
               ASX_OK);
@@ -460,7 +460,7 @@ TEST(run_deadline_bounds_reactor_wait) {
 
     ASSERT_TRUE(setup());
     ASSERT_EQ(asx_runtime_clock_is_virtual(), 0);
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn_captured(r, accept_forever_poll,
                                       (uint32_t)sizeof(accept_forever_state), NULL, &t,
                                       (void **)&a),
@@ -590,7 +590,7 @@ TEST(http_keepalive_exchange_over_real_sockets) {
     asx_http_server_config_init(&hcfg, &g_router);
     ASSERT_EQ(asx_http_server_init(&g_hs, &g_srv, &hcfg), ASX_OK);
 
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, http_server_task, NULL, &t), ASX_OK);
     memset(c, 0, sizeof(*c));
     ASSERT_EQ(asx_task_spawn(r, http_client_task, c, &t), ASX_OK);
@@ -646,7 +646,7 @@ TEST(async_resolve_runs_on_pool_and_wakes_task) {
     memset(&s, 0, sizeof(s));
     asx_resolve_options_init(&opts, 8443);
     ASSERT_EQ(asx_resolve_request_init(&s.req, host, &opts), ASX_OK);
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, resolve_task, &s, &t), ASX_OK);
     budget = asx_budget_from_polls(50);
     /* The lookup runs off-thread: the scheduler blocks until the pool
@@ -677,7 +677,7 @@ TEST(async_resolve_cancel_discards_in_flight_lookup) {
     ASSERT_EQ(gethostname(host, sizeof(host) - 1u), 0);
     asx_resolve_options_init(&opts, 80);
     /* A live (never polled) task owns the lookups' wakers. */
-    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, resolve_task, &s, &owner), ASX_OK);
     /* Start and abandon more lookups than the in-flight table holds:
      * orphaned slots must be recycled by their finishing workers. */

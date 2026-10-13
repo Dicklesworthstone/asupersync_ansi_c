@@ -18,6 +18,8 @@
 #endif
 
 #if ASX_HAS_NATIVE_RUNTIME_SURFACES
+#include "../../test_runtime.h"
+
 /* ------------------------------------------------------------------ */
 /* Test harness                                                        */
 /* ------------------------------------------------------------------ */
@@ -42,7 +44,7 @@ static asx_status st_sink_;
 #define RUN(fn)                                                                                    \
     do {                                                                                           \
         printf("  " #fn "...\n");                                                                  \
-        asx_runtime_reset();                                                                       \
+        asx_runtime_reset(test_runtime());                                                         \
         fn();                                                                                      \
         g_pass++;                                                                                  \
     } while (0)
