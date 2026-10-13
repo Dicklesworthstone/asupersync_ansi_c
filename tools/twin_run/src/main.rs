@@ -11,6 +11,7 @@ mod canon;
 mod constants;
 mod minimize;
 mod parsediff;
+mod rqoracle;
 mod run;
 // `gen` is a reserved keyword in edition 2024.
 #[path = "gen.rs"]
@@ -31,9 +32,9 @@ fn usage() -> ExitCode {
          twin_run minimize <scenario.json> --runner <asx-conformance> --out <dir>\n       \
          twin_run trace <scenario.json>   (raw lab trace, for diagnosis)\n       \
          twin_run constants --source <asupersync crate dir> --out <file.json>\n       \
-         twin_run parse-fuzz (http-request|http-response|ws-frame) --seed <u64> --count <n> \
-         --out <dir>\n       \
-         twin_run parse-diff (http-request|http-response|ws-frame) <input>..."
+         twin_run parse-fuzz (http-request|http-response|ws-frame|raptorq) --seed <u64> \
+         --count <n> --out <dir>\n       \
+         twin_run parse-diff (http-request|http-response|ws-frame|raptorq) <input>..."
     );
     ExitCode::from(2)
 }

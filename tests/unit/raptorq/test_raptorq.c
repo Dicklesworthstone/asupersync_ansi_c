@@ -9,6 +9,14 @@
  * Rand/Tuple spot values come from an independent model of RFC 6330
  * sections 5.3.5.1-5.3.5.4 driven by the crate's V0..V3 tables.
  *
+ * The generator is committed: `make raptorq-vectors-check` reads the tables
+ * below (g_block_golden, g_k10_repair, g_obj_golden and the g_obj<N> block
+ * tables) and recomputes every number with the crate, and with asupersync's
+ * encoder where it has one (tools/ci/check_raptorq_vectors.py,
+ * tools/twin_run/src/rqoracle.rs). `make parser-differential
+ * PARSER_DIFF_TARGET=raptorq` runs the three implementations against each
+ * other on generated blocks, decoding included.
+ *
  * SPDX-License-Identifier: MIT
  */
 

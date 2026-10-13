@@ -40,6 +40,11 @@
 # opcode, mask, key, payload length and digest and bytes used agree. The two
 # families differ only in the close code both reject with
 # (bd-9kll.16.2.14, .15).
+#
+# `raptorq` (a dual oracle: C, asupersync's encoder and decoder, the crates.io
+# raptorq 2.0.1 crate) has no entry on purpose: the three agree on every
+# repair symbol and on whether each set of encoding symbols decodes (500000
+# cases over ten seeds), and the CI step gates, so a first difference fails.
 
 c-accepts/rust-rejects:BadRequestLine [leading-empty-line] | bd-9kll.16.2.1 | RFC 9112 2.2 SHOULD ignore a leading empty line: Rust deviates, C follows
 c-accepts/rust-rejects:BadRequestLine [leading-empty-line,target=authority-empty-port] | bd-9kll.16.2.1 | the leading empty line hides bd-9kll.16.2.4

@@ -2629,9 +2629,10 @@ fuzz-parsers-replay: $(LIB_A)
 # parser-differential — the same bytes to asupersync's parser and to ours
 # (bd-9kll.16.2). twin_run parse-fuzz writes a seeded corpus and the Rust
 # outcomes (tools/twin_run/src/parsediff.rs), the ASX_DIFF_HTTP_REQUEST,
-# ASX_DIFF_HTTP_RESPONSE or ASX_DIFF_WS_FRAME mode of tests/fuzz/fuzz_parsers.c
-# prints the C outcomes (PARSER_DIFF_TARGET=http-request, http-response or
-# ws-frame), and
+# ASX_DIFF_HTTP_RESPONSE, ASX_DIFF_WS_FRAME or ASX_DIFF_RAPTORQ mode of
+# tests/fuzz/fuzz_parsers.c prints the C outcomes (PARSER_DIFF_TARGET=
+# http-request, http-response, ws-frame or raptorq: the encoder of a block
+# against asupersync's and the crates.io raptorq crate's), and
 # tools/ci/parser_differential.py compares them, groups the differences by
 # signature and request shape, and reduces the diverging inputs to classes of
 # minimized input (report in $(PARSER_DIFF_OUT)). PARSER_DIFF_MODE=observe
@@ -2657,6 +2658,8 @@ parser-diff-build: $(LIB_A)
 		-o $(PARSER_DIFF_DIR)/http_response tests/fuzz/fuzz_parsers.c $(LIB_A) $(ALL_LDFLAGS)
 	@$(CC) $(ALL_CFLAGS) -DASX_FUZZ_STANDALONE -DASX_DIFF_WS_FRAME \
 		-o $(PARSER_DIFF_DIR)/ws_frame tests/fuzz/fuzz_parsers.c $(LIB_A) $(ALL_LDFLAGS)
+	@$(CC) $(ALL_CFLAGS) -DASX_FUZZ_STANDALONE -DASX_DIFF_RAPTORQ \
+		-o $(PARSER_DIFF_DIR)/raptorq tests/fuzz/fuzz_parsers.c $(LIB_A) $(ALL_LDFLAGS)
 
 parser-differential: parser-diff-build
 	@python3 tools/ci/parser_differential.py run --twin-run "$(TWIN_RUN)" \
@@ -2668,6 +2671,16 @@ parser-differential: parser-diff-build
 
 parser-differential-selftest:
 	@python3 tools/ci/parser_differential.py --selftest
+	@python3 tools/ci/check_raptorq_vectors.py --selftest
+
+# raptorq-vectors-check — the golden vectors of tests/unit/raptorq/
+# test_raptorq.c against the implementations that produced them (bd-9kll.16.2):
+# the tables are read from the C source, twin_run computes each row with the
+# crates.io raptorq 2.0.1 crate (and with asupersync's encoder where it has
+# one), and every number is compared. A missing or empty table fails.
+.PHONY: raptorq-vectors-check
+raptorq-vectors-check:
+	@python3 tools/ci/check_raptorq_vectors.py --twin-run "$(TWIN_RUN)"
 
 # ---------------------------------------------------------------------------
 # minimize — deterministic counterexample minimizer (bd-1md.4)

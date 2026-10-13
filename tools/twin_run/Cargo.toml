@@ -13,6 +13,11 @@ path = "src/main.rs"
 # The semantic authority, pinned by rev (0.6.0 is not on crates.io). Keep in
 # sync with docs/rust_baseline_inventory.json (pending_rebase / active).
 asupersync = { git = "https://github.com/Dicklesworthstone/asupersync", rev = "5e60b1c4c53d62aaddae68de3ee7de4732f1755b" }
+# The second RaptorQ oracle (bd-9kll.16.2): the C encoder's golden vectors were
+# produced by this crate, an independent RFC 6330 implementation, and
+# `twin_run parse-diff raptorq` compares it with asupersync's own encoder and
+# with C. 2.0.1 exactly: the vectors are its output.
+raptorq = "=2.0.1"
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"

@@ -61,6 +61,13 @@
  *                           unmasked payload, close-payload rules; a
  *                           rejected frame carries the close code the
  *                           receiver fails with, which is compared.
+ *   ASX_DIFF_RAPTORQ        the file is a case `K T SEED R N MASK` (ASCII):
+ *                           the source block of the test_raptorq.c
+ *                           generator, encoded, the digest of every repair
+ *                           symbol from ESI K, and the decode of K+N
+ *                           encoding symbols chosen by MASK: twin_run
+ *                           prints the same for the crates.io raptorq crate
+ *                           and for asupersync's encoder and decoder.
  *
  * SPDX-License-Identifier: MIT
  */
@@ -983,6 +990,188 @@ static void fuzz_one(const uint8_t *data, size_t size) {
     fputs(",\"server\":", stdout);
     diff_ws_frame(ASX_WS_ROLE_SERVER, data, size);
     putchar('}');
+    diff_end();
+}
+
+#elif defined(ASX_DIFF_RAPTORQ)
+
+#include <asx/raptorq/raptorq.h>
+
+#ifndef ASX_FUZZ_STANDALONE
+#error "the ASX_DIFF_* modes need ASX_FUZZ_STANDALONE (one outcome line per file)"
+#endif
+
+/* The limits of twin_run's raptorq target (MAX_K, MAX_T, MAX_R in
+ * tools/twin_run/src/rqoracle.rs): the harness's, not the library's. */
+#define DIFF_RQ_MAX_K 2000u
+#define DIFF_RQ_MAX_T 256u
+#define DIFF_RQ_MAX_R 64u
+
+/* The case `K T SEED R N MASK`: ASCII decimal, single spaces, one optional
+ * final newline, parsed exactly as rqoracle.rs does. Returns 1 and the six
+ * values, or 0 for anything else. */
+static int diff_rq_parse(const uint8_t *data, size_t size, uint32_t out[6]) {
+    size_t end = size;
+    size_t pos = 0;
+    uint32_t count = 0;
+
+    if (end > 0u && data[end - 1u] == (uint8_t)'\n') end--;
+    for (;;) {
+        uint64_t value = 0;
+        size_t digits = 0;
+        while (pos < end && data[pos] != (uint8_t)' ') {
+            if (data[pos] < (uint8_t)'0' || data[pos] > (uint8_t)'9') return 0;
+            value = value * 10u + (uint64_t)(data[pos] - (uint8_t)'0');
+            digits++;
+            pos++;
+            if (digits > 10u) return 0;
+        }
+        if (digits == 0u || value > UINT64_C(0xFFFFFFFF)) return 0;
+        if (count == 6u) return 0;
+        out[count++] = (uint32_t)value;
+        if (pos >= end) break;
+        pos++;                    /* the single space */
+        if (pos >= end) return 0; /* a trailing space: an empty last token */
+    }
+    if (count != 6u) return 0;
+    if (out[0] < 1u || out[0] > DIFF_RQ_MAX_K || out[1] < 1u || out[1] > DIFF_RQ_MAX_T ||
+        out[3] > DIFF_RQ_MAX_R || out[4] > out[3]) {
+        return 0;
+    }
+    /* The pool the decoder's symbols are drawn from holds K+N of them: the
+     * repair symbols alone when MASK is odd, else all K+R. */
+    return out[0] + out[4] <= ((out[5] & 1u) != 0u ? out[3] : out[0] + out[3]);
+}
+
+static uint64_t diff_rq_fnv(const uint8_t *p, size_t n) {
+    uint64_t h = UINT64_C(0xcbf29ce484222325);
+    size_t i;
+    for (i = 0; i < n; i++) h = (h ^ (uint64_t)p[i]) * UINT64_C(0x00000100000001b3);
+    return h;
+}
+
+/* The decode half of a case: a decoder is given the first K+N of the ESIs
+ * 0..K+R-1 after the shuffle of rqoracle.rs (ESI data from the encoder) and
+ * asked for the block. Prints "decode_fnv": the digest of what it recovered,
+ * or "fail" when it reports the set insufficient. */
+static void diff_rq_decode(const asx_raptorq_encoder *enc, uint32_t k, uint32_t t, uint32_t repairs,
+                           uint32_t extra, uint32_t mask) {
+    uint32_t first = (mask & 1u) != 0u ? k : 0u; /* an odd mask: repair symbols only */
+    uint32_t total = k + repairs - first;
+    uint32_t received = k + extra;
+    uint32_t *esis = (uint32_t *)malloc((size_t)total * sizeof(uint32_t));
+    uint8_t *sym = (uint8_t *)malloc(t);
+    uint8_t *block = (uint8_t *)malloc((size_t)k * t);
+    asx_raptorq_decoder dec;
+    size_t ws_size = 0;
+    void *ws = NULL;
+    uint32_t s = mask;
+    uint32_t i;
+    asx_status st;
+
+    if (esis == NULL || sym == NULL || block == NULL) fuzz_fail("raptorq decode allocation");
+    for (i = 0; i < total; i++) esis[i] = first + i;
+    for (i = total - 1u; i >= 1u; i--) {
+        uint32_t j;
+        uint32_t swap;
+        s = s * 1664525u + 1013904223u;
+        j = (s >> 8) % (i + 1u);
+        swap = esis[i];
+        esis[i] = esis[j];
+        esis[j] = swap;
+    }
+    st = asx_raptorq_decoder_workspace_size(k, t, received, &ws_size);
+    if (st == ASX_OK) ws = malloc(ws_size);
+    if (st == ASX_OK && ws == NULL) fuzz_fail("raptorq decoder workspace allocation");
+    if (st == ASX_OK) st = asx_raptorq_decoder_init(&dec, k, t, received, ws, ws_size);
+    for (i = 0; st == ASX_OK && i < received; i++) {
+        if (asx_raptorq_encoder_symbol(enc, esis[i], sym, t) != ASX_OK) {
+            fuzz_fail("raptorq symbol of an initialized encoder");
+        }
+        st = asx_raptorq_decoder_add_symbol(&dec, esis[i], sym, t);
+    }
+    if (st == ASX_OK) st = asx_raptorq_decoder_decode(&dec, block, (size_t)k * t);
+    if (st == ASX_OK) {
+        printf(",\"decode_fnv\":\"%016llx\"",
+               (unsigned long long)diff_rq_fnv(block, (size_t)k * t));
+    } else {
+        fputs(",\"decode_fnv\":\"fail\"", stdout);
+    }
+    free(ws);
+    free(block);
+    free(sym);
+    free(esis);
+}
+
+/* One case: the K source symbols of the generator of test_raptorq.c, the
+ * encoder, the digests of repair ESIs K .. K+R-1, and the decode. */
+static void diff_rq_case(uint32_t k, uint32_t t, uint32_t seed, uint32_t repairs, uint32_t extra,
+                         uint32_t mask) {
+    asx_raptorq_encoder enc;
+    size_t bytes = (size_t)k * t;
+    size_t ws_size = 0;
+    uint8_t *src = (uint8_t *)malloc(bytes);
+    uint8_t *sym = (uint8_t *)malloc(t);
+    void *ws = NULL;
+    uint32_t s = seed;
+    uint32_t i;
+    int systematic_ok = 1;
+    asx_status st;
+
+    if (src == NULL || sym == NULL) fuzz_fail("raptorq case allocation");
+    for (i = 0; i < bytes; i++) {
+        s = s * 1664525u + 1013904223u;
+        src[i] = (uint8_t)(s >> 24);
+    }
+    st = asx_raptorq_encoder_workspace_size(k, t, &ws_size);
+    if (st == ASX_OK) ws = malloc(ws_size);
+    if (st == ASX_OK && ws == NULL) fuzz_fail("raptorq workspace allocation");
+    if (st == ASX_OK) st = asx_raptorq_encoder_init(&enc, k, t, src, bytes, ws, ws_size);
+    if (st != ASX_OK) {
+        fputs("{\"kind\":\"error\",\"detail\":", stdout);
+        diff_put_cstr(asx_status_name(st));
+        putchar('}');
+        free(ws);
+        free(sym);
+        free(src);
+        return;
+    }
+    for (i = 0; i < k; i++) {
+        if (asx_raptorq_encoder_symbol(&enc, i, sym, t) != ASX_OK ||
+            memcmp(sym, src + (size_t)i * t, t) != 0) {
+            systematic_ok = 0;
+        }
+    }
+    printf("{\"kind\":\"complete\",\"k\":%lu,\"t\":%lu,\"seed\":%lu,\"repairs\":%lu,"
+           "\"extra\":%lu,\"mask\":%lu,\"source_fnv\":\"%016llx\",\"systematic_ok\":%s,"
+           "\"repair_fnv\":[",
+           (unsigned long)k, (unsigned long)t, (unsigned long)seed, (unsigned long)repairs,
+           (unsigned long)extra, (unsigned long)mask, (unsigned long long)diff_rq_fnv(src, bytes),
+           systematic_ok ? "true" : "false");
+    for (i = 0; i < repairs; i++) {
+        if (asx_raptorq_encoder_symbol(&enc, k + i, sym, t) != ASX_OK) {
+            fuzz_fail("raptorq repair symbol of an initialized encoder");
+        }
+        printf("%s\"%016llx\"", i > 0u ? "," : "", (unsigned long long)diff_rq_fnv(sym, t));
+    }
+    fputs("]", stdout);
+    diff_rq_decode(&enc, k, t, repairs, extra, mask);
+    fputs("}", stdout);
+    free(ws);
+    free(sym);
+    free(src);
+}
+
+static void fuzz_one(const uint8_t *data, size_t size) {
+    uint32_t c[6];
+    diff_begin();
+    if (size == 0u) {
+        fputs("{\"kind\":\"empty\"}", stdout);
+    } else if (!diff_rq_parse(data, size, c)) {
+        diff_error("not a case");
+    } else {
+        diff_rq_case(c[0], c[1], c[2], c[3], c[4], c[5]);
+    }
     diff_end();
 }
 

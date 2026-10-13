@@ -1044,6 +1044,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "raptorq"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4d4215fb79ef19442a0c71616aabb0715a386e6a16ed9031775ee3e3f20e7502"
+
+[[package]]
 name = "redox_syscall"
 version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1362,6 +1368,7 @@ version = "0.1.0"
 dependencies = [
  "asupersync",
  "proc-macro2",
+ "raptorq",
  "serde",
  "serde_json",
  "sha2 0.10.9",

@@ -1173,6 +1173,24 @@ jobs:
             PARSER_DIFF_OUT=build/parser-differential/out-ws \
             ASX_TWIN_BIN=tools/twin_run/target/release/twin_run
 
+      # RaptorQ, a dual oracle: the C encoder and decoder against asupersync's
+      # (SystematicEncoder, InactivationDecoder) and the crates.io raptorq 2.0.1
+      # crate, on the same blocks: every repair symbol, and whether a set of
+      # K+N encoding symbols decodes (a property of the set, so all three must
+      # agree), 20000 cases. Gates: the three agree on every case, and a
+      # divergence has no recorded bead to hide behind.
+      - name: Parser differential, RaptorQ dual oracle (seed 3, 20000 cases, gates)
+        run: |
+          make parser-differential PARSER_DIFF_MODE=gate PARSER_DIFF_TARGET=raptorq \
+            PARSER_DIFF_SEED=3 PARSER_DIFF_COUNT=20000 \
+            PARSER_DIFF_OUT=build/parser-differential/out-raptorq \
+            ASX_TWIN_BIN=tools/twin_run/target/release/twin_run
+
+      # The golden vectors of tests/unit/raptorq/test_raptorq.c, read from the
+      # source and recomputed with the crate that produced them.
+      - name: RaptorQ golden vectors against the crate
+        run: make raptorq-vectors-check ASX_TWIN_BIN=tools/twin_run/target/release/twin_run
+
       - name: Upload parser differential report
         if: always()
         uses: actions/upload-artifact@v4
@@ -1191,6 +1209,9 @@ jobs:
             build/parser-differential/out-ws/report.txt
             build/parser-differential/out-ws/report.json
             build/parser-differential/out-ws/beads.sh
+            build/parser-differential/out-raptorq/report.txt
+            build/parser-differential/out-raptorq/report.json
+            build/parser-differential/out-raptorq/beads.sh
           if-no-files-found: ignore
 
       - name: Upload divergent scenarios

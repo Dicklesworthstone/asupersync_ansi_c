@@ -139,13 +139,42 @@ FIELDS = (
     "payload_len",
     "payload_fnv",
     "consumed",
+    "k",
+    "t",
+    "seed",
+    "repairs",
+    "extra",
+    "mask",
+    "source_fnv",
+    "systematic_ok",
+    "repair_fnv",
+    "decode_fnv",
 )
+
+# A RaptorQ field the crates.io raptorq crate also answers: the field of the
+# Rust outcome that holds the crate's value (asupersync's is the field itself).
+CRATE_FIELD = {"repair_fnv": "cberner_fnv", "decode_fnv": "cberner_decode_fnv"}
+
+
+def odd_one_out(asupersync, crate, c):
+    """Which of three RaptorQ results is the one that differs, for three
+    values that are not all equal: the crate, asupersync or C, or none of the
+    pairs agreeing."""
+    if asupersync == crate:
+        return "c-deviates"
+    if c == asupersync:
+        return "crate-deviates"
+    if c == crate:
+        return "asupersync-deviates"
+    return "all-differ"
 
 
 def accepted_difference(rust, c, fold_header_case):
     """The signature of the first field two accepted messages differ in (a
     field a message kind does not have is absent from both and compares
-    equal)."""
+    equal). A RaptorQ case has a second Rust oracle, the crates.io raptorq
+    crate's repair digests (`cberner_fnv`): when it is present the repair
+    digests are a three-way verdict that names the odd one out."""
     found = None
     for field in FIELDS:
         rv, cv = rust.get(field), c.get(field)
@@ -153,6 +182,10 @@ def accepted_difference(rust, c, fold_header_case):
             detail = header_diff(rv or [], cv or [], fold_header_case)
             if detail is not None:
                 found = "both-accept:%s:%s" % (field, detail)
+        elif field in CRATE_FIELD and rust.get(CRATE_FIELD[field]) is not None:
+            crate = rust[CRATE_FIELD[field]]
+            if not (rv == cv == crate):
+                found = "both-accept:%s:%s" % (field, odd_one_out(rv, crate, cv))
         elif rv != cv:
             found = "both-accept:%s" % field
         if found is not None:
@@ -327,7 +360,7 @@ TARGET_LABELS = {
 }
 
 # The prefix of a family key for a target with labels (`response@GET ...`).
-KEY_PREFIX = {"http-response": "response", "ws-frame": "ws-frame"}
+KEY_PREFIX = {"http-response": "response", "ws-frame": "ws-frame", "raptorq": "raptorq"}
 
 
 def flatten_by_label(outcomes, labels):
@@ -454,8 +487,10 @@ def reduce_group(want, members, backend, workdir, fold, limit):
             if method not in testers:
                 testers[method] = make_tester(want, backend, workdir, fold, method)
             # A frame is binary: a NUL fills a byte whose value does not
-            # matter, where text is filled with "a".
-            filler = b"\x00" if getattr(backend, "target", "") == "ws-frame" else b"a"
+            # matter. A RaptorQ case is digits and spaces: a "1" keeps it
+            # parseable. Other text is filled with "a".
+            fillers = {"ws-frame": b"\x00", "raptorq": b"1"}
+            filler = fillers.get(getattr(backend, "target", ""), b"a")
             seen[key] = simplify(minimize(data, testers[method]), testers[method], filler)
         entry = classes.setdefault((seen[key], method), [0, name])
         entry[0] += 1
@@ -546,18 +581,37 @@ def ws_shape(data):
     return ",".join(tags)
 
 
+def raptorq_shape(data):
+    """The block size class of a (minimized) RaptorQ case `K T SEED R`: the
+    extended source block size K' of RFC 6330 table 2 grows in steps, so a
+    divergence is usually a property of a range of K."""
+    first = data.split(b" ", 1)[0].strip()
+    if not first.isdigit():
+        return ""
+    k = int(first)
+    for bound in (10, 40, 120, 500):
+        if k <= bound:
+            return "k<=%d" % bound
+    return "k>500"
+
+
 def shape_of(target, data):
     if target == "http-response":
         return response_shape(data)
     if target == "ws-frame":
         return ws_shape(data)
+    if target == "raptorq":
+        return raptorq_shape(data)
     return request_shape(data)
 
 
 def family_key(sig, shape, label=None, target="http-response"):
     """`<signature> [<shape>]`, prefixed `response@GET ` or `ws-frame@client `
-    for a target whose input is several cases."""
+    for a target whose input is several cases, and `raptorq@case ` for a
+    RaptorQ case."""
     key = "%s [%s]" % (sig, shape) if shape else sig
+    if label is None and target == "raptorq":
+        label = "case"
     return "%s@%s %s" % (KEY_PREFIX[target], label, key) if label else key
 
 
@@ -1059,6 +1113,38 @@ def selftest():
     }
     for raw, want in ws_shapes.items():
         check(ws_shape(raw) == want, "ws_shape(%r) = %r" % (raw, ws_shape(raw)))
+
+    # RaptorQ: C against asupersync's encoder, with the crate as the third
+    # oracle that names the odd one out.
+    rq = {"kind": "complete", "k": 10, "t": 16, "seed": 3, "repairs": 2, "source_fnv": "a",
+          "systematic_ok": True, "repair_fnv": ["1", "2"], "cberner_fnv": ["1", "2"]}
+    rq_c = {key: val for key, val in rq.items() if key != "cberner_fnv"}
+    check(classify_pair(rq, rq_c) is None, "three equal oracles agree")
+    check(classify_pair(rq, dict(rq_c, repair_fnv=["1", "9"]))
+          == "both-accept:repair_fnv:c-deviates", "C alone differs")
+    check(classify_pair(dict(rq, repair_fnv=["1", "9"]), rq_c)
+          == "both-accept:repair_fnv:asupersync-deviates", "asupersync alone differs")
+    check(classify_pair(dict(rq, cberner_fnv=["1", "9"]), rq_c)
+          == "both-accept:repair_fnv:crate-deviates", "the crate alone differs")
+    check(classify_pair(dict(rq, repair_fnv=["7", "7"], cberner_fnv=["8", "8"]), rq_c)
+          == "both-accept:repair_fnv:all-differ", "all three differ")
+    check(classify_pair(rq, dict(rq_c, systematic_ok=False)) == "both-accept:systematic_ok",
+          "a non-systematic C encoder is a divergence")
+    rqd = dict(rq, decode_fnv="d", cberner_decode_fnv="d")
+    rqd_c = dict(rq_c, decode_fnv="d")
+    check(classify_pair(rqd, rqd_c) is None, "three equal decodes agree")
+    check(classify_pair(rqd, dict(rqd_c, decode_fnv="fail"))
+          == "both-accept:decode_fnv:c-deviates", "C fails a set both Rust decoders decode")
+    check(classify_pair(dict(rqd, decode_fnv="fail", cberner_decode_fnv="fail"), rqd_c)
+          == "both-accept:decode_fnv:c-deviates", "C decodes a set both Rust decoders fail")
+    check(classify_pair(dict(rqd, decode_fnv="fail"), rqd_c)
+          == "both-accept:decode_fnv:asupersync-deviates", "asupersync alone fails")
+    check(raptorq_shape(b"10 16 3 12\n") == "k<=10" and raptorq_shape(b"41 8 1 0") == "k<=120"
+          and raptorq_shape(b"2000 8 1 0") == "k>500" and raptorq_shape(b"x") == "",
+          "raptorq_shape reads the block size")
+    check(family_key("sig", "k<=10", None, "raptorq") == "raptorq@case sig [k<=10]"
+          and key_target("raptorq@case sig") == "raptorq",
+          "a raptorq key is prefixed and names its target")
     with tempfile.TemporaryDirectory() as tmp:
         rb = FakeResponseBackend()
         names = {"00000.bin": b"HTTP/1.1 200 OK", "00001.bin": b"HxxBxx", "00002.bin": b"junk"}
@@ -1151,10 +1237,11 @@ def main(argv):
     run = sub.add_parser("run", help="run one corpus through both parsers and compare")
     run.add_argument("--twin-run", required=True, help="twin_run command (binary or cargo run)")
     run.add_argument("--c-driver", required=True, help="the ASX_DIFF_* binary of --target")
-    run.add_argument("--target", choices=("http-request", "http-response", "ws-frame"),
+    run.add_argument("--target", choices=("http-request", "http-response", "ws-frame", "raptorq"),
                      default="http-request",
                      help="the parser to compare (a response is a case per request method, "
-                     "a frame a case per receiver role)")
+                     "a frame a case per receiver role; raptorq is the dual-oracle "
+                     "encoder comparison)")
     run.add_argument("--out", required=True)
     run.add_argument("--seed", type=int, default=1)
     run.add_argument("--count", type=int, default=2000)

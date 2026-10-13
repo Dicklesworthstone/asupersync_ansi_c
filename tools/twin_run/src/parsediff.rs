@@ -265,6 +265,8 @@ impl Kind {
 pub enum Target {
     Http(Kind),
     WsFrame,
+    Raptorq,
+    RaptorqVectors,
 }
 
 impl Target {
@@ -273,6 +275,8 @@ impl Target {
             "http-request" => Some(Self::Http(Kind::Request)),
             "http-response" => Some(Self::Http(Kind::Response)),
             "ws-frame" => Some(Self::WsFrame),
+            "raptorq" => Some(Self::Raptorq),
+            "raptorq-vectors" => Some(Self::RaptorqVectors),
             _ => None,
         }
     }
@@ -282,6 +286,8 @@ impl Target {
         match self {
             Self::Http(kind) => kind.outcome(input),
             Self::WsFrame => ws_frame_outcome(input),
+            Self::Raptorq => crate::rqoracle::outcome(input),
+            Self::RaptorqVectors => crate::rqoracle::vectors_outcome(input),
         }
     }
 
@@ -290,6 +296,8 @@ impl Target {
         match self {
             Self::Http(kind) => http_inputs(kind, seed, count),
             Self::WsFrame => ws_inputs(seed, count),
+            Self::Raptorq => crate::rqoracle::inputs(seed, count),
+            Self::RaptorqVectors => Vec::new(),
         }
     }
 }
@@ -958,9 +966,9 @@ pub fn ws_inputs(seed: u64, count: u64) -> Vec<Vec<u8>> {
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage: twin_run parse-fuzz (http-request|http-response|ws-frame) --seed <u64> \
+        "usage: twin_run parse-fuzz (http-request|http-response|ws-frame|raptorq) --seed <u64> \
          --count <n> --out <dir>\n       \
-         twin_run parse-diff (http-request|http-response|ws-frame) <file>..."
+         twin_run parse-diff (http-request|http-response|ws-frame|raptorq) <file>..."
     );
     ExitCode::from(2)
 }
@@ -1014,7 +1022,7 @@ pub fn cli(args: &[String]) -> ExitCode {
     };
     let Some(target) = Target::parse(target) else {
         eprintln!(
-            "twin_run: unknown parse target {target:?} (http-request, http-response, ws-frame)"
+            "twin_run: unknown parse target {target:?} (http-request, http-response, ws-frame, raptorq)"
         );
         return ExitCode::from(2);
     };
