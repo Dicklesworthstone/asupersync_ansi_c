@@ -1311,7 +1311,7 @@ Channel lifecycle flows through OPEN, SENDER_CLOSED, RECEIVER_CLOSED, and FULLY_
 
 ### Timer Wheel with Deterministic Ordering
 
-The timer wheel (`src/time/timer_wheel.c`) is a port of Rust asupersync's `TimerWheel`: four levels of 256 slots (1 ms, 256 ms, 65.5 s and 4.66 h per slot), a ready list, and a deadline-ordered overflow heap for timers more than 24 hours out, all in a fixed arena with O(1) cancel via generation-safe handles. The scheduler's task timers (sleeps and lab budget deadlines) use one instance of it, sized for two timers per task; `asx_timer_wheel_global()` is a second instance for application code (`asx_deadline_arm`, `asx_timer_register`).
+The timer wheel (`src/time/timer_wheel.c`) is a port of Rust asupersync's `TimerWheel`: four levels of 256 slots (1 ms, 256 ms, 65.5 s and 4.66 h per slot), a ready list, and a deadline-ordered overflow heap for timers more than 24 hours out, all in a fixed arena with O(1) cancel via generation-safe handles. The scheduler's task timers (sleeps and lab budget deadlines) use one instance of it, sized for two timers per task; `asx_timer_wheel_global(rt)` is a second instance, one per runtime, for application code (`asx_deadline_arm(rt, ...)`, `asx_timer_register`).
 
 What fires, and in which order, is a property of that structure, not of a sort by deadline:
 
@@ -2571,7 +2571,7 @@ pushes and PRs:
 | `conformance` | oracle schemas, fixture integrity, gate negative controls, recorded codec digests, and the Rust-captured fixtures executed in C and compared, the compare pass also running the kernel-state oracles (`CONFORMANCE_ORACLES`, `docs/LAB_ORACLE_CATALOG.md`) over each run's arenas |
 | `profile-parity` | every v2 Rust fixture executed under eight host profiles, recorded legacy digests, and parallel-worker parity scenarios executed at worker counts 1, 2, 8 and 64 |
 | `fuzz-parity` | fuzz smoke and artifact validation |
-| `fuzz-rust-differential` | 200 generated scenarios (a fixed seed, so a regression gate) executed by asupersync's LabRuntime (`tools/twin_run`) and by the C runtime, which must match each one exactly; divergences are reduced by `twin_run minimize` and uploaded. The nightly workflow runs 20000 scenarios of new seeds daily, in 5 shards of 4000 |
+| `fuzz-rust-differential` | 200 generated scenarios (a fixed seed, so a regression gate) executed by asupersync's LabRuntime (`tools/twin_run`) and by the C runtime, which must match each one exactly; divergences are reduced by `twin_run minimize` and uploaded. The nightly workflow explores new seeds daily |
 | `fuzz-metamorphic` | the metamorphic relations M1 to M4 (`make fuzz-metamorphic`) over scenarios `tools/twin_run` generates on the run, 10000 compared cases per relation at a fixed seed; a violation is reduced by ddmin to a minimal scenario (uploaded), and a stream that ended short of the cases (exit 2) fails the job, with a control step showing it does |
 | `compiler-matrix` | GCC and Clang × CORE/POSIX/FREESTANDING/EMBEDDED_ROUTER, plus Clang 21 on CORE and POSIX; the POSIX legs also run the live unit suite and native I/O |
 | `sanitizers` | the unit suite under ASan+UBSan (deterministic and live POSIX) and TSan (live POSIX) |
@@ -2734,9 +2734,8 @@ Two ways, both blocking in CI:
 - `make fuzz-differential FUZZ_V2_SEED=<n> FUZZ_V2_COUNT=<k>` generates
   scenarios, runs them live in asupersync's LabRuntime through
   `tools/twin_run` (needs the pinned Rust toolchain) and in C, and compares
-  each one. CI runs seed 9 with 200 scenarios on every push; the nightly
-  workflow runs 20000 scenarios of new seeds, 5 shards of 4000 on seeds
-  `day*5+shard`, and a divergence in any shard fails it.
+  each one. CI runs seed 9 with 200 scenarios on every push; the nightly job
+  tries a new seed.
 
 Both cover what the scenario language can express (`docs/SCENARIO_DSL_V2.md`
 §6 lists what it cannot, §7 the open C-side gaps). `make fuzz-smoke` is
