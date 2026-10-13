@@ -64,7 +64,12 @@
 #define MM_MAX_TASKS 64u
 #define MM_MAX_REGIONS 64u
 #define MM_MAX_NAMES 512u
-#define MM_SEEDS 4u
+/* Seeds a scenario is probed with. A rare flip needs many: with 16 the
+ * corpus still hid one (race-deadline-wrapper-cx-reason-001), with 32 it
+ * does not. */
+#ifndef MM_SEEDS
+#define MM_SEEDS 32u
+#endif
 #define MM_MAX_EVENTS 16384u
 #define MM_POOL_CAP (4u * 1024u * 1024u)
 #define MM_CANON_CAP (1024u * 1024u)
@@ -74,9 +79,11 @@
 #define MM_NOOP_STEPS 16u
 /* Compared variants the corpus must yield: fewer means the relation was
  * exercised too little to trust (most of the corpus is skipped when it is
- * schedule sensitive, does not fit the resource class or shares names). */
-#define MM_M1_MIN 6u
-#define MM_M2_MIN 30u
+ * schedule sensitive, does not fit the resource class or shares names).
+ * The default class compares 30 M1 and 390 M2 variants (scratch run of
+ * 786b3a6); these leave room for the corpus to move. */
+#define MM_M1_MIN 15u
+#define MM_M2_MIN 100u
 
 static asx_json_doc g_scn; /* the scenario under test, as read */
 static asx_json_doc g_var; /* the variant built from it */
@@ -697,20 +704,55 @@ static void note_skip(const char *label, const char *what, const char *detail) {
     }
 }
 
-/* Whether the baseline in g_a keeps its semantic digest under other seeds. */
-static int seed_insensitive(const asx_json_doc *d, uint32_t sc, uint64_t seed,
+static char g_sens[160];
+
+/* Whether the baseline in g_a keeps its semantic digest under other seeds.
+ * Otherwise g_sens says which seed and which part of the projection first
+ * differed: the scenario's outcome is decided by a seeded tie-break (two
+ * equal-priority picks, two timers due together), so adding or reordering
+ * a task legitimately changes it. */
+static int seed_insensitive(const asx_json_doc *d, uint32_t sc, uint64_t seed, uint32_t ra,
                             const char *base_digest) {
     uint32_t k;
+    g_sens[0] = '\0';
     for (k = 0; k < MM_SEEDS; k++) {
         uint32_t vr = 0;
         uint32_t rb = 0;
         const char *digest;
-        if (!build_seed_variant(d, sc, alt_seed(seed, k), &vr)) return 0;
-        if (run_scn(&g_var, vr, &g_b, &rb) != ASX_OK) return 0;
+        const char *diff;
+        if (!build_seed_variant(d, sc, alt_seed(seed, k), &vr)) {
+            (void)snprintf(g_sens, sizeof(g_sens), "seed %u: the variant could not be built",
+                           (unsigned)k);
+            return 0;
+        }
+        if (run_scn(&g_var, vr, &g_b, &rb) != ASX_OK) {
+            (void)snprintf(g_sens, sizeof(g_sens), "seed %u: the run fails: %.80s", (unsigned)k,
+                           g_err);
+            return 0;
+        }
         digest = asx_json_get_string(&g_b, rb, "semantic_digest");
-        if (digest == NULL || strcmp(digest, base_digest) != 0) return 0;
+        if (digest != NULL && strcmp(digest, base_digest) == 0) continue;
+        diff = mm_difference(&g_a, ra, &g_b, rb, NULL, NULL);
+        (void)snprintf(g_sens, sizeof(g_sens), "seed %u: %.120s", (unsigned)k,
+                       diff != NULL ? diff : "semantic digest");
+        return 0;
     }
     return 1;
+}
+
+/* With ASX_METAMORPHIC_VERBOSE, the dispatch order, observations and
+ * snapshot of the baseline in g_a and the variant in g_b, for a
+ * violation. */
+static void dump_parts(uint32_t ra, uint32_t rb) {
+    static const char *const parts[] = {"dispatches", "observations", "snapshot"};
+    size_t i;
+    if (!g_verbose) return;
+    for (i = 0; i < sizeof(parts) / sizeof(parts[0]); i++) {
+        const char *x = canon_into(&g_a, asx_json_get(&g_a, ra, parts[i]), g_canon);
+        const char *y = canon_into(&g_b, asx_json_get(&g_b, rb, parts[i]), g_canon2);
+        fprintf(stderr, "    %s\n      base:    %.1600s\n      variant: %.1600s\n", parts[i],
+                x != NULL ? x : "?", y != NULL ? y : "?");
+    }
 }
 
 static void m1_variant(const char *label, const asx_json_doc *d, uint32_t sc, uint32_t ra,
@@ -734,6 +776,7 @@ static void m1_variant(const char *label, const asx_json_doc *d, uint32_t sc, ui
     if (diff != NULL) {
         rep->m1_violations++;
         fprintf(stderr, "  M1 VIOLATION %s (%s): %s\n", label, how, diff);
+        dump_parts(ra, rb);
     }
 }
 
@@ -785,6 +828,7 @@ static void m2_variant(const char *label, const asx_json_doc *d, uint32_t sc, ui
     if (diff != NULL) {
         rep->m2_violations++;
         fprintf(stderr, "  M2 VIOLATION %s (%s): %s\n", label, how, diff);
+        dump_parts(ra, rb);
     }
 }
 
@@ -819,9 +863,9 @@ static void check_scenario(const char *label, const asx_json_doc *d, uint32_t sc
         return;
     }
     /* seed_insensitive reuses g_b; g_a (the baseline) stays. */
-    if (!seed_insensitive(d, sc, seed, digest)) {
+    if (!seed_insensitive(d, sc, seed, ra, digest)) {
         rep->skipped_sensitive++;
-        note_skip(label, "schedule sensitive (the digest changes with the seed)", NULL);
+        note_skip(label, "schedule sensitive, a seeded tie-break decides it", g_sens);
         return;
     }
     analyze(d, sc, &info);
