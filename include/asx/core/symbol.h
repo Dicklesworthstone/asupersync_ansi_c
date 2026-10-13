@@ -41,7 +41,14 @@ typedef uint16_t asx_symbol_id;
 /* Symbol registry                                                     */
 /* ------------------------------------------------------------------ */
 
-/* Reset the global symbol registry (clears all registrations). */
+/* Reset the global symbol registry (clears all registrations).
+ *
+ * The registry is the application's namespace and lives as long as the
+ * process, not as long as a runtime: asx_runtime_reset and asx_runtime_init
+ * leave it alone, because the IDs and symbol sets an application holds
+ * would otherwise name other symbols after the next registration, and the
+ * names are the caller's strings (stored, not copied). Only this call clears
+ * it. */
 ASX_API void asx_symbol_registry_reset(void);
 
 /* Register a named symbol. Returns ASX_OK and sets *out_id on success.

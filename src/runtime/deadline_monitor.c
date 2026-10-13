@@ -10,8 +10,8 @@
  */
 
 #include <asx/runtime/deadline_monitor.h>
+#include <asx/runtime/runtime.h>
 #include <string.h>
-
 /* ------------------------------------------------------------------ */
 /* Internal slot                                                       */
 /* ------------------------------------------------------------------ */
@@ -100,7 +100,8 @@ asx_status asx_deadline_monitor_register(asx_time target_ns, uint64_t entity_id,
 
     if (out_handle == NULL) return ASX_E_INVALID_ARGUMENT;
     if (!g_initialized) return ASX_E_INVALID_STATE;
-
+    asx_runtime_reset_hook_register_internal(ASX_RESET_SLOT_DEADLINE_MONITOR,
+                                             asx_deadline_monitor_reset);
     /* Find free slot (reuse resolved/cancelled slots) */
     idx = ASX_MAX_DEADLINE_MONITORS;
     {

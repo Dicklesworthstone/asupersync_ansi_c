@@ -13,12 +13,24 @@
  */
 
 #include "../../test_harness.h"
+#include <asx/actor/gen_server.h>
 #include <asx/asx.h>
+#include <asx/core/affinity.h>
+#include <asx/core/epoch.h>
+#include <asx/core/symbol.h>
 #include <asx/fs/fs.h>
 #include <asx/net/net.h>
+#include <asx/net/pipe.h>
+#include <asx/net/quic.h>
+#include <asx/net/tls.h>
+#include <asx/net/websocket.h>
 #include <asx/process/process.h>
+#include <asx/runtime/browser_boundary.h>
+#include <asx/runtime/deadline_monitor.h>
 #include <asx/runtime/runtime.h>
 #include <asx/signal/signal.h>
+#include <asx/sync/contended_mutex.h>
+#include <asx/sync/pool.h>
 #include <string.h>
 
 #define SLOT_COUNT ((unsigned)ASX_RESET_SLOT_COUNT)
@@ -333,6 +345,229 @@ TEST(a_runtime_reset_reaches_signal_after_its_first_use) {
 
 #endif /* ASX_HAS_NATIVE_RUNTIME_SURFACES */
 
+/* ------------------------------------------------------------------ */
+/* The protocol and utility modules (bd-u4o2)                          */
+/* ------------------------------------------------------------------ */
+
+/* Each: its own reset and a forgotten table, then the call that first
+ * gives the module state must register it, and a runtime reset must take
+ * the state away (a handle taken before it is dead after it). */
+
+TEST(pipe_is_cleared_by_a_runtime_reset) {
+    asx_pipe_read rd;
+    asx_pipe_write wr;
+
+    asx_pipe_reset();
+    forget();
+    ASSERT_EQ(asx_pipe_open(&rd, &wr), ASX_OK);
+    ASSERT_TRUE(registered(ASX_RESET_SLOT_PIPE));
+    ASSERT_TRUE(asx_pipe_read_is_alive(rd));
+    ASSERT_TRUE(asx_pipe_write_is_alive(wr));
+    asx_runtime_reset();
+    ASSERT_FALSE(asx_pipe_read_is_alive(rd));
+    ASSERT_FALSE(asx_pipe_write_is_alive(wr));
+}
+
+TEST(quic_is_cleared_by_a_runtime_reset) {
+    asx_quic_config cfg;
+    asx_quic_conn conn;
+
+    asx_quic_reset();
+    forget();
+    asx_quic_config_init(&cfg);
+    ASSERT_EQ(asx_quic_connect(&conn, &cfg), ASX_OK);
+    ASSERT_TRUE(registered(ASX_RESET_SLOT_QUIC));
+    ASSERT_TRUE(asx_quic_conn_is_alive(conn));
+    asx_runtime_reset();
+    ASSERT_FALSE(asx_quic_conn_is_alive(conn));
+}
+
+TEST(ws_is_cleared_by_a_runtime_reset) {
+    asx_socket_addr addr = asx_socket_addr_loopback(18121u);
+    asx_tcp_listener lis;
+    asx_tcp_stream client;
+    asx_tcp_stream server;
+    asx_ws_config cfg;
+    asx_ws_conn conn;
+
+    asx_net_reset();
+    asx_ws_reset();
+    forget();
+    ASSERT_EQ(asx_tcp_listener_bind(&lis, &addr), ASX_OK);
+    ASSERT_EQ(asx_tcp_connect(&client, &addr), ASX_OK);
+    ASSERT_EQ(asx_tcp_listener_poll_accept(lis, &server, NULL), ASX_OK);
+    asx_ws_config_init(&cfg, ASX_WS_ROLE_SERVER);
+    cfg.skip_handshake = 1;
+    ASSERT_EQ(asx_ws_accept(&conn, server, &cfg), ASX_OK);
+    ASSERT_TRUE(registered(ASX_RESET_SLOT_WS));
+    ASSERT_TRUE(asx_ws_conn_is_alive(conn));
+    asx_runtime_reset();
+    ASSERT_FALSE(asx_ws_conn_is_alive(conn));
+}
+
+#if ASX_HAS_TLS_SURFACE
+TEST(tls_is_cleared_by_a_runtime_reset) {
+    asx_socket_addr addr = asx_socket_addr_loopback(18120u);
+    asx_tls_config cfg;
+    asx_tls_connector conn;
+    asx_tls_stream tls;
+    asx_tcp_listener lis;
+    asx_tcp_stream client;
+    asx_tcp_stream server;
+
+    asx_net_reset();
+    asx_tls_reset();
+    forget();
+    asx_tls_config_init(&cfg);
+    ASSERT_EQ(asx_tls_config_set_provider(&cfg, asx_tls_null_provider()), ASX_OK);
+    asx_tls_connector_init(&conn, &cfg);
+    ASSERT_EQ(asx_tcp_listener_bind(&lis, &addr), ASX_OK);
+    ASSERT_EQ(asx_tcp_connect(&client, &addr), ASX_OK);
+    ASSERT_EQ(asx_tcp_listener_poll_accept(lis, &server, NULL), ASX_OK);
+    ASSERT_EQ(asx_tls_connect(&tls, &conn, client), ASX_OK);
+    ASSERT_TRUE(registered(ASX_RESET_SLOT_TLS));
+    ASSERT_TRUE(asx_tls_stream_is_alive(tls));
+    asx_runtime_reset();
+    ASSERT_FALSE(asx_tls_stream_is_alive(tls));
+}
+#endif
+
+TEST(epoch_is_cleared_by_a_runtime_reset) {
+    asx_epoch_policy policy = asx_epoch_policy_strict(4u);
+    asx_epoch_handle h;
+
+    asx_epoch_reset();
+    forget();
+    ASSERT_EQ(asx_epoch_create(&policy, &h), ASX_OK);
+    ASSERT_TRUE(registered(ASX_RESET_SLOT_EPOCH));
+    ASSERT_EQ(asx_epoch_get_state(h), ASX_EPOCH_ACTIVE);
+    asx_runtime_reset();
+    ASSERT_EQ(asx_epoch_get_state(h), ASX_EPOCH_CLOSED);
+}
+
+#ifdef ASX_DEBUG_AFFINITY
+TEST(affinity_is_cleared_by_a_runtime_reset) {
+    asx_affinity_reset();
+    forget();
+    asx_affinity_set_domain((asx_affinity_domain)3u);
+    ASSERT_TRUE(registered(ASX_RESET_SLOT_AFFINITY));
+
+    forget();
+    ASSERT_EQ(asx_affinity_bind(7u, (asx_affinity_domain)3u), ASX_OK);
+    ASSERT_TRUE(registered(ASX_RESET_SLOT_AFFINITY));
+    ASSERT_EQ(asx_affinity_tracked_count(), 1u);
+    ASSERT_EQ(asx_affinity_current_domain(), (asx_affinity_domain)3u);
+    asx_runtime_reset();
+    ASSERT_EQ(asx_affinity_tracked_count(), 0u);
+    ASSERT_EQ(asx_affinity_current_domain(), ASX_AFFINITY_DOMAIN_ANY);
+}
+#endif
+
+static int g_pool_resource;
+
+static asx_status pool_make(void *factory_data, void **out) {
+    (void)factory_data;
+    *out = &g_pool_resource;
+    return ASX_OK;
+}
+
+static void pool_drop(void *resource, void *factory_data) {
+    (void)resource;
+    (void)factory_data;
+}
+
+TEST(pool_is_cleared_by_a_runtime_reset) {
+    asx_pool_config cfg;
+    asx_pool_handle h;
+    asx_pool_stats stats;
+
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.max_size = 2u;
+    cfg.create_fn = pool_make;
+    cfg.destroy_fn = pool_drop;
+    asx_pool_reset();
+    forget();
+    ASSERT_EQ(asx_pool_create(&cfg, &h), ASX_OK);
+    ASSERT_TRUE(registered(ASX_RESET_SLOT_POOL));
+    ASSERT_EQ(asx_pool_get_stats(h, &stats), ASX_OK);
+    asx_runtime_reset();
+    ASSERT_TRUE(asx_pool_get_stats(h, &stats) != ASX_OK);
+}
+
+TEST(contended_mutex_is_cleared_by_a_runtime_reset) {
+    asx_contended_mutex_handle h;
+    asx_mutex_guard guard;
+
+    asx_contended_mutex_reset();
+    forget();
+    ASSERT_EQ(asx_contended_mutex_create(&h), ASX_OK);
+    ASSERT_TRUE(registered(ASX_RESET_SLOT_CONTENDED_MUTEX));
+    ASSERT_EQ(asx_contended_mutex_try_lock(h, &guard), ASX_OK);
+    ASSERT_TRUE(asx_contended_mutex_is_locked(h));
+    asx_runtime_reset();
+    ASSERT_FALSE(asx_contended_mutex_is_locked(h));
+    ASSERT_TRUE(asx_contended_mutex_try_lock(h, &guard) != ASX_OK);
+}
+
+static asx_status server_init(void *args, void **out_state) {
+    (void)args;
+    *out_state = NULL;
+    return ASX_OK;
+}
+
+static asx_status server_call(void *state, uint64_t request, uint64_t *reply) {
+    (void)state;
+    *reply = request;
+    return ASX_OK;
+}
+
+TEST(gen_server_is_cleared_by_a_runtime_reset) {
+    asx_gen_server_callbacks cb;
+    asx_gen_server_ref ref;
+
+    memset(&cb, 0, sizeof(cb));
+    cb.init = server_init;
+    cb.handle_call = server_call;
+    asx_gen_server_reset();
+    forget();
+    ASSERT_EQ(asx_gen_server_start(&ref, &cb, NULL), ASX_OK);
+    ASSERT_TRUE(registered(ASX_RESET_SLOT_GEN_SERVER));
+    ASSERT_EQ(asx_gen_server_get_state(ref), ASX_GEN_SERVER_RUNNING);
+    asx_runtime_reset();
+    ASSERT_TRUE(asx_gen_server_get_state(ref) != ASX_GEN_SERVER_RUNNING);
+}
+
+TEST(deadline_monitor_is_cleared_by_a_runtime_reset) {
+    asx_deadline_monitor_handle h;
+
+    asx_deadline_monitor_reset();
+    ASSERT_EQ(asx_deadline_monitor_init(), ASX_OK);
+    forget();
+    ASSERT_EQ(asx_deadline_monitor_register(1000u, 7u, NULL, NULL, &h), ASX_OK);
+    ASSERT_TRUE(registered(ASX_RESET_SLOT_DEADLINE_MONITOR));
+    ASSERT_EQ(asx_deadline_monitor_active_count(), 1u);
+    asx_runtime_reset();
+    ASSERT_EQ(asx_deadline_monitor_active_count(), 0u);
+    ASSERT_EQ(asx_deadline_monitor_get_state(&h), ASX_DEADLINE_CANCELLED);
+    asx_deadline_monitor_shutdown();
+}
+
+/* The symbol registry is the application's namespace and lives as long as
+ * the process: a runtime reset leaves it alone, only its own reset clears. */
+TEST(symbol_registry_survives_a_runtime_reset) {
+    asx_symbol_id id = ASX_SYMBOL_INVALID;
+    asx_symbol_id again = ASX_SYMBOL_INVALID;
+
+    asx_symbol_registry_reset();
+    ASSERT_EQ(asx_symbol_register("bd-u4o2.symbol", &id), ASX_OK);
+    asx_runtime_reset();
+    ASSERT_EQ(asx_symbol_lookup("bd-u4o2.symbol", &again), ASX_OK);
+    ASSERT_EQ(again, id);
+    ASSERT_EQ(asx_symbol_count(), 1u);
+    asx_symbol_registry_reset();
+    ASSERT_EQ(asx_symbol_lookup("bd-u4o2.symbol", &again), ASX_E_NOT_FOUND);
+}
+
 int main(void) {
     RUN_TEST(forgetting_empties_every_slot);
     RUN_TEST(a_bad_slot_or_hook_is_ignored);
@@ -348,6 +583,22 @@ int main(void) {
     RUN_TEST(signal_registers_wherever_it_can_hold_state);
     RUN_TEST(a_runtime_reset_reaches_signal_after_its_first_use);
 #endif
+    RUN_TEST(pipe_is_cleared_by_a_runtime_reset);
+    RUN_TEST(quic_is_cleared_by_a_runtime_reset);
+    RUN_TEST(ws_is_cleared_by_a_runtime_reset);
+#if ASX_HAS_TLS_SURFACE
+    RUN_TEST_IF(asx_surface_available_active(ASX_SURFACE_TLS), tls_is_cleared_by_a_runtime_reset,
+                "the TLS surface is not available in this profile");
+#endif
+    RUN_TEST(epoch_is_cleared_by_a_runtime_reset);
+#ifdef ASX_DEBUG_AFFINITY
+    RUN_TEST(affinity_is_cleared_by_a_runtime_reset);
+#endif
+    RUN_TEST(pool_is_cleared_by_a_runtime_reset);
+    RUN_TEST(contended_mutex_is_cleared_by_a_runtime_reset);
+    RUN_TEST(gen_server_is_cleared_by_a_runtime_reset);
+    RUN_TEST(deadline_monitor_is_cleared_by_a_runtime_reset);
+    RUN_TEST(symbol_registry_survives_a_runtime_reset);
     TEST_REPORT();
     return test_failures;
 }
