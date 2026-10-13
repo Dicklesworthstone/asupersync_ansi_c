@@ -481,9 +481,9 @@ static asx_status poll_finish_child(void *data, asx_task_id self) {
 
 static uint32_t scope_cancel_trace_count(void) {
     uint32_t i, count = 0u;
-    for (i = 0u; i < asx_trace_event_count(); i++) {
+    for (i = 0u; i < asx_trace_event_count(&g_rt); i++) {
         asx_trace_event event;
-        if (asx_trace_event_get(i, &event) &&
+        if (asx_trace_event_get(&g_rt, i, &event) &&
             (event.kind == ASX_TRACE_CANCEL_REQUEST || event.kind == ASX_TRACE_REGION_CANCELLED)) {
             count++;
         }
@@ -541,10 +541,10 @@ TEST(scope_finish_budget_retry_never_cancels_or_reissues_close) {
     ASSERT_EQ(ctx.cancelled, 0);
     ASSERT_EQ(scope.budget.poll_quota, 0u);
     memcpy(&before, &scope, sizeof(before));
-    events = asx_trace_event_count();
+    events = asx_trace_event_count(&g_rt);
     ASSERT_EQ(asx_scope_finish(&scope, &changed, NULL), ASX_E_INVALID_STATE);
     ASSERT_EQ(memcmp(&scope, &before, sizeof(scope)), 0);
-    ASSERT_EQ(asx_trace_event_count(), events);
+    ASSERT_EQ(asx_trace_event_count(&g_rt), events);
     ASSERT_EQ(asx_scope_spawn(&scope, poll_immediate_ok, NULL, &refused), ASX_E_REGION_CLOSED);
     ASSERT_EQ(refused.task_id, ASX_INVALID_ID);
     scope.budget = asx_budget_from_polls(8u);
@@ -641,7 +641,7 @@ TEST(scope_finish_invalid_body_and_reason_are_failure_atomic) {
     setup();
     ASSERT_EQ(asx_scope_init(&scope, g_rid, &g_cx, asx_budget_from_polls(8u)), ASX_OK);
     memcpy(&before, &scope, sizeof(before));
-    events = asx_trace_event_count();
+    events = asx_trace_event_count(&g_rt);
     ASSERT_EQ(asx_scope_finish(NULL, &ok, NULL), ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_scope_finish(&scope, NULL, NULL), ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_scope_finish(&scope, &invalid, NULL), ASX_E_INVALID_ARGUMENT);
@@ -650,7 +650,7 @@ TEST(scope_finish_invalid_body_and_reason_are_failure_atomic) {
     reason.kind = (asx_cancel_kind)99;
     ASSERT_EQ(asx_scope_finish(&scope, &cancelled, &reason), ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(memcmp(&scope, &before, sizeof(scope)), 0);
-    ASSERT_EQ(asx_trace_event_count(), events);
+    ASSERT_EQ(asx_trace_event_count(&g_rt), events);
     ASSERT_EQ(asx_region_get_state(g_rid, &state), ASX_OK);
     ASSERT_EQ(state, ASX_REGION_OPEN);
     ASSERT_EQ(asx_scope_finish(&scope, &ok, NULL), ASX_OK);
@@ -701,15 +701,15 @@ TEST(scope_finish_uninitialized_or_invalid_authority_refuses_before_close) {
     ASSERT_EQ(asx_cx_init(&other_cx, other, ASX_INVALID_ID, ASX_CAP_ALL), ASX_OK);
     memcpy(&scope, &valid, sizeof(scope));
     scope.cx = other_cx;
-    events = asx_trace_event_count();
+    events = asx_trace_event_count(&g_rt);
     ASSERT_EQ(asx_scope_finish(&scope, &body, NULL), ASX_E_INVALID_STATE);
-    ASSERT_EQ(asx_trace_event_count(), events);
+    ASSERT_EQ(asx_trace_event_count(&g_rt), events);
     ASSERT_EQ(asx_region_get_state(g_rid, &state), ASX_OK);
     ASSERT_EQ(state, ASX_REGION_OPEN);
     memcpy(&scope, &valid, sizeof(scope));
     ASSERT_EQ(asx_cx_init(&scope.cx, g_rid, ASX_INVALID_ID, ASX_CAP_NONE), ASX_OK);
     ASSERT_EQ(asx_scope_finish(&scope, &body, NULL), ASX_E_INVALID_STATE);
-    ASSERT_EQ(asx_trace_event_count(), events);
+    ASSERT_EQ(asx_trace_event_count(&g_rt), events);
     ASSERT_EQ(asx_scope_finish(&valid, &body, NULL), ASX_OK);
     teardown();
 }
@@ -726,10 +726,10 @@ TEST(scope_finish_poison_and_stale_region_preserve_saved_body_and_budget) {
     ASSERT_EQ(asx_scope_init(&scope, g_rid, &g_cx, asx_budget_from_polls(8u)), ASX_OK);
     ASSERT_EQ(asx_region_poison(g_rid), ASX_OK);
     memcpy(&before, &scope, sizeof(before));
-    events = asx_trace_event_count();
+    events = asx_trace_event_count(&g_rt);
     ASSERT_EQ(asx_scope_finish(&scope, &body, NULL), ASX_E_REGION_POISONED);
     ASSERT_EQ(memcmp(&scope, &before, sizeof(scope)), 0);
-    ASSERT_EQ(asx_trace_event_count(), events);
+    ASSERT_EQ(asx_trace_event_count(&g_rt), events);
     teardown();
 
 #ifndef ASX_DEBUG_QUARANTINE
@@ -742,10 +742,10 @@ TEST(scope_finish_poison_and_stale_region_preserve_saved_body_and_budget) {
     ASSERT_NE(asx_handle_generation(stale.region_id), asx_handle_generation(g_rid));
     ASSERT_EQ(asx_cx_init(&g_cx, g_rid, ASX_INVALID_ID, ASX_CAP_ALL), ASX_OK);
     memcpy(&before, &stale, sizeof(before));
-    events = asx_trace_event_count();
+    events = asx_trace_event_count(&g_rt);
     ASSERT_EQ(asx_scope_finish(&stale, &body, NULL), ASX_E_STALE_HANDLE);
     ASSERT_EQ(memcmp(&stale, &before, sizeof(stale)), 0);
-    ASSERT_EQ(asx_trace_event_count(), events);
+    ASSERT_EQ(asx_trace_event_count(&g_rt), events);
     ASSERT_EQ(asx_scope_init(&scope, g_rid, &g_cx, asx_budget_from_polls(8u)), ASX_OK);
     ASSERT_EQ(asx_scope_finish(&scope, &body, NULL), ASX_OK);
     teardown();

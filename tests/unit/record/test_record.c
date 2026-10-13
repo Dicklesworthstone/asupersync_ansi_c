@@ -49,7 +49,7 @@ TEST(summary_capture_reports_live_obligation_counts) {
     ASSERT_EQ(asx_task_spawn(region, poll_idle, NULL, &holder), ASX_OK);
     ASSERT_EQ(asx_obligation_reserve_ex(region, ASX_OBLIGATION_KIND_GENERIC, holder, &obligation),
               ASX_OK);
-    ASSERT_EQ(asx_record_summary_capture(&summary), ASX_OK);
+    ASSERT_EQ(asx_record_summary_capture(&g_rt, &summary), ASX_OK);
     ASSERT_EQ(summary.region_count, 1u);
     ASSERT_EQ(summary.obligation_count, 1u);
     ASSERT_TRUE(summary.event_count >= 2u);
@@ -64,7 +64,7 @@ TEST(snapshot_json_is_nonempty) {
     setup();
     ASSERT_EQ(asx_region_open(&g_rt, &region), ASX_OK);
     asx_record_snapshot_init(&snapshot);
-    ASSERT_EQ(asx_record_snapshot_capture(&snapshot), ASX_OK);
+    ASSERT_EQ(asx_record_snapshot_capture(&g_rt, &snapshot), ASX_OK);
     asx_codec_buffer_init(&buf);
     ASSERT_EQ(asx_record_snapshot_json(&snapshot, &buf), ASX_OK);
     ASSERT_TRUE(buf.len > 0u);

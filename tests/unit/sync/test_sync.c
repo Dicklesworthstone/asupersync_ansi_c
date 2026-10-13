@@ -771,8 +771,8 @@ static uint32_t sync_obligation_resolution_count(asx_obligation_id id) {
     uint32_t i;
     uint32_t n = 0;
     asx_trace_event event;
-    for (i = 0; i < asx_trace_event_count(); i++) {
-        if (!asx_trace_event_get(i, &event) || event.entity_id != id) continue;
+    for (i = 0; i < asx_trace_event_count(test_runtime()); i++) {
+        if (!asx_trace_event_get(test_runtime(), i, &event) || event.entity_id != id) continue;
         if (event.kind == ASX_TRACE_OBLIGATION_COMMIT || event.kind == ASX_TRACE_OBLIGATION_ABORT ||
             event.kind == ASX_TRACE_OBLIGATION_LEAK) {
             n++;
@@ -921,11 +921,11 @@ TEST(equal_count_permits_reject_another_reservations_credit) {
     ASSERT_EQ(asx_semaphore_available(sem), 0u);
     mixed = first;
     mixed.obligation = second.obligation;
-    digest = asx_trace_digest();
+    digest = asx_trace_digest(test_runtime());
     ASSERT_EQ(asx_semaphore_release(mixed), ASX_E_PERMISSION_DENIED);
     ASSERT_EQ(asx_semaphore_forget(mixed), ASX_E_PERMISSION_DENIED);
     ASSERT_EQ(asx_semaphore_available(sem), 0u);
-    ASSERT_EQ(asx_trace_digest(), digest);
+    ASSERT_EQ(asx_trace_digest(test_runtime()), digest);
     ASSERT_EQ(asx_obligation_get_info(first.obligation, &info), ASX_OK);
     ASSERT_EQ(info.state, ASX_OBLIGATION_RESERVED);
     ASSERT_EQ(info.holder, holder);

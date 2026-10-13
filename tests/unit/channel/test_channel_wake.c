@@ -1205,7 +1205,7 @@ static void cap_observe(void *ctx, const asx_trace_event *ev, const asx_trace_pa
 /* Start (1: forgetting earlier captures) or stop (0) capturing. */
 static void capture(int on) {
     if (on) g_ncap = 0;
-    asx_trace_set_observer(on ? cap_observe : NULL, NULL);
+    asx_trace_set_observer(&g_rt, on ? cap_observe : NULL, NULL);
 }
 
 static int cap_user(uint32_t i, asx_task_id task, const char *message) {

@@ -111,7 +111,7 @@ TEST(timer_trace_emits_set_fire_and_cancel) {
     uint32_t count;
 
     asx_timer_wheel_reset(w);
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
 
     ASSERT_EQ(asx_timer_register(w, 100, (void *)0xAABB, &fire_h), ASX_OK);
     ASSERT_EQ(asx_timer_register(w, 200, (void *)0xCCDD, &cancel_h), ASX_OK);
@@ -121,24 +121,24 @@ TEST(timer_trace_emits_set_fire_and_cancel) {
     ASSERT_EQ(count, (uint32_t)1);
     ASSERT_EQ(wakers[0], (void *)0xAABB);
 
-    ASSERT_EQ(asx_trace_event_count(), (uint32_t)4);
+    ASSERT_EQ(asx_trace_event_count(test_runtime()), (uint32_t)4);
 
-    ASSERT_TRUE(asx_trace_event_get(0, &ev));
+    ASSERT_TRUE(asx_trace_event_get(test_runtime(), 0, &ev));
     ASSERT_EQ(ev.kind, ASX_TRACE_TIMER_SET);
     ASSERT_EQ(ev.entity_id, timer_trace_entity_id(&fire_h));
     ASSERT_EQ(ev.aux, (uint64_t)100);
 
-    ASSERT_TRUE(asx_trace_event_get(1, &ev));
+    ASSERT_TRUE(asx_trace_event_get(test_runtime(), 1, &ev));
     ASSERT_EQ(ev.kind, ASX_TRACE_TIMER_SET);
     ASSERT_EQ(ev.entity_id, timer_trace_entity_id(&cancel_h));
     ASSERT_EQ(ev.aux, (uint64_t)200);
 
-    ASSERT_TRUE(asx_trace_event_get(2, &ev));
+    ASSERT_TRUE(asx_trace_event_get(test_runtime(), 2, &ev));
     ASSERT_EQ(ev.kind, ASX_TRACE_TIMER_CANCEL);
     ASSERT_EQ(ev.entity_id, timer_trace_entity_id(&cancel_h));
     ASSERT_EQ(ev.aux, (uint64_t)200);
 
-    ASSERT_TRUE(asx_trace_event_get(3, &ev));
+    ASSERT_TRUE(asx_trace_event_get(test_runtime(), 3, &ev));
     ASSERT_EQ(ev.kind, ASX_TRACE_TIMER_FIRE);
     ASSERT_EQ(ev.entity_id, timer_trace_entity_id(&fire_h));
     ASSERT_EQ(ev.aux, (uint64_t)100);
@@ -1100,7 +1100,7 @@ TEST(timer_runtime_wheel_is_separate_and_silent) {
     ASSERT_TRUE(app != rt);
     asx_timer_wheel_reset(app);
     asx_timer_wheel_reset(rt);
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
 
     ASSERT_EQ(asx_timer_register(rt, 5u * TW_MS, (void *)7, &h), ASX_OK);
     ASSERT_EQ(asx_timer_active_count(rt), (uint32_t)1);
@@ -1109,11 +1109,11 @@ TEST(timer_runtime_wheel_is_separate_and_silent) {
 
     ASSERT_EQ(asx_timer_collect_expired(rt, 5u * TW_MS, wakers, 4), (uint32_t)1);
     ASSERT_EQ(wakers[0], (void *)7);
-    ASSERT_EQ(asx_trace_event_count(), (uint32_t)0);
+    ASSERT_EQ(asx_trace_event_count(test_runtime()), (uint32_t)0);
 
     /* The application wheel traces its own timers. */
     ASSERT_EQ(asx_timer_register(app, 5u * TW_MS, (void *)8, &h), ASX_OK);
-    ASSERT_EQ(asx_trace_event_count(), (uint32_t)1);
+    ASSERT_EQ(asx_trace_event_count(test_runtime()), (uint32_t)1);
 }
 
 /* -------------------------------------------------------------------

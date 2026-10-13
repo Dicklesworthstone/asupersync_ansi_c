@@ -389,8 +389,8 @@ static void check_forged_tracked_oneshot_binding(tracked_oneshot_misuse *ctx) {
     forged.obligation = ctx->obligation;
     memcpy(&before, &forged, sizeof(before));
     ASSERT_EQ(asx_obligation_get_info(ctx->obligation, &before_info), ASX_OK);
-    emitted = asx_trace_emitted_total();
-    digest = asx_trace_digest();
+    emitted = asx_trace_emitted_total(test_runtime());
+    digest = asx_trace_digest(test_runtime());
     ASSERT_EQ(asx_oneshot_permit_send(&forged, 999u), ASX_E_PERMISSION_DENIED);
     asx_oneshot_permit_abort(&forged);
     ASSERT_EQ(memcmp(&forged, &before, sizeof(forged)), 0);
@@ -405,8 +405,8 @@ static void check_forged_tracked_oneshot_binding(tracked_oneshot_misuse *ctx) {
     ASSERT_FALSE(asx_oneshot_receiver_is_closed(&receiver));
     ASSERT_EQ(asx_oneshot_get_state(ctx->receiver.slot, ctx->receiver.generation),
               ASX_ONESHOT_EMPTY);
-    ASSERT_EQ(asx_trace_emitted_total(), emitted);
-    ASSERT_EQ(asx_trace_digest(), digest);
+    ASSERT_EQ(asx_trace_emitted_total(test_runtime()), emitted);
+    ASSERT_EQ(asx_trace_digest(test_runtime()), digest);
     forged.obligation = ASX_INVALID_ID;
     asx_oneshot_permit_abort(&forged);
     ASSERT_EQ(asx_oneshot_try_recv(&receiver, &value), ASX_E_DISCONNECTED);
@@ -421,8 +421,8 @@ static void check_wrong_task_oneshot_attempts(tracked_oneshot_misuse *ctx, asx_t
     ASSERT_NE(asx_handle_index(self), asx_handle_index(ctx->holder));
     ASSERT_EQ(ctx->phase, 1u);
     memcpy(&before, &ctx->permit, sizeof(before));
-    emitted = asx_trace_emitted_total();
-    digest = asx_trace_digest();
+    emitted = asx_trace_emitted_total(test_runtime());
+    digest = asx_trace_digest(test_runtime());
     /* The owned permit may move; a copied raw ledger ID confers no authority. */
     ASSERT_EQ(asx_obligation_commit(ctx->obligation), ASX_E_PERMISSION_DENIED);
     ASSERT_EQ(asx_obligation_abort(ctx->obligation), ASX_E_PERMISSION_DENIED);
@@ -440,8 +440,8 @@ static void check_wrong_task_oneshot_attempts(tracked_oneshot_misuse *ctx, asx_t
               ASX_ONESHOT_EMPTY);
     ASSERT_FALSE(asx_oneshot_permit_is_closed(&ctx->permit));
     ASSERT_FALSE(asx_oneshot_receiver_is_closed(&ctx->receiver));
-    ASSERT_EQ(asx_trace_emitted_total(), emitted);
-    ASSERT_EQ(asx_trace_digest(), digest);
+    ASSERT_EQ(asx_trace_emitted_total(test_runtime()), emitted);
+    ASSERT_EQ(asx_trace_digest(test_runtime()), digest);
     ASSERT_EQ(asx_oneshot_try_send(&ctx->sender, 999u), ASX_E_INVALID_STATE);
     ASSERT_EQ(asx_oneshot_try_recv(&ctx->receiver, &value), ASX_E_WOULD_BLOCK);
     check_forged_tracked_oneshot_binding(ctx);

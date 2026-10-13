@@ -370,13 +370,13 @@ TEST(tracked_permit_authenticates_each_reservation_and_moves) {
     forged = second;
     forged.obligation = first.obligation;
     memcpy(&before, &forged, sizeof(before));
-    digest = asx_trace_digest();
+    digest = asx_trace_digest(test_runtime());
     ASSERT_EQ(asx_broadcast_permit_send(&forged, 999u, &reached), ASX_E_PERMISSION_DENIED);
     asx_broadcast_permit_abort(&forged);
     ASSERT_EQ(memcmp(&forged, &before, sizeof(forged)), 0);
     ASSERT_EQ(reached, 0u);
     ASSERT_EQ(asx_broadcast_total_sent(&tx), 0u);
-    ASSERT_EQ(asx_trace_digest(), digest);
+    ASSERT_EQ(asx_trace_digest(test_runtime()), digest);
     ASSERT_EQ(asx_obligation_get_info(first.obligation, &info), ASX_OK);
     ASSERT_EQ(info.state, ASX_OBLIGATION_RESERVED);
     ASSERT_EQ(info.holder, holder);
@@ -386,14 +386,14 @@ TEST(tracked_permit_authenticates_each_reservation_and_moves) {
     ASSERT_EQ(reached, 1u);
     ASSERT_EQ(asx_obligation_get_info(before.obligation, &info), ASX_OK);
     ASSERT_EQ(info.state, ASX_OBLIGATION_COMMITTED);
-    digest = asx_trace_digest();
+    digest = asx_trace_digest(test_runtime());
     memcpy(&before, &retained, sizeof(before));
     ASSERT_EQ(asx_broadcast_permit_send(&retained, 999u, &reached),
               ASX_E_OBLIGATION_ALREADY_RESOLVED);
     asx_broadcast_permit_abort(&retained);
     ASSERT_EQ(memcmp(&retained, &before, sizeof(retained)), 0);
     ASSERT_EQ(asx_broadcast_total_sent(&tx), 1u);
-    ASSERT_EQ(asx_trace_digest(), digest);
+    ASSERT_EQ(asx_trace_digest(test_runtime()), digest);
     ASSERT_EQ(asx_obligation_get_info(second.obligation, &info), ASX_OK);
     ASSERT_EQ(info.state, ASX_OBLIGATION_RESERVED);
     memcpy(&before, &second, sizeof(before));
@@ -402,14 +402,14 @@ TEST(tracked_permit_authenticates_each_reservation_and_moves) {
     ASSERT_EQ(asx_obligation_get_info(before.obligation, &info), ASX_OK);
     ASSERT_EQ(info.state, ASX_OBLIGATION_ABORTED);
     ASSERT_EQ(info.abort_reason, ASX_OBLIGATION_ABORT_CANCEL);
-    digest = asx_trace_digest();
+    digest = asx_trace_digest(test_runtime());
     retained = before;
     ASSERT_EQ(asx_broadcast_permit_send(&retained, 999u, &reached),
               ASX_E_OBLIGATION_ALREADY_RESOLVED);
     asx_broadcast_permit_abort(&retained);
     ASSERT_EQ(memcmp(&retained, &before, sizeof(retained)), 0);
     ASSERT_EQ(asx_broadcast_total_sent(&tx), 1u);
-    ASSERT_EQ(asx_trace_digest(), digest);
+    ASSERT_EQ(asx_trace_digest(test_runtime()), digest);
     ASSERT_EQ(asx_broadcast_try_recv(&rx, &value), ASX_OK);
     ASSERT_EQ(value, 7u);
     ASSERT_EQ(asx_broadcast_try_recv(&rx, &value), ASX_E_WOULD_BLOCK);
@@ -605,9 +605,9 @@ TEST(registration_observer_cannot_reuse_the_credit_being_registered) {
     ASSERT_EQ(asx_task_spawn(region, broadcast_holder_poll, NULL, &holder), ASX_OK);
     ASSERT_EQ(asx_cx_init(&cx, region, holder, ASX_CAP_NONE), ASX_OK);
     ASSERT_EQ(asx_broadcast_create(2u, &observer.sender, &receiver), ASX_OK);
-    asx_trace_set_observer(reserve_without_events_from_observer, &observer);
+    asx_trace_set_observer(test_runtime(), reserve_without_events_from_observer, &observer);
     status = asx_broadcast_reserve(&observer.sender, &cx, &outer);
-    asx_trace_set_observer(NULL, NULL);
+    asx_trace_set_observer(test_runtime(), NULL, NULL);
     ASSERT_EQ(status, ASX_OK);
     ASSERT_EQ(observer.observed, 1);
     ASSERT_EQ(observer.status, ASX_OK);

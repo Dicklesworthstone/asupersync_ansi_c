@@ -1618,13 +1618,13 @@ static void test_send_info_from_a_task(void) {
     client_add(&c, CL_STOP_JOIN, 0u);
     client_add(&c, CL_INFO, 8u);
     client_start(&c, h, r);
-    users_before = asx_trace_kind_total(ASX_TRACE_USER);
+    users_before = asx_trace_kind_total(test_runtime(), ASX_TRACE_USER);
     run(r);
     ASSERT(c.steps[0].status == ASX_OK, "an info send to a running server");
     ASSERT(s.n == 1u && s.seq[0] == 2007u, "reached handle_info as a USER message");
     ASSERT(c.steps[1].status == ASX_OK, "the server stopped and joined");
     ASSERT(c.steps[2].status == ASX_E_DISCONNECTED, "an info to a stopped server is refused");
-    ASSERT(asx_trace_kind_total(ASX_TRACE_USER) > users_before,
+    ASSERT(asx_trace_kind_total(test_runtime(), ASX_TRACE_USER) > users_before,
            "the server's loop and the rejection left user traces");
 }
 
@@ -1650,7 +1650,7 @@ static void test_drop_oldest_evicts_the_oldest_cast_to_make_room(void) {
     uint64_t users_before;
     setup();
     h = spawn_rec_policy(g_root, &s, 2, ASX_ACTOR_OVERFLOW_DROP_OLDEST);
-    users_before = asx_trace_kind_total(ASX_TRACE_USER);
+    users_before = asx_trace_kind_total(test_runtime(), ASX_TRACE_USER);
     ASSERT(asx_actor_try_cast(h, 1) == ASX_OK && asx_actor_try_cast(h, 2) == ASX_OK, "room");
     ASSERT(asx_actor_evicted_count(h) == 0u, "nothing evicted while there is room");
     ASSERT(asx_actor_try_cast(h, 3) == ASX_OK, "a full mailbox takes the new cast");
@@ -1658,7 +1658,7 @@ static void test_drop_oldest_evicts_the_oldest_cast_to_make_room(void) {
     ASSERT(asx_actor_try_cast(h, 4) == ASX_OK, "again");
     ASSERT(asx_actor_evicted_count(h) == 2u, "the second eviction is counted");
     ASSERT(asx_actor_mailbox_count(h) == 2u, "the mailbox stays at its capacity");
-    ASSERT(asx_trace_kind_total(ASX_TRACE_USER) == users_before,
+    ASSERT(asx_trace_kind_total(test_runtime(), ASX_TRACE_USER) == users_before,
            "from the host there is no task to attribute the eviction to");
     run(g_root);
     ASSERT(s.casts == 2u && s.log[0] == 3u && s.log[1] == 4u,
@@ -1705,12 +1705,12 @@ static void test_drop_oldest_traces_the_eviction_on_the_calling_task(void) {
     MUST_OK(asx_task_spawn(g_root, evictor_poll, &e, &tid));
     h = spawn_rec_policy(g_root, &s, 2, ASX_ACTOR_OVERFLOW_DROP_OLDEST);
     e.server = h;
-    users_before = asx_trace_kind_total(ASX_TRACE_USER);
+    users_before = asx_trace_kind_total(test_runtime(), ASX_TRACE_USER);
     run_one_poll(g_root);
     ASSERT(e.status[0] == ASX_OK && e.status[1] == ASX_OK && e.status[2] == ASX_OK,
            "all three casts were accepted");
     ASSERT(asx_actor_evicted_count(h) == 1u, "the third evicted the first");
-    ASSERT(asx_trace_kind_total(ASX_TRACE_USER) == users_before + 1u,
+    ASSERT(asx_trace_kind_total(test_runtime(), ASX_TRACE_USER) == users_before + 1u,
            "one gen_server::cast_evicted_oldest trace, on the task");
 }
 

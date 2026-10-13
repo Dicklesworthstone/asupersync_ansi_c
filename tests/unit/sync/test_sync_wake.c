@@ -1119,7 +1119,7 @@ static void timer_events_of(asx_task_id task, char *out, size_t cap) {
     uint32_t i;
     size_t n = 0;
     asx_trace_event ev;
-    for (i = 0; asx_trace_event_get(i, &ev) && n + 1u < cap; i++) {
+    for (i = 0; asx_trace_event_get(&g_rt, i, &ev) && n + 1u < cap; i++) {
         char c;
         if (asx_handle_index(ev.entity_id) != asx_handle_index(task)) continue;
         if (ev.kind == ASX_TRACE_TIMER_SET) {

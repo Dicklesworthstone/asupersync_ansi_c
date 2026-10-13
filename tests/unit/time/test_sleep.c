@@ -479,7 +479,7 @@ TEST(sleep_beyond_the_wheel_horizon_fires_early_and_registers_again) {
     asx_runtime_config_init(&cfg);
     MUST_OK(asx_runtime_hooks_init(&hooks));
     MUST_OK(asx_runtime_init(&rt, &cfg, &hooks));
-    asx_trace_reset();
+    asx_trace_reset(&rt);
     memset(&t, 0, sizeof(t));
     MUST_OK(asx_sleep_init(&t.s, eight_days));
     ASSERT_EQ(asx_region_open(&rt, &r), ASX_OK);
@@ -490,9 +490,9 @@ TEST(sleep_beyond_the_wheel_horizon_fires_early_and_registers_again) {
     ASSERT_EQ(t.result, ASX_OK);
     ASSERT_EQ(t.polls, 3u);
     ASSERT_EQ(asx_runtime_virtual_now(&rt), eight_days);
-    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_TIMER_SET), (uint64_t)2u);
-    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_TIMER_CANCEL), (uint64_t)1u);
-    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_TIMER_FIRE), (uint64_t)1u);
+    ASSERT_EQ(asx_trace_kind_total(&rt, ASX_TRACE_TIMER_SET), (uint64_t)2u);
+    ASSERT_EQ(asx_trace_kind_total(&rt, ASX_TRACE_TIMER_CANCEL), (uint64_t)1u);
+    ASSERT_EQ(asx_trace_kind_total(&rt, ASX_TRACE_TIMER_FIRE), (uint64_t)1u);
     asx_runtime_reset(&rt);
 }
 
@@ -511,7 +511,7 @@ TEST(sleep_within_the_wheel_horizon_registers_once) {
     asx_runtime_config_init(&cfg);
     MUST_OK(asx_runtime_hooks_init(&hooks));
     MUST_OK(asx_runtime_init(&rt, &cfg, &hooks));
-    asx_trace_reset();
+    asx_trace_reset(&rt);
     memset(&t, 0, sizeof(t));
     MUST_OK(asx_sleep_init(&t.s, six_days));
     ASSERT_EQ(asx_region_open(&rt, &r), ASX_OK);
@@ -522,9 +522,9 @@ TEST(sleep_within_the_wheel_horizon_registers_once) {
     ASSERT_EQ(t.result, ASX_OK);
     ASSERT_EQ(t.polls, 2u);
     ASSERT_EQ(asx_runtime_virtual_now(&rt), six_days);
-    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_TIMER_SET), (uint64_t)1u);
-    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_TIMER_CANCEL), (uint64_t)0u);
-    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_TIMER_FIRE), (uint64_t)1u);
+    ASSERT_EQ(asx_trace_kind_total(&rt, ASX_TRACE_TIMER_SET), (uint64_t)1u);
+    ASSERT_EQ(asx_trace_kind_total(&rt, ASX_TRACE_TIMER_CANCEL), (uint64_t)0u);
+    ASSERT_EQ(asx_trace_kind_total(&rt, ASX_TRACE_TIMER_FIRE), (uint64_t)1u);
     asx_runtime_reset(&rt);
 }
 

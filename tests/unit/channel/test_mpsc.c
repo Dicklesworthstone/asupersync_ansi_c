@@ -303,7 +303,7 @@ TEST(trace_emits_send_and_recv) {
     uint64_t value;
 
     setup();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
 
     ASSERT_EQ(asx_channel_create(g_rid, 4, &ch), ASX_OK);
     ASSERT_EQ(asx_channel_try_reserve(ch, &permit), ASX_OK);
@@ -311,14 +311,14 @@ TEST(trace_emits_send_and_recv) {
     ASSERT_EQ(asx_channel_try_recv(ch, &value), ASX_OK);
     ASSERT_EQ(value, 42u);
 
-    ASSERT_EQ(asx_trace_event_count(), (uint32_t)2);
+    ASSERT_EQ(asx_trace_event_count(test_runtime()), (uint32_t)2);
 
-    ASSERT_TRUE(asx_trace_event_get(0, &ev));
+    ASSERT_TRUE(asx_trace_event_get(test_runtime(), 0, &ev));
     ASSERT_EQ(ev.kind, ASX_TRACE_CHANNEL_SEND);
     ASSERT_EQ(ev.entity_id, (uint64_t)ch);
     ASSERT_EQ(ev.aux, (uint64_t)42);
 
-    ASSERT_TRUE(asx_trace_event_get(1, &ev));
+    ASSERT_TRUE(asx_trace_event_get(test_runtime(), 1, &ev));
     ASSERT_EQ(ev.kind, ASX_TRACE_CHANNEL_RECV);
     ASSERT_EQ(ev.entity_id, (uint64_t)ch);
     ASSERT_EQ(ev.aux, (uint64_t)42);
@@ -1137,8 +1137,8 @@ static void check_forged_tracked_permit_binding(tracked_permit_misuse *ctx) {
     forged.obligation = ctx->obligation;
     memcpy(&before, &forged, sizeof(before));
     ASSERT_EQ(asx_obligation_get_info(ctx->obligation, &before_info), ASX_OK);
-    emitted = asx_trace_emitted_total();
-    digest = asx_trace_digest();
+    emitted = asx_trace_emitted_total(test_runtime());
+    digest = asx_trace_digest(test_runtime());
     ASSERT_EQ(asx_send_permit_send(&forged, 999u), ASX_E_PERMISSION_DENIED);
     asx_send_permit_abort(&forged);
     ASSERT_EQ(memcmp(&forged, &before, sizeof(forged)), 0);
@@ -1156,8 +1156,8 @@ static void check_forged_tracked_permit_binding(tracked_permit_misuse *ctx) {
     ASSERT_EQ(queued, 0u);
     ASSERT_EQ(asx_channel_reserved_count(ctx->channel, &reserved), ASX_OK);
     ASSERT_EQ(reserved, 1u);
-    ASSERT_EQ(asx_trace_emitted_total(), emitted);
-    ASSERT_EQ(asx_trace_digest(), digest);
+    ASSERT_EQ(asx_trace_emitted_total(test_runtime()), emitted);
+    ASSERT_EQ(asx_trace_digest(test_runtime()), digest);
     /* Restore the independently owned untracked permit and return its slot. */
     forged.obligation = ASX_INVALID_ID;
     asx_send_permit_abort(&forged);
@@ -1179,8 +1179,8 @@ static void check_wrong_task_permit_attempts(tracked_permit_misuse *ctx, asx_tas
     ASSERT_NE(asx_handle_index(self), asx_handle_index(ctx->holder));
     ASSERT_EQ(ctx->phase, 1u);
     memcpy(&before, &ctx->permit, sizeof(before));
-    emitted = asx_trace_emitted_total();
-    digest = asx_trace_digest();
+    emitted = asx_trace_emitted_total(test_runtime());
+    digest = asx_trace_digest(test_runtime());
     /* A raw ledger ID is not the owned physical permit capability. */
     ASSERT_EQ(asx_obligation_commit(ctx->obligation), ASX_E_PERMISSION_DENIED);
     ASSERT_EQ(asx_obligation_abort(ctx->obligation), ASX_E_PERMISSION_DENIED);
@@ -1200,8 +1200,8 @@ static void check_wrong_task_permit_attempts(tracked_permit_misuse *ctx, asx_tas
     ASSERT_EQ(queued, 0u);
     ASSERT_EQ(asx_channel_reserved_count(ctx->channel, &reserved), ASX_OK);
     ASSERT_EQ(reserved, 1u);
-    ASSERT_EQ(asx_trace_emitted_total(), emitted);
-    ASSERT_EQ(asx_trace_digest(), digest);
+    ASSERT_EQ(asx_trace_emitted_total(test_runtime()), emitted);
+    ASSERT_EQ(asx_trace_digest(test_runtime()), digest);
     ASSERT_EQ(asx_channel_try_reserve(ctx->channel, &probe), ASX_E_CHANNEL_FULL);
     check_forged_tracked_permit_binding(ctx);
     if (test_current_failed) return;
@@ -1368,7 +1368,7 @@ TEST(cancelled_cx_wins_over_ready_channel_and_traces) {
     ASSERT_EQ(asx_channel_create(g_rid, 4, &ch), ASX_OK);
     ASSERT_EQ(asx_channel_send(ch, NULL, 5u), ASX_OK);
     ASSERT_EQ(asx_task_cancel(t, ASX_CANCEL_USER), ASX_OK);
-    asx_trace_set_observer(observe_last, NULL);
+    asx_trace_set_observer(test_runtime(), observe_last, NULL);
 
     ASSERT_EQ(asx_channel_recv(ch, &cx, &v), ASX_E_CANCELLED);
     ASSERT_TRUE(last_event_is_user_trace(t, "mpsc::recv cancelled"));
@@ -1376,7 +1376,7 @@ TEST(cancelled_cx_wins_over_ready_channel_and_traces) {
     ASSERT_TRUE(last_event_is_user_trace(t, "mpsc::reserve cancelled"));
     ASSERT_EQ(asx_channel_send(ch, &cx, 6u), ASX_E_CANCELLED);
     ASSERT_TRUE(last_event_is_user_trace(t, "mpsc::reserve cancelled"));
-    asx_trace_set_observer(NULL, NULL);
+    asx_trace_set_observer(test_runtime(), NULL, NULL);
     ASSERT_EQ(asx_channel_reserved_count(ch, &reserved), ASX_OK);
     ASSERT_EQ(reserved, 0u);
 
@@ -1924,10 +1924,10 @@ TEST(recv_many_limit_zero_returns_before_the_cancel_check) {
     ASSERT_EQ(asx_task_cancel(t, ASX_CANCEL_USER), ASX_OK);
     ASSERT_EQ(asx_channel_recv_many(ch, &cx, NULL, 0u, &n), ASX_OK);
     ASSERT_EQ(n, 0u);
-    asx_trace_set_observer(observe_last, NULL);
+    asx_trace_set_observer(test_runtime(), observe_last, NULL);
     ASSERT_EQ(asx_channel_recv_many(ch, &cx, buf, 2u, &n), ASX_E_CANCELLED);
     ASSERT_TRUE(last_event_is_user_trace(t, "mpsc::recv_many cancelled"));
-    asx_trace_set_observer(NULL, NULL);
+    asx_trace_set_observer(test_runtime(), NULL, NULL);
     ASSERT_EQ(asx_channel_recv_many(ch, NULL, buf, 2u, &n), ASX_OK);
     ASSERT_EQ(n, 1u);
     ASSERT_EQ(buf[0], 6u);

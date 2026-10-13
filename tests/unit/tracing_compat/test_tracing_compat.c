@@ -88,7 +88,7 @@ static void test_tracing_export_current(void) {
     MUST_OK(asx_runtime_init_default(&rt));
     MUST_OK(asx_region_open(&rt, &region));
 
-    MUST_OK(asx_tracing_compat_export_current(tracing_sink, NULL, &out_count));
+    MUST_OK(asx_tracing_compat_export_current(&rt, tracing_sink, NULL, &out_count));
     ASSERT(g_sink_count > 0, "current trace exported");
     ASSERT(out_count == (uint32_t)g_sink_count, "count reported");
     ASSERT(strstr(g_last_record, "\"kind\":") != NULL, "json-like record emitted");
@@ -104,7 +104,8 @@ static void test_tracing_null_args(void) {
     ASSERT(asx_tracing_compat_format_event(NULL, &out) == ASX_E_INVALID_ARGUMENT, "null event");
     ASSERT(asx_tracing_compat_emit_event(&event, NULL, NULL) == ASX_E_INVALID_ARGUMENT,
            "null sink rejected");
-    ASSERT(asx_tracing_compat_export_current(NULL, NULL, NULL) == ASX_E_INVALID_ARGUMENT,
+    ASSERT(asx_tracing_compat_export_current(test_runtime(), NULL, NULL, NULL) ==
+               ASX_E_INVALID_ARGUMENT,
            "null export sink rejected");
 }
 
