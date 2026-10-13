@@ -89,6 +89,28 @@ fn capture(scenario: &Value, provenance: &Value) -> Option<Value> {
     Some(fixture)
 }
 
+/// The four leading counts of the runner's comparison summary
+/// (`asx-conformance: compared=N pass=N fail=N error=N`) in that order,
+/// whatever `key=N` fields follow them: the runner appends
+/// `forced_replayed`, `forced_unavailable` and `skipped_forbidden`. None for
+/// any other line, including one with anything but `key=N` after the counts.
+fn summary_counts(line: &str) -> Option<[u64; 4]> {
+    let mut fields = line.strip_prefix("asx-conformance: ")?.split(' ');
+    let mut counts = [0u64; 4];
+    for (slot, name) in counts.iter_mut().zip(["compared", "pass", "fail", "error"]) {
+        let value = fields.next()?.strip_prefix(name)?.strip_prefix('=')?;
+        *slot = value.parse().ok()?;
+    }
+    for field in fields {
+        let (key, value) = field.split_once('=')?;
+        let key_ok = !key.is_empty() && key.bytes().all(|b| b.is_ascii_lowercase() || b == b'_');
+        if !key_ok || value.parse::<u64>().is_err() {
+            return None;
+        }
+    }
+    Some(counts)
+}
+
 /// A completed single-fixture comparison. A PASS or an interpreter ERROR is
 /// not a semantic reproduction. Inconsistent status/output is a broken
 /// runner, not a candidate the minimizer may accept or silently discard.
@@ -107,21 +129,21 @@ fn comparison_kind(code: Option<i32>, stdout: &str, id: &str) -> Result<Option<S
         return Err("runner must report exactly one result and one comparison summary".into());
     }
     let result = results[0];
-    let summary = summaries[0];
+    let counts = summary_counts(summaries[0]);
     if code == Some(0)
         && result.starts_with(&format!("PASS {id} sha256:"))
-        && summary == "asx-conformance: compared=1 pass=1 fail=0 error=0"
+        && counts == Some([1, 1, 0, 0])
     {
         return Ok(None);
     }
     if code == Some(1)
         && result.starts_with(&format!("ERROR {id}: "))
-        && summary == "asx-conformance: compared=1 pass=0 fail=0 error=1"
+        && counts == Some([1, 0, 0, 1])
     {
         return Ok(None);
     }
     if code == Some(1)
-        && summary == "asx-conformance: compared=1 pass=0 fail=1 error=0"
+        && counts == Some([1, 0, 1, 0])
         && let Some(what) = result.strip_prefix(&format!("FAIL {id}: "))
         && let Some(kind) = what.split_whitespace().next()
     {
@@ -256,6 +278,54 @@ mod tests {
             Ok(Some("trace".into()))
         );
         assert_eq!(comparison_kind(Some(1), error, "x"), Ok(None));
+    }
+
+    /// The runner appends fields to the four counts (`forced_replayed`,
+    /// `forced_unavailable`, `skipped_forbidden`); they must not matter.
+    #[test]
+    fn comparator_accepts_the_fields_the_runner_appends_to_its_summary() {
+        let extra = " forced_replayed=1 forced_unavailable=0 skipped_forbidden=0";
+        let pass = format!(
+            "PASS x sha256:abc\nasx-conformance: compared=1 pass=1 fail=0 error=0{extra}\n"
+        );
+        let fail = format!(
+            "FAIL x: snapshot\n  first_diff: tasks\nasx-conformance: compared=1 pass=0 fail=1 error=0{extra}\n"
+        );
+        let error = format!(
+            "ERROR x: C run failed: unsupported op\nasx-conformance: compared=1 pass=0 fail=0 error=1{extra}\n"
+        );
+        assert_eq!(comparison_kind(Some(0), &pass, "x"), Ok(None));
+        assert_eq!(
+            comparison_kind(Some(1), &fail, "x"),
+            Ok(Some("snapshot".into()))
+        );
+        assert_eq!(comparison_kind(Some(1), &error, "x"), Ok(None));
+        // The counts still decide: appended fields do not make a pass a fail.
+        assert!(comparison_kind(Some(1), &pass, "x").is_err());
+        assert!(comparison_kind(Some(0), &fail, "x").is_err());
+    }
+
+    #[test]
+    fn summary_counts_ignore_appended_key_value_fields_and_nothing_else() {
+        let base = "asx-conformance: compared=1 pass=0 fail=1 error=0";
+        assert_eq!(summary_counts(base), Some([1, 0, 1, 0]));
+        assert_eq!(
+            summary_counts(&format!("{base} forced_replayed=3 skipped_forbidden=0")),
+            Some([1, 0, 1, 0])
+        );
+        for line in [
+            "",
+            "asx-conformance: compared=1 pass=0 fail=1",
+            "asx-conformance: pass=0 compared=1 fail=1 error=0",
+            "asx-conformance: compared=1 pass=0 fail=1 error=x",
+            "asx-conformance: compared=1 pass=0 fail=1 error=0 junk",
+            "asx-conformance: compared=1 pass=0 fail=1 error=0 forced_replayed=",
+            "asx-conformance: compared=1 pass=0 fail=1 error=0 =3",
+            "asx-conformance: compared=1 pass=0 fail=1 error=0 Forced=3",
+            "asx-conformance sweep: compared=1 pass=0 fail=1 error=0",
+        ] {
+            assert_eq!(summary_counts(line), None, "{line:?}");
+        }
     }
 
     #[test]
