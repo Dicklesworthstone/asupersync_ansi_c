@@ -1716,7 +1716,7 @@ Events emitted through `asx_telemetry_emit()` are filtered at three levels, set 
 | **OPS_LIGHT** | Lifecycle + terminal events only | Yes | Moderate |
 | **ULTRA_MIN** | None (digest only) | Yes | Minimal |
 
-The telemetry digest (FNV-1a mixing, `asx_telemetry_digest()`) is updated regardless of tier, so an `ULTRA_MIN` run's digest is comparable with a `FORENSIC` run's. The tiers apply only to `asx_telemetry_emit()`: the runtime's own events go through the trace (`asx_trace_emit()`) and are recorded whatever the tier.
+The telemetry digest (FNV-1a mixing, `asx_telemetry_digest()`) is updated regardless of tier, so an `ULTRA_MIN` run's digest is comparable with a `FORENSIC` run's. The tiers apply only to `asx_telemetry_emit()`: the runtime's own events go through the trace (`asx_trace_emit(rt, ...)`) and are recorded whatever the tier.
 
 ## Regression Localization
 
@@ -2521,9 +2521,9 @@ static void write_line(const char *json_line, void *user_data) {
     fprintf((FILE *)user_data, "%s\n", json_line);
 }
 
-/* Export every event in the trace ring, one line each */
-asx_status export_trace(FILE *out, uint32_t *exported) {
-    return asx_tracing_compat_export_current(write_line, out, exported);
+/* Export every event in a runtime's trace ring, one line each */
+asx_status export_trace(const asx_runtime *rt, FILE *out, uint32_t *exported) {
+    return asx_tracing_compat_export_current(rt, write_line, out, exported);
 }
 ```
 
