@@ -245,7 +245,7 @@ try_recv() -> Result<T, RecvError>
 
 **C status:** implemented. `channel_wait_cancelled` (`src/channel/mpsc.c:1258-1265`) checks `asx_cx_checkpoint`, records the trace message `mpsc::reserve cancelled`, `mpsc::recv cancelled` or `mpsc::recv_many cancelled`, and withdraws the task from all three wait queues, passing any wake it held on (`asx_channel_wait_cancel`, `mpsc.c:1234-1248`). Cancellation observation requires no capability flag: the checkpoint observes the identified task's pending cancel before budget consumption (`src/cx/cx.c:416-435`); masking defers delivery but does not hide a recorded request from `asx_cx_is_cancel_requested` (`src/cx/cx.c:402-413`). Permit send and abort authenticate their physical binding without a cancellation checkpoint (`mpsc.c:891-987`). Unit tests: `test_channel_wake.c` `cancelled_waiter_does_not_absorb_wake`, `test_mpsc.c` `cancelled_cx_wins_over_ready_channel_and_traces`. Rust parity: `mpsc-recv-cancel-first-001`. Reserve cancellation has no v2 fixture.
 
-`asx_task_masked` (`src/runtime/cancellation.c:761`) adds a synchronous callback
+`asx_task_masked` (`src/runtime/cancellation.c:777`) adds a synchronous callback
 guard for a task's cancellation mask. It releases its level when the callback
 returns, including a channel poll returning `ASX_E_PENDING` or an error, and
 returns the body's status unless release fails; it does

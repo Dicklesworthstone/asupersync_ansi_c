@@ -109,7 +109,10 @@ reproduce exactly for the projected streams to agree.
   `region.cancelled` for **every** region in the target's subtree, depth
   ascending, on **every** call. The target carries the request's reason;
   each descendant carries a `ParentCancelled` reason whose cause is its
-  parent's reason (`src/runtime/state.rs:7741-7758`).
+  parent's reason **of this request** (`src/runtime/state.rs:7741-7758`;
+  the `region_reasons` map, not the reason the parent kept from an earlier
+  request: a region cancelled first with chain 2 and again with a fresh
+  `User` reason gives its child chain 1 in the second event).
 - **`cancel.requested` only when newly cancelled, by a region or policy.**
   It is emitted per task only when the task becomes newly cancelled
   through a region cancel (`state.rs:7863-7865`) or a policy's sibling

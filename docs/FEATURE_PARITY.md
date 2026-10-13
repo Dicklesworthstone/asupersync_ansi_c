@@ -104,7 +104,7 @@ and the region shutdown ceiling Rust's `BudgetedFinalizer` enforces has no C
 counterpart.
 
 The synchronous cancellation guard
-`asx_task_masked` (`src/runtime/cancellation.c:761`) calls its body once within one admitted mask
+`asx_task_masked` (`src/runtime/cancellation.c:777`) calls its body once within one admitted mask
 level and releases that level on every normal C return, including an error or
 `ASX_E_PENDING`. It returns the body's status unless release fails. Nested
 guards preserve outer levels when additional raw masks are balanced; a pending

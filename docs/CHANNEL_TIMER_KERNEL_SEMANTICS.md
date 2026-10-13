@@ -229,7 +229,7 @@ Rust `Drop for Sender` (`src/channel/mpsc.rs:1241-1256`):
 
 The cancellation check itself is v4 §3.2 CANCEL-ACKNOWLEDGE at a checkpoint (`rule.cancel.acknowledge` #2; C status: C_REFINEMENT_MAP.md row `rule.cancel.acknowledge`). C cancellation observation needs no capability flag: `asx_cx_checkpoint` checks the identified task's cancellation before budget consumption (`src/cx/cx.c:416-435`); masking defers checkpoint delivery but does not hide a recorded request from `asx_cx_is_cancel_requested` (`src/cx/cx.c:402-413`). Rust parity: `mpsc-recv-cancel-first-001` (a pending recv cancelled by the driver returns `ASX_E_CANCELLED` and the task ends Cancelled). Reserve cancellation has no v2 fixture; C unit tests: `tests/unit/channel/test_channel_wake.c` `cancelled_waiter_does_not_absorb_wake`, `cancel_storm_on_full_channel_keeps_fifo_progress`, `masked_producer_is_not_cancelled_until_unmask`; `tests/unit/channel/test_mpsc.c` `cancelled_cx_wins_over_ready_channel_and_traces`.
 
-The synchronous callback guard `asx_task_masked` (`src/runtime/cancellation.c:761`)
+The synchronous callback guard `asx_task_masked` (`src/runtime/cancellation.c:777`)
 releases one admitted mask level on every returning body, including an error or
 `ASX_E_PENDING`, and returns the body's status unless release fails. A channel
 wait does not keep that guard across polls. Nested guards preserve outer levels

@@ -423,6 +423,11 @@ asx_status asx_task_cancel_budget_internal(asx_task_id id, asx_cancel_kind kind,
  * the reason each subtree region's tasks are cancelled with. */
 static uint32_t g_propagate_slots[ASX_MAX_REGIONS];
 static asx_cancel_reason g_propagate_reasons[ASX_MAX_REGIONS];
+/* asx_region_cancel: the reason this request derives for each region (Rust's
+ * region_reasons map), for the trace event, and each region's position in the
+ * subtree order, by slot. Valid only inside the call. */
+static asx_cancel_reason g_propagate_requested[ASX_MAX_REGIONS];
+static uint32_t g_propagate_pos[ASX_MAX_REGIONS];
 
 /* Cancel every live task of the subtree (rooted at subtree entry 0) with
  * its region's reason from g_propagate_reasons. Under lab dispatch the
@@ -545,19 +550,30 @@ asx_status asx_region_cancel(asx_region_id region, const asx_cancel_reason *reas
 
         settle_regions[r] = rid;
 
+        g_propagate_pos[slot] = r;
         if (r == 0u) {
             g_propagate_reasons[0] = *reason;
+            g_propagate_requested[0] = *reason;
         } else {
-            /* The cause is the parent's stored reason, which outlives this
-             * call; parents precede children in the subtree order. */
-            asx_region_slot *parent = &k->regions[asx_handle_slot(rs->parent_id)];
+            /* What is stored is caused by the parent's stored reason, which
+             * outlives this call; parents precede children in the subtree
+             * order. The event carries what this request derives, caused by
+             * the parent's reason of this request (Rust's region_reasons,
+             * state.rs:7692-7753), which differs when the parent kept a
+             * stronger one: ParentCancelled chain 2 kept, a User request
+             * chain 0: the child's event has chain 1, not 3. */
+            uint32_t pslot = asx_handle_slot(rs->parent_id);
+            asx_region_slot *parent = &k->regions[pslot];
             parent_cancelled_reason(&g_propagate_reasons[r], rs->parent_id, &parent->cancel_reason,
+                                    reason->timestamp);
+            parent_cancelled_reason(&g_propagate_requested[r], rs->parent_id,
+                                    &g_propagate_requested[g_propagate_pos[pslot]],
                                     reason->timestamp);
         }
         payload.text = NULL;
-        payload.reason = &g_propagate_reasons[r];
+        payload.reason = &g_propagate_requested[r];
         asx_trace_emit_payload_internal(k, ASX_TRACE_REGION_CANCELLED, rid,
-                                        (uint64_t)g_propagate_reasons[r].kind, &payload);
+                                        (uint64_t)g_propagate_requested[r].kind, &payload);
 
         if (rs->state == ASX_REGION_CLOSED) continue;
         if (!rs->cancel_requested) {
