@@ -146,7 +146,7 @@ Drop for SendPermit: if !self.sent { release_capacity(); obligation.abort(Cancel
 
 **Rust source:** `mpsc.rs:1663-1673`
 
-**C status:** implemented for tracked permits at holder-task completion. Reserve attaches the physical permit's drop to its obligation (`src/channel/mpsc.c:1049-1056`); completion invokes `obligation_drop_permit` (`src/runtime/lifecycle.c:567-577`), which returns the channel slot through `channel_permit_drop` (`src/channel/mpsc.c:861-874`) and aborts the obligation with `Cancel`. C has no lexical destructors or permit cleanup-stack registration: an untracked permit has no holder and stays reserved until it is sent or aborted. The conformance interpreter also explicitly drops its body's permits with `Cancel` (`drop_send_permit`, `src/conformance/interpreter.c:1150`). This source evidence adds no Rust drop fixture coverage.
+**C status:** implemented for tracked permits at holder-task completion. Reserve attaches the physical permit's drop to its obligation (`src/channel/mpsc.c:1049-1056`); completion invokes `obligation_drop_permit` (`src/runtime/lifecycle.c:557-567`), which returns the channel slot through `channel_permit_drop` (`src/channel/mpsc.c:861-874`) and aborts the obligation with `Cancel`. C has no lexical destructors or permit cleanup-stack registration: an untracked permit has no holder and stays reserved until it is sent or aborted. The conformance interpreter also explicitly drops its body's permits with `Cancel` (`drop_send_permit`, `src/conformance/interpreter.c:1150`). This source evidence adds no Rust drop fixture coverage.
 
 ### 1.4 Backpressure and Waiter Queue
 
@@ -272,7 +272,7 @@ The `session` module wraps the base channel with an `ObligationToken` per permit
 
 **C status:** `TrackedSender`/`TrackedPermit` and the leak panic: spec (Rust) — not implemented in C (`src/channel/session.c` is a different, bidirectional session channel; `include/asx/core/session.h:1-14`). The base-permit obligation is implemented: `asx_send_permit` has an `obligation` field (`include/asx/core/channel.h:69-83`), registered by `asx_channel_reserve` (`src/channel/mpsc.c:1262-1286`), committed on send (`:943`), aborted `Explicit` on abort (`:984-986`) and `Error` on disconnect (`:920`). Rust parity: `mpsc-two-phase-send-recv-001` (its trace records `obligation.reserved` and `obligation.committed` of kind `SendPermit` for both sends).
 
-Typed permit settlement authenticates the channel/token binding through `asx_obligation_check_token_internal` (`src/runtime/lifecycle.c:1987-2007`) and resolves through `asx_obligation_resolve_token_internal` (`src/runtime/lifecycle.c:2009-2028`), as called by `channel_permit_resolve` (`src/channel/mpsc.c:872-884`). A genuine permit may move to another task while retaining its original holder's ledger liability; a plain move does not transfer that holder or region. Raw owned-obligation IDs retain holder-poll authority checks (`asx_obligation_check_access_internal`, `src/runtime/lifecycle.c:1924-1960`); knowing an ID alone does not authenticate a physical permit. This is C source evidence, not Rust type-level or new handoff fixture coverage.
+Typed permit settlement authenticates the channel/token binding through `asx_obligation_check_token_internal` (`src/runtime/lifecycle.c:1977-1997`) and resolves through `asx_obligation_resolve_token_internal` (`src/runtime/lifecycle.c:1999-2018`), as called by `channel_permit_resolve` (`src/channel/mpsc.c:872-884`). A genuine permit may move to another task while retaining its original holder's ledger liability; a plain move does not transfer that holder or region. Raw owned-obligation IDs retain holder-poll authority checks (`asx_obligation_check_access_internal`, `src/runtime/lifecycle.c:1924-1960`); knowing an ID alone does not authenticate a physical permit. This is C source evidence, not Rust type-level or new handoff fixture coverage.
 
 ### 1.10 Close/Drain Semantics
 
@@ -317,7 +317,7 @@ The receiver drains queued messages after all senders drop: `Ok(value)` until th
 
 ## 2. Timer Wheel Semantics
 
-**C status (whole section):** ported (bd-9kll.7.1, bd-9kll.7.4). `src/time/timer_wheel.c` is a port of the Rust wheel: four levels of 256 slots, a ready list, `cascade`, `refill_overflow`, `advance_to` with tick skipping, and a deadline-ordered overflow heap, in a fixed arena (`ASX_MAX_TIMERS` entries for the application instance, `asx_timer_wheel_global`, default 128, `include/asx/asx_config.h:277-283`). The scheduler's task timers (sleeps, and under lab dispatch budget deadlines) are registrations in a second instance, `asx_timer_wheel_runtime`, sized for two per task, so there is one timer structure and one order in every mode (`timers_fire`, `src/runtime/scheduler.c`). Coalescing (off by default in Rust) is not modelled; a cancelled timer leaves its slot at once instead of when the slot is visited, which cannot change what fires or in which order.
+**C status (whole section):** ported (bd-9kll.7.1, bd-9kll.7.4). `src/time/timer_wheel.c` is a port of the Rust wheel: four levels of 256 slots, a ready list, `cascade`, `refill_overflow`, `advance_to` with tick skipping, and a deadline-ordered overflow heap, in a fixed arena (`ASX_MAX_TIMERS` entries for the application instance, `asx_timer_wheel_global`, default 128, `include/asx/asx_config.h:277-283`). The scheduler's task timers (sleeps, and under lab dispatch budget deadlines) are registrations in a second instance, the kernel's scheduler wheel (`asx_kernel.wheel`), sized for two per task, so there is one timer structure and one order in every mode (`timers_fire`, `src/runtime/scheduler.c`). Coalescing (off by default in Rust) is not modelled; a cancelled timer leaves its slot at once instead of when the slot is visited, which cannot change what fires or in which order.
 
 ### 2.1 Structure: 4-Level Hierarchical Wheel
 
@@ -485,7 +485,7 @@ next_task():
 run_loop_until (:5570): when next_task finds nothing, spin -> yield -> park (section 3.10)
 ```
 
-**C status:** spec (Rust) — not implemented in C. The C lab step (`src/runtime/scheduler.c:1239-1289`) follows `LabRuntime::step_inner` (`lab/runtime.rs:4480-`): drain admissions and commands, draw one RNG value (`lab/runtime.rs:4499`), process timers (`:4509-4511`), then pick a task. C does the same in that order (`scheduler.c:1258-1270`).
+**C status:** spec (Rust) — not implemented in C. The C lab step (`src/runtime/scheduler.c:1244-1294`) follows `LabRuntime::step_inner` (`lab/runtime.rs:4480-`): drain admissions and commands, draw one RNG value (`lab/runtime.rs:4499`), process timers (`:4509-4511`), then pick a task. C does the same in that order (`scheduler.c:1258-1270`).
 
 ### 3.3 Entry Ordering Contracts
 
@@ -591,7 +591,7 @@ When `next_task` finds nothing (`advance_empty_backoff`, `three_lane.rs:5517-552
 
 The park deadline is chosen from the timer-driver, local timed and global timed deadlines (`select_backoff_deadline`, `three_lane.rs:529-545`, called at `:5741-5746`); with no deadline the worker parks without a timeout (`:5814`).
 
-**C status:** spec (Rust) — not implemented in C. When every task is parked, the native C scheduler fires due timers, jumps a virtual clock to the earliest timer, or waits in the reactor hook until the deadline (`src/runtime/scheduler.c:11-19`; wait converted to whole ms at `:983-1019`, capped by `ASX_SCHED_MAX_IDLE_WAIT_MS` = 1000, `:55`). The lab run moves the virtual clock to the next timer when nothing is scheduled (`scheduler.c:1342-1349`).
+**C status:** spec (Rust) — not implemented in C. When every task is parked, the native C scheduler fires due timers, jumps a virtual clock to the earliest timer, or waits in the reactor hook until the deadline (`src/runtime/scheduler.c:11-19`; wait converted to whole ms at `:988-1024`, capped by `ASX_SCHED_MAX_IDLE_WAIT_MS` = 1000, `:55`). The lab run moves the virtual clock to the next timer when nothing is scheduled (`scheduler.c:1342-1349`).
 
 ---
 
@@ -729,7 +729,7 @@ For deterministic parity with Rust, and the current C status of each:
 | Failure | Rust detection | Rust result | C (lab dispatch) |
 |---------|-----------|----------|---|
 | Cancel-streak limit hit | `cancel_streak >= effective_limit` (`three_lane.rs:6969-6972`) | Skip cancel lane, try timed/ready; fallback cancel if none | Ready lane first after 16 cancel dispatches (`lab_dispatch.c:611-631`) |
-| No tasks available | All lanes empty | Spin -> yield -> park (section 3.10) | Step dispatches nothing; the run auto-advances the clock or returns (`scheduler.c:1285-1339`) |
+| No tasks available | All lanes empty | Spin -> yield -> park (section 3.10) | Step dispatches nothing; the run auto-advances the clock or returns (`scheduler.c:1290-1344`) |
 | Work steal failure | All stealers empty | Continue to Phase 5 / backoff | Not applicable (one worker) |
 | Shutdown requested | Checked in `run_loop_until` (`three_lane.rs:5601`, `:5647`) | Exit loop | Not applicable |
 
