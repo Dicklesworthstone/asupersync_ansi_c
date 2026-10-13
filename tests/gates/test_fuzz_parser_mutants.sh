@@ -113,19 +113,29 @@ log_case() {
 }
 
 # expect_for TARGET: what the report of its planted bug must say. E_KIND is
-# "sanitizer" (a sanitizer error whose stack names E_FILE) or "property" (the
-# harness's own fuzz_fail message, E_TEXT).
+# "sanitizer" (a sanitizer error whose stack names E_FILE), "property" (the
+# harness's own fuzz_fail message, E_TEXT) or "either". The two HTTP plants are
+# one off-by-one (the start-line guard `pos >= len` became `pos > len`) with
+# two faces: when a chunk boundary falls inside the line and more input
+# follows, the parser takes a byte of the next chunk and the harness reports
+# "consumed more than it was given"; when the chunk is the last one, the same
+# read is one byte past the buffer and AddressSanitizer reports it in
+# src/net/http.c. Which a seed gives depends on its chunk mode and on the
+# request method its mode byte selects: HTTP_RESPONSE seed00 (mode 0x80)
+# answers a HEAD, so its "hello" is read as the start of a second message
+# that ends the buffer: the sanitizer face, found from the corpus (batch #10,
+# 69e3d15). Both faces are the plant; a crash in another file is not.
 expect_for() {
     E_KIND=sanitizer
     E_TEXT=""
     case "$1" in
     HTTP_REQUEST)
-        E_KIND=property
+        E_KIND=either
         E_FILE=src/net/http.c
         E_TEXT="http parser consumed more than it was given"
         ;;
     HTTP_RESPONSE)
-        E_KIND=property
+        E_KIND=either
         E_FILE=src/net/http.c
         E_TEXT="http parser consumed more than it was given"
         ;;
@@ -192,14 +202,20 @@ run_harness() {
 
 # names_plant: the last run crashed, and its report names the plant of the
 # target expect_for set up: a sanitizer error whose stack is in E_FILE, or
-# the harness's own property message E_TEXT.
+# the harness's own property message E_TEXT (E_KIND says which, or either).
 names_plant() {
     if [ "$H_RC" -eq 0 ] || [ "$H_ARTIFACTS" -eq 0 ]; then return 1; fi
-    if [ "$E_KIND" = "property" ]; then
-        grep -q "property violated: $E_TEXT" "$H_LOG"
-    else
+    case "$E_KIND" in
+    property) grep -q "property violated: $E_TEXT" "$H_LOG" ;;
+    either)
+        grep -q "property violated: $E_TEXT" "$H_LOG" ||
+            { grep -Eq 'ERROR: AddressSanitizer|runtime error:' "$H_LOG" &&
+                grep -q "$E_FILE" "$H_LOG"; }
+        ;;
+    *)
         grep -Eq 'ERROR: AddressSanitizer|runtime error:' "$H_LOG" && grep -q "$E_FILE" "$H_LOG"
-    fi
+        ;;
+    esac
 }
 
 echo "=== test_fuzz_parser_mutants ($RUN_ID) ==="
