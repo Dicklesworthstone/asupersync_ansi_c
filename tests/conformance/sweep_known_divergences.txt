@@ -38,6 +38,7 @@ region-lifecycle-closed-child-spawn-001 lab-model: region open from a poll is a 
 region-limits-group-member-refused-001 lab-model: spawn mailbox: admission is at the next step; the sweep refuses at the spawn and the group op cannot continue
 region-limits-late-admission-001 lab-model: spawn mailbox: live tasks are counted at the next step's admission, the spawner done; the sweep counts at the spawn
 region-limits-refused-spawn-aborted-001 lab-model: spawn mailbox: a refusal is classified at admission by the join reason; the sweep refuses at the spawn
+spawn-refused-child-aborted-twice-quorum-001 order: the lab's seeded pick runs t.3 first (dispatches 1, 3): it holds the mutex and t.0 is cancelled waiting; the sweep runs t.0 first (ok). Refused spawns also fail the sweep run (mailbox)
 task-groups-join-all-region-cancel-001 lab-model: the lab's region-open costs the owner a dispatch, so members inherit poll quota 2, the sweep's 3; forced to 2 the sweep matches (test_lab_dispatch spawned_members_inherit)
 task-groups-race-deadline-tie-001 order: the same-round race tie is drawn from the lab's per-task seeded entropy; the sweep has no seed and takes the lowest index
 task-groups-race-same-round-tie-001 order: the same-round race tie is drawn from the lab's per-task seeded entropy; the sweep has no seed and takes the lowest index
