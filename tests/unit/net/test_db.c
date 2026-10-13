@@ -83,6 +83,27 @@ TEST(db_connect_rejects_oversized_dsn) {
     ASSERT_EQ(asx_db_close(ok_conn), ASX_OK);
 }
 
+TEST(db_connect_refuses_a_dsn_that_names_a_real_database) {
+    asx_db_pool pool;
+    asx_db_conn *conn = NULL;
+
+    asx_db_pool_init(&pool);
+    if (!db_surface_available()) return;
+
+    /* The model has no driver: these would "succeed" and reach nothing. */
+    ASSERT_EQ(asx_db_connect(&pool, "postgres://prod.example/app", &conn), ASX_E_PERMISSION_DENIED);
+    ASSERT_TRUE(conn == NULL);
+    ASSERT_EQ(asx_db_connect(&pool, "mysql://db/app", &conn), ASX_E_PERMISSION_DENIED);
+    ASSERT_EQ(asx_db_connect(&pool, "sqlite:///var/lib/app.db", &conn), ASX_E_PERMISSION_DENIED);
+    ASSERT_EQ(asx_db_connect(&pool, "dsn", &conn), ASX_E_PERMISSION_DENIED);
+    ASSERT_EQ(asx_db_connect(&pool, "", &conn), ASX_E_PERMISSION_DENIED);
+
+    /* The model's own scheme is the only one. */
+    ASSERT_EQ(asx_db_connect(&pool, "mem://lab", &conn), ASX_OK);
+    ASSERT_TRUE(conn != NULL);
+    ASSERT_EQ(asx_db_close(conn), ASX_OK);
+}
+
 TEST(db_connect_exhaustion) {
     asx_db_pool pool;
     asx_db_conn *conns[ASX_DB_MAX_CONNECTIONS + 1];
@@ -295,6 +316,7 @@ int main(void) {
     RUN_TEST(db_pool_backend_variants);
     RUN_TEST(db_connect_and_close);
     RUN_TEST(db_connect_rejects_oversized_dsn);
+    RUN_TEST(db_connect_refuses_a_dsn_that_names_a_real_database);
     RUN_TEST(db_connect_exhaustion);
     RUN_TEST(db_execute_query);
     RUN_TEST(db_transaction_lifecycle);

@@ -1,9 +1,15 @@
 /*
- * asx/transport/transport.h — transport abstraction layer
+ * asx/transport/transport.h — transport abstraction layer (MODEL-ONLY, DEC-010)
  *
  * Provides the Transport trait (listen/connect/read/write) and concrete
  * adapters: memory (in-process loopback), and abstract transport
  * composition (framed, reconnecting).
+ *
+ * MODEL-ONLY: the trait is an interface, and the only transport in the tree
+ * is the in-memory loopback. There is no TCP, UDP, TLS or other network
+ * transport behind it (the TCP and UDP surfaces in asx/net/net.h are a
+ * separate API that does not implement this trait). A success status means
+ * the in-process model accepted the call.
  *
  * Design:
  *   - Transport trait is a set of function pointers for I/O operations.

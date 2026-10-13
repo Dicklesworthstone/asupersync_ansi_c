@@ -1,10 +1,13 @@
 /*
- * asx/net/distributed.h — distributed runtime, snapshot, assignment, and recovery
+ * asx/net/distributed.h — in-memory distributed-runtime model for lab scenarios
  *
- * Provides the distributed systems surface: consistent hashing for partition
- * assignment, state snapshots with versioning, node membership and failure
- * detection, task assignment/reassignment, and recovery protocol with
- * checkpoint/restore semantics. All deterministic in-memory for core profile.
+ * MODEL-ONLY (DEC-010). This is a deterministic in-memory model of the data
+ * structures of a distributed runtime: a consistent-hash ring, partition
+ * assignment, versioned snapshots, a node table with states, and a recovery
+ * bookkeeping record. It is not a distributed runtime. There is no network,
+ * no membership or failure-detection protocol and no consensus: a node's
+ * state changes only when the caller sets it, and a "node" is a table entry in
+ * this process.
  *
  * SPDX-License-Identifier: MIT
  */

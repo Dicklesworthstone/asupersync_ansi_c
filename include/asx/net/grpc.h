@@ -1,10 +1,16 @@
 /*
- * asx/net/grpc.h — gRPC codec, service, client/server, reflection, and health
+ * asx/net/grpc.h — in-memory gRPC model for lab scenarios
  *
- * Provides the public gRPC surface: protobuf-style codec abstraction, service
- * definition with method dispatch, unary and streaming call types, client channel
- * and server listener, reflection registry, and health checking protocol.
- * All deterministic in-memory for the core profile.
+ * MODEL-ONLY (DEC-010). This is a deterministic in-memory model. It is not a
+ * gRPC client or server: no HTTP/2, no protobuf on the wire, no TLS, no
+ * network protocol. A client channel holds a pointer to a server object in the
+ * same process and calls its method handler directly; the channel's target is
+ * a label, not an address that is resolved or dialed. A success status means
+ * the in-process model accepted the call.
+ *
+ * It gives lab scenarios the shape of the API: service and method tables,
+ * unary dispatch with gRPC status codes, metadata, health and reflection
+ * registries.
  *
  * SPDX-License-Identifier: MIT
  */
@@ -158,7 +164,8 @@ typedef struct {
     asx_grpc_server *server; /* Direct in-memory link for deterministic mode */
 } asx_grpc_channel;
 
-/* Initialize a client channel connected to a server (in-memory). */
+/* Initialize a client channel linked to a server object in this process.
+ * `target` is kept as a label only; nothing is resolved or connected. */
 ASX_API void asx_grpc_channel_init(asx_grpc_channel *ch, const char *target,
                                    asx_grpc_server *server);
 

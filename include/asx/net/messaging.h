@@ -1,9 +1,15 @@
 /*
- * asx/net/messaging.h — messaging and broker client abstraction
+ * asx/net/messaging.h — in-memory message broker model for lab scenarios
  *
- * Provides message queue, pub/sub topic, and broker client surfaces.
- * In the deterministic core, all messaging is in-memory with bounded
- * queues and topic-based dispatch.
+ * MODEL-ONLY (DEC-010). This is a deterministic in-memory model. It is not a
+ * client of Kafka, Redis, NATS, JetStream or any other broker: no connection,
+ * no wire protocol, no persistence, no delivery guarantee beyond a process's
+ * own bounded queues. Publishing pushes a message into each subscriber's
+ * in-process queue; a success status means the model accepted it. Selecting a
+ * real broker backend is refused (ASX_E_PERMISSION_DENIED).
+ *
+ * It gives lab scenarios the shape of the API: bounded queues, topics with
+ * subscribers, and fan-out.
  *
  * SPDX-License-Identifier: MIT
  */

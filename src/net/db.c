@@ -1,5 +1,10 @@
 /*
- * db.c — deterministic database client abstraction
+ * db.c — in-memory database client model (MODEL-ONLY, DEC-010)
+ *
+ * Not a database client: no driver, no wire protocol, no storage. A
+ * connection is a slot in the pool, a statement runs nothing, and execute
+ * hands back an empty result set that the caller may fill with
+ * asx_db_result_add_row for a lab scenario. Only "mem://" DSNs are accepted.
  *
  * SPDX-License-Identifier: MIT
  */
@@ -95,6 +100,13 @@ asx_status asx_db_connect(asx_db_pool *pool, const char *dsn, asx_db_conn **out)
     *out = NULL;
     len = db_bounded_strlen(dsn, ASX_DB_DSN_MAX);
     if (len >= ASX_DB_DSN_MAX) return ASX_E_BUFFER_TOO_SMALL;
+
+    /* The only backend is the in-process model. A DSN naming a database
+     * (postgres://, mysql://, a file) would be accepted and never reach it,
+     * so it is refused as selecting that backend is. */
+    if (pool->config.backend == ASX_DB_BACKEND_MEMORY && strncmp(dsn, "mem://", 6u) != 0) {
+        return ASX_E_PERMISSION_DENIED;
+    }
 
     for (i = 0u; i < ASX_DB_MAX_CONNECTIONS; i++) {
         if (!pool->connections[i].alive) break;

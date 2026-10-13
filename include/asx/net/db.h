@@ -1,10 +1,15 @@
 /*
- * asx/net/db.h — database client abstraction
+ * asx/net/db.h — in-memory database client model for lab scenarios
  *
- * Provides a portable database client surface: connection pool, prepared
- * statements, query execution, result set iteration, and transaction
- * management. In the deterministic core, all operations use in-memory
- * row storage with no real database backend.
+ * MODEL-ONLY (DEC-010). This is a deterministic in-memory model. It is not a
+ * database client: no driver, no wire protocol and no storage. A connection
+ * is a slot in a pool; a statement runs nothing; a success status means the
+ * in-process model accepted the call, not that a database did anything. The
+ * SQLite, Postgres and MySQL backend flags are 0 and selecting those
+ * backends is refused.
+ *
+ * It gives lab scenarios the shape of the API: connection pool, result-set
+ * building and iteration, and a transaction state machine.
  *
  * SPDX-License-Identifier: MIT
  */
@@ -117,13 +122,19 @@ ASX_API ASX_MUST_USE const char *asx_db_backend_str(asx_db_backend backend);
 /* Select the backend to use for new pool connections. */
 ASX_API asx_status asx_db_pool_set_backend(asx_db_pool *pool, asx_db_backend backend);
 
-/* Open a connection. */
+/* Open a model connection. Only "mem://..." DSNs are accepted: a DSN that
+ * names a database (postgres://, mysql://, a file) would succeed and never
+ * reach it, so it is refused with ASX_E_PERMISSION_DENIED, as selecting that
+ * backend is. ASX_E_BUFFER_TOO_SMALL for a DSN of ASX_DB_DSN_MAX or more. */
 ASX_API asx_status asx_db_connect(asx_db_pool *pool, const char *dsn, asx_db_conn **out);
 
 /* Close a connection. */
 ASX_API asx_status asx_db_close(asx_db_conn *conn);
 
-/* Execute a query. Result set is populated with in-memory deterministic data. */
+/* Count a statement and return an EMPTY result set: the model runs nothing and
+ * stores nothing, whatever the statement says (an INSERT inserts no row, a
+ * SELECT finds none). A lab scenario fills the result with
+ * asx_db_result_add_row if it needs rows. */
 ASX_API asx_status asx_db_execute(asx_db_conn *conn, const char *query, asx_db_result *result);
 
 /* Begin a transaction. */

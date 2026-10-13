@@ -1,9 +1,21 @@
 /*
- * asx/net/quic.h — deterministic QUIC connection and stream types
+ * asx/net/quic.h — in-memory QUIC model for lab scenarios
  *
- * Provides QUIC connection lifecycle, bidirectional/unidirectional streams,
- * and datagram support. In deterministic core, QUIC operates over in-memory
- * transport with simulated connection state.
+ * MODEL-ONLY (DEC-010). This is a deterministic in-memory model. It is not a
+ * QUIC client or server: there is no UDP socket, no TLS 1.3 handshake, no
+ * packets, frames, loss recovery or congestion control, and no network
+ * protocol of any kind. A success status means the in-process model accepted
+ * the call, not that anything left the process.
+ *
+ * What the model gives a lab scenario is the shape of a connection and stream
+ * lifecycle between two ends inside one process:
+ *   - asx_quic_connect begins a client handshake. With no network the
+ *     connection stays in ASX_QUIC_STATE_HANDSHAKE until asx_quic_accept
+ *     pairs it with its server end; both ends are then CONNECTED.
+ *   - Datagrams go to the paired peer's queue. Stream bytes are a loopback
+ *     buffer: they are read back from the handle that wrote them (the model
+ *     has no peer-initiated streams).
+ *   - idle_timeout_ms is stored, not enforced.
  *
  * SPDX-License-Identifier: MIT
  */
@@ -75,16 +87,24 @@ typedef struct {
  * QUIC connection API
  * ------------------------------------------------------------------- */
 
-/* Create a QUIC client connection (deterministic handshake). */
+/* Begin a client connection. There is no network, so the handshake does not
+ * complete here: the connection is in ASX_QUIC_STATE_HANDSHAKE (streams and
+ * datagrams are refused with ASX_E_INVALID_STATE) until an in-process
+ * asx_quic_accept pairs it. ASX_E_RESOURCE_EXHAUSTED when no slot is free. */
 ASX_API ASX_MUST_USE asx_status asx_quic_connect(asx_quic_conn *out, const asx_quic_config *cfg);
 
-/* Accept a QUIC server connection (deterministic handshake). */
+/* Accept the oldest client connection that is waiting in HANDSHAKE and return
+ * the server end. Both ends are CONNECTED on ASX_OK. ASX_E_PENDING (and *out
+ * untouched) when no connect is waiting; ASX_E_RESOURCE_EXHAUSTED when no slot
+ * is free for the server end (the client keeps waiting). */
 ASX_API ASX_MUST_USE asx_status asx_quic_accept(asx_quic_conn *out, const asx_quic_config *cfg);
 
-/* Get the current connection state. */
+/* Get the current connection state: HANDSHAKE until paired, CONNECTED once
+ * paired, DRAINING when the peer closed first, CLOSED for a dead handle. */
 ASX_API asx_quic_state asx_quic_conn_state(asx_quic_conn conn);
 
-/* Initiate graceful connection close with error code. */
+/* Close a connection. The paired end, if any, moves to DRAINING and can only
+ * be closed. A connect that was never accepted simply stops waiting. */
 ASX_API asx_status asx_quic_conn_close(asx_quic_conn conn, uint32_t error_code);
 
 /* Check if a QUIC connection is alive. */
@@ -117,7 +137,8 @@ ASX_API int asx_quic_stream_is_alive(asx_quic_stream stream);
  * QUIC datagram API
  * ------------------------------------------------------------------- */
 
-/* Send a datagram on a QUIC connection (unreliable). */
+/* Queue a datagram for the paired end. ASX_E_INVALID_STATE unless the
+ * connection is CONNECTED and both ends enabled datagrams. */
 ASX_API ASX_MUST_USE asx_status asx_quic_send_datagram(asx_quic_conn conn, const asx_buf *src);
 
 /* Poll-receive a datagram from a QUIC connection. */

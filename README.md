@@ -328,7 +328,7 @@ The main subsystem families are below. Their public headers live under `include/
 | **bytes** | Buffer management, codec bridges, I/O adapters |
 | **security** | Ambient-authority audit catalog, authenticated symbols and security contexts, crypto primitives (SHA-1/256/512, HMAC-SHA256, HKDF-SHA256, constant-time compare, Base64/hex, whitening of a caller-supplied entropy source) |
 | **net** | TCP/UDP over in-memory or native sockets, DNS (getaddrinfo on the blocking pool), HTTP/1.1 server/client, WebSocket (RFC 6455), a TLS provider interface (no real provider ships, see Limitations) |
-| **db, quic, grpc, messaging, distributed, transport, remote** | In-memory models of a database, QUIC, gRPC, messaging, a distributed runtime, transports and remote execution: bounded and deterministic, with no wire protocol and no peer; a success status reports the model, not a real service (see Limitations) |
+| **db, quic, grpc, messaging, distributed, transport, remote** | Lab models, not features: in-memory stand-ins for a database, QUIC, gRPC, a message broker, a distributed runtime, transports and remote execution, with no wire protocol and no peer. See "Lab Models" |
 | **raptorq** | RFC 6330 fountain-code encoder/decoder (its unit tests match golden vectors from the crates.io `raptorq` 2.0.1 crate) |
 | **fs** | Files and directories: in-memory model, plus native POSIX backend |
 | **process** | Child processes: spawn, stdio pipes, exit status, kill/reap (native POSIX backend) |
@@ -346,6 +346,36 @@ The main subsystem families are below. Their public headers live under `include/
 | **console** | Console I/O and formatting |
 | **tracing_compat** | Tracing compatibility layer for integration with external systems |
 | **platform** | POSIX, Win32, and freestanding adapters |
+
+## Lab Models
+
+Seven surfaces are deterministic in-memory models for lab scenarios, not
+implementations of the systems they are named after (DEC-010). Each header
+opens with a `MODEL-ONLY` banner, and none of them is a feature claim of this
+library. A success status from one of these APIs means the in-process model
+accepted the call: nothing left the process, no peer was involved, and no
+external system did anything.
+
+| Model | Files | What a lab scenario gets | What it is not |
+|---|---|---|---|
+| QUIC | `include/asx/net/quic.h`, `src/net/quic.c` | Connection and stream lifecycle between two ends in one process. `asx_quic_connect` begins a handshake that stays in `HANDSHAKE` until an in-process `asx_quic_accept` pairs it (`ASX_E_PENDING` if no connect is waiting); datagrams go to the paired end | No UDP, TLS 1.3, packets, loss recovery or congestion control. Stream bytes read back from the handle that wrote them; `idle_timeout_ms` is not enforced |
+| gRPC | `include/asx/net/grpc.h`, `src/net/grpc.c` | Service and method tables, unary dispatch with gRPC status codes, metadata, health and reflection registries. A channel calls a server object in the same process | No HTTP/2, protobuf wire format, TLS or network; a channel's target is a label |
+| Database | `include/asx/net/db.h`, `src/net/db.c` | A connection pool, result-set building and iteration, a transaction state machine. Only `mem://` DSNs connect | No driver and no storage: a statement runs nothing and returns an empty result set. A DSN that names a database, and the SQLite, Postgres and MySQL backends, are refused (`ASX_E_PERMISSION_DENIED`) |
+| Messaging | `include/asx/net/messaging.h`, `src/net/messaging.c` | Bounded queues, topics and fan-out to subscribers' queues | No broker client, persistence or delivery guarantee. The Kafka backend is refused; Redis, NATS and JetStream do not exist |
+| Distributed | `include/asx/net/distributed.h`, `src/net/distributed.c` | A consistent-hash ring, partition assignment, versioned snapshots, a node table and recovery bookkeeping | No network, membership or failure-detection protocol, or consensus: a node's state changes only when the caller sets it |
+| Transport | `include/asx/transport/transport.h`, `src/transport/transport.c` | The transport trait, an in-memory loopback, and framed and reconnecting wrappers | No network transport behind the trait; the TCP and UDP API in `asx/net/net.h` does not implement it |
+| Remote | `include/asx/remote/remote.h`, `src/remote/remote.c` | Capability, handle, idempotency, saga and lease state machines | Nothing is sent to another node; a handle completes only when the caller drives it |
+
+Where an API would imply real network success, it says so instead: a QUIC
+connect with no accept never reaches `CONNECTED`, and a database DSN that names
+a real database is refused. What the models are for is exercising the shape of
+those APIs, and the application code around them, deterministically.
+
+Not on this list: the HTTP/1.1 parser, server and client (`asx/net/http.h`,
+`asx/net/server.h`) run on real TCP in live POSIX builds and are tested in C
+only, and `asx/net/web.h` is routing, middleware, CORS, CSRF and a session
+store over those types, with all of its state in fixed-size in-process tables.
+`src/net/tls.c` is covered under Limitations.
 
 ## Build and Verification Reference
 
@@ -2494,7 +2524,7 @@ Check whether `asx_deadline_monitor_check()` is being called frequently enough i
 - Native I/O ships only in live builds of the POSIX profile: an epoll reactor on Linux with a poll(2) fallback elsewhere (only Linux runs in CI), a pthread blocking pool, sockets, files, processes and signals. There is no kqueue, IOCP or io_uring backend (`ASX_IO_BACKEND_IO_URING` is refused with `ASX_E_PERMISSION_DENIED`). The other profiles, EMBEDDED_ROUTER, HFT and AUTOMOTIVE included, compile the native backends out: their net, fs, process and signal surfaces use the in-memory backends, and their reactor is the ghost reactor unless you install reactor hooks of your own.
 - WIN32 builds and passes its unit suite under MSVC in CI (deterministic builds), but has no native I/O: no sockets, no IOCP reactor (the reactor is a timed sleep), no blocking pool. See the win32 row of `docs/DEFERRED_STUBS_REGISTER.md` (`bd-v12u.3`).
 - TLS needs a provider, and none is built in. The core carries no cryptography: `asx_tls_connect` and `asx_tls_accept` refuse a configuration that names no `asx_tls_provider` (`ASX_E_HOOK_MISSING`), so nothing is sent in the clear under the name of TLS by default. The one provider in the tree, `asx_tls_null_provider()`, is a plaintext passthrough for tests and simulations: it performs no handshake, authenticates no peer and encrypts nothing, and a caller must select it with `asx_tls_config_set_provider`. A real TLS stack plugs in through the provider callbacks (handshake, read, write, shutdown, peer certificate); no such adapter ships yet (`bd-9kll.17.2`). Nothing else in the tree opens a TLS stream: the HTTP server and client speak plain TCP.
-- The database, QUIC, gRPC, messaging, distributed, transport and remote surfaces (`src/net/db.c`, `quic.c`, `grpc.c`, `messaging.c`, `distributed.c`, `src/transport/`, `src/remote/`) are deterministic in-memory models (DEC-010). They open no socket and speak no wire protocol: a query returns generated in-memory rows, and a QUIC connection or gRPC channel is a link between structures in the same process. A successful status means the model accepted the call, not that anything reached a database, broker or peer. Use them as test doubles for the API shapes, not as clients.
+- The database, QUIC, gRPC, messaging, distributed, transport and remote surfaces (`src/net/db.c`, `quic.c`, `grpc.c`, `messaging.c`, `distributed.c`, `src/transport/`, `src/remote/`) are deterministic in-memory models (DEC-010), listed under "Lab Models". They open no socket and speak no wire protocol: a statement runs nothing and returns an empty result set, a QUIC connect stays in `HANDSHAKE` until an in-process accept pairs it, and a gRPC channel is a link between structures in the same process. A successful status means the model accepted the call, not that anything reached a database, broker or peer. Use them as test doubles for the API shapes, not as clients.
 - There is no WebAssembly build target. The BROWSER profile compiles natively with browser surface gating, and `tools/ci/wasm32_oracle_probe.sh`, which CI does not run, only test-compiles some sources for `wasm32-unknown-unknown` (`docs/WASM32_ORACLE_EVALUATION.md`).
 - Rust parity covers what the DSL v2 scenarios can express (see `make conformance`). Networking, files, processes, HTTP and live builds are not compared with Rust, and `docs/SCENARIO_DSL_V2.md` §7 lists the open C-side gaps.
 - Deterministic guarantees assume matching scenario, profile, seed, and compatible runtime version.

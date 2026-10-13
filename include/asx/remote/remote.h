@@ -1,6 +1,12 @@
 /*
  * asx/remote/remote.h — remote execution, idempotency, saga, and lease primitives
  *
+ * MODEL-ONLY (DEC-010). These are the value types and state machines of a
+ * remote-execution protocol, not a remote-execution implementation: nothing
+ * is sent to another node, there is no transport behind a handle, and a
+ * remote handle completes only when the caller drives its transitions. Use
+ * them as deterministic lab models.
+ *
  * Provides types and APIs for cross-boundary task execution:
  *   - Remote capabilities and handles for cross-region task management
  *   - Idempotency keys and records for at-most-once execution guarantees

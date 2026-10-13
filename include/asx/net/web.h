@@ -4,7 +4,15 @@
  * Provides the public web application surface: path-based routing with method
  * dispatch, layered middleware, typed request extraction, cookie-based sessions,
  * server-sent events, multipart form parsing, CORS, CSRF protection, and static
- * file serving. All deterministic in-memory for the core profile.
+ * file serving.
+ *
+ * Scope: the router, middleware, query parsing, CORS and CSRF logic run on the
+ * real HTTP request/response types. Everything stateful is a fixed-size,
+ * in-process table: the session store is not persisted or shared between
+ * processes, an SSE stream is a queue the caller drains (it opens no
+ * connection), and the static-file table serves buffers the caller registered
+ * (it reads no file system). This header listens on nothing; pair it with
+ * asx/net/server.h for a socket.
  *
  * SPDX-License-Identifier: MIT
  */
