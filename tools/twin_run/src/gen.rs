@@ -1189,4 +1189,104 @@ mod tests {
             }
         }
     }
+
+    /// The indices below `count` of batch `seed` that are cancel storms.
+    fn storm_indices(seed: u64, count: u64) -> Vec<u64> {
+        (0..count).filter(|&index| is_storm(seed, index)).collect()
+    }
+
+    /// bd-9kll.4.10: the fuzz-differential lanes' own batches contain
+    /// storms, at these indices. CI runs `make fuzz-differential
+    /// FUZZ_V2_SEED=9 FUZZ_V2_COUNT=200`: 13 storms in 200. The Makefile's
+    /// default is seed 1, count 100: 8. Whether scenario `index` is a storm
+    /// is a pure function of `seed` and `index` (the storm stream's own
+    /// salt), so these lists change only when STORM_SALT or STORM_ONE_IN do.
+    #[test]
+    fn the_lane_batches_emit_cancel_storms_at_known_indices() {
+        assert_eq!(
+            storm_indices(9, 200),
+            vec![9, 24, 27, 30, 46, 52, 96, 178, 179, 183, 187, 191, 194]
+        );
+        assert_eq!(storm_indices(1, 100), vec![27, 45, 49, 55, 62, 79, 93, 96]);
+    }
+
+    /// One scenario in sixteen on average: 100 expected in 1600, and a fair
+    /// draw lands within 60..=140 (seeds 1, 2 and 3 give 109, 77 and 100).
+    #[test]
+    fn about_one_scenario_in_sixteen_is_a_cancel_storm() {
+        for seed in [1_u64, 2, 3] {
+            let storms = storm_indices(seed, 1600).len();
+            assert!(
+                (60..=140).contains(&storms),
+                "seed {seed}: {storms} storms in 1600"
+            );
+        }
+    }
+
+    /// The shape that reaches the lab's cancel streak limit (16): more
+    /// sleepers than the limit, all still asleep at the instant the driver
+    /// cancels their region, and spinners that wake at that instant and
+    /// yield 20 to 60 times, so the ready lane is never empty while the
+    /// cancel lane drains.
+    #[test]
+    fn every_storm_of_a_lane_batch_has_more_sleepers_than_the_streak_limit() {
+        const STREAK_LIMIT: usize = 16;
+        for index in storm_indices(9, 200) {
+            let storm = scenario(9, index);
+            let tasks = storm["tasks"].as_array().expect("a storm has tasks");
+            let named = |prefix: &str| -> Vec<&Value> {
+                tasks
+                    .iter()
+                    .filter(|t| t["name"].as_str().is_some_and(|n| n.starts_with(prefix)))
+                    .collect()
+            };
+            let sleepers = named("t.s");
+            let spinners = named("t.r");
+            assert!(
+                sleepers.len() > STREAK_LIMIT && sleepers.len() <= 40,
+                "storm {index}: {} sleepers",
+                sleepers.len()
+            );
+            assert!((1..=3).contains(&spinners.len()), "storm {index}");
+            assert!(tasks.len() <= 43, "storm {index}: {} tasks", tasks.len());
+
+            let cancel = &storm["script"][0];
+            let at = cancel["at_ns"].as_u64().expect("the cancel instant");
+            assert_eq!(cancel["op"]["op"], "cancel_region", "storm {index}");
+            assert_eq!(cancel["op"]["region"], "r.storm", "storm {index}");
+            assert!(
+                matches!(cancel["op"]["kind"].as_str(), Some("User" | "Shutdown")),
+                "storm {index}: a sleep acknowledges only User and Shutdown"
+            );
+            for sleeper in sleepers {
+                let sleep = &sleeper["program"][0];
+                assert_eq!(sleep["op"], "sleep", "storm {index}");
+                assert!(
+                    sleep["ns"].as_u64().expect("sleep ns") > at,
+                    "storm {index}: a sleeper wakes before the cancel"
+                );
+            }
+            for spinner in spinners {
+                let program = spinner["program"].as_array().expect("a program");
+                assert_eq!(program[0]["op"], "sleep_until", "storm {index}");
+                assert_eq!(program[0]["at_ns"].as_u64(), Some(at), "storm {index}");
+                let yields = &program[1..];
+                assert!((20..=60).contains(&yields.len()), "storm {index}");
+                assert!(yields.iter().all(|s| s["op"] == "yield"), "storm {index}");
+            }
+        }
+    }
+
+    /// A storm is a pure function of its seed and index, and it is the
+    /// scenario `scenario` returns for that index (no other draw reaches it).
+    #[test]
+    fn a_storm_is_a_pure_function_of_its_seed_and_index() {
+        let first = scenario(9, 9);
+        assert_eq!(first, scenario(9, 9));
+        assert_eq!(first["id"], "gen-9-9-001");
+        assert_eq!(
+            first["description"],
+            "generated cancel storm (twin_run generate, bd-9kll.4.10)"
+        );
+    }
 }
