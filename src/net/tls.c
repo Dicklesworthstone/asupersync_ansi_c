@@ -212,6 +212,7 @@ static asx_status tls_open(asx_tls_stream *out, asx_tls_role role, asx_tcp_strea
         if (!g_tls_streams[idx].alive) break;
     }
     if (idx >= ASX_MAX_TLS_STREAMS) return ASX_E_RESOURCE_EXHAUSTED;
+    if (asx_runtime_shared_state_refused_internal("network")) return ASX_E_INVALID_STATE;
     asx_runtime_reset_hook_register_internal(ASX_RESET_SLOT_TLS, asx_tls_reset);
     s = &g_tls_streams[idx];
     /* The generation outlives the slot's contents: a handle to a closed

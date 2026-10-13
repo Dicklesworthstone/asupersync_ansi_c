@@ -35,8 +35,12 @@ static asx_process_backend g_process_backend = ASX_PROCESS_DEFAULT_BACKEND;
  * can hold state a reset would clear: a backend choice or a spawned child.
  * A program that never starts a process does not link this module
  * (bd-dkfs). */
-static void process_note_state(void) {
+static int process_note_state(void) {
+    /* Nonzero: refused while two runtimes are live (the table is one for
+     * the process). */
+    if (asx_runtime_shared_state_refused_internal("processes")) return 1;
     asx_runtime_reset_hook_register_internal(ASX_RESET_SLOT_PROCESS, asx_process_reset);
+    return 0;
 }
 
 #if ASX_PROCESS_HAS_NATIVE
@@ -141,7 +145,7 @@ asx_status asx_process_set_backend(asx_process_backend backend) {
 #if !ASX_PROCESS_HAS_NATIVE
     if (backend == ASX_PROCESS_BACKEND_NATIVE) return ASX_E_PERMISSION_DENIED;
 #endif
-    process_note_state();
+    if (process_note_state()) return ASX_E_INVALID_STATE;
     g_process_backend = backend;
     return ASX_OK;
 }
@@ -162,7 +166,7 @@ asx_status asx_process_spawn(asx_process_handle *out, const asx_process_spawn_op
     st = proc_check_program(options->program);
     if (st != ASX_OK) return st;
 
-    process_note_state();
+    if (process_note_state()) return ASX_E_INVALID_STATE;
 #if ASX_PROCESS_HAS_NATIVE
     if (PROC_USE_NATIVE()) {
         asx_process_command cmd;
@@ -420,7 +424,7 @@ asx_status asx_process_command_spawn(const asx_process_command *cmd, asx_process
         !proc_stdio_valid(cmd->stderr_mode)) {
         return ASX_E_INVALID_ARGUMENT;
     }
-    process_note_state();
+    if (process_note_state()) return ASX_E_INVALID_STATE;
 #if ASX_PROCESS_HAS_NATIVE
     if (PROC_USE_NATIVE()) return asx_native_process_spawn(cmd, out);
 #endif

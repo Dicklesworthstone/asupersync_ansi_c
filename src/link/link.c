@@ -70,6 +70,7 @@ static asx_status add_link(asx_task_id holder, asx_task_id peer, asx_exit_policy
     if (out_ref == NULL || (policy != ASX_EXIT_PROPAGATE && policy != ASX_EXIT_TRAP)) {
         return ASX_E_INVALID_ARGUMENT;
     }
+    if (asx_runtime_shared_state_refused_internal("links")) return ASX_E_INVALID_STATE;
     /* TaskWatches::apply resolves the holder, then the peer (:1363). */
     if (!task_is_live(holder)) return ASX_E_STALE_HANDLE;
     if (!task_is_live(peer)) return ASX_E_NOT_FOUND;

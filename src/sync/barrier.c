@@ -19,6 +19,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../runtime/runtime_internal.h"
 #include "wait_queue.h"
 #include <asx/sync/barrier.h>
 #include <stddef.h>
@@ -87,9 +88,13 @@ static void barrier_reap_queue(asx_wait_queue *q) {
 /* Lifecycle                                                           */
 /* ------------------------------------------------------------------ */
 
+/* Whether any barrier was created since the last reset. */
+int asx_barrier_in_use_internal(void) { return g_slot_count != 0u; }
+
 asx_status asx_barrier_create(uint32_t count, asx_barrier_handle *out) {
     uint32_t i;
     if (out == NULL || count == 0) return ASX_E_INVALID_ARGUMENT;
+    if (asx_runtime_shared_state_refused_internal("barriers")) return ASX_E_INVALID_STATE;
 
     for (i = 0; i < ASX_BARRIER_MAX; i++) {
         if (!g_slots[i].alive) {

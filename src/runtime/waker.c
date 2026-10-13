@@ -94,6 +94,7 @@ asx_status asx_waker_register(asx_task_id task, asx_waker *out_waker) {
     uint32_t i;
 
     if (task == ASX_INVALID_ID || out_waker == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (asx_runtime_shared_state_refused_internal("wakers")) return ASX_E_INVALID_STATE;
 
     waker_lock();
     for (i = 0; i < g_slot_count; i++) {

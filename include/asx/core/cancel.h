@@ -94,10 +94,15 @@ ASX_API uint32_t asx_cancel_reason_chain_links(const asx_cancel_reason *r);
 ASX_API void asx_cancel_chain_limits_set_internal(uint32_t max_depth, uint32_t max_memory);
 /* The defaults (16 reasons, 4096 bytes) return at runtime reset. */
 ASX_API void asx_cancel_chain_limits_reset_internal(void);
+/* Whether the process-wide chain bounds are `max_depth` and `max_memory`: a
+ * second runtime is accepted only with the config the live one has. */
+ASX_API int asx_cancel_chain_limits_match_internal(uint32_t max_depth, uint32_t max_memory);
 /* What the runtime's reset and init call (applications do not): the chain
- * bounds return to their defaults, and every cancel witness of a task of the
- * runtime with `runtime_tag` is released, so a task cancelled and discarded
- * before it completed leaves no slot behind in the fixed witness table. */
+ * every cancel witness of a task of the runtime with `runtime_tag` is
+ * released, so a task cancelled and discarded before it completed leaves no
+ * slot behind in the fixed witness table. (The chain bounds are process-wide
+ * and return to their defaults with the last runtime's reset: the clear
+ * calls asx_cancel_chain_limits_reset_internal.) */
 ASX_API void asx_cancel_reset_internal(uint16_t runtime_tag);
 
 /* -------------------------------------------------------------------

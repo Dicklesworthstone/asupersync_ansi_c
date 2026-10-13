@@ -71,6 +71,14 @@ void asx_kernel_bind_internal(void *storage) {
     g_kernels[0] = block;
 }
 
+void asx_kernel_bind_slot_internal(uint16_t tag, void *storage) {
+    asx_kernel *block = (asx_kernel *)storage;
+
+    memset(block, 0, sizeof(*block));
+    block->tag = tag;
+    g_kernels[tag] = block;
+}
+
 /* A raw reset is an explicit teardown: it ends a binding to a caller's
  * storage block (which stays as the runtime left it) and clears the
  * library's. Init binds its own storage first and clears with

@@ -13,6 +13,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../runtime/runtime_internal.h"
 #include "../sync/wait_queue.h"
 #include <asx/asx_config.h>
 #include <asx/core/session.h>
@@ -157,6 +158,9 @@ void asx_session_reset(void) {
 /* Lifecycle                                                           */
 /* ------------------------------------------------------------------ */
 
+/* Whether any session was created since the last reset. */
+int asx_session_in_use_internal(void) { return g_slot_count != 0u; }
+
 asx_status asx_session_create(asx_region_id region, uint32_t capacity,
                               asx_session_endpoint *out_initiator,
                               asx_session_endpoint *out_responder) {
@@ -166,6 +170,7 @@ asx_status asx_session_create(asx_region_id region, uint32_t capacity,
     asx_status st;
 
     if (out_initiator == NULL || out_responder == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (asx_runtime_shared_state_refused_internal("sessions")) return ASX_E_INVALID_STATE;
     if (capacity == 0 || capacity > ASX_SESSION_MAX_CAPACITY) return ASX_E_INVALID_ARGUMENT;
     if (!asx_handle_is_valid(region)) return ASX_E_INVALID_ARGUMENT;
     if (asx_handle_type_tag(region) != ASX_TYPE_REGION) return ASX_E_INVALID_ARGUMENT;

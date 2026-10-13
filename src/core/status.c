@@ -16,7 +16,10 @@ typedef struct asx_task_ledger {
     asx_error_ledger_entry entries[ASX_ERROR_LEDGER_DEPTH];
 } asx_task_ledger;
 
-static asx_task_ledger g_task_ledgers[ASX_ERROR_LEDGER_TASK_SLOTS];
+/* One block of ASX_ERROR_LEDGER_TASK_SLOTS per runtime tag: a task's ledger
+ * is its runtime's slot, so two runtimes' tasks in one slot do not evict one
+ * another. */
+static asx_task_ledger g_task_ledgers[(uint32_t)ASX_MAX_RUNTIMES * ASX_ERROR_LEDGER_TASK_SLOTS];
 static asx_task_ledger g_fallback_ledger;
 static asx_task_id g_bound_task = ASX_INVALID_ID;
 /* One past the highest g_task_ledgers slot recorded into since the last
@@ -68,12 +71,16 @@ static int asx_error_ledger_is_task_id(asx_task_id task_id) {
 
 static asx_task_ledger *asx_error_ledger_slot_for_task(asx_task_id task_id) {
     uint16_t slot;
+    uint16_t tag;
 
     if (!asx_error_ledger_is_task_id(task_id)) { return &g_fallback_ledger; }
 
     slot = asx_handle_slot(task_id);
-    if (slot >= ASX_ERROR_LEDGER_TASK_SLOTS) { return &g_fallback_ledger; }
-    return &g_task_ledgers[slot];
+    tag = asx_handle_runtime_tag(task_id);
+    if (slot >= ASX_ERROR_LEDGER_TASK_SLOTS || tag >= ASX_MAX_RUNTIMES) {
+        return &g_fallback_ledger;
+    }
+    return &g_task_ledgers[(uint32_t)tag * ASX_ERROR_LEDGER_TASK_SLOTS + slot];
 }
 
 static const asx_task_ledger *asx_error_ledger_readonly(asx_task_id task_id) {
@@ -677,7 +684,7 @@ void asx_error_ledger_reset(void) {
     uint32_t i;
 
     for (i = 0; i < g_task_ledger_hwm; i++) {
-        /* ASX_CHECKPOINT_WAIVER("bounded: g_task_ledger_hwm <= ASX_ERROR_LEDGER_TASK_SLOTS") */
+        /* ASX_CHECKPOINT_WAIVER("bounded: g_task_ledger_hwm <= the ledger array") */
         asx_task_ledger_clear(&g_task_ledgers[i], ASX_INVALID_ID);
     }
     g_task_ledger_hwm = 0;
@@ -686,6 +693,16 @@ void asx_error_ledger_reset(void) {
         g_fallback_ledger_dirty = 0;
     }
     g_bound_task = ASX_INVALID_ID;
+}
+
+void asx_error_ledger_reset_runtime_internal(uint16_t runtime_tag) {
+    uint32_t first = (uint32_t)runtime_tag * ASX_ERROR_LEDGER_TASK_SLOTS;
+    uint32_t i;
+
+    for (i = first; i < first + ASX_ERROR_LEDGER_TASK_SLOTS && i < g_task_ledger_hwm; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded: one runtime's block of the ledger array") */
+        asx_task_ledger_clear(&g_task_ledgers[i], ASX_INVALID_ID);
+    }
 }
 
 void asx_error_ledger_bind_task(asx_task_id task_id) { g_bound_task = task_id; }

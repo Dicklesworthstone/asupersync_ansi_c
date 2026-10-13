@@ -285,6 +285,9 @@ void asx_broadcast_reset(void) {
 /* Lifecycle                                                           */
 /* ------------------------------------------------------------------ */
 
+/* Whether any broadcast channel was created since the last reset. */
+int asx_broadcast_in_use_internal(void) { return g_slot_count != 0u; }
+
 asx_status asx_broadcast_create(uint32_t capacity, asx_broadcast_sender *out_sender,
                                 asx_broadcast_receiver *out_receiver) {
     uint32_t idx;
@@ -292,6 +295,7 @@ asx_status asx_broadcast_create(uint32_t capacity, asx_broadcast_sender *out_sen
 
     if (out_sender == NULL || out_receiver == NULL) return ASX_E_INVALID_ARGUMENT;
     if (capacity == 0 || capacity > ASX_BROADCAST_MAX_CAPACITY) return ASX_E_INVALID_ARGUMENT;
+    if (asx_runtime_shared_state_refused_internal("broadcasts")) return ASX_E_INVALID_STATE;
 
     /* Find free slot */
     idx = ASX_MAX_BROADCASTS;

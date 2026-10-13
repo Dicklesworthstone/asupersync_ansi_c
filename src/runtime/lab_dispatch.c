@@ -476,6 +476,8 @@ int asx_lab_dispatch_overflowed(void) { return g_lab_overflow; }
 
 asx_status asx_scheduler_use_lab_dispatch(uint64_t seed) {
     uint32_t i;
+    /* Lab dispatch drives kernel 0 only: not while a second runtime is live. */
+    if (asx_runtime_shared_state_refused_internal("lab dispatch")) return ASX_E_INVALID_STATE;
     /* A refused spawn can retain its captured actor cell without a live
      * task slot. Do not erase its admission ticket by reseeding. */
     if (g_lab_admit_n > 0u) return ASX_E_INVALID_STATE;

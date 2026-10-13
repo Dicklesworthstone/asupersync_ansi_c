@@ -109,6 +109,7 @@ static asx_status quic_alloc(asx_quic_conn *out, const asx_quic_config *cfg) {
         if (!g_quic_conns[idx].alive) break;
     }
     if (idx >= ASX_MAX_QUIC_CONNECTIONS) return ASX_E_RESOURCE_EXHAUSTED;
+    if (asx_runtime_shared_state_refused_internal("network")) return ASX_E_INVALID_STATE;
     asx_runtime_reset_hook_register_internal(ASX_RESET_SLOT_QUIC, asx_quic_reset);
     s = &g_quic_conns[idx];
     generation = quic_next_gen(s->generation);

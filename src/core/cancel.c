@@ -282,6 +282,10 @@ void asx_cancel_chain_limits_reset_internal(void) {
     g_chain_max_memory = CHAIN_DEFAULT_MEMORY;
 }
 
+int asx_cancel_chain_limits_match_internal(uint32_t max_depth, uint32_t max_memory) {
+    return g_chain_max_depth == max_depth && g_chain_max_memory == max_memory;
+}
+
 uint32_t asx_cancel_reason_chain_links(const asx_cancel_reason *r) {
     const asx_cancel_reason *c;
     uint32_t limit;
@@ -371,7 +375,6 @@ asx_status asx_cancel_witness_validate_transition(const asx_cancel_witness_info 
 void asx_cancel_reset_internal(uint16_t runtime_tag) {
     uint32_t used = 0u;
     uint32_t i;
-    asx_cancel_chain_limits_reset_internal();
     for (i = 0; i < g_witness_count; i++) {
         /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
         if (g_witnesses[i].active && asx_handle_runtime_tag(g_witnesses[i].task) == runtime_tag) {

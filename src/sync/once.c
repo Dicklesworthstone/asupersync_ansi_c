@@ -19,6 +19,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../runtime/runtime_internal.h"
 #include "wait_queue.h"
 #include <asx/runtime/runtime.h>
 #include <asx/sync/once.h>
@@ -81,9 +82,13 @@ static void once_reap_queue(asx_wait_queue *q) {
 /* Lifecycle                                                           */
 /* ------------------------------------------------------------------ */
 
+/* Whether any once cell was created since the last reset. */
+int asx_once_in_use_internal(void) { return g_slot_count != 0u; }
+
 asx_status asx_once_create(asx_once_handle *out) {
     uint32_t i;
     if (out == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (asx_runtime_shared_state_refused_internal("once cells")) return ASX_E_INVALID_STATE;
 
     for (i = 0; i < ASX_ONCE_MAX; i++) {
         if (!g_slots[i].alive) {

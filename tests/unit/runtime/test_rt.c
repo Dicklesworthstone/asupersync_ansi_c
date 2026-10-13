@@ -812,6 +812,70 @@ TEST(kernel_trace_belongs_to_the_kernel) {
     asx_runtime_reset();
 }
 
+/* K18: a poll run from inside another poll (a second runtime's scheduler
+ * driven from a task) gives its caller back the current task and the
+ * ledger's bound task; outside a poll both are unbound afterwards. */
+typedef struct {
+    asx_task_slot *inner_slot;
+    asx_task_id inner_id;
+    asx_task_id outer_current;
+    asx_task_id outer_bound;
+    asx_task_id inner_current;
+    asx_task_id inner_bound;
+    asx_task_id after_current;
+    asx_task_id after_bound;
+} nested_poll_ctx;
+
+static asx_status nested_inner_poll(void *data, asx_task_id self) {
+    nested_poll_ctx *c = (nested_poll_ctx *)data;
+    (void)self;
+    c->inner_current = asx_task_current();
+    c->inner_bound = asx_error_ledger_bound_task();
+    return ASX_OK;
+}
+
+static asx_status nested_outer_poll(void *data, asx_task_id self) {
+    nested_poll_ctx *c = (nested_poll_ctx *)data;
+    (void)self;
+    c->outer_current = asx_task_current();
+    c->outer_bound = asx_error_ledger_bound_task();
+    (void)asx_task_poll_current_internal(c->inner_slot, c->inner_id);
+    c->after_current = asx_task_current();
+    c->after_bound = asx_error_ledger_bound_task();
+    return ASX_OK;
+}
+
+TEST(nested_poll_restores_the_current_task_and_the_ledger_binding) {
+    nested_poll_ctx c;
+    asx_region_id region;
+    asx_task_id outer;
+    asx_task_id inner;
+    asx_task_slot *outer_slot;
+
+    memset(&c, 0, sizeof(c));
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(region, nested_outer_poll, &c, &outer), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(region, nested_inner_poll, &c, &inner), ASX_OK);
+    ASSERT_EQ(asx_task_slot_lookup(outer, &outer_slot), ASX_OK);
+    ASSERT_EQ(asx_task_slot_lookup(inner, &c.inner_slot), ASX_OK);
+    c.inner_id = inner;
+
+    ASSERT_EQ(asx_task_current(), ASX_INVALID_ID);
+    (void)asx_task_poll_current_internal(outer_slot, outer);
+
+    ASSERT_EQ(c.outer_current, outer);
+    ASSERT_EQ(c.outer_bound, outer);
+    ASSERT_EQ(c.inner_current, inner);
+    ASSERT_EQ(c.inner_bound, inner);
+    ASSERT_EQ(c.after_current, outer);
+    ASSERT_EQ(c.after_bound, outer);
+    /* The outermost poll leaves both unbound, as a sweep poll always did. */
+    ASSERT_EQ(asx_task_current(), ASX_INVALID_ID);
+    ASSERT_EQ(asx_error_ledger_bound_task(), ASX_INVALID_ID);
+    asx_runtime_reset();
+}
+
 TEST(runtime_storage_refusals_bind_nothing_and_change_no_byte) {
     asx_runtime rt;
     asx_runtime before;
@@ -2016,8 +2080,11 @@ int main(void) {
     RUN_TEST(kernel_clear_leaves_another_held_kernel_and_the_process_state_alone);
     RUN_TEST(kernel_clock_and_entropy_belong_to_the_kernel);
     RUN_TEST(kernel_trace_belongs_to_the_kernel);
+    RUN_TEST(nested_poll_restores_the_current_task_and_the_ledger_binding);
     RUN_TEST(runtime_storage_refusals_bind_nothing_and_change_no_byte);
-    RUN_TEST(refused_storage_init_preserves_the_live_runtime_and_the_block);
+    RUN_TEST_IF(ASX_MAX_RUNTIMES == 1u,
+                refused_storage_init_preserves_the_live_runtime_and_the_block,
+                "with room for more runtimes the block is bound as the next tag");
     RUN_TEST(runtimes_in_turn_in_their_own_blocks_do_not_share_arenas);
     fprintf(stderr, "=== test_rt ===\n");
 

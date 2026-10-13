@@ -71,6 +71,7 @@ static asx_status add_monitor(asx_task_id watcher, asx_task_id target,
                               const asx_actor_handle *server, asx_monitor_ref *out_ref) {
     uint32_t i;
     if (out_ref == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (asx_runtime_shared_state_refused_internal("monitors")) return ASX_E_INVALID_STATE;
     /* TaskWatches::apply resolves the holder, then the target (:1333). */
     if (!task_is_live(watcher)) return ASX_E_STALE_HANDLE;
     if (!task_is_live(target)) return ASX_E_NOT_FOUND;

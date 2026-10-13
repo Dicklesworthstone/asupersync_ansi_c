@@ -535,6 +535,10 @@ static asx_status actor_poll(void *user_data, asx_task_id self) {
 /* Lifecycle                                                           */
 /* ------------------------------------------------------------------ */
 
+/* Whether any actor server was spawned since the last reset, or one is
+ * still live: a second runtime would share the table. */
+int asx_actor_in_use_internal(void) { return g_actor_hwm != 0u || g_live_servers != 0u; }
+
 asx_status asx_actor_spawn(asx_actor_handle *out, asx_region_id region,
                            const asx_actor_behavior *behavior, void *state,
                            uint32_t mailbox_capacity) {
@@ -547,6 +551,7 @@ asx_status asx_actor_spawn(asx_actor_handle *out, asx_region_id region,
     if (out == NULL || behavior == NULL) return ASX_E_INVALID_ARGUMENT;
     if (mailbox_capacity == 0u || mailbox_capacity > ASX_ACTOR_MAILBOX_CAPACITY)
         return ASX_E_INVALID_ARGUMENT;
+    if (asx_runtime_shared_state_refused_internal("actors")) return ASX_E_INVALID_STATE;
 
     /* A slot is free until spawned, and again once its server stopped;
      * unused slots go first, so handles to stopped servers stay valid as

@@ -487,10 +487,10 @@ static inline int asx_kernel_other_held(const asx_kernel *except) {
 /* Whether any kernel is held by an initialized runtime. */
 static inline int asx_kernel_any_held(void) { return asx_kernel_other_held(NULL); }
 
-/* `rt` (its generation set) takes kernel 0. */
-static inline void asx_kernel_hold(asx_runtime *rt) {
-    rt->tag = g_kernels[0]->tag;
-    g_kernels[rt->tag]->rt_generation = rt->generation;
+/* `rt` (its generation set) takes the kernel registered at `tag`. */
+static inline void asx_kernel_hold(asx_runtime *rt, uint16_t tag) {
+    rt->tag = tag;
+    g_kernels[tag]->rt_generation = rt->generation;
 }
 
 /* asx_handle_pack for a handle kernel `k` issues: its runtime tag rides in
@@ -506,6 +506,37 @@ static inline uint64_t asx_handle_mint(const asx_kernel *k, uint16_t type_tag, u
  * leaves it as it is. Counters and the rest of the kernel state are cleared
  * by asx_runtime_clear_internal. */
 void asx_kernel_bind_internal(void *storage);
+
+/* Register the caller's `storage` block (already validated, not the
+ * library's) as the kernel of `tag` (1 .. ASX_MAX_RUNTIMES - 1), zeroing it
+ * and stamping the tag. Counters and the rest of the kernel state are
+ * cleared by asx_runtime_clear_internal. */
+void asx_kernel_bind_slot_internal(uint16_t tag, void *storage);
+
+/* Open a root region in kernel `k` (the public asx_region_open is kernel
+ * 0's until it takes the runtime). */
+asx_status asx_region_open_kernel_internal(asx_kernel *k, asx_region_id *out_id);
+
+/* Second runtimes (K18): whether the still process-wide subsystem holds
+ * state a second runtime would share. Each is defined with its subsystem;
+ * rt.c evaluates them at a second initialization and names the first that
+ * answers nonzero. */
+int asx_semaphore_in_use_internal(void);
+int asx_rwlock_in_use_internal(void);
+int asx_barrier_in_use_internal(void);
+int asx_once_in_use_internal(void);
+int asx_notify_in_use_internal(void);
+int asx_channel_in_use_internal(void);
+int asx_oneshot_in_use_internal(void);
+int asx_watch_in_use_internal(void);
+int asx_broadcast_in_use_internal(void);
+int asx_session_in_use_internal(void);
+int asx_actor_in_use_internal(void);
+int asx_supervisor_in_use_internal(void);
+
+/* Whether `hooks` is the hook table the live runtimes installed (the
+ * allocator seal aside): the table is process-wide. Defined in hooks.c. */
+int asx_runtime_hooks_match_installed_internal(const asx_runtime_hooks *hooks);
 
 /* The reset of asx_runtime_reset without the rebind to the static block:
  * what init runs after it bound the runtime's storage (lifecycle.c). */

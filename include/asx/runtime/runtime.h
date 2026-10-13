@@ -1467,6 +1467,34 @@ void asx_runtime_reset_hooks_forget_internal(void);
 /* Runtime-internal: run the registered hooks in slot order. */
 void asx_runtime_reset_hooks_run_internal(void);
 
+/* -------------------------------------------------------------------
+ * Second runtimes (K18, bd-9kll.3.20)
+ *
+ * ASX_MAX_RUNTIMES runtimes may be live at once (default 1). A runtime
+ * beyond the first brings its own storage block (asx_runtime_config.storage)
+ * and is accepted only while every subsystem that is still process-wide has
+ * nothing live (channels, sync primitives, actors, links, monitors, wakers,
+ * the application timer wheel, lab dispatch, parallel lanes, the network,
+ * file-system, process and signal adapters, the io driver and blocking
+ * pool), and asks for the process-wide settings the first one has (hooks,
+ * io backend, cancel chain limits). While two runtimes are live, those
+ * subsystems refuse to acquire state. Either refusal returns
+ * ASX_E_INVALID_STATE and names the subsystem.
+ * ------------------------------------------------------------------- */
+
+/* Why the last asx_runtime_init* refusal, or the last refused acquisition of
+ * a still process-wide subsystem, was made: a static sentence naming the
+ * subsystem ("handle-less subsystem channels is still process-wide ..."),
+ * or an empty string when there was none. Valid until the next refusal. */
+ASX_API const char *asx_runtime_last_refusal_reason(void);
+
+/* Runtime-internal: called by a subsystem that is still process-wide at
+ * each entry that creates or acquires state. Nonzero, with the reason
+ * recorded for asx_runtime_last_refusal_reason, while two or more runtimes
+ * are initialized; the caller returns ASX_E_INVALID_STATE. Zero with one
+ * runtime (always, while ASX_MAX_RUNTIMES is 1). */
+ASX_API int asx_runtime_shared_state_refused_internal(const char *subsystem);
+
 #ifdef __cplusplus
 }
 #endif

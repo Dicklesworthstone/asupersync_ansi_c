@@ -14,6 +14,7 @@
  */
 
 #include "wait_queue.h"
+#include <asx/runtime/runtime.h>
 #include <asx/sync/pool.h>
 #include <string.h>
 
@@ -113,6 +114,7 @@ asx_status asx_pool_create(const asx_pool_config *config, asx_pool_handle *out) 
     if (config->create_fn == NULL) return ASX_E_INVALID_ARGUMENT;
     if (config->max_size == 0 || config->max_size > ASX_POOL_MAX_RESOURCES)
         return ASX_E_INVALID_ARGUMENT;
+    if (asx_runtime_shared_state_refused_internal("pools")) return ASX_E_INVALID_STATE;
     asx_runtime_reset_hook_register_internal(ASX_RESET_SLOT_POOL, asx_pool_reset);
     for (i = 0; i < ASX_POOL_MAX; i++) {
         if (!g_slots[i].alive) {

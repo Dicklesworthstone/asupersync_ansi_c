@@ -234,6 +234,11 @@ typedef struct asx_error_ledger_entry {
 /* Reset all ledger state. Primarily for tests and deterministic replay setup. */
 ASX_API void asx_error_ledger_reset(void);
 
+/* Runtime-internal: clear the task ledgers of the runtime that issues
+ * handles tagged `runtime_tag` (a runtime's reset), leaving every other
+ * runtime's, the fallback ledger and the bound task alone. */
+ASX_API void asx_error_ledger_reset_runtime_internal(uint16_t runtime_tag);
+
 /* Bind the implicit task context used by ASX_TRY(). */
 ASX_API void asx_error_ledger_bind_task(asx_task_id task_id);
 

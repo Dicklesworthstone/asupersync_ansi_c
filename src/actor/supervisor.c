@@ -1751,6 +1751,9 @@ static asx_status compile_children(const asx_child_spec *children, uint32_t n, u
 /* Lifecycle                                                           */
 /* ------------------------------------------------------------------ */
 
+/* Whether any supervisor was spawned since the last reset. */
+int asx_supervisor_in_use_internal(void) { return g_sup_hwm != 0u; }
+
 asx_status asx_supervisor_spawn(asx_supervisor_handle *out, asx_region_id region,
                                 const asx_supervisor_config *config, const asx_child_spec *children,
                                 uint32_t child_count) {
@@ -1766,6 +1769,7 @@ asx_status asx_supervisor_spawn(asx_supervisor_handle *out, asx_region_id region
 
     if (out == NULL || config == NULL || children == NULL) return ASX_E_INVALID_ARGUMENT;
     if (child_count == 0u || child_count > SUP_CHILDREN) return ASX_E_INVALID_ARGUMENT;
+    if (asx_runtime_shared_state_refused_internal("supervisors")) return ASX_E_INVALID_STATE;
     if (config->max_restarts > ASX_SUPERVISOR_MAX_RESTARTS) return ASX_E_INVALID_ARGUMENT;
     if ((unsigned)config->strategy > (unsigned)ASX_SUPERVISOR_REST_FOR_ONE ||
         (unsigned)config->escalation > (unsigned)ASX_ESCALATION_RESET_COUNTER ||

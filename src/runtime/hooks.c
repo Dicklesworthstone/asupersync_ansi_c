@@ -584,6 +584,21 @@ const asx_runtime_hooks *asx_runtime_get_hooks(void) {
     return &g_hooks;
 }
 
+/* The table is process-wide: a second runtime is accepted only with the
+ * table the live ones installed, byte for byte. The allocator seal is state
+ * of the installed copy, not part of what a runtime asks for. */
+int asx_runtime_hooks_match_installed_internal(const asx_runtime_hooks *hooks) {
+    asx_runtime_hooks installed;
+    asx_runtime_hooks asked;
+
+    if (!g_hooks_installed) return 1;
+    installed = g_hooks;
+    asked = *hooks;
+    installed.allocator_sealed = 0;
+    asked.allocator_sealed = 0;
+    return memcmp(&installed, &asked, sizeof(installed)) == 0;
+}
+
 /* ------------------------------------------------------------------ */
 /* Allocator seal                                                     */
 /* ------------------------------------------------------------------ */

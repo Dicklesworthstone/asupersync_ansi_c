@@ -7,18 +7,26 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../sync/wait_queue.h"
 #include "runtime_internal.h"
 #include <asx/asx_config.h>
 #include <asx/core/transition.h>
 #include <asx/fs/fs.h>
+#include <asx/link/link.h>
+#include <asx/monitor/monitor.h>
 #include <asx/net/net.h>
 #include <asx/process/process.h>
 #include <asx/runtime/blocking.h>
 #include <asx/runtime/builder.h>
 #include <asx/runtime/config_reload.h>
+#include <asx/runtime/diagnostic.h>
 #include <asx/runtime/io_driver.h>
+#include <asx/runtime/journal.h>
+#include <asx/runtime/journal_replay.h>
+#include <asx/runtime/parallel.h>
 #include <asx/runtime/rt.h>
 #include <asx/runtime/runtime.h>
+#include <asx/runtime/waker.h>
 #include <asx/signal/signal.h>
 #include <stddef.h>
 #include <string.h>
@@ -174,11 +182,199 @@ asx_status asx_runtime_config_validate(const asx_runtime_config *config) {
 /* Lifecycle                                                           */
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ */
+/* Second runtimes (K18)                                               */
+/*                                                                     */
+/* A runtime beyond the first is accepted while every subsystem that   */
+/* is still process-wide has nothing live, and refuses to acquire      */
+/* state while two runtimes are (asx_runtime_shared_state_refused_     */
+/* internal); either refusal names the subsystem.                      */
+/* ------------------------------------------------------------------ */
+
+static char g_refusal_reason[128];
+
+/* Record "<prefix><name><suffix>" (cut at the buffer's size). */
+static void runtime_set_reason(const char *prefix, const char *name, const char *suffix) {
+    size_t used = 0u;
+    const char *parts[3];
+    size_t p;
+
+    parts[0] = prefix;
+    parts[1] = name;
+    parts[2] = suffix;
+    for (p = 0u; p < 3u; p++) {
+        size_t n = strlen(parts[p]);
+        if (n > sizeof(g_refusal_reason) - 1u - used) n = sizeof(g_refusal_reason) - 1u - used;
+        memcpy(g_refusal_reason + used, parts[p], n);
+        used += n;
+    }
+    g_refusal_reason[used] = '\0';
+}
+
+const char *asx_runtime_last_refusal_reason(void) { return g_refusal_reason; }
+
+/* Whether two or more runtimes are initialized. */
+static int runtime_two_held(void) {
+    uint32_t i;
+    uint32_t held = 0u;
+    for (i = 0u; i < ASX_MAX_RUNTIMES; i++) {
+        if (g_kernels[i] != NULL && g_kernels[i]->rt_generation != 0u) held++;
+    }
+    return held >= 2u;
+}
+
+int asx_runtime_shared_state_refused_internal(const char *subsystem) {
+    if (!runtime_two_held()) return 0;
+    runtime_set_reason("handle-less subsystem ", subsystem,
+                       " is still process-wide: refused while two runtimes are live");
+    return 1;
+}
+
+static int runtime_p_timers(void) { return asx_timer_active_count(asx_timer_wheel_global()) != 0u; }
+static int runtime_p_wait_queues(void) { return asx_wait_nodes_in_use() != 0u; }
+static int runtime_p_wakers(void) { return asx_waker_active_count() != 0u; }
+static int runtime_p_links(void) { return asx_link_count() != 0u; }
+static int runtime_p_monitors(void) { return asx_monitor_count() != 0u; }
+static int runtime_p_lab_dispatch(void) { return asx_lab_dispatch_active() != 0; }
+static int runtime_p_parallel(void) { return asx_parallel_is_initialized() != 0; }
+static int runtime_p_journal(void) { return asx_journal_active() != 0; }
+static int runtime_p_replay(void) { return asx_replay_active() != 0; }
+static int runtime_p_diagnostic(void) { return asx_diagnostic_current() != NULL; }
+static int runtime_p_faults(void) { return asx_fault_injection_count() != 0u; }
+static int runtime_p_running(void) { return asx_task_current() != ASX_INVALID_ID; }
+#if ASX_HAS_NATIVE_IO_DRIVER
+static int runtime_p_io_driver(void) { return asx_io_active_count() != 0u; }
+#endif
+#if ASX_HAS_BLOCKING_SURFACE
+static int runtime_p_blocking(void) { return asx_blocking_active_count() != 0u; }
+#endif
+static int runtime_p_net(void) {
+    return asx_runtime_reset_hook_registered_internal(ASX_RESET_SLOT_NET) ||
+           asx_runtime_reset_hook_registered_internal(ASX_RESET_SLOT_PIPE) ||
+           asx_runtime_reset_hook_registered_internal(ASX_RESET_SLOT_TLS) ||
+           asx_runtime_reset_hook_registered_internal(ASX_RESET_SLOT_QUIC) ||
+           asx_runtime_reset_hook_registered_internal(ASX_RESET_SLOT_WS);
+}
+static int runtime_p_fs(void) {
+    return asx_runtime_reset_hook_registered_internal(ASX_RESET_SLOT_FS);
+}
+static int runtime_p_process(void) {
+    return asx_runtime_reset_hook_registered_internal(ASX_RESET_SLOT_PROCESS);
+}
+static int runtime_p_signal(void) {
+    return asx_runtime_reset_hook_registered_internal(ASX_RESET_SLOT_SIGNAL);
+}
+static int runtime_p_pools(void) {
+    return asx_runtime_reset_hook_registered_internal(ASX_RESET_SLOT_POOL) ||
+           asx_runtime_reset_hook_registered_internal(ASX_RESET_SLOT_CONTENDED_MUTEX);
+}
+
+typedef struct {
+    const char *name;
+    int (*in_use)(void);
+} runtime_shared_subsystem;
+
+/* The still process-wide subsystems, as a second initialization names
+ * them. Each moves out of the table as it becomes per runtime. */
+static const runtime_shared_subsystem g_shared_subsystems[] = {
+    {"application timers", runtime_p_timers},
+    {"wait queues", runtime_p_wait_queues},
+    {"wakers", runtime_p_wakers},
+    {"semaphores", asx_semaphore_in_use_internal},
+    {"rwlocks", asx_rwlock_in_use_internal},
+    {"barriers", asx_barrier_in_use_internal},
+    {"once cells", asx_once_in_use_internal},
+    {"notifies", asx_notify_in_use_internal},
+    {"pools", runtime_p_pools},
+    {"channels", asx_channel_in_use_internal},
+    {"oneshots", asx_oneshot_in_use_internal},
+    {"watches", asx_watch_in_use_internal},
+    {"broadcasts", asx_broadcast_in_use_internal},
+    {"sessions", asx_session_in_use_internal},
+    {"actors", asx_actor_in_use_internal},
+    {"supervisors", asx_supervisor_in_use_internal},
+    {"links", runtime_p_links},
+    {"monitors", runtime_p_monitors},
+    {"lab dispatch", runtime_p_lab_dispatch},
+    {"parallel lanes", runtime_p_parallel},
+    {"journal", runtime_p_journal},
+    {"journal replay", runtime_p_replay},
+    {"diagnostic stack", runtime_p_diagnostic},
+    {"fault injection", runtime_p_faults},
+    {"a run in progress", runtime_p_running},
+#if ASX_HAS_NATIVE_IO_DRIVER
+    {"io driver", runtime_p_io_driver},
+#endif
+#if ASX_HAS_BLOCKING_SURFACE
+    {"blocking pool", runtime_p_blocking},
+#endif
+    {"network", runtime_p_net},
+    {"file system", runtime_p_fs},
+    {"processes", runtime_p_process},
+    {"signals", runtime_p_signal},
+};
+
+/* The registry slot a new runtime takes: the lowest whose kernel no
+ * initialized runtime holds, or ASX_MAX_RUNTIMES when all are held. */
+static uint16_t runtime_free_tag(void) {
+    uint16_t t;
+    for (t = 0u; t < ASX_MAX_RUNTIMES; t++) {
+        if (g_kernels[t] == NULL || g_kernels[t]->rt_generation == 0u) return t;
+    }
+    return (uint16_t)ASX_MAX_RUNTIMES;
+}
+
+/* Whether a runtime may start while another is live: ASX_OK, or
+ * ASX_E_INVALID_STATE with the reason recorded. */
+static asx_status runtime_admit_second(const asx_runtime_config *config,
+                                       const asx_runtime_hooks *hooks) {
+    size_t i;
+
+    if (!asx_runtime_hooks_match_installed_internal(hooks)) {
+        runtime_set_reason("hooks are process-wide: ", "this table differs from the live runtime's",
+                           "");
+        return ASX_E_INVALID_STATE;
+    }
+    if (config->io_backend != g_active_io_backend ||
+        !asx_cancel_chain_limits_match_internal(config->max_cancel_chain_depth,
+                                                config->max_cancel_chain_memory)) {
+        runtime_set_reason("the io backend and the cancel chain limits are process-wide: ",
+                           "this config differs from the live runtime's", "");
+        return ASX_E_INVALID_STATE;
+    }
+    for (i = 0u; i < sizeof(g_shared_subsystems) / sizeof(g_shared_subsystems[0]); i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded: the static table of still process-wide subsystems") */
+        if (g_shared_subsystems[i].in_use()) {
+            runtime_set_reason(
+                "handle-less subsystem ", g_shared_subsystems[i].name,
+                " is still process-wide and in use: a second runtime would share it");
+            return ASX_E_INVALID_STATE;
+        }
+    }
+    return ASX_OK;
+}
+
+/* Unbind the runtime of `tag` after a failed init or at shutdown: kernel 0
+ * goes back to the library's static block, any other slot is cleared and
+ * left unregistered (its storage stays as the runtime left it). */
+static void runtime_unbind(uint16_t tag) {
+    if (tag == 0u) {
+        asx_runtime_reset();
+        return;
+    }
+    asx_runtime_clear_internal(g_kernels[tag]);
+    g_kernels[tag] = NULL;
+}
+
 asx_status asx_runtime_init_checked(asx_runtime *rt, const asx_runtime_config *config,
                                     const asx_runtime_hooks *hooks,
                                     uint64_t application_fingerprint) {
     asx_status st;
+    uint16_t tag;
+    asx_kernel *k;
+    int shared; /* another runtime is live: process-wide state is its */
 
+    g_refusal_reason[0] = '\0';
     if (application_fingerprint != asx_runtime_config_fingerprint()) return ASX_E_CONFIG_MISMATCH;
     if (rt == NULL || config == NULL || hooks == NULL) return ASX_E_INVALID_ARGUMENT;
 
@@ -191,42 +387,70 @@ asx_status asx_runtime_init_checked(asx_runtime *rt, const asx_runtime_config *c
     st = asx_runtime_hooks_validate(hooks, ASX_DETERMINISTIC);
     if (st != ASX_OK) return st;
     /* Initialization accepts an uninitialized destination: do not inspect
-     * its bytes to authorize replacing the active process-wide runtime. */
-    if (asx_kernel_any_held()) return ASX_E_INVALID_STATE;
+     * its bytes to authorize replacing a live process-wide runtime. */
+    tag = runtime_free_tag();
+    if (tag >= ASX_MAX_RUNTIMES) {
+        runtime_set_reason("the runtime registry is full: ", "raise ASX_MAX_RUNTIMES", "");
+        return ASX_E_INVALID_STATE;
+    }
+    /* A second runtime without a block of its own is what a plain init
+     * while one is live always was: refused as a state, not an argument. */
+    if (tag != 0u && config->storage == NULL) {
+        runtime_set_reason("a runtime beyond the first needs its own storage block: ",
+                           "asx_runtime_config.storage, asx_runtime_storage_size() bytes", "");
+        return ASX_E_INVALID_STATE;
+    }
+    shared = asx_kernel_any_held();
+    if (shared) {
+        st = runtime_admit_second(config, hooks);
+        if (st != ASX_OK) return st;
+    }
     /* Step 3: bind the runtime's state storage (the caller's block, zeroed,
-     * or the library's) and reset all internal state (deterministic clean
+     * or the library's) and reset its internal state (deterministic clean
      * slate). Nothing above wrote any state, so a refusal left it intact. */
-    asx_kernel_bind_internal(config->storage);
-    asx_runtime_clear_internal(g_kernels[0]);
+    if (tag == 0u) {
+        asx_kernel_bind_internal(config->storage);
+    } else {
+        asx_kernel_bind_slot_internal(tag, config->storage);
+    }
+    k = g_kernels[tag];
+    asx_runtime_clear_internal(k);
 
-    /* Step 4: install hooks */
-    st = asx_runtime_set_hooks(hooks);
-    if (st != ASX_OK) {
-        asx_runtime_reset(); /* unbind: a failed init leaves no binding */
-        return st;
+    /* Step 4: install hooks (the live runtime's table is the same one) */
+    if (!shared) {
+        st = asx_runtime_set_hooks(hooks);
+        if (st != ASX_OK) {
+            runtime_unbind(tag); /* a failed init leaves no binding */
+            return st;
+        }
+        g_active_io_backend = config->io_backend;
     }
 
-    g_active_io_backend = config->io_backend;
-
-    /* Step 4a: initialize shipped runtime subsystems.
+    /* Step 4a: initialize shipped runtime subsystems (once: the live
+     * runtime's driver and pool serve a second one, which has nothing live
+     * in them, and its shutdown leaves them to the last).
      * Browser profile builds fail closed for native-only surfaces, which is
      * expected and should not prevent the runtime object itself from starting. */
 #if ASX_HAS_NATIVE_IO_DRIVER
-    st = asx_io_driver_init();
-    if (st != ASX_OK && st != ASX_E_PERMISSION_DENIED) {
-        g_active_io_backend = ASX_IO_BACKEND_GHOST;
-        asx_runtime_reset();
-        return st;
+    if (!shared) {
+        st = asx_io_driver_init();
+        if (st != ASX_OK && st != ASX_E_PERMISSION_DENIED) {
+            g_active_io_backend = ASX_IO_BACKEND_GHOST;
+            runtime_unbind(tag);
+            return st;
+        }
     }
 #endif
 
 #if ASX_HAS_BLOCKING_SURFACE
-    st = asx_blocking_pool_init();
-    if (st != ASX_OK && st != ASX_E_PERMISSION_DENIED) {
-        asx_io_driver_shutdown();
-        g_active_io_backend = ASX_IO_BACKEND_GHOST;
-        asx_runtime_reset();
-        return st;
+    if (!shared) {
+        st = asx_blocking_pool_init();
+        if (st != ASX_OK && st != ASX_E_PERMISSION_DENIED) {
+            asx_io_driver_shutdown();
+            g_active_io_backend = ASX_IO_BACKEND_GHOST;
+            runtime_unbind(tag);
+            return st;
+        }
     }
 #endif
 
@@ -234,8 +458,9 @@ asx_status asx_runtime_init_checked(asx_runtime *rt, const asx_runtime_config *c
     /* A live readiness reactor means real I/O: sockets, files, child
      * processes and signal subscriptions created from now on use the
      * native backends (where the platform provides them; elsewhere the
-     * setters refuse and the deterministic models stay selected). */
-    if (asx_io_driver_is_live()) {
+     * setters refuse and the deterministic models stay selected). The
+     * first runtime to start the reactor owns them. */
+    if (!shared && asx_io_driver_is_live()) {
         st = asx_net_set_backend(ASX_NET_BACKEND_NATIVE);
         (void)st;
         st = asx_fs_set_backend(ASX_FS_BACKEND_NATIVE);
@@ -250,18 +475,17 @@ asx_status asx_runtime_init_checked(asx_runtime *rt, const asx_runtime_config *c
     /* Step 5: store config and mark initialized */
     memset(rt, 0, sizeof(*rt));
     runtime_config_copy(rt, config);
-    asx_runtime_set_leak_policy_internal(g_kernels[0], config->leak_response,
-                                         config->leak_escalation);
-    asx_runtime_set_cleanup_hard_bound_internal(g_kernels[0], config->cleanup_hard_bound != 0u);
+    asx_runtime_set_leak_policy_internal(k, config->leak_response, config->leak_escalation);
+    asx_runtime_set_cleanup_hard_bound_internal(k, config->cleanup_hard_bound != 0u);
     asx_cancel_chain_limits_set_internal(config->max_cancel_chain_depth,
                                          config->max_cancel_chain_memory);
-    asx_region_finalizer_config_set_internal(g_kernels[0], config->finalizer_poll_budget,
+    asx_region_finalizer_config_set_internal(k, config->finalizer_poll_budget,
                                              config->finalizer_time_budget_ns,
                                              config->finalizer_escalation);
     rt->hooks = *hooks;
     rt->generation = g_rt_generation++;
     rt->initialized = 1;
-    asx_kernel_hold(rt);
+    asx_kernel_hold(rt, tag);
 
     return ASX_OK;
 }
@@ -324,13 +548,17 @@ asx_status asx_runtime_init_from_env_checked(asx_runtime *rt, const char *prefix
 void asx_runtime_shutdown(asx_runtime *rt) {
     if (rt == NULL) return;
     if (asx_runtime_is_initialized(rt)) {
+        /* The io driver and the blocking pool are the live runtimes' one
+         * pair: the last runtime to shut down stops them. */
+        if (!asx_kernel_other_held(asx_kernel_for_tag(rt->tag))) {
 #if ASX_HAS_NATIVE_IO_DRIVER
-        asx_io_driver_shutdown();
+            asx_io_driver_shutdown();
 #endif
 #if ASX_HAS_BLOCKING_SURFACE
-        asx_blocking_pool_shutdown();
+            asx_blocking_pool_shutdown();
 #endif
-        asx_runtime_reset();
+        }
+        runtime_unbind(rt->tag);
     }
     memset(rt, 0, sizeof(*rt));
 }

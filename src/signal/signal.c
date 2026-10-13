@@ -48,8 +48,12 @@ static asx_signal_backend g_signal_backend = ASX_SIGNAL_DEFAULT_BACKEND;
  * can hold state a reset would clear: a backend choice, a subscription or a
  * raised shutdown. A program that never uses signals does not link this
  * module (bd-dkfs). */
-static void signal_note_state(void) {
+static int signal_note_state(void) {
+    /* Nonzero: refused while two runtimes are live (the table is one for
+     * the process, as is the OS handler). */
+    if (asx_runtime_shared_state_refused_internal("signals")) return 1;
     asx_runtime_reset_hook_register_internal(ASX_RESET_SLOT_SIGNAL, asx_signal_reset);
+    return 0;
 }
 
 static uint32_t asx_signal_next_generation(uint32_t generation) {
@@ -105,7 +109,7 @@ asx_status asx_signal_set_backend(asx_signal_backend backend) {
 #if !ASX_SIGNAL_HAS_NATIVE
     if (backend == ASX_SIGNAL_BACKEND_NATIVE) return ASX_E_PERMISSION_DENIED;
 #endif
-    signal_note_state();
+    if (signal_note_state()) return ASX_E_INVALID_STATE;
     g_signal_backend = backend;
     return ASX_OK;
 }
@@ -119,7 +123,7 @@ asx_status asx_signal_subscribe(asx_signal_subscription *out, asx_signal_kind ki
 
     if (out == NULL) return ASX_E_INVALID_ARGUMENT;
 
-    signal_note_state();
+    if (signal_note_state()) return ASX_E_INVALID_STATE;
     for (i = 0; i < ASX_MAX_SIGNAL_SUBSCRIPTIONS; i++) {
         if (!g_subscriptions[i].alive) break;
     }
@@ -186,7 +190,7 @@ asx_status asx_signal_unsubscribe(asx_signal_subscription subscription) {
 
 asx_status asx_signal_raise(asx_signal_kind kind) {
     /* Also requests shutdown for INT/TERM when nobody is subscribed. */
-    signal_note_state();
+    if (signal_note_state()) return ASX_E_INVALID_STATE;
     signal_deliver(kind, 1u, 0);
     return ASX_OK;
 }

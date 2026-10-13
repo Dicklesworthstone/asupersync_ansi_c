@@ -460,6 +460,10 @@ static void channel_wake_everyone(asx_channel_slot *s) {
 /* Channel lifecycle                                                  */
 /* ------------------------------------------------------------------ */
 
+/* Whether any channel was created since the last reset: a second runtime
+ * would share the table. */
+int asx_channel_in_use_internal(void) { return g_channel_hwm != 0u; }
+
 static asx_status channel_create_impl(asx_region_id region, uint32_t capacity, int unbounded,
                                       asx_channel_id *out_id) {
     uint16_t i;
@@ -471,6 +475,7 @@ static asx_status channel_create_impl(asx_region_id region, uint32_t capacity, i
     if (capacity == 0 || capacity > ASX_CHANNEL_MAX_CAPACITY) { return ASX_E_INVALID_ARGUMENT; }
     if (!asx_handle_is_valid(region)) { return ASX_E_INVALID_ARGUMENT; }
     if (asx_handle_type_tag(region) != ASX_TYPE_REGION) { return ASX_E_INVALID_ARGUMENT; }
+    if (asx_runtime_shared_state_refused_internal("channels")) { return ASX_E_INVALID_STATE; }
 
     st = asx_region_get_state(region, &region_state);
     if (st != ASX_OK) { return st; }

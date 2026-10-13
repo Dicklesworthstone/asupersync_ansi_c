@@ -172,6 +172,42 @@ TEST(ledger_reset_after_heavy_use_leaves_no_stale_state) {
     asx_error_ledger_reset();
 }
 
+/* K18: a task's ledger is its runtime's slot. A runtime's reset clears its
+ * own block and leaves another runtime's tasks' errors in place; two
+ * runtimes' tasks in one slot, generation and all, keep their own entries. */
+TEST(ledger_is_per_runtime_tag_and_a_runtime_reset_clears_only_its_block) {
+    asx_task_id rt0_task = ledger_tid(1u, 5u);
+    asx_error_ledger_entry entry;
+
+    asx_error_ledger_reset();
+    asx_error_ledger_record_for_task(rt0_task, ASX_E_CANCELLED, "rt0", "ledger", 1u);
+    ASSERT_EQ(asx_error_ledger_count(rt0_task), 1u);
+    asx_error_ledger_reset_runtime_internal(0u);
+    ASSERT_EQ(asx_error_ledger_count(rt0_task), 0u);
+
+#if ASX_MAX_RUNTIMES >= 2u
+    {
+        asx_task_id rt1_task = asx_handle_with_runtime_tag(rt0_task, 1u);
+
+        asx_error_ledger_record_for_task(rt0_task, ASX_E_CANCELLED, "rt0", "ledger", 1u);
+        asx_error_ledger_record_for_task(rt1_task, ASX_E_INVALID_STATE, "rt1", "ledger", 2u);
+        ASSERT_EQ(asx_error_ledger_count(rt0_task), 1u);
+        ASSERT_EQ(asx_error_ledger_count(rt1_task), 1u);
+        ASSERT_TRUE(asx_error_ledger_get(rt0_task, 0u, &entry));
+        ASSERT_STR_EQ(entry.operation, "rt0");
+        ASSERT_TRUE(asx_error_ledger_get(rt1_task, 0u, &entry));
+        ASSERT_STR_EQ(entry.operation, "rt1");
+
+        asx_error_ledger_reset_runtime_internal(1u);
+        ASSERT_EQ(asx_error_ledger_count(rt1_task), 0u);
+        ASSERT_EQ(asx_error_ledger_count(rt0_task), 1u);
+    }
+#else
+    (void)entry;
+#endif
+    asx_error_ledger_reset();
+}
+
 TEST(must_use_manifest_covers_transition_and_acquisition_surfaces) {
     ASSERT_TRUE(asx_must_use_surface_count() >= 10u);
     ASSERT_TRUE(manifest_contains("asx_region_transition_check"));
@@ -193,6 +229,7 @@ int main(void) {
     RUN_TEST(try_task_uses_explicit_task_context);
     RUN_TEST(ledger_overflow_is_deterministic_ring);
     RUN_TEST(ledger_reset_after_heavy_use_leaves_no_stale_state);
+    RUN_TEST(ledger_is_per_runtime_tag_and_a_runtime_reset_clears_only_its_block);
     RUN_TEST(must_use_manifest_covers_transition_and_acquisition_surfaces);
     TEST_REPORT();
     return test_failures;

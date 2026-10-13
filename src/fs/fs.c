@@ -38,8 +38,12 @@ static asx_fs_backend g_fs_backend = ASX_FS_DEFAULT_BACKEND;
  * hold state a reset would clear: a backend choice, an entry, an open file
  * or directory. A program that never uses the file system does not link
  * this module (bd-dkfs). */
-static void fs_note_state(void) {
+static int fs_note_state(void) {
+    /* Nonzero: refused while two runtimes are live (the tables are one for
+     * the process). */
+    if (asx_runtime_shared_state_refused_internal("file system")) return 1;
     asx_runtime_reset_hook_register_internal(ASX_RESET_SLOT_FS, asx_fs_reset);
+    return 0;
 }
 
 #if ASX_FS_HAS_NATIVE
@@ -184,7 +188,7 @@ static uint32_t fs_mem_free_entry_count(void) {
 static asx_status fs_mem_create_entry(const asx_fs_path *path, asx_fs_entry_kind kind,
                                       int *out_index) {
     int idx;
-    fs_note_state();
+    if (fs_note_state()) return ASX_E_INVALID_STATE;
     idx = fs_mem_free_entry_slot();
     if (idx < 0) return ASX_E_RESOURCE_EXHAUSTED;
     memset(&g_entries[idx], 0, sizeof(g_entries[idx]));
@@ -361,7 +365,7 @@ asx_status asx_fs_set_backend(asx_fs_backend backend) {
 #if !ASX_FS_HAS_NATIVE
     if (backend == ASX_FS_BACKEND_NATIVE) return ASX_E_PERMISSION_DENIED;
 #endif
-    fs_note_state();
+    if (fs_note_state()) return ASX_E_INVALID_STATE;
     g_fs_backend = backend;
     return ASX_OK;
 }
@@ -612,7 +616,7 @@ asx_status asx_fs_dir_open(asx_fs_dir_handle *out, const asx_fs_path *path) {
     if (out == NULL) return ASX_E_INVALID_ARGUMENT;
     st = fs_path_check(path);
     if (st != ASX_OK) return st;
-    fs_note_state();
+    if (fs_note_state()) return ASX_E_INVALID_STATE;
 #if ASX_FS_HAS_NATIVE
     if (FS_USE_NATIVE()) return asx_native_fs_dir_open(path, out);
 #endif
@@ -701,7 +705,7 @@ asx_status asx_fs_file_open(asx_file_handle *out, const asx_fs_path *path, uint3
     st = fs_path_check(path);
     if (st != ASX_OK) return st;
 
-    fs_note_state();
+    if (fs_note_state()) return ASX_E_INVALID_STATE;
 #if ASX_FS_HAS_NATIVE
     if (FS_USE_NATIVE()) return asx_native_fs_open(path, flags, out);
 #endif

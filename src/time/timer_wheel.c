@@ -31,6 +31,7 @@
  */
 
 #include <asx/asx_config.h>
+#include <asx/runtime/runtime.h>
 #define ASX_INTERNAL_TRACE_FAMILY_ACCESS 1
 #include <asx/runtime/trace.h>
 #undef ASX_INTERNAL_TRACE_FAMILY_ACCESS
@@ -660,6 +661,11 @@ asx_status asx_timer_register(asx_timer_wheel *wheel, asx_time deadline, void *w
     uint32_t idx;
 
     if (wheel == NULL || out_handle == NULL) return ASX_E_INVALID_ARGUMENT;
+    /* The application wheel is one for the process; a runtime's scheduler
+     * wheel is its own and never refused. */
+    if (wheel == &g_app_wheel && asx_runtime_shared_state_refused_internal("application timers")) {
+        return ASX_E_INVALID_STATE;
+    }
     if (!tw_alloc(wheel, &idx)) return ASX_E_RESOURCE_EXHAUSTED;
 
     tw_arm(wheel, idx, tw_clamp_deadline(wheel, deadline), waker_data, out_handle);

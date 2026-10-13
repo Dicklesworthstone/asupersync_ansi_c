@@ -46,7 +46,7 @@ task outcomes, and finalization audits unresolved obligations under the leak
 policy after callbacks and cleanup tasks finish.
 
 The bounded outcome-aware close increment adds
-`asx_region_close_with_outcome` (`src/runtime/lifecycle.c:1128`),
+`asx_region_close_with_outcome` (`src/runtime/lifecycle.c:1134`),
 `asx_region_wait_closed` (`src/runtime/quiescence.c:374`) and
 `asx_scope_finish` (`src/cx/scope.c:203`).
 The body's `OK` severity requests close without cancellation; `CANCELLED`

@@ -11,6 +11,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../runtime/runtime_internal.h"
 #include "../sync/wait_queue.h"
 #include <asx/core/watch.h>
 #define ASX_INTERNAL_TRACE_FAMILY_ACCESS 1
@@ -111,12 +112,16 @@ asx_status asx_watch_set_discard(const asx_watch_sender *sender, asx_watch_disca
 /* Lifecycle                                                           */
 /* ------------------------------------------------------------------ */
 
+/* Whether any watch was created since the last reset. */
+int asx_watch_in_use_internal(void) { return g_slot_count != 0u; }
+
 asx_status asx_watch_create(uint64_t initial_value, asx_watch_sender *out_sender,
                             asx_watch_receiver *out_receiver) {
     uint32_t idx;
     asx_watch_slot *s;
 
     if (out_sender == NULL || out_receiver == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (asx_runtime_shared_state_refused_internal("watches")) return ASX_E_INVALID_STATE;
 
     /* Find free slot */
     idx = ASX_MAX_WATCHES;

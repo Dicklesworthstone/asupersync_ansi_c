@@ -38,8 +38,12 @@ static asx_net_backend g_net_backend = ASX_NET_DEFAULT_BACKEND;
  * hold state a reset would clear: a backend choice, a socket slot or an
  * ephemeral port. A program that never opens a socket does not link this
  * module (bd-dkfs). */
-static void net_note_state(void) {
+static int net_note_state(void) {
+    /* Nonzero: refused while two runtimes are live (the tables are one for
+     * the process). */
+    if (asx_runtime_shared_state_refused_internal("network")) return 1;
     asx_runtime_reset_hook_register_internal(ASX_RESET_SLOT_NET, asx_net_reset);
+    return 0;
 }
 
 asx_status asx_net_set_backend(asx_net_backend backend) {
@@ -49,7 +53,7 @@ asx_status asx_net_set_backend(asx_net_backend backend) {
 #if !ASX_NET_HAS_NATIVE
     if (backend == ASX_NET_BACKEND_NATIVE) return ASX_E_PERMISSION_DENIED;
 #endif
-    net_note_state();
+    if (net_note_state()) return ASX_E_INVALID_STATE;
     g_net_backend = backend;
     return ASX_OK;
 }
@@ -457,7 +461,7 @@ static asx_socket_addr net_make_loopback(asx_addr_family family, uint16_t port) 
 static asx_socket_addr net_ephemeral_addr(asx_addr_family family) {
     uint16_t port;
 
-    net_note_state();
+    (void)net_note_state(); /* its callers refused before they got here */
     port = g_next_ephemeral_port++;
     if (g_next_ephemeral_port < 49152u) g_next_ephemeral_port = 49152u;
     return net_make_loopback(family, port);
@@ -597,7 +601,7 @@ static asx_status stream_alloc(const asx_socket_addr *local, const asx_socket_ad
 
     if (local == NULL || peer == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
 
-    net_note_state();
+    if (net_note_state()) return ASX_E_INVALID_STATE;
     for (idx = 0u; idx < ASX_MAX_TCP_STREAMS; idx++) {
         if (!g_streams[idx].alive) break;
     }
@@ -702,7 +706,7 @@ asx_status asx_tcp_listener_bind_with_cx(asx_tcp_listener *out, const asx_socket
      * at asx_net_reset), so local_addr reports a port a client can connect
      * to. */
     if (addr->port != 0u && listener_port_taken(addr)) return ASX_E_ALREADY_EXISTS;
-    net_note_state();
+    if (net_note_state()) return ASX_E_INVALID_STATE;
     for (idx = 0u; idx < ASX_MAX_TCP_LISTENERS; idx++) {
         if (!g_listeners[idx].alive) break;
     }
@@ -1175,7 +1179,7 @@ asx_status asx_udp_bind_with_cx(asx_udp_socket *out, const asx_socket_addr *addr
     }
 #endif
 
-    net_note_state();
+    if (net_note_state()) return ASX_E_INVALID_STATE;
     for (idx = 0u; idx < ASX_MAX_UDP_SOCKETS; idx++) {
         if (!g_udp_sockets[idx].alive) break;
     }
@@ -1916,7 +1920,7 @@ static asx_status unix_stream_alloc(const asx_unix_addr *local, const asx_unix_a
 
     if (local == NULL || peer == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
 
-    net_note_state();
+    if (net_note_state()) return ASX_E_INVALID_STATE;
     for (idx = 0u; idx < ASX_MAX_UNIX_STREAMS; idx++) {
         if (!g_unix_streams[idx].alive) break;
     }
@@ -1962,7 +1966,7 @@ asx_status asx_unix_listener_bind(asx_unix_listener *out, const asx_unix_addr *a
 
     if (out == NULL || addr == NULL || !addr->has_path) return ASX_E_INVALID_ARGUMENT;
 
-    net_note_state();
+    if (net_note_state()) return ASX_E_INVALID_STATE;
     for (idx = 0u; idx < ASX_MAX_UNIX_LISTENERS; idx++) {
         if (!g_unix_listeners[idx].alive) break;
     }
@@ -2165,7 +2169,7 @@ asx_status asx_unix_dgram_bind(asx_unix_dgram *out, const asx_unix_addr *addr) {
 
     if (out == NULL || addr == NULL || !addr->has_path) return ASX_E_INVALID_ARGUMENT;
 
-    net_note_state();
+    if (net_note_state()) return ASX_E_INVALID_STATE;
     for (idx = 0u; idx < ASX_MAX_UNIX_DGRAM_SOCKETS; idx++) {
         if (!g_unix_dgrams[idx].alive) break;
     }

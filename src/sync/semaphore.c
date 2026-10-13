@@ -243,9 +243,14 @@ static uint32_t sem_waiter_index(sem_slot *s, const asx_semaphore_waiter *waiter
 /* Lifecycle                                                           */
 /* ------------------------------------------------------------------ */
 
+/* Whether any semaphore (or mutex over one) was created since the last
+ * reset: a second runtime would share the table. */
+int asx_semaphore_in_use_internal(void) { return g_slot_count != 0u; }
+
 static asx_status sem_create(uint32_t initial_permits, int is_mutex, asx_semaphore_handle *out) {
     uint32_t i;
     if (out == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (asx_runtime_shared_state_refused_internal("semaphores")) return ASX_E_INVALID_STATE;
 
     for (i = 0; i < ASX_SEMAPHORE_MAX; i++) {
         if (!g_slots[i].alive) {

@@ -134,12 +134,14 @@ void asx_runtime_clear_internal(asx_kernel *k) {
     k->member_seq = 0;
     asx_kernel_clock_reset_internal(k);
     asx_scheduler_reset_internal(k);
+    asx_error_ledger_reset_runtime_internal(k->tag);
     asx_cancel_reset_internal(k->tag);
     asx_region_finalizers_reset_internal(k);
     if (asx_kernel_other_held(k)) { /* the subsystems below are process-wide */
         asx_trace_reset_internal(k);
         return;
     }
+    asx_cancel_chain_limits_reset_internal();
     asx_ghost_reset_run(); /* the sealed determinism reference survives the reset */
     asx_scheduler_event_reset();
     asx_lab_dispatch_reset_internal();
@@ -924,6 +926,10 @@ static asx_status region_open_with_parent(asx_kernel *k, asx_region_id parent,
 
 asx_status asx_region_open(asx_region_id *out_id) {
     return region_open_with_parent(g_kernels[0], ASX_INVALID_ID, out_id);
+}
+
+asx_status asx_region_open_kernel_internal(asx_kernel *k, asx_region_id *out_id) {
+    return region_open_with_parent(k, ASX_INVALID_ID, out_id);
 }
 
 asx_status asx_region_open_child(asx_region_id parent, asx_region_id *out_child) {

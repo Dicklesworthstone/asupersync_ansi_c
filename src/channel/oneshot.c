@@ -130,11 +130,15 @@ asx_status asx_oneshot_set_discard(const asx_oneshot_sender *sender, asx_oneshot
 /* Lifecycle                                                           */
 /* ------------------------------------------------------------------ */
 
+/* Whether any oneshot was created since the last reset. */
+int asx_oneshot_in_use_internal(void) { return g_slot_count != 0u; }
+
 asx_status asx_oneshot_create(asx_oneshot_sender *out_sender, asx_oneshot_receiver *out_receiver) {
     uint32_t idx;
     asx_oneshot_slot *s;
 
     if (out_sender == NULL || out_receiver == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (asx_runtime_shared_state_refused_internal("oneshots")) return ASX_E_INVALID_STATE;
 
     /* Find free slot */
     idx = ASX_MAX_ONESHOTS;

@@ -493,15 +493,21 @@ static asx_kernel *sched_clock_kernel(asx_task_id id) {
 
 asx_task_id asx_task_current(void) { return g_current_task; }
 
-/* Run `t`'s poll function as the current task, as the sweep does in
- * sched_poll_slot: asx_task_current() names `tid` inside the call, which is
- * what the primitives that park their caller (channels, mutexes, ...) key
- * their wait lists on. For run loops other than the sweep's. */
+/* Run `t`'s poll function as the current task (the sweep's sched_poll_slot
+ * and the other run loops): asx_task_current() names `tid` inside the call,
+ * which is what the primitives that park their caller (channels, mutexes,
+ * ...) key their wait lists on, and the error ledger records to it. A run
+ * started from inside a poll (another runtime's scheduler) gets its caller
+ * back afterwards: the current task, and the ledger's bound task, are what
+ * they were; outside a poll the ledger is left unbound, as it always was. */
 asx_status asx_task_poll_current_internal(asx_task_slot *t, asx_task_id tid) {
     asx_task_id outer = g_current_task;
+    asx_task_id outer_bound = outer != ASX_INVALID_ID ? asx_error_ledger_bound_task() : outer;
     asx_status st;
     g_current_task = tid;
+    asx_error_ledger_bind_task(tid);
     st = t->poll_fn(t->user_data, tid);
+    asx_error_ledger_bind_task(outer_bound);
     g_current_task = outer;
     return st;
 }
@@ -1105,11 +1111,7 @@ static asx_status sched_poll_slot(asx_kernel *k, uint32_t i, asx_region_slot *rs
     t->park_requested = 0;
     t->notified = 0;
     t->lab_ack_in_poll = 0;
-    g_current_task = tid;
-    asx_error_ledger_bind_task(tid);
-    poll_result = t->poll_fn(t->user_data, tid);
-    asx_error_ledger_bind_task(ASX_INVALID_ID);
-    g_current_task = ASX_INVALID_ID;
+    poll_result = asx_task_poll_current_internal(t, tid);
     t->in_poll = 0;
     /* Obligation posts made during this poll are applied while the task
      * record still exists (lab/runtime.rs:4797-4808; bd-2fga). */

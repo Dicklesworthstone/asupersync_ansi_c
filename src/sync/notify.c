@@ -20,6 +20,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../runtime/runtime_internal.h"
 #include "wait_queue.h"
 #include <asx/sync/notify.h>
 #include <stddef.h>
@@ -133,9 +134,13 @@ static void notify_reap_queue(asx_wait_queue *q) {
 /* Lifecycle                                                           */
 /* ------------------------------------------------------------------ */
 
+/* Whether any notify was created since the last reset. */
+int asx_notify_in_use_internal(void) { return g_slot_count != 0u; }
+
 asx_status asx_notify_create(asx_notify_handle *out) {
     uint32_t i;
     if (out == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (asx_runtime_shared_state_refused_internal("notifies")) return ASX_E_INVALID_STATE;
 
     /* Find free slot */
     for (i = 0; i < ASX_NOTIFY_MAX; i++) {

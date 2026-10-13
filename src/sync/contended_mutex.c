@@ -47,6 +47,7 @@ asx_status asx_contended_mutex_create(asx_contended_mutex_handle *out) {
     uint32_t i;
     asx_status st;
     if (out == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (asx_runtime_shared_state_refused_internal("pools")) return ASX_E_INVALID_STATE;
 
     /* Registers the reset with the runtime the first time a mutex is made
      * (bd-u4o2), so a runtime reset reaches the table. */

@@ -538,6 +538,7 @@ asx_status asx_parallel_init(const asx_parallel_config *cfg) {
     uint32_t i;
 
     if (cfg == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (asx_runtime_shared_state_refused_internal("parallel lanes")) return ASX_E_INVALID_STATE;
     if (cfg->worker_count == 0) { return ASX_E_INVALID_ARGUMENT; }
     if (cfg->worker_count > ASX_MAX_WORKERS) { return ASX_E_RESOURCE_EXHAUSTED; }
     if (!admission_mode_valid(cfg->admission_policy.mode)) { return ASX_E_INVALID_ARGUMENT; }
@@ -1521,9 +1522,7 @@ static asx_status parallel_run_impl(asx_region_id region, asx_budget *budget) {
                 t->in_poll = 1;
                 t->park_requested = 0;
                 t->notified = 0;
-                asx_error_ledger_bind_task(tid);
                 poll_result = asx_task_poll_current_internal(t, tid);
-                asx_error_ledger_bind_task(ASX_INVALID_ID);
                 t->in_poll = 0;
                 g_task_polled_stamp[slot_idx] = g_round_stamp;
                 /* Acknowledged during this poll and still running: the
