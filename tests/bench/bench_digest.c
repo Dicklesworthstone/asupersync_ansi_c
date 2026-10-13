@@ -443,12 +443,12 @@ static void spawn_run_once(one_run *out) {
     t1 = now_ns();
 
     /* The digests a diagnostics consumer reads, once. */
-    sink ^= asx_trace_digest();
+    sink ^= asx_trace_digest(test_runtime());
     sink ^= asx_hindsight_digest();
     sink ^= asx_event_hash_chain();
     t2 = now_ns();
 
-    out->trace_events = (uint32_t)asx_trace_emitted_total();
+    out->trace_events = (uint32_t)asx_trace_emitted_total(test_runtime());
     out->hindsight_events = asx_hindsight_total_count();
     out->log_events = asx_event_log_count();
 
@@ -551,7 +551,7 @@ static void bench_sustained(uint32_t ops, double log_old, double log_new, double
 
     asx_runtime_reset(test_runtime());
     if (asx_region_open(test_runtime(), &rid) != ASX_OK) return;
-    trace0 = asx_trace_emitted_total();
+    trace0 = asx_trace_emitted_total(test_runtime());
     hs0 = asx_hindsight_total_count();
     log0 = asx_event_log_count();
     t0 = now_ns();
@@ -570,7 +570,7 @@ static void bench_sustained(uint32_t ops, double log_old, double log_new, double
     }
     t1 = now_ns();
     ns_per_op = (double)(t1 - t0) / (double)done;
-    tev = (double)(asx_trace_emitted_total() - trace0) / (double)done;
+    tev = (double)(asx_trace_emitted_total(test_runtime()) - trace0) / (double)done;
     hev = (double)(asx_hindsight_total_count() - hs0) / (double)done;
     lev = (double)(asx_event_log_count() - log0) / (double)done;
     saved = tev * (tr_old - tr_new) + hev * (hs_old - hs_new) + lev * (log_old - log_new);

@@ -80,7 +80,7 @@ static asx_status poll_checkpoint_forever(void *data, asx_task_id self) {
 static void reset_all(void) {
     asx_runtime_reset(test_runtime());
     asx_channel_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     asx_timer_wheel_reset(asx_timer_wheel_global());
 }
 
@@ -328,7 +328,7 @@ static void scenario_region_create_exhaustion(pressure_case_result *result) {
         }
     }
     metrics_capture(&result->before);
-    if (asx_runtime_snapshot_capture(&before_snapshot) != ASX_OK) {
+    if (asx_runtime_snapshot_capture(test_runtime(), &before_snapshot) != ASX_OK) {
         result->diagnostic = "failed to capture before snapshot";
         goto finish;
     }
@@ -336,7 +336,7 @@ static void scenario_region_create_exhaustion(pressure_case_result *result) {
     result->actual_status = asx_region_open(test_runtime(), &overflow);
 
     metrics_capture(&result->after);
-    if (asx_runtime_snapshot_capture(&after_snapshot) != ASX_OK) {
+    if (asx_runtime_snapshot_capture(test_runtime(), &after_snapshot) != ASX_OK) {
         result->diagnostic = "failed to capture after snapshot";
         goto finish;
     }
@@ -382,7 +382,7 @@ static void scenario_task_spawn_exhaustion(pressure_case_result *result) {
         last_task = task;
     }
     metrics_capture(&result->before);
-    if (asx_runtime_snapshot_capture(&before_snapshot) != ASX_OK) {
+    if (asx_runtime_snapshot_capture(test_runtime(), &before_snapshot) != ASX_OK) {
         result->diagnostic = "failed to capture before snapshot";
         goto finish;
     }
@@ -390,7 +390,7 @@ static void scenario_task_spawn_exhaustion(pressure_case_result *result) {
     result->actual_status = asx_task_spawn(region, poll_complete, NULL, &task);
 
     metrics_capture(&result->after);
-    if (asx_runtime_snapshot_capture(&after_snapshot) != ASX_OK) {
+    if (asx_runtime_snapshot_capture(test_runtime(), &after_snapshot) != ASX_OK) {
         result->diagnostic = "failed to capture after snapshot";
         goto finish;
     }
@@ -444,7 +444,7 @@ static void scenario_obligation_reserve_exhaustion(pressure_case_result *result)
         }
     }
     metrics_capture(&result->before);
-    if (asx_runtime_snapshot_capture(&before_snapshot) != ASX_OK) {
+    if (asx_runtime_snapshot_capture(test_runtime(), &before_snapshot) != ASX_OK) {
         result->diagnostic = "failed to capture before snapshot";
         goto finish;
     }
@@ -453,7 +453,7 @@ static void scenario_obligation_reserve_exhaustion(pressure_case_result *result)
         asx_obligation_reserve_ex(region, ASX_OBLIGATION_KIND_GENERIC, holder, &overflow);
 
     metrics_capture(&result->after);
-    if (asx_runtime_snapshot_capture(&after_snapshot) != ASX_OK) {
+    if (asx_runtime_snapshot_capture(test_runtime(), &after_snapshot) != ASX_OK) {
         result->diagnostic = "failed to capture after snapshot";
         goto finish;
     }
@@ -504,7 +504,7 @@ static void scenario_channel_enqueue_exhaustion(pressure_case_result *result) {
     metrics_capture(&result->before);
     if (asx_channel_queue_len(channel, &result->before.channel_queue_len) != ASX_OK ||
         asx_channel_reserved_count(channel, &result->before.channel_reserved_count) != ASX_OK ||
-        asx_runtime_snapshot_capture(&before_snapshot) != ASX_OK) {
+        asx_runtime_snapshot_capture(test_runtime(), &before_snapshot) != ASX_OK) {
         result->diagnostic = "failed to capture channel before metrics";
         goto finish;
     }
@@ -514,7 +514,7 @@ static void scenario_channel_enqueue_exhaustion(pressure_case_result *result) {
     metrics_capture(&result->after);
     if (asx_channel_queue_len(channel, &result->after.channel_queue_len) != ASX_OK ||
         asx_channel_reserved_count(channel, &result->after.channel_reserved_count) != ASX_OK ||
-        asx_runtime_snapshot_capture(&after_snapshot) != ASX_OK) {
+        asx_runtime_snapshot_capture(test_runtime(), &after_snapshot) != ASX_OK) {
         result->diagnostic = "failed to capture channel after metrics";
         goto finish;
     }
@@ -561,7 +561,7 @@ static void scenario_timer_allocation_exhaustion(pressure_case_result *result) {
         }
     }
     metrics_capture(&result->before);
-    if (asx_runtime_snapshot_capture(&before_snapshot) != ASX_OK) {
+    if (asx_runtime_snapshot_capture(test_runtime(), &before_snapshot) != ASX_OK) {
         result->diagnostic = "failed to capture timer before snapshot";
         goto finish;
     }
@@ -569,7 +569,7 @@ static void scenario_timer_allocation_exhaustion(pressure_case_result *result) {
     result->actual_status = asx_timer_register(wheel, 10000u, NULL, &overflow_handle);
 
     metrics_capture(&result->after);
-    if (asx_runtime_snapshot_capture(&after_snapshot) != ASX_OK) {
+    if (asx_runtime_snapshot_capture(test_runtime(), &after_snapshot) != ASX_OK) {
         result->diagnostic = "failed to capture timer after snapshot";
         goto finish;
     }

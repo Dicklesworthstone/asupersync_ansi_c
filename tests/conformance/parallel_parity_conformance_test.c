@@ -252,13 +252,13 @@ static void capture_trace_summary(parity_result *out) {
     uint32_t i;
     uint64_t order_digest = UINT64_C(1469598103934665603);
 
-    out->event_count = asx_trace_event_count();
-    out->trace_digest = asx_trace_digest();
+    out->event_count = asx_trace_event_count(test_runtime());
+    out->trace_digest = asx_trace_digest(test_runtime());
     for (i = 0u; i < out->event_count; i++) {
         asx_trace_event ev;
         uint32_t kind;
 
-        if (!asx_trace_event_get(i, &ev)) { continue; }
+        if (!asx_trace_event_get(test_runtime(), i, &ev)) { continue; }
         kind = (uint32_t)ev.kind;
         if (kind < PARITY_EVENT_BUCKETS) { out->event_counts[kind]++; }
         order_digest = digest_mix_u32(order_digest, kind);
@@ -767,7 +767,7 @@ static asx_status run_scenario(parity_scenario scenario, uint32_t worker_count,
     }
 
     reset_all();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
 
     switch (scenario) {
     case PARITY_SCENARIO_LIFECYCLE: st = run_lifecycle(worker_count, out); break;

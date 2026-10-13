@@ -37,14 +37,14 @@ static void reset_all(void) {
     asx_ghost_reset();
     asx_scheduler_event_reset();
     asx_event_log_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
 }
 
 static void guard_capture(misuse_guard *guard) {
-    ASSERT_EQ(asx_runtime_snapshot_capture(&guard->snapshot), ASX_OK);
+    ASSERT_EQ(asx_runtime_snapshot_capture(test_runtime(), &guard->snapshot), ASX_OK);
     guard->event_log_count = asx_event_log_count();
     guard->scheduler_event_count = asx_scheduler_event_count();
-    guard->trace_event_count = asx_trace_event_count();
+    guard->trace_event_count = asx_trace_event_count(test_runtime());
     guard->event_hash = asx_event_hash_chain();
     guard->ghost_violation_count = asx_ghost_violation_count();
 }
@@ -52,11 +52,11 @@ static void guard_capture(misuse_guard *guard) {
 static void guard_assert_no_semantic_mutation(const misuse_guard *before) {
     asx_runtime_snapshot after;
 
-    ASSERT_EQ(asx_runtime_snapshot_capture(&after), ASX_OK);
+    ASSERT_EQ(asx_runtime_snapshot_capture(test_runtime(), &after), ASX_OK);
     ASSERT_EQ(asx_runtime_snapshot_eq(&before->snapshot, &after), ASX_OK);
     ASSERT_EQ(asx_event_log_count(), before->event_log_count);
     ASSERT_EQ(asx_scheduler_event_count(), before->scheduler_event_count);
-    ASSERT_EQ(asx_trace_event_count(), before->trace_event_count);
+    ASSERT_EQ(asx_trace_event_count(test_runtime()), before->trace_event_count);
     ASSERT_EQ(asx_event_hash_chain(), before->event_hash);
     ASSERT_TRUE(asx_ghost_violation_count() >= before->ghost_violation_count);
 }

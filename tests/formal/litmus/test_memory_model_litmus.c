@@ -513,7 +513,7 @@ typedef enum {
 static void litmus_runtime_reset(void) {
     asx_runtime_reset(test_runtime());
     asx_parallel_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
 }
 
 static asx_parallel_config litmus_parallel_config(uint32_t worker_count,

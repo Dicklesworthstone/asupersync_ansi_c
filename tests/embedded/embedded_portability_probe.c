@@ -72,7 +72,7 @@ int main(int argc, char **argv) {
     int scenario_pass = 0;
 
     asx_runtime_reset(test_runtime());
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
 
     status = asx_region_open(test_runtime(), &region);
     if (status == ASX_OK) { status = asx_task_spawn(region, poll_complete, NULL, &task); }
@@ -90,8 +90,8 @@ int main(int argc, char **argv) {
     }
     if (status == ASX_OK) { status = asx_quiescence_check(region); }
 
-    digest = asx_trace_digest();
-    event_count = asx_trace_event_count();
+    digest = asx_trace_digest(test_runtime());
+    event_count = asx_trace_event_count(test_runtime());
     scenario_pass = (status == ASX_OK && digest != 0u && event_count > 0u);
 
     printf("{\n");
