@@ -755,7 +755,9 @@ one slot C keeps. Scenarios: `timeout-sem-fires-001` (the deadline passes
 with the semaphore still held), `timeout-sem-completes-001` (a release
 before the deadline completes the wait and cancels the timer),
 `timeout-sem-zero-duration-001` (`ns` 0: the wait is polled once, then
-Elapsed at the same instant).
+Elapsed at the same instant), `timeout-elapsed-then-yield-001` (the poll that
+finds the Sleep due goes on to the next step, which yields: the wait the
+timeout dropped does not leave the task parked).
 
 ### 3.10 Monitors
 

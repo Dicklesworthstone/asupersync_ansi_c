@@ -592,15 +592,15 @@ asx_status asx_task_wait_until(asx_task_id self, asx_time deadline) {
 
 int asx_task_poll_deadline_sleep_internal(asx_task_id self, asx_time deadline) {
     asx_task_slot *t;
+    int polling = asx_task_slot_lookup(self, &t) == ASX_OK && t->in_poll;
     if (sched_now(sched_clock_kernel(self)) >= deadline) {
-        /* Ready: a sleep registered by an earlier poll records its fire. */
+        /* Ready: records the fire; a timeout's dropped pending inner wait stops parking. */
         asx_status st = asx_task_complete_timer(self);
         (void)st;
+        if (polling) t->park_requested = 0;
         return 1;
     }
-    if (asx_task_slot_lookup(self, &t) == ASX_OK && t->in_poll) {
-        sched_trace_sleep_timer(self, t, deadline);
-    }
+    if (polling) sched_trace_sleep_timer(self, t, deadline);
     return 0;
 }
 
