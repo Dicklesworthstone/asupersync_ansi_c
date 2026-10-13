@@ -646,24 +646,24 @@ TEST(scheduler_polls_a_task_in_a_region_opened_in_the_round_before_its_opener_re
     ASSERT_TRUE(g_scope_log[2] == 'O');
 }
 
-/* ---- A finalizer's time budget is advisory (bd-9kll.4.14) ---- */
+/* ---- A cleanup task's time budget is advisory (bd-9kll.4.14) ---- */
 
 typedef struct {
     asx_sleep_state sleep;
     int started;
     int done;
     int cancel_seen;
-} fin_probe;
+} cleanup_probe;
 
-/* Sleeps 6 s of virtual time; its budget's deadline is 5 s after it was
- * spawned. Records whether a cancel was pending when the sleep ended. */
-static asx_status poll_fin_sleeps_past_its_budget(void *data, asx_task_id self) {
-    fin_probe *p = (fin_probe *)data;
+/* Sleeps 150 ns, past its budget's deadline at 100; records whether a cancel
+ * was pending when the sleep ended. */
+static asx_status poll_cleanup_sleeps_past_its_deadline(void *data, asx_task_id self) {
+    cleanup_probe *p = (cleanup_probe *)data;
     asx_cancel_reason reason;
     asx_status st;
     if (!p->started) {
         p->started = 1;
-        st = asx_sleep_init(&p->sleep, 6000000000ULL);
+        st = asx_sleep_init(&p->sleep, 150u);
         if (st != ASX_OK) return st;
     }
     st = asx_sleep_poll(&p->sleep, self);
@@ -673,28 +673,48 @@ static asx_status poll_fin_sleeps_past_its_budget(void *data, asx_task_id self) 
     return ASX_OK;
 }
 
-/* Rust arms no deadline timer for a cleanup task (state.rs:4401), so a
- * finalizer that outlives its time budget is not cancelled when it wakes;
- * only a checkpoint evaluates the budget (cx.rs:3112-3160). The sweep
- * cancelled it before the poll at the deadline. */
-TEST(scheduler_does_not_cancel_a_finalizer_at_its_time_budget_before_it_polls) {
+typedef struct {
+    asx_region_id region;
+    cleanup_probe probe;
+} cleanup_spawner;
+
+/* Spawns the probe as a cleanup task of its own region: spawned from a poll
+ * there, it takes this task's budget, whose deadline is 100. */
+static asx_status poll_spawn_cleanup_probe(void *data, asx_task_id self) {
+    cleanup_spawner *s = (cleanup_spawner *)data;
+    asx_task_id child;
+    (void)self;
+    return asx_task_spawn_cleanup(s->region, poll_cleanup_sleeps_past_its_deadline, &s->probe,
+                                  &child);
+}
+
+/* Rust arms no deadline timer for a cleanup task (state.rs:4401), so one
+ * that outlives its budget's deadline is not cancelled when it wakes; only a
+ * checkpoint evaluates the budget (cx.rs:3112-3160). The sweep woke it at the
+ * deadline and cancelled it before the poll. */
+TEST(scheduler_does_not_cancel_a_cleanup_task_at_its_budget_deadline_before_it_polls) {
     asx_region_id rid;
-    asx_region_state rs;
-    asx_budget budget;
-    fin_probe p;
+    asx_task_id parent;
+    asx_budget parent_budget;
+    asx_budget run;
+    cleanup_spawner s;
 
     asx_runtime_reset();
     asx_ghost_reset();
-    memset(&p, 0, sizeof(p));
+    memset(&s, 0, sizeof(s));
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
-    ASSERT_EQ(asx_region_defer_async(rid, poll_fin_sleeps_past_its_budget, &p), ASX_OK);
-    budget = asx_budget_infinite();
-    ASSERT_EQ(asx_region_drain(rid, &budget), ASX_OK);
+    s.region = rid;
+    parent_budget = asx_budget_infinite();
+    parent_budget.deadline = 100u;
+    ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_spawn_cleanup_probe, &s, &parent_budget,
+                                         &parent),
+              ASX_OK);
 
-    ASSERT_TRUE(p.done);
-    ASSERT_FALSE(p.cancel_seen);
-    ASSERT_EQ(asx_region_get_state(rid, &rs), ASX_OK);
-    ASSERT_EQ((int)rs, (int)ASX_REGION_CLOSED);
+    run = asx_budget_infinite();
+    ASSERT_EQ(asx_scheduler_run(rid, &run), ASX_OK);
+    ASSERT_TRUE(s.probe.done);
+    ASSERT_FALSE(s.probe.cancel_seen);
+    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)150u);
 }
 
 /* ---- A passed budget deadline strengthens a pending cancel (bd-9kll.4.15) ---- */
@@ -877,7 +897,7 @@ int main(void) {
                 "needs 19 tasks: 16 cancel polls in a row, the ready task, two more");
     RUN_TEST(scheduler_polls_a_task_spawned_in_a_round_in_that_round);
     RUN_TEST(scheduler_polls_a_task_in_a_region_opened_in_the_round_before_its_opener_resumes);
-    RUN_TEST(scheduler_does_not_cancel_a_finalizer_at_its_time_budget_before_it_polls);
+    RUN_TEST(scheduler_does_not_cancel_a_cleanup_task_at_its_budget_deadline_before_it_polls);
     RUN_TEST(scheduler_a_passed_deadline_strengthens_a_user_cancel_that_arrived_first);
 
     /* Budget enforcement before a poll */

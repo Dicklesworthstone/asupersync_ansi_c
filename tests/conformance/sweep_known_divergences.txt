@@ -16,7 +16,9 @@
 # A fixture that diverges and is not listed FAILs; one listed that now matches is
 # STALE and fails too.
 
+actor-cancel-after-batch-drains-call-001 order: Rust's lab cancels the server before the worker (seeded tie in the cancel lane, dispatch 6-7); the sweep keeps arena order, so the worker acknowledges first and keeps its Ok
 actor-cancel-before-start-drains-001 order: seed 2 puts the parent's two yields and the cancel before the server's first run; the sweep runs worker and server in the round they are spawned
+actor-cancel-idle-server-001 order: the lab's seeded pick dispatches the server twice before the parent resumes (dispatch 4-5); the sweep resumes the parent between them, so its cancel finds casts undrained
 actor-refused-reply-before-sleep-001 lab-model: a refused server spawn keeps a handle only under lab dispatch (refused at admission); the sweep returns the error at the spawn
 actor-spawn-in-closing-region-001 lab-model: a refused server spawn keeps a handle only under lab dispatch (refused at admission); the sweep returns the error at the spawn
 cancel-request-event-reason-001 lab-model: the lab's region-open command costs the task a dispatch, so its poll quota is spent before the region cancel and folds into the record; the sweep spends it after
@@ -32,6 +34,7 @@ obligation-quota-refused-semaphore-permit-releases-001 lab-model: Rust's obligat
 race-deadline-wrapper-cx-reason-001 undiagnosed bd-9kll.4.16: the race's Deadline origin is t.2 under the sweep, the wrapper t.2/g1.timeout in Rust
 race-loser-abort-preserves-fail-fast-001 lab-model: the driver's finish_region is a lab command applied after due timers' wakes have run; the sweep cancels before the race members are polled
 race-owner-cancel-cx-reason-001 lab-model: group members spawned into a cancelled region are refused at the next step's admission; the sweep refuses at the spawn and the op cannot continue
+region-lifecycle-close-cancels-children-001 order: the lab's seeded pick polls the owner three times before the sleeper's first poll, so it is cancelled unstarted; the sweep starts it first and its acknowledged cancel keeps Ok
 region-lifecycle-closed-child-spawn-001 lab-model: region open from a poll is a deferred lab command, so a third dispatch finds the spent poll quota and cancels; the sweep opens at once and completes in its second poll
 region-limits-group-member-refused-001 lab-model: spawn mailbox: admission is at the next step; the sweep refuses at the spawn and the group op cannot continue
 region-limits-late-admission-001 lab-model: spawn mailbox: live tasks are counted at the next step's admission, the spawner done; the sweep counts at the spawn
