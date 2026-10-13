@@ -1157,9 +1157,9 @@ jobs:
       # Responses: each input is decoded as the answer to a GET, a HEAD and a
       # CONNECT (the request method frames the body), so 6000 inputs are
       # 18000 cases.
-      - name: Parser differential, HTTP response (seed 3, 6000 inputs, observes)
+      - name: Parser differential, HTTP response (seed 3, 6000 inputs, gates)
         run: |
-          make parser-differential PARSER_DIFF_MODE=observe PARSER_DIFF_TARGET=http-response \
+          make parser-differential PARSER_DIFF_MODE=gate PARSER_DIFF_TARGET=http-response \
             PARSER_DIFF_SEED=3 PARSER_DIFF_COUNT=6000 \
             PARSER_DIFF_OUT=build/parser-differential/out-response \
             ASX_TWIN_BIN=tools/twin_run/target/release/twin_run
@@ -1169,9 +1169,9 @@ jobs:
       # corpus holds every header prefix of each base frame (a decoder that
       # counts the mask key short accepts a header that is not there), and a
       # rejected frame carries the close code the receiver fails with.
-      - name: Parser differential, WebSocket frame (seed 5, 8000 inputs, observes)
+      - name: Parser differential, WebSocket frame (seed 5, 8000 inputs, gates)
         run: |
-          make parser-differential PARSER_DIFF_MODE=observe PARSER_DIFF_TARGET=ws-frame \
+          make parser-differential PARSER_DIFF_MODE=gate PARSER_DIFF_TARGET=ws-frame \
             PARSER_DIFF_SEED=5 PARSER_DIFF_COUNT=8000 \
             PARSER_DIFF_OUT=build/parser-differential/out-ws \
             ASX_TWIN_BIN=tools/twin_run/target/release/twin_run
