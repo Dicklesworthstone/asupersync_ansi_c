@@ -34,6 +34,7 @@
 
 #include "../../signal/signal_native.h"
 #include <asx/runtime/io_driver.h>
+#include <asx/runtime/journal.h>
 #include <asx/runtime/runtime.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -196,6 +197,8 @@ void asx_native_signal_drain(uint32_t counts[ASX_SIGNAL_KIND_COUNT]) {
             if (counts[i] == 0u) counts[i] = 1u;
         }
     }
+    /* Which signals arrived, and how many, is a boundary input (RP1). */
+    asx_journal_note_signal(counts, ASX_SIGNAL_KIND_COUNT);
 }
 
 static asx_status sig_waiter_register(sig_waiter *w) {

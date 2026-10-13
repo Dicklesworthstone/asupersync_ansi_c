@@ -9,14 +9,14 @@
 ![C99](https://img.shields.io/badge/C-C99-00599C)
 ![No external deps](https://img.shields.io/badge/dependencies-none-brightgreen)
 ![Deterministic replay](https://img.shields.io/badge/replay-deterministic-orange)
-![Public API declarations](https://img.shields.io/badge/public%20API-2%2C125%20declarations-blue)
-![C test programs](https://img.shields.io/badge/tests-230%20programs-brightgreen)
+![Public API declarations](https://img.shields.io/badge/public%20API-2%2C154%20declarations-blue)
+![C test programs](https://img.shields.io/badge/tests-232%20programs-brightgreen)
 ![9 profiles](https://img.shields.io/badge/profiles-9%20deployment%20targets-blue)
 [![License: MIT+Rider](https://img.shields.io/badge/License-MIT%2BOpenAI%2FAnthropic%20Rider-blue.svg)](./LICENSE)
 
 </div>
 
-Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->2,125<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->230<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
+Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->2,154<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->232<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
 
 <div align="center">
 <h3>Quick Source Build</h3>
@@ -59,7 +59,7 @@ The port targets asupersync commit `5e60b1c4c` (2026-10).
 
 | Feature | What It Gives You |
 |---|---|
-| **<!-- fact:api_declarations -->2,125<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> header families** | Async runtime API: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
+| **<!-- fact:api_declarations -->2,154<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> header families** | Async runtime API: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
 | **No external dependencies** | Pure C runtime core; ships into constrained and audited environments unchanged |
 | **Deterministic replay and trace hashing** | Deterministic builds replay a scenario exactly from its seed and input; trace digests let you diff behavior across builds, profiles, and codec modes |
 | **Structured cancellation with witness protocol** | 11 cancel kinds with severity lattice, witness phase tracking, and cleanup budgets (advisory as in Rust; an opt-in hard bound) |
@@ -69,7 +69,7 @@ The port targets asupersync commit `5e60b1c4c` (2026-10).
 | **<!-- fact:status_codes -->67<!-- /fact --> typed error codes with recovery guidance** | Each error has a category, recoverability class, recovery action, and backoff hints |
 | **Resource contracts instead of silent degradation** | Explicit memory/queue/timer ceilings with deterministic failure taxonomy per resource class (R1/R2/R3) |
 | **9 deployment profiles** | CORE, POSIX, WIN32, FREESTANDING, EMBEDDED_ROUTER, HFT, AUTOMOTIVE, PARALLEL, BROWSER |
-| **<!-- fact:test_programs -->230<!-- /fact --> tracked C test programs across 7 categories** | <!-- fact:test_unit -->168<!-- /fact --> unit, <!-- fact:test_e2e -->23<!-- /fact --> e2e, <!-- fact:test_invariant -->3<!-- /fact --> invariant, <!-- fact:test_vignettes -->12<!-- /fact --> vignette, <!-- fact:test_conformance -->6<!-- /fact --> conformance, <!-- fact:test_fuzz -->5<!-- /fact --> fuzz, and <!-- fact:test_formal -->13<!-- /fact --> formal files in the current tree |
+| **<!-- fact:test_programs -->232<!-- /fact --> tracked C test programs across 7 categories** | <!-- fact:test_unit -->170<!-- /fact --> unit, <!-- fact:test_e2e -->23<!-- /fact --> e2e, <!-- fact:test_invariant -->3<!-- /fact --> invariant, <!-- fact:test_vignettes -->12<!-- /fact --> vignette, <!-- fact:test_conformance -->6<!-- /fact --> conformance, <!-- fact:test_fuzz -->5<!-- /fact --> fuzz, and <!-- fact:test_formal -->13<!-- /fact --> formal files in the current tree |
 | **Cross-profile checks** | Profiles are meant to change limits and defaults, never semantics. `make profile-parity` executes every Rust-captured fixture under CORE, POSIX, FREESTANDING, EMBEDDED_ROUTER, HFT, AUTOMOTIVE, PARALLEL and BROWSER builds, each compared with the same Rust captures; CI also runs them under EMBEDDED_ROUTER on five ISAs (QEMU) and on 32-bit x86 |
 
 The current repository is library-first: it ships the static library, public
@@ -360,7 +360,7 @@ external system did anything.
 |---|---|---|---|
 | QUIC | `include/asx/net/quic.h`, `src/net/quic.c` | Connection and stream lifecycle between two ends in one process. `asx_quic_connect` begins a handshake that stays in `HANDSHAKE` until an in-process `asx_quic_accept` pairs it (`ASX_E_PENDING` if no connect is waiting); datagrams go to the paired end | No UDP, TLS 1.3, packets, loss recovery or congestion control. Stream bytes read back from the handle that wrote them; `idle_timeout_ms` is not enforced |
 | gRPC | `include/asx/net/grpc.h`, `src/net/grpc.c` | Service and method tables, unary dispatch with gRPC status codes, metadata, health and reflection registries. A channel calls a server object in the same process | No HTTP/2, protobuf wire format, TLS or network; a channel's target is a label |
-| Database | `include/asx/net/db.h`, `src/net/db.c` | A connection pool, result-set building and iteration, a transaction state machine. Only `mem://` DSNs connect | No driver and no storage: a statement runs nothing and returns an empty result set. A DSN that names a database, and the SQLite, Postgres and MySQL backends, are refused (`ASX_E_PERMISSION_DENIED`) |
+| Database | `include/asx/net/db.h`, `src/net/db.c` | A connection pool, result-set building and iteration, a transaction state machine. Only `mem://` DSNs connect | No driver, parser or storage, so the model implements no statement: `asx_db_execute` refuses every statement with `ASX_E_PERMISSION_DENIED` (never `OK` with an empty result, which would read as "ran and found nothing") and a scenario builds its own result sets with `asx_db_result_add_row`. A DSN that names a database, and the SQLite, Postgres and MySQL backends, are refused the same way |
 | Messaging | `include/asx/net/messaging.h`, `src/net/messaging.c` | Bounded queues, topics and fan-out to subscribers' queues | No broker client, persistence or delivery guarantee. The Kafka backend is refused; Redis, NATS and JetStream do not exist |
 | Distributed | `include/asx/net/distributed.h`, `src/net/distributed.c` | A consistent-hash ring, partition assignment, versioned snapshots, a node table and recovery bookkeeping | No network, membership or failure-detection protocol, or consensus: a node's state changes only when the caller sets it |
 | Transport | `include/asx/transport/transport.h`, `src/transport/transport.c` | The transport trait, an in-memory loopback, and framed and reconnecting wrappers | No network transport behind the trait; the TCP and UDP API in `asx/net/net.h` does not implement it |
@@ -911,13 +911,13 @@ tools/                       CI, capture, replay, fuzz, and minimization tooling
 docs/                        Port architecture, parity tracking, deployment hardening
 ```
 
-The tree holds <!-- fact:header_files -->129<!-- /fact --> public headers
+The tree holds <!-- fact:header_files -->130<!-- /fact --> public headers
 (<!-- fact:headers_core -->22<!-- /fact --> in `core/`,
-<!-- fact:headers_runtime -->29<!-- /fact --> in `runtime/`), <!-- fact:source_files -->138<!-- /fact -->
+<!-- fact:headers_runtime -->30<!-- /fact --> in `runtime/`), <!-- fact:source_files -->139<!-- /fact -->
 C sources (<!-- fact:sources_core -->19<!-- /fact --> in `core/`,
-<!-- fact:sources_runtime -->40<!-- /fact --> in `runtime/`,
+<!-- fact:sources_runtime -->41<!-- /fact --> in `runtime/`,
 <!-- fact:sources_platform -->7<!-- /fact --> in `platform/`),
-<!-- fact:test_programs -->230<!-- /fact --> C test programs and
+<!-- fact:test_programs -->232<!-- /fact --> C test programs and
 <!-- fact:examples -->14<!-- /fact --> examples (`make lint-docs` checks these numbers
 against `tools/count_inventory.sh`).
 
@@ -968,14 +968,14 @@ make profile-parity
 
 ## Testing and Quality Gates
 
-`asx` currently ships with <!-- fact:test_programs -->230<!-- /fact --> tracked C test programs across 7 categories in
+`asx` currently ships with <!-- fact:test_programs -->232<!-- /fact --> tracked C test programs across 7 categories in
 the checked-in `tests/` tree. Individual assertion counts evolve over time; see
 `tests/TEST.md` for the current indexed suite inventory and per-suite case
 totals where tracked.
 
 | Category | Files | Coverage |
 |---|---|---|
-| **Unit tests** | <!-- fact:test_unit -->168<!-- /fact --> | Broad public API and subsystem coverage across the current tree |
+| **Unit tests** | <!-- fact:test_unit -->170<!-- /fact --> | Broad public API and subsystem coverage across the current tree |
 | **End-to-end scenarios** | <!-- fact:test_e2e -->23<!-- /fact --> | Core lifecycle, automotive, HFT, codec parity, continuity, network surfaces, POSIX adapter, HTTP server on real sockets (browser and CLI lanes are shell families) |
 | **Invariant tests** | <!-- fact:test_invariant -->3<!-- /fact --> | Lifecycle transition legality, quiescence, obligation linearity |
 | **API vignettes** | <!-- fact:test_vignettes -->12<!-- /fact --> | Ergonomics and usage pattern demonstrations |
@@ -1599,6 +1599,14 @@ The hindsight ring buffer (256 entries) records the runtime's nondeterministic i
 When a replay diverges from the expected path, the hindsight log shows where nondeterminism entered. `asx_hindsight_check_divergence()` compares the log's digest with an expected one; flush the log (`asx_hindsight_flush_json()`) and compare it with the baseline run's to read something like "at trace sequence 847 the entropy draw returned 0x1f3a, where the baseline shows 0x7c2b."
 
 The log has its own digest (FNV-1a mixing from the asx digest seed) for that comparison. Like the trace digest it is rolling: each entry is folded in when it is logged, so the digest covers every entry since the last reset, including those the 256-entry ring has already overwritten.
+
+## Native Boundary Journal
+
+The hindsight ring is a diagnostic: 256 entries, one `u64` each, not persisted. For a live run's boundaries, `asx_journal` (`include/asx/runtime/journal.h`) records the *results* a later replay would need, as a versioned, hash-chained byte stream that goes to a sink you provide (a file, a RAM ring, flash). It records: clock reads, entropy draws, reactor wait and poll results (with their events), TCP and UDP accept/connect/read/write/receive/send results (the bytes read, or their length and hash in SHAPE mode), name resolution, child spawn and exit statuses, signal arrivals, and blocking-pool completions.
+
+Clock, entropy and reactor results are recorded by wrapping the hook table before the runtime is initialized with it (`asx_journal_wrap_hooks`), so every consumer is covered, including ones that read the table directly; the native network, process, signal and blocking adapters call one-branch taps. Recording never fails or blocks the application: a sink error or a record that cannot fit is counted and sticks in `asx_journal_status()`, and the stream is then incomplete. `asx_journal_reader_*` walks a stream and verifies its chain, its sequence and its END totals; a truncated or edited stream is reported, not trusted.
+
+This is the recording half. Replaying a journal into a runtime (RP2) is not implemented, filesystem results are not recorded yet, and the 10% throughput budget on the HTTP keep-alive bench has not been measured: the unit tests check batching (sink calls per record) and bounded per-record work, not wall-clock overhead.
 
 ## Per-Profile Overload Policies
 
@@ -2524,7 +2532,7 @@ Check whether `asx_deadline_monitor_check()` is being called frequently enough i
 - Native I/O ships only in live builds of the POSIX profile: an epoll reactor on Linux with a poll(2) fallback elsewhere (only Linux runs in CI), a pthread blocking pool, sockets, files, processes and signals. There is no kqueue, IOCP or io_uring backend (`ASX_IO_BACKEND_IO_URING` is refused with `ASX_E_PERMISSION_DENIED`). The other profiles, EMBEDDED_ROUTER, HFT and AUTOMOTIVE included, compile the native backends out: their net, fs, process and signal surfaces use the in-memory backends, and their reactor is the ghost reactor unless you install reactor hooks of your own.
 - WIN32 builds and passes its unit suite under MSVC in CI (deterministic builds), but has no native I/O: no sockets, no IOCP reactor (the reactor is a timed sleep), no blocking pool. See the win32 row of `docs/DEFERRED_STUBS_REGISTER.md` (`bd-v12u.3`).
 - TLS needs a provider, and none is built in. The core carries no cryptography: `asx_tls_connect` and `asx_tls_accept` refuse a configuration that names no `asx_tls_provider` (`ASX_E_HOOK_MISSING`), so nothing is sent in the clear under the name of TLS by default. The one provider in the tree, `asx_tls_null_provider()`, is a plaintext passthrough for tests and simulations: it performs no handshake, authenticates no peer and encrypts nothing, and a caller must select it with `asx_tls_config_set_provider`. A real TLS stack plugs in through the provider callbacks (handshake, read, write, shutdown, peer certificate); no such adapter ships yet (`bd-9kll.17.2`). Nothing else in the tree opens a TLS stream: the HTTP server and client speak plain TCP.
-- The database, QUIC, gRPC, messaging, distributed, transport and remote surfaces (`src/net/db.c`, `quic.c`, `grpc.c`, `messaging.c`, `distributed.c`, `src/transport/`, `src/remote/`) are deterministic in-memory models (DEC-010), listed under "Lab Models". They open no socket and speak no wire protocol: a statement runs nothing and returns an empty result set, a QUIC connect stays in `HANDSHAKE` until an in-process accept pairs it, and a gRPC channel is a link between structures in the same process. A successful status means the model accepted the call, not that anything reached a database, broker or peer. Use them as test doubles for the API shapes, not as clients.
+- The database, QUIC, gRPC, messaging, distributed, transport and remote surfaces (`src/net/db.c`, `quic.c`, `grpc.c`, `messaging.c`, `distributed.c`, `src/transport/`, `src/remote/`) are deterministic in-memory models (DEC-010), listed under "Lab Models". They open no socket and speak no wire protocol: a database statement is refused (the model implements none), a QUIC connect stays in `HANDSHAKE` until an in-process accept pairs it, and a gRPC channel is a link between structures in the same process. A successful status means the model accepted the call, not that anything reached a database, broker or peer. Use them as test doubles for the API shapes, not as clients.
 - There is no WebAssembly build target. The BROWSER profile compiles natively with browser surface gating, and `tools/ci/wasm32_oracle_probe.sh`, which CI does not run, only test-compiles some sources for `wasm32-unknown-unknown` (`docs/WASM32_ORACLE_EVALUATION.md`).
 - Rust parity covers what the DSL v2 scenarios can express (see `make conformance`). Networking, files, processes, HTTP and live builds are not compared with Rust, and `docs/SCENARIO_DSL_V2.md` §7 lists the open C-side gaps.
 - Deterministic guarantees assume matching scenario, profile, seed, and compatible runtime version.
@@ -2573,7 +2581,7 @@ It has not been benchmarked against live builds here, and the two differ in more
 
 ### Can I embed this as a library without the CLI?
 
-Yes. The C API is first-class: <!-- fact:api_declarations -->2,125<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact -->
+Yes. The C API is first-class: <!-- fact:api_declarations -->2,154<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact -->
 public header families in the current `include/asx/` tree, and one umbrella
 `#include <asx/asx.h>`. The repository is library-first: `make install`
 installs only `libasx.a` and the headers. The `asx` CLI (`version`, `info`,

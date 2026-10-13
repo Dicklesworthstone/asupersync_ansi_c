@@ -28,6 +28,7 @@
 #include "../../net/net_native.h"
 #include <arpa/inet.h>
 #include <asx/runtime/io_driver.h>
+#include <asx/runtime/journal.h>
 #include <asx/runtime/runtime.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -74,6 +75,19 @@ typedef struct {
 } native_sock;
 
 static native_sock g_socks[ASX_NATIVE_MAX_SOCKETS];
+
+/* Journal views (RP1): a handle as one u64 and an address as its record. */
+static uint64_t native_journal_id(asx_native_handle h) {
+    return ((uint64_t)h.slot << 32) | (uint64_t)h.generation;
+}
+
+static void native_journal_addr(const asx_socket_addr *a, asx_journal_addr *out) {
+    memset(out, 0, sizeof(*out));
+    if (a == NULL) return;
+    out->family = (uint8_t)a->family;
+    memcpy(out->bytes, a->addr, sizeof(out->bytes));
+    out->port = a->port;
+}
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -294,8 +308,8 @@ asx_status asx_native_tcp_listen(const asx_socket_addr *addr, asx_native_handle 
     return ASX_OK;
 }
 
-asx_status asx_native_tcp_accept(asx_native_handle listener, asx_native_handle *out,
-                                 asx_socket_addr *peer) {
+static asx_status native_tcp_accept_impl(asx_native_handle listener, asx_native_handle *out,
+                                         asx_socket_addr *peer) {
     native_sock *l = native_lookup(listener, NATIVE_LISTENER);
     native_sock *s;
     struct sockaddr_storage ss;
@@ -326,7 +340,23 @@ asx_status asx_native_tcp_accept(asx_native_handle listener, asx_native_handle *
     return ASX_OK;
 }
 
-asx_status asx_native_tcp_connect(const asx_socket_addr *addr, asx_native_handle *out) {
+asx_status asx_native_tcp_accept(asx_native_handle listener, asx_native_handle *out,
+                                 asx_socket_addr *peer) {
+    asx_socket_addr got;
+    asx_journal_addr rec;
+    asx_status st;
+    memset(&got, 0, sizeof(got));
+    st = native_tcp_accept_impl(listener, out, &got);
+    if (peer != NULL && st == ASX_OK) *peer = got;
+    if (out != NULL) {
+        native_journal_addr(&got, &rec);
+        asx_journal_note_net_accept(native_journal_id(listener), (int32_t)st,
+                                    st == ASX_OK ? native_journal_id(*out) : 0u, &rec);
+    }
+    return st;
+}
+
+static asx_status native_tcp_connect_impl(const asx_socket_addr *addr, asx_native_handle *out) {
     struct sockaddr_storage ss;
     socklen_t len;
     native_sock *s;
@@ -355,8 +385,19 @@ asx_status asx_native_tcp_connect(const asx_socket_addr *addr, asx_native_handle
     return ASX_OK;
 }
 
-asx_status asx_native_tcp_read(asx_native_handle stream, uint8_t *dst, uint32_t cap,
-                               uint32_t *out_read) {
+asx_status asx_native_tcp_connect(const asx_socket_addr *addr, asx_native_handle *out) {
+    asx_journal_addr rec;
+    asx_status st = native_tcp_connect_impl(addr, out);
+    if (addr != NULL && out != NULL) {
+        native_journal_addr(addr, &rec);
+        asx_journal_note_net_connect(&rec, (int32_t)st,
+                                     st == ASX_OK ? native_journal_id(*out) : 0u);
+    }
+    return st;
+}
+
+static asx_status native_tcp_read_impl(asx_native_handle stream, uint8_t *dst, uint32_t cap,
+                                       uint32_t *out_read) {
     native_sock *s = native_lookup(stream, NATIVE_STREAM);
     asx_status st;
     ssize_t n;
@@ -379,8 +420,17 @@ asx_status asx_native_tcp_read(asx_native_handle stream, uint8_t *dst, uint32_t 
     return native_errno_status(errno);
 }
 
-asx_status asx_native_tcp_write(asx_native_handle stream, const uint8_t *src, uint32_t len,
-                                uint32_t *out_written) {
+asx_status asx_native_tcp_read(asx_native_handle stream, uint8_t *dst, uint32_t cap,
+                               uint32_t *out_read) {
+    asx_status st = native_tcp_read_impl(stream, dst, cap, out_read);
+    if (out_read != NULL) {
+        asx_journal_note_net_read(native_journal_id(stream), cap, (int32_t)st, dst, *out_read);
+    }
+    return st;
+}
+
+static asx_status native_tcp_write_impl(asx_native_handle stream, const uint8_t *src, uint32_t len,
+                                        uint32_t *out_written) {
     native_sock *s = native_lookup(stream, NATIVE_STREAM);
     asx_status st;
     ssize_t n;
@@ -402,6 +452,15 @@ asx_status asx_native_tcp_write(asx_native_handle stream, const uint8_t *src, ui
         return native_wait(s, ASX_IO_WRITABLE);
     }
     return native_errno_status(errno);
+}
+
+asx_status asx_native_tcp_write(asx_native_handle stream, const uint8_t *src, uint32_t len,
+                                uint32_t *out_written) {
+    asx_status st = native_tcp_write_impl(stream, src, len, out_written);
+    if (out_written != NULL) {
+        asx_journal_note_net_write(native_journal_id(stream), len, (int32_t)st, *out_written);
+    }
+    return st;
 }
 
 asx_status asx_native_tcp_shutdown_write(asx_native_handle stream) {
@@ -464,8 +523,8 @@ asx_status asx_native_udp_connect(asx_native_handle sock, const asx_socket_addr 
     return ASX_OK;
 }
 
-asx_status asx_native_udp_send(asx_native_handle sock, const uint8_t *src, uint32_t len,
-                               const asx_socket_addr *to, uint32_t *out_written) {
+static asx_status native_udp_send_impl(asx_native_handle sock, const uint8_t *src, uint32_t len,
+                                       const asx_socket_addr *to, uint32_t *out_written) {
     native_sock *s = native_lookup(sock, NATIVE_UDP);
     ssize_t n;
 
@@ -493,8 +552,17 @@ asx_status asx_native_udp_send(asx_native_handle sock, const uint8_t *src, uint3
     return native_errno_status(errno);
 }
 
-asx_status asx_native_udp_recv(asx_native_handle sock, uint8_t *dst, uint32_t cap,
-                               uint32_t *out_read, asx_socket_addr *from) {
+asx_status asx_native_udp_send(asx_native_handle sock, const uint8_t *src, uint32_t len,
+                               const asx_socket_addr *to, uint32_t *out_written) {
+    asx_status st = native_udp_send_impl(sock, src, len, to, out_written);
+    if (out_written != NULL) {
+        asx_journal_note_udp_send(native_journal_id(sock), len, (int32_t)st, *out_written);
+    }
+    return st;
+}
+
+static asx_status native_udp_recv_impl(asx_native_handle sock, uint8_t *dst, uint32_t cap,
+                                       uint32_t *out_read, asx_socket_addr *from) {
     native_sock *s = native_lookup(sock, NATIVE_UDP);
     struct sockaddr_storage ss;
     socklen_t sl = (socklen_t)sizeof(ss);
@@ -512,6 +580,21 @@ asx_status asx_native_udp_recv(asx_native_handle sock, uint8_t *dst, uint32_t ca
         return native_wait(s, ASX_IO_READABLE);
     }
     return native_errno_status(errno);
+}
+
+asx_status asx_native_udp_recv(asx_native_handle sock, uint8_t *dst, uint32_t cap,
+                               uint32_t *out_read, asx_socket_addr *from) {
+    asx_socket_addr got;
+    asx_journal_addr rec;
+    asx_status st;
+    memset(&got, 0, sizeof(got));
+    st = native_udp_recv_impl(sock, dst, cap, out_read, &got);
+    if (from != NULL && st == ASX_OK) *from = got;
+    if (out_read != NULL) {
+        native_journal_addr(&got, &rec);
+        asx_journal_note_udp_recv(native_journal_id(sock), cap, (int32_t)st, dst, *out_read, &rec);
+    }
+    return st;
 }
 
 /* ------------------------------------------------------------------ */
@@ -546,8 +629,8 @@ int asx_native_is_alive(asx_native_handle h) { return native_lookup(h, NATIVE_FR
 /* Name resolution                                                     */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_native_resolve(const char *host, const asx_resolve_options *opts,
-                              asx_resolve_result *out) {
+static asx_status native_resolve_impl(const char *host, const asx_resolve_options *opts,
+                                      asx_resolve_result *out) {
     struct addrinfo hints;
     struct addrinfo *res = NULL;
     struct addrinfo *ai;
@@ -588,6 +671,23 @@ asx_status asx_native_resolve(const char *host, const asx_resolve_options *opts,
     }
     freeaddrinfo(res);
     return out->count > 0u ? ASX_OK : ASX_E_NOT_FOUND;
+}
+
+asx_status asx_native_resolve(const char *host, const asx_resolve_options *opts,
+                              asx_resolve_result *out) {
+    asx_journal_addr recs[ASX_RESOLVE_MAX_RESULTS];
+    asx_status st = native_resolve_impl(host, opts, out);
+    uint32_t i;
+    uint32_t n = 0u;
+    if (out != NULL && host != NULL && opts != NULL) {
+        n = out->count < ASX_RESOLVE_MAX_RESULTS ? out->count : (uint32_t)ASX_RESOLVE_MAX_RESULTS;
+        for (i = 0; i < n; i++) {
+            ASX_CHECKPOINT_WAIVER("bounded: at most ASX_RESOLVE_MAX_RESULTS addresses");
+            native_journal_addr(&out->addrs[i], &recs[i]);
+        }
+        asx_journal_note_resolve((int32_t)st, recs, n);
+    }
+    return st;
 }
 
 #else

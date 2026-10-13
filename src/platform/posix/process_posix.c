@@ -38,6 +38,7 @@
 
 #include "../../process/process_native.h"
 #include <asx/runtime/io_driver.h>
+#include <asx/runtime/journal.h>
 #include <asx/runtime/runtime.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -118,6 +119,13 @@ static native_proc g_procs[ASX_NATIVE_MAX_PROCESSES];
 static pid_t g_detached[ASX_NATIVE_MAX_DETACHED];
 static uint32_t g_detached_count;
 static proc_plan g_plan;
+
+/* The journal's name for a process (RP1): the handle spawn returned, as one
+ * u64 (native slot bit set, then generation). */
+static uint64_t proc_journal_id(const native_proc *p) {
+    return ((uint64_t)((uint32_t)(p - g_procs) | ASX_PROCESS_NATIVE_SLOT_BIT) << 32) |
+           (uint64_t)p->generation;
+}
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -247,6 +255,7 @@ static void proc_record_status(native_proc *p, int status) {
         p->term_signal = 0;
         p->code = WIFEXITED(status) ? (int32_t)WEXITSTATUS(status) : -1;
     }
+    asx_journal_note_process_exit(proc_journal_id(p), (uint32_t)p->state, p->code, p->term_signal);
     proc_fd_close(&p->exitfd);
 }
 
@@ -267,6 +276,8 @@ static int proc_try_reap(native_proc *p) {
         p->state = ASX_PROCESS_EXITED;
         p->code = -1;
         p->term_signal = 0;
+        asx_journal_note_process_exit(proc_journal_id(p), (uint32_t)p->state, p->code,
+                                      p->term_signal);
         proc_fd_close(&p->exitfd);
         return 1;
     }
@@ -282,6 +293,8 @@ static void proc_reap_blocking(native_proc *p) {
         proc_record_status(p, status);
     } else {
         p->reaped = 1;
+        asx_journal_note_process_exit(proc_journal_id(p), (uint32_t)p->state, p->code,
+                                      p->term_signal);
         proc_fd_close(&p->exitfd);
     }
 }
@@ -531,7 +544,8 @@ static void proc_child(int errfd) {
 /* Spawn                                                               */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_native_process_spawn(const asx_process_command *cmd, asx_process_handle *out) {
+static asx_status native_process_spawn_impl(const asx_process_command *cmd,
+                                            asx_process_handle *out) {
     asx_process_stdio modes[3];
     int parent_fd[3] = {-1, -1, -1};
     int child_fd[3] = {-1, -1, -1};
@@ -652,6 +666,20 @@ fail:
     proc_close_quiet(&null_fd);
     proc_close_quiet(&errpipe[0]);
     proc_close_quiet(&errpipe[1]);
+    return st;
+}
+
+asx_status asx_native_process_spawn(const asx_process_command *cmd, asx_process_handle *out) {
+    asx_status st = native_process_spawn_impl(cmd, out);
+    if (out != NULL) {
+        uint64_t id = 0u;
+        uint32_t pid = 0u;
+        if (st == ASX_OK) {
+            id = ((uint64_t)out->slot << 32) | (uint64_t)out->generation;
+            pid = asx_native_process_id(*out);
+        }
+        asx_journal_note_process_spawn((int32_t)st, id, pid);
+    }
     return st;
 }
 

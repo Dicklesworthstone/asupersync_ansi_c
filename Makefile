@@ -197,6 +197,7 @@ RUNTIME_SRC := \
 	src/runtime/resource.c \
 	src/runtime/trace.c \
 	src/runtime/hindsight.c \
+	src/runtime/journal.c \
 	src/runtime/telemetry.c \
 	src/runtime/profile_compat.c \
 	src/runtime/browser_boundary.c \

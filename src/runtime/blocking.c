@@ -12,8 +12,8 @@
 #include <asx/platform/atomics.h>
 #include <asx/runtime/blocking.h>
 #include <asx/runtime/browser_boundary.h>
+#include <asx/runtime/journal.h>
 #include <string.h>
-
 #if ASX_HAS_BLOCKING_SURFACE
 /* ------------------------------------------------------------------ */
 /* Internal slot                                                       */
@@ -255,6 +255,10 @@ static void blocking_job_run(void *job_ctx) {
     pool_unlock();
 
     result = fn(user_data);
+    /* The completion order of the pool is a boundary input (RP1). Noted
+     * before the slot reads COMPLETED, so whoever sees it done finds the
+     * record already in the journal. */
+    asx_journal_note_blocking_done(idx, generation, result);
 
     pool_lock();
     if (idx < g_slot_count && g_slots[idx].generation == generation &&
