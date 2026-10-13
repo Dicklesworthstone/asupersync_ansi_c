@@ -1468,6 +1468,56 @@ jobs:
           retention-days: 14
 
   # ---------------------------------------------------------------------------
+  # musl-qemu — the library on musl for OpenWrt-class targets under qemu-user
+  # (bd-9kll.15.8). zig cc (the PyPI ziglang wheel, pinned: clang and the musl
+  # sources) cross-builds the library and the conformance runner statically
+  # for mips big-endian (o32, soft float, mips32r2) and aarch64 at resource
+  # classes 1 and 2 (EMBEDDED_ROUTER); qemu-mips and qemu-aarch64 replay the
+  # fixtures of tests/baremetal/subset.txt and the digests must equal the
+  # host's (class 1 differs exactly on exceeds_r1.txt); a planted one-byte
+  # corruption must be caught; a kernel-only static app (one region, one
+  # task, one channel, no interpreter) is built and run and its footprint is
+  # kept. Strict mode: a missing tool is a failure, not a SKIP. This is musl
+  # built by zig, not OpenWrt's SDK, and no device.
+  # ---------------------------------------------------------------------------
+  musl-qemu:
+    name: "musl (OpenWrt-class): mips BE + aarch64 under qemu-user"
+    runs-on: ubuntu-latest
+    needs: [check]
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install zig (PyPI ziglang, pinned) and qemu-user
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-user
+          python3 -m venv "$RUNNER_TEMP/zig-venv"
+          "$RUNNER_TEMP/zig-venv/bin/pip" install --quiet ziglang==0.14.1
+          "$RUNNER_TEMP/zig-venv/bin/python" -m ziglang version
+          qemu-mips --version | head -1
+          qemu-aarch64 --version | head -1
+
+      - name: musl mips + aarch64 under qemu-user, digests equal the host's
+        run: |
+          make -j4 test-musl-qemu FAIL_ON_MISSING_CROSS_TOOLCHAINS=1 FAIL_ON_MISSING_RUNNERS=1 \
+            MUSL_ZIG="$RUNNER_TEMP/zig-venv/bin/python -m ziglang"
+
+      - name: Upload footprint and replay output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: musl-qemu-${{ github.run_id }}
+          path: |
+            build/musl/footprint.txt
+            build/musl/native.txt
+            build/musl/*/qemu.txt
+            build/musl/*/compare.txt
+            build/musl/*/control-compare.txt
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # ---------------------------------------------------------------------------
   # embedded-matrix — router-class cross-target builds + QEMU
   # ---------------------------------------------------------------------------
   embedded-matrix:

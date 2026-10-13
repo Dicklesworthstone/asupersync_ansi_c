@@ -188,7 +188,7 @@ naming the subsystem. Threading them is the remaining work of `bd-9kll.3.20`.
    In constrained systems, "best effort" often means undefined behavior. `asx` uses deterministic exhaustion and failure-atomic boundaries. Arena sizes are fixed at build time, and every resource class (R1/R2/R3) publishes concrete limits.
 
 4. **Portable core, specialized adapters**
-   Core logic is platform-neutral ANSI C. OS- or device-specific behavior lives behind profile/platform adapters. CI builds and tests it on Linux with GCC and Clang, on five router-class ISAs under QEMU, on 32-bit x86, and on Windows with MSVC (deterministic builds; Windows has no native I/O yet). A Cortex-M4 and a RISC-V 32 bare-metal image replay 331 of the conformance fixtures under qemu-system and print the host's digests (`make test-baremetal-qemu`, the `baremetal-qemu` job; footprints in "Measured footprint"); the other `make cross-baremetal-*` targets are builds CI does not run.
+   Core logic is platform-neutral ANSI C. OS- or device-specific behavior lives behind profile/platform adapters. CI builds and tests it on Linux with GCC and Clang, on five router-class ISAs under QEMU, on 32-bit x86, and on Windows with MSVC (deterministic builds; Windows has no native I/O yet). A Cortex-M4 and a RISC-V 32 bare-metal image replay 331 of the conformance fixtures under qemu-system and print the host's digests (`make test-baremetal-qemu`, the `baremetal-qemu` job; footprints in "Measured footprint"), and musl builds of the library for big-endian MIPS and aarch64 replay the same fixtures under qemu-user (`make test-musl-qemu`, the `musl-qemu` job); the other `make cross-baremetal-*` targets are builds CI does not run.
 
 5. **Evidence-gated optimization**
    Performance work requires baseline artifacts, hotspot evidence, semantic proof, and rollback path. Instrumentation modules for latency histograms, jitter tracking, and deadline/watchdog compliance (aimed at the HFT and automotive profiles) record the samples an application feeds them.
@@ -1084,6 +1084,34 @@ quickstart). Its bss grows with the class from about 130 KiB (R1) to 2 MiB
 router workload: the run shows that the kernel gives the same digests on a
 32-bit Cortex-M4 and a RISC-V 32 core as on x86-64, and what that part of
 it costs there.
+
+**On musl, under qemu-user** (`make test-musl-qemu`, measured at `21e13b0` on
+worker B; static binaries built by `zig cc` 0.14.1 (clang 19.1.7) against the
+musl 1.2.5 sources it carries, `-O2 -DNDEBUG --gc-sections`, EMBEDDED_ROUTER;
+run by qemu-user 10.2.1; not OpenWrt's own toolchain and not a device). The
+targets are a big-endian MIPS32r2 (o32, soft float: the ABI and endianness of
+OpenWrt's `mips_24kc`) and aarch64. The conformance runner replays the same
+331 fixtures and every line equals the host's on class 2, and on class 1
+except the same 18 fixtures; a one-byte corruption of one fixture is
+caught. The footprint a router application pays is the kernel-only static
+app (`tools/musl/kernel_min.c`: one region, one task, one channel, linked
+against the `ASX_KERNEL_ONLY` sources with no interpreter; its text includes
+the musl libc it pulls in, stdio among it). Bytes:
+
+| Target, class | kernel_min text | data | bss | Runner text | Runner bss |
+|---|---|---|---|---|---|
+| mips (BE), R1 | 171,860 | 240 | 136,608 | 633,344 | 33,229,428 |
+| mips (BE), R2 | 173,496 | 240 | 687,344 | 636,336 | 34,410,020 |
+| aarch64, R1 | 126,012 | 380 | 146,664 | 478,596 | 33,361,132 |
+| aarch64, R2 | 124,632 | 380 | 720,296 | 476,356 | 34,633,484 |
+
+The kernel-only app's flash is 168 KiB (mips) and 123 KiB (aarch64): over
+the 128 KiB target of EMBEDDED_ROUTER on mips, under it on aarch64, and under
+the 256 KiB hard threshold on both (it is a different figure from the
+kernel-only archive of the table above, which is a sum of objects, and from
+the quickstart). Its bss is 133 KiB at R1 and 671 KiB at R2 on mips. The
+runner's bss is the interpreter's static buffers. No device has run this:
+`bd-9kll.15.8`'s physical-device half is open.
 
 The perf workflow (`.github/workflows/perf.yml`, pushes to `main`) uses separate
 `build/perf-core` and `build/perf-hft` directories. A CORE SLO failure no
@@ -2595,7 +2623,7 @@ verification, and risk documents, among them:
 
 ## CI Pipeline Architecture
 
-The primary CI workflow (`.github/workflows/ci.yml`) runs <!-- fact:ci_jobs -->19<!-- /fact --> top-level jobs on
+The primary CI workflow (`.github/workflows/ci.yml`) runs <!-- fact:ci_jobs -->20<!-- /fact --> top-level jobs on
 pushes and PRs:
 
 | Job | Runs |
@@ -2614,13 +2642,14 @@ pushes and PRs:
 | `m32` | the unit suite and the Rust fixture replay on 32-bit x86 |
 | `wasm32` | `make build-wasm32` (four freestanding wasm32 modules linked with wasm-ld) and `make test-wasm32-replay` (every v2 fixture under node on CORE, FREESTANDING and BROWSER, digest lines compared with the native runner's) |
 | `baremetal-qemu` | `make test-baremetal-qemu`: the 331 fixtures of at most 16 KiB cross-built for FREESTANDING on Cortex-M4 (qemu mps2-an386) and EMBEDDED_ROUTER on RISC-V 32 (qemu virt) at resource classes 1 to 3, compiled in as arrays, replayed, and their semantic and projection digests compared with the host runner's (class 1 must differ exactly on the 18 listed fixtures its arenas are too small for); a planted one-byte corruption must be caught |
+| `musl-qemu` | `make test-musl-qemu`: the library and the conformance runner built against musl 1.2.5 by `zig cc` for big-endian mips32r2 and aarch64 (EMBEDDED_ROUTER, classes 1 and 2), the same 331 fixtures replayed under qemu-user with digests equal to the host's (class 1 differing exactly on the 18 listed), a planted-corruption control, and a kernel-only static app (one region, task and channel, no interpreter) whose sections are the router footprint |
 | `msvc` | the library and the unit suite built by MSVC (x64, `/W4 /WX /wd4100`, via CMake) and run with CTest, for CORE and WIN32 (deterministic builds) |
 | `embedded-matrix` | router-class cross builds with size and layout rows (built, not run) |
 | `size-report` | the release library and the kernel-only archive built for CORE and EMBEDDED_ROUTER, resource classes default and 1, each quickstart linked and the kernel archive's link closure checked; a build, link or closure failure fails the lane, the sizes are reported and not gated |
 | `gcc-analyzer` | GCC 15.2 `-fanalyzer` over `src/` in CORE and POSIX live; every diagnostic is fixed or carries a reasoned waiver (`docs/STATIC_ANALYSIS_TRIAGE.md`) |
 | `gate-scripts` | the integration tests and smoke lanes no other job runs: the fuzz gates' integration tests (counterexample replay, controls, minimizer pipeline, the harnesses under ASan+UBSan), the foundational contract evidence script, the combinator and actor-supervision harnesses, the POSIX adapter smoke, strict schema validation, the embedded portability proof, and the installer smoke |
 
-None of the <!-- fact:ci_jobs -->19<!-- /fact --> jobs is marked `continue-on-error`, so a failure in any of
+None of the <!-- fact:ci_jobs -->20<!-- /fact --> jobs is marked `continue-on-error`, so a failure in any of
 them fails the workflow. A nightly workflow (`nightly.yml`) runs the C fuzzer
 for 100K iterations, Rust-vs-C differential fuzzing on a new seed each day,
 the metamorphic relations over 250000 generated cases each (five shards of
