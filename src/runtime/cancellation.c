@@ -914,3 +914,26 @@ asx_status asx_task_get_cancel_epoch(asx_task_id id, uint32_t *out) {
     *out = t->cancel_epoch;
     return ASX_OK;
 }
+
+/* The outcome the TaskRecord completes with, which is what a task's monitors and links and its
+ * region's close outcome take (finish_task_completion's close_outcome, state.rs:8203-8240 and
+ * 8517-8521), and is not the join's (classify_spawn_completion, task_handle.rs:173-202):
+ * - a record that holds a cancel request completes Cancelled whatever the body returned
+ *   (TaskRecord::complete, record/task.rs:1260-1285), also a task spawned from a poll that
+ *   acknowledged it, whose join keeps the value it returned;
+ * - a cancel only the Cx holds (a budget deadline or quota no checkpoint acknowledged,
+ *   cancel_unmaterialized) leaves the record Running, so the body's return completes it Ok
+ *   (lab/runtime.rs:4853-4880), though the join, classified with the Cx, is Cancelled;
+ * - a panic is the record's own, and a region's async finalizer keeps what its poll returned.
+ * Called once the slot's join outcome is final, with its payload. */
+asx_outcome asx_task_record_outcome_internal(const asx_task_slot *t) {
+    asx_outcome record = t->outcome;
+    if (t->finalizer || record.severity == ASX_OUTCOME_PANICKED) return record;
+    if (t->cancel_pending && !t->cancel_unmaterialized) {
+        record = asx_outcome_make(ASX_OUTCOME_CANCELLED);
+        record.cancel_reason = t->cancel_reason;
+    } else if (record.severity == ASX_OUTCOME_CANCELLED) {
+        record = asx_outcome_make(ASX_OUTCOME_OK);
+    }
+    return record;
+}

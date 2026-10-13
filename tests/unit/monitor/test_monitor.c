@@ -555,6 +555,56 @@ static void test_the_runtime_fires_a_polled_monitor(void) {
     ASSERT(d.ref == ref && d.reason.severity == ASX_OUTCOME_OK, "its content");
 }
 
+/* The outcome a monitor reports is the TaskRecord's (finish_task_completion's
+ * close_outcome, state.rs:8203-8240), not the join's. A budget deadline that
+ * passed before the poll is on the task's Cx only (BudgetDeadlineWake,
+ * cx/cx.rs:313-367): the record stays Running, and a body that returns
+ * without a checkpoint acknowledging it completes the record Ok
+ * (TaskRecord::complete, record/task.rs:1260-1285), so the DOWN is Normal,
+ * though the join, classified with the Cx, is Cancelled(Deadline). */
+static asx_status checkpoint_poll(void *user_data, asx_task_id self) {
+    asx_checkpoint_result seen;
+    (void)user_data;
+    MUST_OK(asx_checkpoint(self, &seen));
+    return ASX_OK;
+}
+
+static void deadline_exit(asx_task_poll_fn poll, asx_down *down, asx_outcome *joined) {
+    asx_task_id watcher;
+    asx_task_id target = ASX_INVALID_ID;
+    asx_monitor_ref ref = 0;
+    asx_budget b = asx_budget_infinite();
+    setup();
+    b.deadline = 0u; /* due at once (Rust Some(Time::ZERO)) */
+    watcher = spawn_task();
+    MUST_OK(asx_task_spawn_with_budget(g_root, poll, NULL, &b, &target));
+    MUST_OK(asx_monitor_establish(watcher, target, &ref));
+    run(g_root);
+    MUST_OK(asx_monitor_down(ref, down));
+    MUST_OK(asx_task_join(target, joined));
+}
+
+static void test_an_unacknowledged_budget_deadline_is_a_normal_exit(void) {
+    asx_down d;
+    asx_outcome joined;
+    memset(&d, 0, sizeof(d));
+    memset(&joined, 0, sizeof(joined));
+    deadline_exit(finish_poll, &d, &joined);
+    ASSERT(d.reason.severity == ASX_OUTCOME_OK, "the record completed Ok: a Normal DOWN");
+    ASSERT(joined.severity == ASX_OUTCOME_CANCELLED, "the join is cancellation-dominant");
+}
+
+static void test_an_acknowledged_budget_deadline_is_a_cancelled_exit(void) {
+    asx_down d;
+    asx_outcome joined;
+    memset(&d, 0, sizeof(d));
+    memset(&joined, 0, sizeof(joined));
+    deadline_exit(checkpoint_poll, &d, &joined);
+    ASSERT(d.reason.severity == ASX_OUTCOME_CANCELLED, "the checkpoint reconciled the record");
+    ASSERT(d.reason.cancel_reason.kind == ASX_CANCEL_DEADLINE, "with the Deadline reason");
+    ASSERT(joined.severity == ASX_OUTCOME_CANCELLED, "and the join agrees");
+}
+
 static void test_a_watchers_completion_ends_its_monitors_silently(void) {
     rec_state s;
     asx_actor_handle h;
@@ -799,6 +849,8 @@ int main(void) {
     RUN(test_the_runtime_fires_a_servers_monitor_at_completion);
     RUN(test_the_runtime_reports_an_error_exit);
     RUN(test_the_runtime_fires_a_polled_monitor);
+    RUN(test_an_unacknowledged_budget_deadline_is_a_normal_exit);
+    RUN(test_an_acknowledged_budget_deadline_is_a_cancelled_exit);
     RUN(test_a_watchers_completion_ends_its_monitors_silently);
     RUN(test_a_runtime_reset_forgets_monitors);
     RUN(test_a_lane_request_takes_a_step_and_its_down_follows);

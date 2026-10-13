@@ -1277,4 +1277,8 @@ static inline asx_kernel *asx_kernel_context(void) {
 /* asx_runtime_random_secure_u64 as runtime `k` sees it. Defined in hooks.c. */
 asx_status asx_kernel_random_secure_u64(asx_kernel *k, uint64_t *out_value);
 
+/* The outcome a completed task's TaskRecord holds, which its monitors, its links and its
+ * region's close outcome take; the join's (t->outcome) can differ. Defined in cancellation.c. */
+asx_outcome asx_task_record_outcome_internal(const asx_task_slot *t);
+
 #endif /* ASX_RUNTIME_INTERNAL_H */

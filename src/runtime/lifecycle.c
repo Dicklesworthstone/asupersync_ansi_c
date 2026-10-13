@@ -671,15 +671,16 @@ asx_status asx_region_audit_leaks_internal(asx_region_id region) {
 
 void asx_task_on_complete_internal(asx_task_slot *task, asx_region_slot *region) {
     asx_kernel *k = asx_kernel_of(task->region);
+    asx_outcome record_outcome;
     (void)asx_cancel_witness_release(task->cancel_witness); /* its cancel, if any, is over */
-    /* Rust's outcome carries its payload: Cancelled(reason), Panicked(payload). Every completion
-     * path sets the severity and the slot's reason or panic message before this runs, so the
-     * outcome takes its payload here, once, for the join, handle, group and region close. */
+    /* Rust's outcome carries its payload (Cancelled(reason), Panicked(payload)); every completion
+     * path sets the severity and the slot's reason or message first, so it is taken here, once. */
     if (task->outcome.severity == ASX_OUTCOME_CANCELLED) {
         task->outcome.cancel_reason = task->cancel_reason;
     } else if (task->outcome.severity == ASX_OUTCOME_PANICKED) {
         task->outcome.panic_message = task->panic_message;
     }
+    record_outcome = asx_task_record_outcome_internal(task); /* the record's, not the join's */
     if (task->first_held != ASX_SLOT_NONE) {
         int fail_fast = 0;
         (void)asx_task_resolve_held_obligations_internal(task, &fail_fast);
@@ -701,18 +702,17 @@ void asx_task_on_complete_internal(asx_task_slot *task, asx_region_slot *region)
     task->parked = 0;
     asx_task_release_capture_internal(task);
     if (region != NULL) {
-        /* Rust unlink_completed_task_from_region_in (state.rs:8509-8522):
-         * the task's outcome joins the region's close outcome. */
+        /* unlink_completed_task_from_region_in (state.rs:8509-8522): the record's outcome joins. */
         region->close_outcome = region->has_close_outcome
-                                    ? asx_outcome_join(&region->close_outcome, &task->outcome)
-                                    : task->outcome;
+                                    ? asx_outcome_join(&region->close_outcome, &record_outcome)
+                                    : record_outcome;
         region->has_close_outcome = 1;
         asx_region_finalizer_task_done_internal(region, task);
     }
     if (region != NULL && region->task_count > 0u) region->task_count--;
     /* Watch effects dispatch after the join waiters (lab/runtime.rs:5010). */
     asx_watches_task_finished(asx_task_handle_for_slot(k, (uint32_t)(task - k->tasks)),
-                              &task->outcome, obligation_clock(k));
+                              &record_outcome, obligation_clock(k));
     if (task->detached) { asx_task_slot_release(k, (uint32_t)(task - k->tasks)); }
 }
 

@@ -775,6 +775,25 @@ DOWN was delivered queues a Demonitor command (`Monitor::drop`,
 for the lane: a no-op when applied, but the step that drains it is a lab step
 of its own, and the dispatch numbers after it shift by one.
 
+That outcome is the TaskRecord's (`close_outcome` of `finish_task_completion`,
+`state.rs:8203-8240`, which also folds into the region's close outcome,
+`state.rs:8517-8521`), not the join's (`classify_spawn_completion`,
+`task_handle.rs:173-202`), and the two differ in both directions. A record
+that holds a cancel request completes Cancelled whatever the body returned
+(`TaskRecord::complete`, `record/task.rs:1260-1285`), so a task spawned from a
+poll that acknowledged a cancel after its first poll, whose join keeps the
+value it returned (Ok), exits abnormally: the DOWN says `cancelled` and a link
+cancels its peer (`link-spawned-server-acknowledged-cancel-exit-is-abnormal-001`).
+A budget deadline (or quota) that only the task's Cx holds, which no
+checkpoint acknowledged, leaves the record Running, and the body's return
+completes it Ok, though the join, classified with the Cx, reports
+Cancelled(Deadline): the DOWN says `normal`, a link stays silent, and the
+region's close outcome folds Ok
+(`monitor-budget-deadline-unacknowledged-down-is-normal-001`,
+`link-budget-deadline-unacknowledged-exit-is-normal-001`,
+`region-close-outcome-budget-deadline-unacknowledged-ok-001`). The next
+checkpoint of such a task acknowledges the deadline and reconciles the record.
+
 | op | Fields | Rust | C | Observation |
 |---|---|---|---|---|
 | `monitor` | `task` (a task name, as `join` takes it), `as` (the monitor's name) | `cx.monitor(target).await` (`monitor.rs:1090`): `target` is the task's handle when the harness holds one, else its id | `asx_monitor_open_poll` until done | `ASX_OK` with the monitor's reference (`MonitorRef::id`, from 1); `ASX_E_NOT_FOUND` when the task is not live when the request is applied (finished, or its spawn was refused). A name is used once per task. |
