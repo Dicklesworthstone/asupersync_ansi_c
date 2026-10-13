@@ -48,101 +48,269 @@
         "action": "calibrate_parallel_overload_admission_slos",
         "rationale": "RCH run `rch exec -- make parallel-bench-gate` on worker vmi1152480 emitted 5 worker-count rows and 15 resource-class footprint rows. Expected full-queue pressure produced observe-only warnings for worker_count=1/2/8/32/64; block count stayed 0. Thresholds are resource-plane gates only and require profile-parity evidence before any baseline update can claim semantic safety.",
         "commit": "2d8a13b3454c8376d195876e6f2506a8687909db"
+      },
+      {
+        "date": "2026-10-13",
+        "author": "BlueCastle",
+        "action": "recapture_baselines",
+        "rationale": "Re-captured the CORE baselines on the CI runner class from the Perf Gates run 38400156553-1 (https://github.com/Dicklesworthstone/asupersync_ansi_c/actions/runs/38400156553), commit 929ea0ca0fae45b10cfd778ae26370b8fd5c4060, host AMD EPYC 9V74 80-Core Processor, 1 run(s), single run. Budgets unchanged (DEC-014).",
+        "commit": "929ea0ca0fae45b10cfd778ae26370b8fd5c4060",
+        "run_id": "38400156553-1",
+        "decision": "DEC-014"
+      },
+      {
+        "date": "2026-10-13",
+        "author": "BlueCastle",
+        "action": "recapture_baselines",
+        "rationale": "Re-captured the HFT baselines on the CI runner class from the Perf Gates run 38400156553-1 (https://github.com/Dicklesworthstone/asupersync_ansi_c/actions/runs/38400156553), commit 929ea0ca0fae45b10cfd778ae26370b8fd5c4060, host AMD EPYC 9V74 80-Core Processor, 1 run(s), single run. Budgets unchanged (DEC-014).",
+        "commit": "929ea0ca0fae45b10cfd778ae26370b8fd5c4060",
+        "run_id": "38400156553-1",
+        "decision": "DEC-014"
       }
     ]
   },
   "profiles": {
     "CORE": {
-      "captured_at": "2026-03-01T05:10:00Z",
-      "captured_on": "development-host",
+      "captured_at": "2026-10-13T12:49:25Z",
+      "captured_on": "github-hosted runner: AMD EPYC 9V74 80-Core Processor",
       "deterministic": true,
       "baseline_metadata": {
-        "git_commit": "07b193833509ff496ed1e02201baa06dab1e53be",
+        "git_commit": "929ea0ca0fae45b10cfd778ae26370b8fd5c4060",
         "profile": "CORE",
         "compiler": "gcc",
-        "target": "development-host-x86_64",
+        "target": "linux-x86_64 6.17.0-1022-azure",
         "command": "make bench-json",
         "accepted_commands": [
           "make bench-json",
           "make slo-gate"
         ],
         "scenario_set": "runtime_microbenchmarks.v1",
-        "captured_at": "2026-03-01T05:10:00Z",
+        "captured_at": "2026-10-13T12:49:25Z",
         "threshold_policy": {
           "name": "tail_latency_headroom_v1",
           "mode": "blocking",
           "semantic_scope": "resource-plane-only"
         },
-        "max_age_days": 120
+        "max_age_days": 120,
+        "compiler_version": "13.3.0",
+        "host": {
+          "cpu_model": "AMD EPYC 9V74 80-Core Processor",
+          "os_release": "6.17.0-1022-azure",
+          "pointer_bits": 64,
+          "ci_sha": "929ea0ca0fae45b10cfd778ae26370b8fd5c4060"
+        },
+        "run_id": "38400156553-1",
+        "run_url": "https://github.com/Dicklesworthstone/asupersync_ansi_c/actions/runs/38400156553",
+        "statistic": "single run",
+        "runs": 1,
+        "decision": "DEC-014"
       },
       "benchmarks": {
         "scheduler_single_task": {
-          "p99_ns":    {"budget": 1000,  "headroom": 5.0, "baseline": 201},
-          "p99_9_ns":  {"budget": 3000,  "headroom": 10.0, "baseline": 301},
-          "p99_99_ns": {"budget": 15000, "headroom": 6.3, "baseline": 2395},
-          "jitter_ns": {"budget": 200,   "headroom": 8.0, "baseline": 25}
+          "p99_ns": {
+            "budget": 1000,
+            "headroom": 3.6,
+            "baseline": 280
+          },
+          "p99_9_ns": {
+            "budget": 3000,
+            "headroom": 5.3,
+            "baseline": 571
+          },
+          "p99_99_ns": {
+            "budget": 15000,
+            "headroom": 2.3,
+            "baseline": 6660
+          },
+          "jitter_ns": {
+            "budget": 200,
+            "headroom": 20,
+            "baseline": 10
+          }
         },
         "scheduler_multi_task": {
-          "p99_ns":    {"budget": 10000, "headroom": 4.9, "baseline": 2034},
-          "p99_9_ns":  {"budget": 20000, "headroom": 6.4, "baseline": 3115},
-          "p99_99_ns": {"budget": 20000, "headroom": 6.4, "baseline": 3115},
-          "jitter_ns": {"budget": 500,   "headroom": 9.4, "baseline": 53}
+          "p99_ns": {
+            "budget": 10000,
+            "headroom": 1.7,
+            "baseline": 5998
+          },
+          "p99_9_ns": {
+            "budget": 20000,
+            "headroom": 2.8,
+            "baseline": 7031
+          },
+          "p99_99_ns": {
+            "budget": 20000,
+            "headroom": 2.8,
+            "baseline": 7031
+          },
+          "jitter_ns": {
+            "budget": 500,
+            "headroom": 17.9,
+            "baseline": 28
+          }
         },
         "scheduler_multi_round": {
-          "p99_ns":    {"budget": 15000, "headroom": 5.0, "baseline": 2976},
-          "p99_9_ns":  {"budget": 75000, "headroom": 5.0, "baseline": 14928},
-          "p99_99_ns": {"budget": 75000, "headroom": 5.0, "baseline": 14928},
-          "jitter_ns": {"budget": 750,   "headroom": 9.6, "baseline": 78}
+          "p99_ns": {
+            "budget": 15000,
+            "headroom": 1.3,
+            "baseline": 11256
+          },
+          "p99_9_ns": {
+            "budget": 75000,
+            "headroom": 4.9,
+            "baseline": 15363
+          },
+          "p99_99_ns": {
+            "budget": 75000,
+            "headroom": 4.9,
+            "baseline": 15363
+          },
+          "jitter_ns": {
+            "budget": 750,
+            "headroom": 3.8,
+            "baseline": 195
+          }
         },
         "timer_register": {
-          "p99_ns":    {"budget": 90000,  "headroom": 5.0, "baseline": 18063},
-          "p99_9_ns":  {"budget": 125000, "headroom": 5.1, "baseline": 24636},
-          "jitter_ns": {"budget": 5000,   "headroom": 7.8, "baseline": 645}
+          "p99_ns": {
+            "budget": 90000,
+            "headroom": 43.4,
+            "baseline": 2073
+          },
+          "p99_9_ns": {
+            "budget": 125000,
+            "headroom": 10.7,
+            "baseline": 11647
+          },
+          "jitter_ns": {
+            "budget": 5000,
+            "headroom": 90.9,
+            "baseline": 55
+          }
         },
         "timer_cancel": {
-          "p99_ns":    {"budget": 5000,  "headroom": 11.1, "baseline": 450},
-          "p99_9_ns":  {"budget": 25000, "headroom": 54.2, "baseline": 461},
-          "jitter_ns": {"budget": 500,   "headroom": 83.3, "baseline": 6}
+          "p99_ns": {
+            "budget": 5000,
+            "headroom": 2.5,
+            "baseline": 1962
+          },
+          "p99_9_ns": {
+            "budget": 25000,
+            "headroom": 6.6,
+            "baseline": 3816
+          },
+          "jitter_ns": {
+            "budget": 500,
+            "headroom": 19.2,
+            "baseline": 26
+          }
         },
         "channel_send": {
-          "p99_ns":    {"budget": 50000,  "headroom": 7.7, "baseline": 6482},
-          "p99_9_ns":  {"budget": 200000, "headroom": 10.5, "baseline": 19026},
-          "jitter_ns": {"budget": 5000,   "headroom": 33.3, "baseline": 150}
+          "p99_ns": {
+            "budget": 50000,
+            "headroom": 25.1,
+            "baseline": 1993
+          },
+          "p99_9_ns": {
+            "budget": 200000,
+            "headroom": 24.9,
+            "baseline": 8042
+          },
+          "jitter_ns": {
+            "budget": 5000,
+            "headroom": 147.1,
+            "baseline": 34
+          }
         },
         "channel_recv": {
-          "p99_ns":    {"budget": 5000,  "headroom": 6.1, "baseline": 822},
-          "p99_9_ns":  {"budget": 25000, "headroom": 28.7, "baseline": 872},
-          "jitter_ns": {"budget": 500,   "headroom": 19.2, "baseline": 26}
+          "p99_ns": {
+            "budget": 5000,
+            "headroom": 9.2,
+            "baseline": 541
+          },
+          "p99_9_ns": {
+            "budget": 25000,
+            "headroom": 29.4,
+            "baseline": 851
+          },
+          "jitter_ns": {
+            "budget": 500,
+            "headroom": 55.6,
+            "baseline": 9
+          }
         },
         "quiescence_drain": {
-          "p99_ns":    {"budget": 10000, "headroom": 11.2, "baseline": 892},
-          "p99_9_ns":  {"budget": 25000, "headroom": 26.8, "baseline": 932},
-          "jitter_ns": {"budget": 1000,  "headroom": 29.4, "baseline": 34}
+          "p99_ns": {
+            "budget": 10000,
+            "headroom": 3.9,
+            "baseline": 2594
+          },
+          "p99_9_ns": {
+            "budget": 25000,
+            "headroom": 2.9,
+            "baseline": 8532
+          },
+          "jitter_ns": {
+            "budget": 1000,
+            "headroom": 13.2,
+            "baseline": 76
+          }
         },
         "embedded_pressure": {
-          "p99_ns":    {"budget": 10000, "headroom": 8.5, "baseline": 1173},
-          "p99_9_ns":  {"budget": 50000, "headroom": 23.3, "baseline": 2145},
-          "jitter_ns": {"budget": 1000,  "headroom": 27.0, "baseline": 37}
+          "p99_ns": {
+            "budget": 10000,
+            "headroom": 3.8,
+            "baseline": 2634
+          },
+          "p99_9_ns": {
+            "budget": 50000,
+            "headroom": 5.7,
+            "baseline": 8833
+          },
+          "jitter_ns": {
+            "budget": 1000,
+            "headroom": 19.2,
+            "baseline": 52
+          }
         }
       },
       "deadline_report": {
-        "miss_rate":         {"budget": 0.01,   "headroom": 20.0, "baseline": 0.0005},
-        "max_overshoot_ns":  {"budget": 50000,  "headroom": 11.6, "baseline": 4297}
+        "miss_rate": {
+          "budget": 0.01,
+          "headroom": 20.0,
+          "baseline": 0.000000
+        },
+        "max_overshoot_ns": {
+          "budget": 50000,
+          "headroom": 11.6,
+          "baseline": 0
+        }
       },
       "adaptive_report": {
-        "fallback_rate":              {"budget": 0.80,  "headroom": 1.6,  "baseline": 0.50,  "direction": "upper"},
-        "mean_confidence_fp32_floor": {"budget": 1000000000, "headroom": 2.6, "baseline": 2641404886, "direction": "lower"}
+        "fallback_rate": {
+          "budget": 0.80,
+          "headroom": 1.6,
+          "baseline": 0.500000,
+          "direction": "upper"
+        },
+        "mean_confidence_fp32_floor": {
+          "budget": 1000000000,
+          "headroom": 2.6,
+          "baseline": 2641404886,
+          "direction": "lower"
+        }
       }
     },
     "HFT": {
-      "captured_at": "2026-03-02T06:20:00Z",
-      "captured_on": "development-host",
+      "captured_at": "2026-10-13T12:49:25Z",
+      "captured_on": "github-hosted runner: AMD EPYC 9V74 80-Core Processor",
       "deterministic": true,
       "baseline_metadata": {
-        "git_commit": "a645205d4c65e09a0f0e7c645620b97d78d11731",
+        "git_commit": "929ea0ca0fae45b10cfd778ae26370b8fd5c4060",
         "profile": "HFT",
         "compiler": "gcc",
-        "target": "development-host-x86_64",
+        "target": "linux-x86_64 6.17.0-1022-azure",
         "command": "make bench-json",
         "accepted_commands": [
           "make bench-json",
@@ -150,71 +318,221 @@
           "make slo-gate PROFILE=HFT"
         ],
         "scenario_set": "runtime_microbenchmarks_hft.v1",
-        "captured_at": "2026-03-02T06:20:00Z",
+        "captured_at": "2026-10-13T12:49:25Z",
         "threshold_policy": {
           "name": "hft_tail_latency_headroom_v1",
           "mode": "blocking",
           "semantic_scope": "resource-plane-only"
         },
-        "max_age_days": 120
+        "max_age_days": 120,
+        "compiler_version": "13.3.0",
+        "host": {
+          "cpu_model": "AMD EPYC 9V74 80-Core Processor",
+          "os_release": "6.17.0-1022-azure",
+          "pointer_bits": 64,
+          "ci_sha": "929ea0ca0fae45b10cfd778ae26370b8fd5c4060"
+        },
+        "run_id": "38400156553-1",
+        "run_url": "https://github.com/Dicklesworthstone/asupersync_ansi_c/actions/runs/38400156553",
+        "statistic": "single run",
+        "runs": 1,
+        "decision": "DEC-014"
       },
       "benchmarks": {
         "scheduler_single_task": {
-          "p99_ns":    {"budget": 1100,  "headroom": 5.0, "baseline": 221},
-          "p99_9_ns":  {"budget": 3500,  "headroom": 10.0, "baseline": 350},
-          "p99_99_ns": {"budget": 15000, "headroom": 5.3, "baseline": 2845},
-          "jitter_ns": {"budget": 200,   "headroom": 8.3, "baseline": 24}
+          "p99_ns": {
+            "budget": 1100,
+            "headroom": 4.6,
+            "baseline": 241
+          },
+          "p99_9_ns": {
+            "budget": 3500,
+            "headroom": 4.8,
+            "baseline": 731
+          },
+          "p99_99_ns": {
+            "budget": 15000,
+            "headroom": 13.7,
+            "baseline": 1091
+          },
+          "jitter_ns": {
+            "budget": 200,
+            "headroom": 28.6,
+            "baseline": 7
+          }
         },
         "scheduler_multi_task": {
-          "p99_ns":    {"budget": 25000, "headroom": 5.0, "baseline": 4999},
-          "p99_9_ns":  {"budget": 135000, "headroom": 5.0, "baseline": 26970},
-          "p99_99_ns": {"budget": 135000, "headroom": 5.0, "baseline": 26970},
-          "jitter_ns": {"budget": 2500,  "headroom": 5.2, "baseline": 480}
+          "p99_ns": {
+            "budget": 25000,
+            "headroom": 2.5,
+            "baseline": 9985
+          },
+          "p99_9_ns": {
+            "budget": 135000,
+            "headroom": 9.5,
+            "baseline": 14282
+          },
+          "p99_99_ns": {
+            "budget": 135000,
+            "headroom": 9.5,
+            "baseline": 14282
+          },
+          "jitter_ns": {
+            "budget": 2500,
+            "headroom": 16.2,
+            "baseline": 154
+          }
         },
         "scheduler_multi_round": {
-          "p99_ns":    {"budget": 26500, "headroom": 5.0, "baseline": 5290},
-          "p99_9_ns":  {"budget": 120000, "headroom": 5.1, "baseline": 23364},
-          "p99_99_ns": {"budget": 120000, "headroom": 5.1, "baseline": 23364},
-          "jitter_ns": {"budget": 3000,  "headroom": 5.1, "baseline": 583}
+          "p99_ns": {
+            "budget": 26500,
+            "headroom": 2.1,
+            "baseline": 12439
+          },
+          "p99_9_ns": {
+            "budget": 120000,
+            "headroom": 5.4,
+            "baseline": 22414
+          },
+          "p99_99_ns": {
+            "budget": 120000,
+            "headroom": 5.4,
+            "baseline": 22414
+          },
+          "jitter_ns": {
+            "budget": 3000,
+            "headroom": 8,
+            "baseline": 377
+          }
         },
         "timer_register": {
-          "p99_ns":    {"budget": 85000,  "headroom": 5.3, "baseline": 16170},
-          "p99_9_ns":  {"budget": 150000, "headroom": 5.0, "baseline": 30517},
-          "jitter_ns": {"budget": 5500,   "headroom": 5.2, "baseline": 1064}
+          "p99_ns": {
+            "budget": 85000,
+            "headroom": 41,
+            "baseline": 2073
+          },
+          "p99_9_ns": {
+            "budget": 150000,
+            "headroom": 9.8,
+            "baseline": 15313
+          },
+          "jitter_ns": {
+            "budget": 5500,
+            "headroom": 79.7,
+            "baseline": 69
+          }
         },
         "timer_cancel": {
-          "p99_ns":    {"budget": 4500,  "headroom": 5.4, "baseline": 832},
-          "p99_9_ns":  {"budget": 10000, "headroom": 10.3, "baseline": 972},
-          "jitter_ns": {"budget": 300,   "headroom": 10.7, "baseline": 28}
+          "p99_ns": {
+            "budget": 4500,
+            "headroom": 2.3,
+            "baseline": 1953
+          },
+          "p99_9_ns": {
+            "budget": 10000,
+            "headroom": 1.2,
+            "baseline": 8482
+          },
+          "jitter_ns": {
+            "budget": 300,
+            "headroom": 5.8,
+            "baseline": 52
+          }
         },
         "channel_send": {
-          "p99_ns":    {"budget": 50000,  "headroom": 5.3, "baseline": 9478},
-          "p99_9_ns":  {"budget": 125000, "headroom": 5.2, "baseline": 24145},
-          "jitter_ns": {"budget": 3500,   "headroom": 5.4, "baseline": 652}
+          "p99_ns": {
+            "budget": 50000,
+            "headroom": 25.1,
+            "baseline": 1993
+          },
+          "p99_9_ns": {
+            "budget": 125000,
+            "headroom": 14.9,
+            "baseline": 8413
+          },
+          "jitter_ns": {
+            "budget": 3500,
+            "headroom": 125,
+            "baseline": 28
+          }
         },
         "channel_recv": {
-          "p99_ns":    {"budget": 7000,  "headroom": 5.2, "baseline": 1343},
-          "p99_9_ns":  {"budget": 75000, "headroom": 5.3, "baseline": 14076},
-          "jitter_ns": {"budget": 700,   "headroom": 5.4, "baseline": 129}
+          "p99_ns": {
+            "budget": 7000,
+            "headroom": 12.7,
+            "baseline": 551
+          },
+          "p99_9_ns": {
+            "budget": 75000,
+            "headroom": 93.5,
+            "baseline": 802
+          },
+          "jitter_ns": {
+            "budget": 700,
+            "headroom": 87.5,
+            "baseline": 8
+          }
         },
         "quiescence_drain": {
-          "p99_ns":    {"budget": 5500,  "headroom": 5.0, "baseline": 1102},
-          "p99_9_ns":  {"budget": 65000, "headroom": 5.2, "baseline": 12543},
-          "jitter_ns": {"budget": 300,   "headroom": 5.1, "baseline": 59}
+          "p99_ns": {
+            "budget": 5500,
+            "headroom": 2.2,
+            "baseline": 2534
+          },
+          "p99_9_ns": {
+            "budget": 65000,
+            "headroom": 7.7,
+            "baseline": 8413
+          },
+          "jitter_ns": {
+            "budget": 300,
+            "headroom": 5.2,
+            "baseline": 58
+          }
         },
         "embedded_pressure": {
-          "p99_ns":    {"budget": 10000, "headroom": 5.2, "baseline": 1903},
-          "p99_9_ns":  {"budget": 10500, "headroom": 5.2, "baseline": 2034},
-          "jitter_ns": {"budget": 300,   "headroom": 5.7, "baseline": 53}
+          "p99_ns": {
+            "budget": 10000,
+            "headroom": 2.2,
+            "baseline": 4466
+          },
+          "p99_9_ns": {
+            "budget": 10500,
+            "headroom": 2.1,
+            "baseline": 5017
+          },
+          "jitter_ns": {
+            "budget": 300,
+            "headroom": 3.8,
+            "baseline": 79
+          }
         }
       },
       "deadline_report": {
-        "miss_rate":         {"budget": 0.01,  "headroom": 20.0, "baseline": 0.0},
-        "max_overshoot_ns":  {"budget": 50000, "headroom": 50.0, "baseline": 0}
+        "miss_rate": {
+          "budget": 0.01,
+          "headroom": 20.0,
+          "baseline": 0.000000
+        },
+        "max_overshoot_ns": {
+          "budget": 50000,
+          "headroom": 50.0,
+          "baseline": 0
+        }
       },
       "adaptive_report": {
-        "fallback_rate":              {"budget": 0.80,  "headroom": 1.6,  "baseline": 0.50,  "direction": "upper"},
-        "mean_confidence_fp32_floor": {"budget": 1000000000, "headroom": 2.6, "baseline": 2641404886, "direction": "lower"}
+        "fallback_rate": {
+          "budget": 0.80,
+          "headroom": 1.6,
+          "baseline": 0.500000,
+          "direction": "upper"
+        },
+        "mean_confidence_fp32_floor": {
+          "budget": 1000000000,
+          "headroom": 2.6,
+          "baseline": 2641404886,
+          "direction": "lower"
+        }
       }
     },
     "PARALLEL": {
@@ -245,10 +563,26 @@
       },
       "benchmarks": {
         "parallel_large_swarm": {
-          "p99_ns":    {"budget": 1000000, "headroom": 40.7, "baseline": 24587},
-          "p99_9_ns":  {"budget": 2000000, "headroom": 60.8, "baseline": 32869},
-          "p99_99_ns": {"budget": 2000000, "headroom": 60.8, "baseline": 32869},
-          "jitter_ns": {"budget": 250000,  "headroom": 95.5, "baseline": 2618}
+          "p99_ns": {
+            "budget": 1000000,
+            "headroom": 40.7,
+            "baseline": 24587
+          },
+          "p99_9_ns": {
+            "budget": 2000000,
+            "headroom": 60.8,
+            "baseline": 32869
+          },
+          "p99_99_ns": {
+            "budget": 2000000,
+            "headroom": 60.8,
+            "baseline": 32869
+          },
+          "jitter_ns": {
+            "budget": 250000,
+            "headroom": 95.5,
+            "baseline": 2618
+          }
         }
       },
       "overload_admission_slo": {
@@ -258,8 +592,18 @@
         "summary_artifact": "build/perf/parallel-bench-gate-summary.json",
         "threshold_mode": "observe_only_warn_block_fail",
         "resource_plane_only": true,
-        "worker_counts": [1, 2, 8, 32, 64],
-        "resource_classes": ["R1", "R2", "R3"],
+        "worker_counts": [
+          1,
+          2,
+          8,
+          32,
+          64
+        ],
+        "resource_classes": [
+          "R1",
+          "R2",
+          "R3"
+        ],
         "warn": {
           "p99_ns": 1000000,
           "p99_9_ns": 2000000,
