@@ -753,7 +753,8 @@ static asx_status sched_complete(asx_task_slot *t, asx_task_id tid, asx_region_s
  * cancel already pending (Rust's lab, lab/runtime.rs:4663-4670; fuzz
  * finding gen-1-73, bd-ij9w). `*now`/`*have_now` cache one clock read per
  * round (only taken when one is needed). */
-static void sched_enforce_budget(asx_task_slot *t, asx_task_id tid, asx_time *now, int *have_now) {
+static void sched_enforce_budget(const asx_task_slot *t, asx_task_id tid, asx_time *now,
+                                 int *have_now) {
     asx_status st;
     /* Under lab dispatch the budget-deadline timer cancels the task, as
      * Rust's lab does (lab_deadline_fire); it checks no deadline here. */
@@ -772,20 +773,19 @@ static void sched_enforce_budget(asx_task_slot *t, asx_task_id tid, asx_time *no
         }
     }
     if (t->budget.poll_quota == 0u) {
-        if (asx_lab_dispatch_active()) {
-            /* Rust's lab stamps this one with CancelReason::poll_quota()'s
-             * testing defaults (lab/runtime.rs:4667); a later checkpoint
-             * re-attributes it, earlier timestamp winning (bd-wxep). */
-            asx_cancel_reason r = asx_cancel_reason_default(ASX_CANCEL_POLL_QUOTA, NULL);
-            st = asx_task_cancel_reason_internal(tid, &r, ASX_CANCEL_SRC_BUDGET);
-            (void)st;
-            return;
-        }
-        if (!*have_now) {
-            *now = sched_now();
-            *have_now = 1;
-        }
-        st = asx_task_cancel_budget_internal(tid, ASX_CANCEL_POLL_QUOTA, *now);
+        /* Stamped with CancelReason::poll_quota()'s testing defaults (the
+         * root region, no task, one second), not with this task and now.
+         * Rust's lab does that (lab/runtime.rs:4667) and so does its
+         * production scheduler (three_lane.rs consume_budget_poll, "as the
+         * lab does"). The task's next checkpoint re-attributes the reason
+         * to itself at the time it runs, the earlier timestamp winning
+         * (Cx::checkpoint, cx.rs:3112-3160; bd-wxep); one never reached
+         * keeps these defaults, which is what the Rust fixtures record
+         * (budget-quota-cx-reason-*, bd-9kll.4.13). A pending cancel is
+         * strengthened in the Cx only until a checkpoint acknowledges it
+         * (fuzz gen-113-192). */
+        asx_cancel_reason r = asx_cancel_reason_default(ASX_CANCEL_POLL_QUOTA, NULL);
+        st = asx_task_cancel_reason_internal(tid, &r, ASX_CANCEL_SRC_BUDGET);
         (void)st;
     }
 }

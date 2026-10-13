@@ -576,6 +576,87 @@ TEST(scheduler_polls_a_task_spawned_in_a_round_in_that_round) {
     ASSERT_EQ(polls_in_round_0, 2u);
 }
 
+/* ---- Poll quota enforced before a poll (bd-9kll.4.13) ---- */
+
+typedef struct {
+    uint32_t polls;
+    int checkpoint;
+    int saw_cancel;
+    asx_cancel_reason reason;
+} quota_probe;
+
+/* Pends twice, so a quota of 2 is spent when its third poll starts, then
+ * (optionally checkpointing first) reads the cancel reason raised for it. */
+static asx_status poll_probe_quota_reason(void *data, asx_task_id self) {
+    quota_probe *p = (quota_probe *)data;
+    asx_checkpoint_result cr;
+    p->polls++;
+    if (p->polls < 3u) return ASX_E_PENDING;
+    if (p->checkpoint) {
+        asx_status st = asx_checkpoint(self, &cr);
+        if (st != ASX_OK) return st;
+    }
+    p->saw_cancel = asx_task_get_cancel_reason(self, &p->reason) == ASX_OK;
+    return ASX_OK;
+}
+
+/* Rust's lab (lab/runtime.rs:4667) and its production scheduler
+ * (three_lane.rs consume_budget_poll) both stamp an exhausted poll quota
+ * with CancelReason::poll_quota()'s testing defaults. */
+TEST(scheduler_stamps_an_exhausted_poll_quota_with_the_poll_quota_defaults) {
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_budget quota;
+    asx_budget run;
+    asx_cancel_reason expect;
+    quota_probe p;
+
+    asx_runtime_reset();
+    asx_ghost_reset();
+    memset(&p, 0, sizeof(p));
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    quota = asx_budget_from_polls(2);
+    ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_probe_quota_reason, &p, &quota, &tid), ASX_OK);
+    run = asx_budget_infinite();
+    ASSERT_EQ(asx_scheduler_run(rid, &run), ASX_OK);
+
+    ASSERT_EQ(p.polls, 3u);
+    ASSERT_TRUE(p.saw_cancel);
+    expect = asx_cancel_reason_default(ASX_CANCEL_POLL_QUOTA, NULL);
+    ASSERT_EQ((int)p.reason.kind, (int)ASX_CANCEL_POLL_QUOTA);
+    ASSERT_EQ(p.reason.origin_region, expect.origin_region);
+    ASSERT_EQ(p.reason.origin_task, expect.origin_task);
+    ASSERT_EQ(p.reason.timestamp, expect.timestamp);
+}
+
+/* The default stamp is provisional: the task's own checkpoint re-attributes
+ * it to the task and its region at the current time, the earlier timestamp
+ * winning (Cx::checkpoint, cx.rs:3112-3160; bd-wxep). */
+TEST(scheduler_poll_quota_stamp_is_reattributed_by_a_later_checkpoint) {
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_budget quota;
+    asx_budget run;
+    quota_probe p;
+
+    asx_runtime_reset();
+    asx_ghost_reset();
+    memset(&p, 0, sizeof(p));
+    p.checkpoint = 1;
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    quota = asx_budget_from_polls(2);
+    ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_probe_quota_reason, &p, &quota, &tid), ASX_OK);
+    run = asx_budget_infinite();
+    ASSERT_EQ(asx_scheduler_run(rid, &run), ASX_OK);
+
+    ASSERT_EQ(p.polls, 3u);
+    ASSERT_TRUE(p.saw_cancel);
+    ASSERT_EQ((int)p.reason.kind, (int)ASX_CANCEL_POLL_QUOTA);
+    ASSERT_TRUE(asx_handle_index(p.reason.origin_task) == asx_handle_index(tid));
+    ASSERT_TRUE(asx_handle_index(p.reason.origin_region) == asx_handle_index(rid));
+    ASSERT_TRUE(p.reason.timestamp < (asx_time)1000000000u);
+}
+
 int main(void) {
     fprintf(stderr, "=== test_scheduler ===\n");
 
@@ -599,6 +680,10 @@ int main(void) {
     RUN_TEST_IF(ASX_MAX_TASKS >= 19u, scheduler_cancel_streak_gives_ready_work_a_turn,
                 "needs 19 tasks: 16 cancel polls in a row, the ready task, two more");
     RUN_TEST(scheduler_polls_a_task_spawned_in_a_round_in_that_round);
+
+    /* Budget enforcement before a poll */
+    RUN_TEST(scheduler_stamps_an_exhausted_poll_quota_with_the_poll_quota_defaults);
+    RUN_TEST(scheduler_poll_quota_stamp_is_reattributed_by_a_later_checkpoint);
 
     TEST_REPORT();
     return test_failures;

@@ -22,14 +22,10 @@ actor-cancel-caller-and-server-001 drift bd-9kll.4.12: a worker spawned into a r
 actor-cancel-idle-server-001 drift bd-9kll.4.12: a worker spawned into a region opened this round is skipped for the round, so the parent's cancel lands first
 actor-refused-reply-before-sleep-001 lab-model: a refused server spawn keeps a handle only under lab dispatch (refused at admission); the sweep returns the error at the spawn
 actor-spawn-in-closing-region-001 lab-model: a refused server spawn keeps a handle only under lab dispatch (refused at admission); the sweep returns the error at the spawn
-budget-quota-cx-reason-at-completion-001 drift bd-9kll.4.13: poll-quota exhaustion is stamped (region, task, now), not with CancelReason::poll_quota() defaults
-budget-quota-cx-reason-reconciled-001 drift bd-9kll.4.13: poll-quota exhaustion is stamped (region, task, now), so the checkpoint's later stamp loses
-cancel-cleanup-budget-advisory-001 drift bd-9kll.4.13: poll-quota exhaustion is stamped (region, task, now), not with CancelReason::poll_quota() defaults
 cancel-region-request-lane-priority-001 drift bd-9kll.4.15: a checkpoint outside lab dispatch does not strengthen a pending cancel with the passed deadline
-cancel-request-event-reason-001 drift bd-9kll.4.13: poll-quota exhaustion is stamped (region, task, now); the task keeps User where Rust ends PollQuota
+cancel-request-event-reason-001 lab-model: the lab's region-open command costs the task a dispatch, so its poll quota is spent before the region cancel and folds into the record; the sweep spends it after
 cancel-subtree-order-after-child-close-001 lab-model: close_region from a poll is a deferred lab command and the child ends ok; the sweep applies it at once and cancels the child
 lab-dispatch-cached-abort-at-admission-001 lab-model: Rust's handle-cancel queue and next-step admission order a supervisor's abort before its child starts; the sweep admits at once
-lab-dispatch-cancel-waker-once-001 drift bd-9kll.4.13: poll-quota exhaustion is stamped (region, task, now), not with CancelReason::poll_quota() defaults
 lab-dispatch-mpsc-disconnect-order-001 order: the lab's seeded pick runs the receiver's task to completion before the sender's; the sweep polls in arena order
 lab-dispatch-region-command-advances-region-001 lab-model: Rust's lab region command requests the cancel then advances the region (Draining); the sweep cancels directly (Closing)
 lab-dispatch-region-command-deferred-wakes-001 lab-model: region commands from a poll are deferred to the next step with their wakes; the sweep applies them at once
@@ -41,7 +37,7 @@ race-deadline-wrapper-cx-reason-001 undiagnosed bd-9kll.4.16: the race's Deadlin
 race-loser-abort-preserves-fail-fast-001 lab-model: the driver's finish_region is a lab command applied after due timers' wakes have run; the sweep cancels before the race members are polled
 race-owner-cancel-cx-reason-001 lab-model: group members spawned into a cancelled region are refused at the next step's admission; the sweep refuses at the spawn and the op cannot continue
 region-finalizer-time-budget-advisory-001 drift bd-9kll.4.14: pre-poll deadline enforcement cancels a finalizer, for which Rust arms no deadline timer
-region-lifecycle-closed-child-spawn-001 drift bd-9kll.4.13: poll-quota exhaustion is stamped (region, task, now); Rust's task ends PollQuota, the sweep's completes ok
+region-lifecycle-closed-child-spawn-001 lab-model: region open from a poll is a deferred lab command, so a third dispatch finds the spent poll quota and cancels; the sweep opens at once and completes in its second poll
 region-limits-group-member-refused-001 lab-model: spawn mailbox: admission is at the next step; the sweep refuses at the spawn and the group op cannot continue
 region-limits-late-admission-001 lab-model: spawn mailbox: live tasks are counted at the next step's admission, the spawner done; the sweep counts at the spawn
 region-limits-refused-spawn-aborted-001 lab-model: spawn mailbox: a refusal is classified at admission by the join reason; the sweep refuses at the spawn
