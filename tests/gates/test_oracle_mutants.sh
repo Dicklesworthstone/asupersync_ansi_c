@@ -21,6 +21,9 @@
 #   - SWEEP_PARKED_DEADLINE_NO_TIMER only the wake timer is dropped, so a lone
 #                              parked task is never moved to its deadline
 #                              (sweep only, compare-sweep)  -> budget-deadline-parked-*
+#   - CODEC_BIN_SNAPSHOT_TRUNCATED the BIN codec frame drops the snapshot's
+#                              last byte, so every run's JSON and BIN round
+#                              trips differ (bd-vhrp)         -> any fixture
 # A mutant the corpus does not catch means the fixtures stopped exercising
 # that rule: the gate fails.
 # The raw-ID authorization bypass is tested through actual polling tasks:
@@ -112,6 +115,10 @@ run_mutant MASKED_SKIP_UNMASK 'cancel-masked-'
 # Rust capture), so the timer alone is a mutant of its own, caught by it.
 run_mutant SWEEP_PARKED_DEADLINE_NO_WAKE '.' compare-sweep
 run_mutant SWEEP_PARKED_DEADLINE_NO_TIMER 'budget-deadline-parked-' compare-sweep
+
+# The runner puts every run through the JSON and the BIN codec (bd-vhrp): a
+# BIN encoder that loses a byte must fail the corpus.
+run_mutant CODEC_BIN_SNAPSHOT_TRUNCATED '.'
 
 # The scenario parser cannot reach depth 64; the actual public boundary
 # test must catch acceptance of depth 65, without a compile/empty-run pass.
