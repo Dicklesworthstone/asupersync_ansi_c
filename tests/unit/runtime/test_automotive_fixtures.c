@@ -287,7 +287,7 @@ TEST(auto_degraded_transition_002_deterministic_events) {
 
     /* First run */
     asx_runtime_reset(test_runtime());
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
 
     ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_checkpoint_cooperative, NULL, &tid), ASX_OK);
@@ -303,7 +303,7 @@ TEST(auto_degraded_transition_002_deterministic_events) {
 
     /* Second run — identical scenario */
     asx_runtime_reset(test_runtime());
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
 
     ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_checkpoint_cooperative, NULL, &tid), ASX_OK);
@@ -651,7 +651,7 @@ TEST(deterministic_trace_digest_across_runs) {
 
     /* First run */
     asx_runtime_reset(test_runtime());
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
 
     ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_checkpoint_cooperative, NULL, &tid), ASX_OK);
@@ -662,11 +662,11 @@ TEST(deterministic_trace_digest_across_runs) {
     budget = asx_budget_from_polls(10);
     SCHED_RUN_IGNORE(rid, &budget);
 
-    digest1 = asx_trace_digest();
+    digest1 = asx_trace_digest(test_runtime());
 
     /* Second identical run */
     asx_runtime_reset(test_runtime());
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
 
     ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_checkpoint_cooperative, NULL, &tid), ASX_OK);
@@ -677,7 +677,7 @@ TEST(deterministic_trace_digest_across_runs) {
     budget = asx_budget_from_polls(10);
     SCHED_RUN_IGNORE(rid, &budget);
 
-    digest2 = asx_trace_digest();
+    digest2 = asx_trace_digest(test_runtime());
 
     /* Deterministic: identical scenarios produce identical digests */
     ASSERT_EQ(digest1, digest2);

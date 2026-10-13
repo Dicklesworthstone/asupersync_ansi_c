@@ -625,8 +625,10 @@ TEST(cancel_signal_ordering_names_a_child_cancelled_by_a_parent_that_was_not) {
     cs->cancel_reason.cause = &rs->cancel_reason;
     rs->cancel_requested = 1;
     rs->cancel_reason = req;
-    asx_trace_emit(ASX_TRACE_REGION_CANCELLED, (uint64_t)child, (uint64_t)ASX_CANCEL_PARENT);
-    asx_trace_emit(ASX_TRACE_REGION_CANCELLED, (uint64_t)root, (uint64_t)ASX_CANCEL_USER);
+    asx_trace_emit(test_runtime(), ASX_TRACE_REGION_CANCELLED, (uint64_t)child,
+                   (uint64_t)ASX_CANCEL_PARENT);
+    asx_trace_emit(test_runtime(), ASX_TRACE_REGION_CANCELLED, (uint64_t)root,
+                   (uint64_t)ASX_CANCEL_USER);
     r = check("cancel_signal_ordering");
     ASSERT_EQ((int)r.verdict, (int)ASX_ORACLE_FAIL);
     ASSERT_EQ(r.detail_count, 1u);
@@ -780,8 +782,9 @@ TEST(reply_linearity_names_an_obligation_resolved_twice_or_never_reserved) {
     ASSERT_EQ(asx_task_spawn(rid, poll_reserve_commit, &rid, &t), ASX_OK);
     budget = asx_budget_from_polls(8u);
     ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
-    for (i = 0; i < asx_trace_event_count(); i++) {
-        if (asx_trace_event_get(i, &e) != 0 && e.kind == ASX_TRACE_OBLIGATION_COMMIT) {
+    for (i = 0; i < asx_trace_event_count(test_runtime()); i++) {
+        if (asx_trace_event_get(test_runtime(), i, &e) != 0 &&
+            e.kind == ASX_TRACE_OBLIGATION_COMMIT) {
             oid = e.entity_id;
         }
     }
@@ -790,7 +793,7 @@ TEST(reply_linearity_names_an_obligation_resolved_twice_or_never_reserved) {
 
     /* A second resolution of it: the API answers ALREADY_RESOLVED and
      * records nothing, so an event of one is the violation. */
-    asx_trace_emit(ASX_TRACE_OBLIGATION_ABORT, (uint64_t)oid, 0u);
+    asx_trace_emit(test_runtime(), ASX_TRACE_OBLIGATION_ABORT, (uint64_t)oid, 0u);
     r = check("reply_linearity");
     ASSERT_EQ((int)r.verdict, (int)ASX_ORACLE_FAIL);
     ASSERT_EQ(r.detail_count, 1u);
@@ -798,7 +801,7 @@ TEST(reply_linearity_names_an_obligation_resolved_twice_or_never_reserved) {
 
     /* A resolution with no reservation before it. */
     fresh();
-    asx_trace_emit(ASX_TRACE_OBLIGATION_COMMIT,
+    asx_trace_emit(test_runtime(), ASX_TRACE_OBLIGATION_COMMIT,
                    asx_handle_pack(ASX_TYPE_OBLIGATION, 0u, asx_handle_pack_index(1u, 3u)), 0u);
     r = check("reply_linearity");
     ASSERT_EQ((int)r.verdict, (int)ASX_ORACLE_FAIL);

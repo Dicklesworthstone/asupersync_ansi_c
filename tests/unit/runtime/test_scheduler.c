@@ -355,7 +355,7 @@ TEST(scheduler_trace_emits_round_markers) {
 
     asx_runtime_reset(test_runtime());
     asx_ghost_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
 
     ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_yield_n, &counter, &tid), ASX_OK);
@@ -363,8 +363,8 @@ TEST(scheduler_trace_emits_round_markers) {
     budget = asx_budget_infinite();
     ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
 
-    for (i = 0; i < asx_trace_event_count(); i++) {
-        ASSERT_TRUE(asx_trace_event_get(i, &ev));
+    for (i = 0; i < asx_trace_event_count(test_runtime()); i++) {
+        ASSERT_TRUE(asx_trace_event_get(test_runtime(), i, &ev));
         if (ev.kind != ASX_TRACE_SCHED_ROUND) continue;
 
         ASSERT_EQ(ev.entity_id, (uint64_t)ASX_INVALID_ID);

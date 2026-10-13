@@ -636,12 +636,12 @@ TEST(kernel_clear_leaves_another_held_kernel_and_the_process_state_alone) {
          * log, alone. */
         ASSERT_EQ(asx_region_open(&rt, &region), ASX_OK);
         asx_trace_emit_internal(k2, ASX_TRACE_USER, 7u, 8u);
-        ASSERT_TRUE(asx_trace_emitted_total() != 0u);
+        ASSERT_TRUE(asx_trace_emitted_total(&rt) != 0u);
         ASSERT_TRUE(asx_event_log_count() != 0u);
         asx_runtime_clear_internal(g_kernels[0]);
         ASSERT_EQ(g_kernels[0]->rt_generation, 0u);
         ASSERT_EQ(g_kernels[0]->region_count, 0u);
-        ASSERT_EQ(asx_trace_emitted_total(), (uint64_t)0);
+        ASSERT_EQ(asx_trace_emitted_total(&rt), (uint64_t)0);
         ASSERT_EQ(asx_trace_emitted_total_internal(k2), (uint64_t)1);
         ASSERT_EQ(k2->rt_generation, 9u);
         ASSERT_TRUE(asx_event_log_count() != 0u);
@@ -757,12 +757,12 @@ TEST(kernel_trace_belongs_to_the_kernel) {
     MUST_OK(asx_runtime_init(&rt, &cfg, &hooks));
     asx_trace_reset_internal(g_kernels[0]);
     ASSERT_EQ(asx_trace_digest_internal(g_kernels[0]), seed);
-    ASSERT_EQ(asx_trace_digest(), seed);
+    ASSERT_EQ(asx_trace_digest(&rt), seed);
 
     asx_trace_emit_internal(g_kernels[0], ASX_TRACE_USER, 11u, 22u);
-    asx_trace_emit(ASX_TRACE_USER, 33u, 44u); /* the public call: kernel 0 */
+    asx_trace_emit(&rt, ASX_TRACE_USER, 33u, 44u); /* the public call: kernel 0 */
     ASSERT_EQ(asx_trace_emitted_total_internal(g_kernels[0]), (uint64_t)2);
-    ASSERT_EQ(asx_trace_emitted_total(), (uint64_t)2);
+    ASSERT_EQ(asx_trace_emitted_total(&rt), (uint64_t)2);
     ASSERT_EQ(asx_trace_kind_total_internal(g_kernels[0], ASX_TRACE_USER), (uint64_t)2);
     ASSERT_EQ(asx_trace_event_get_internal(g_kernels[0], 1u, &e), 1);
     ASSERT_EQ(e.entity_id, (uint64_t)33);

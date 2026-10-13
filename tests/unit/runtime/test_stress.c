@@ -26,7 +26,7 @@
 static void reset_all(void) {
     asx_runtime_reset(test_runtime());
     asx_ghost_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     asx_replay_clear_reference();
 }
 
@@ -480,21 +480,23 @@ TEST(trace_ring_high_event_volume) {
 
     reset_all();
 
-    for (i = 0; i < 500; i++) { asx_trace_emit(ASX_TRACE_SCHED_POLL, (uint64_t)i, 0); }
+    for (i = 0; i < 500; i++) {
+        asx_trace_emit(test_runtime(), ASX_TRACE_SCHED_POLL, (uint64_t)i, 0);
+    }
 
-    ASSERT_EQ(asx_trace_event_count(), kept);
-    ASSERT_EQ(asx_trace_emitted_total(), (uint64_t)500u);
+    ASSERT_EQ(asx_trace_event_count(test_runtime()), kept);
+    ASSERT_EQ(asx_trace_emitted_total(test_runtime()), (uint64_t)500u);
 
     /* Digest should be non-zero */
-    digest = asx_trace_digest();
+    digest = asx_trace_digest(test_runtime());
     ASSERT_TRUE(digest != 0);
 
     /* Verify first and last events are readable */
     {
         asx_trace_event ev;
-        ASSERT_TRUE(asx_trace_event_get(0, &ev));
+        ASSERT_TRUE(asx_trace_event_get(test_runtime(), 0, &ev));
         ASSERT_EQ(ev.entity_id, (uint64_t)(500u - kept));
-        ASSERT_TRUE(asx_trace_event_get(kept - 1u, &ev));
+        ASSERT_TRUE(asx_trace_event_get(test_runtime(), kept - 1u, &ev));
         ASSERT_EQ(ev.entity_id, 499u);
     }
 }
@@ -506,16 +508,16 @@ TEST(trace_digest_deterministic_across_resets) {
     /* Run 1 */
     reset_all();
     for (i = 0; i < 100; i++) {
-        asx_trace_emit(ASX_TRACE_SCHED_POLL, (uint64_t)(i * 3), (uint64_t)i);
+        asx_trace_emit(test_runtime(), ASX_TRACE_SCHED_POLL, (uint64_t)(i * 3), (uint64_t)i);
     }
-    d1 = asx_trace_digest();
+    d1 = asx_trace_digest(test_runtime());
 
     /* Run 2 — same sequence */
     reset_all();
     for (i = 0; i < 100; i++) {
-        asx_trace_emit(ASX_TRACE_SCHED_POLL, (uint64_t)(i * 3), (uint64_t)i);
+        asx_trace_emit(test_runtime(), ASX_TRACE_SCHED_POLL, (uint64_t)(i * 3), (uint64_t)i);
     }
-    d2 = asx_trace_digest();
+    d2 = asx_trace_digest(test_runtime());
 
     ASSERT_EQ(d1, d2);
 }

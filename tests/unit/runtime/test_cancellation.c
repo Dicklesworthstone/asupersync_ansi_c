@@ -124,8 +124,8 @@ static uint32_t task_transitions_since(uint32_t from, asx_task_id tid, uint64_t 
     uint32_t i;
     uint32_t n = 0;
     asx_trace_event ev;
-    for (i = from; i < asx_trace_event_count(); i++) {
-        if (!asx_trace_event_get(i, &ev)) continue;
+    for (i = from; i < asx_trace_event_count(test_runtime()); i++) {
+        if (!asx_trace_event_get(test_runtime(), i, &ev)) continue;
         if (ev.kind != ASX_TRACE_TASK_TRANSITION ||
             asx_handle_type_tag(ev.entity_id) != asx_handle_type_tag(tid) ||
             asx_handle_index(ev.entity_id) != asx_handle_index(tid)) {
@@ -159,7 +159,7 @@ TEST(cancel_created_task_goes_straight_to_cancel_requested) {
     ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_checkpoint_then_complete, NULL, &tid), ASX_OK);
 
-    mark = asx_trace_event_count();
+    mark = asx_trace_event_count(test_runtime());
     ASSERT_EQ(asx_task_cancel(tid, ASX_CANCEL_USER), ASX_OK);
     ASSERT_EQ(asx_task_get_state(tid, &state), ASX_OK);
     ASSERT_EQ((int)state, (int)ASX_TASK_CANCEL_REQUESTED);
@@ -199,7 +199,7 @@ TEST(budget_cancel_of_a_created_task_materializes_in_one_step) {
     asx_runtime_virtual_advance(test_runtime(), 10u);
     ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_pending, NULL, &b, &tid), ASX_OK);
 
-    mark = asx_trace_event_count();
+    mark = asx_trace_event_count(test_runtime());
     ASSERT_EQ(asx_checkpoint(tid, &cr), ASX_OK);
     ASSERT_TRUE(cr.cancelled);
     ASSERT_EQ(asx_task_get_state(tid, &state), ASX_OK);
@@ -524,7 +524,7 @@ static asx_status run_acknowledged_cancel(const ack_then_return_cfg *cfg, asx_ta
     SCHED_RUN_IGNORE(rid, &budget); /* Created -> Running; the poll is pending */
     st = asx_task_cancel(*out_tid, ASX_CANCEL_USER);
     if (st != ASX_OK) return st;
-    mark = asx_trace_event_count();
+    mark = asx_trace_event_count(test_runtime());
     budget = asx_budget_from_polls(10);
     SCHED_RUN_IGNORE(rid, &budget);
     *out_n = task_transitions_since(mark, *out_tid, seen, cap);
@@ -1605,8 +1605,8 @@ TEST(region_cancel_closes_subtree_and_chains_parent_reasons) {
     ASSERT_EQ(got.timestamp, (asx_time)5u);
     ASSERT_TRUE(got.message == NULL);
     ASSERT_TRUE(got.cause != NULL && got.cause->kind == ASX_CANCEL_USER);
-    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_REGION_CANCELLED), (uint64_t)2u);
-    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_CANCEL_REQUEST), (uint64_t)2u);
+    ASSERT_EQ(asx_trace_kind_total(test_runtime(), ASX_TRACE_REGION_CANCELLED), (uint64_t)2u);
+    ASSERT_EQ(asx_trace_kind_total(test_runtime(), ASX_TRACE_CANCEL_REQUEST), (uint64_t)2u);
 
     /* Both regions finalize when their last task completes. */
     budget = asx_budget_from_polls(32);
@@ -1615,7 +1615,7 @@ TEST(region_cancel_closes_subtree_and_chains_parent_reasons) {
     ASSERT_EQ((int)rs, (int)ASX_REGION_CLOSED);
     ASSERT_EQ(asx_region_get_state(parent, &rs), ASX_OK);
     ASSERT_EQ((int)rs, (int)ASX_REGION_CLOSED);
-    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_REGION_CLOSED), (uint64_t)2u);
+    ASSERT_EQ(asx_trace_kind_total(test_runtime(), ASX_TRACE_REGION_CLOSED), (uint64_t)2u);
 }
 
 TEST(region_cancel_of_an_idle_region_finalizes_at_once) {
@@ -1658,7 +1658,7 @@ TEST(cancel_strengthen_replaces_the_whole_reason_and_records_no_event) {
     ASSERT_EQ(asx_task_cancel_with_reason(tid, &weak), ASX_OK);
     ASSERT_EQ(asx_task_get_cancel_reason(tid, &got), ASX_OK);
     ASSERT_EQ((int)got.kind, (int)ASX_CANCEL_SHUTDOWN);
-    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_CANCEL_REQUEST), (uint64_t)0u);
+    ASSERT_EQ(asx_trace_kind_total(test_runtime(), ASX_TRACE_CANCEL_REQUEST), (uint64_t)0u);
 }
 
 TEST(region_cancel_records_one_request_per_newly_cancelled_task) {
@@ -1679,12 +1679,12 @@ TEST(region_cancel_records_one_request_per_newly_cancelled_task) {
     strong = test_reason(ASX_CANCEL_SHUTDOWN, rid, 20u, "stop");
     ASSERT_EQ(asx_region_cancel(rid, &weak, &reached), ASX_OK);
     ASSERT_EQ(reached, 1u);
-    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_CANCEL_REQUEST), (uint64_t)1u);
+    ASSERT_EQ(asx_trace_kind_total(test_runtime(), ASX_TRACE_CANCEL_REQUEST), (uint64_t)1u);
     ASSERT_EQ(asx_task_cancel_with_reason(tid, &strong), ASX_OK);
     ASSERT_EQ(asx_region_cancel(rid, &strong, &reached), ASX_OK);
     ASSERT_EQ(asx_task_get_cancel_reason(tid, &got), ASX_OK);
     ASSERT_EQ((int)got.kind, (int)ASX_CANCEL_SHUTDOWN);
-    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_CANCEL_REQUEST), (uint64_t)1u);
+    ASSERT_EQ(asx_trace_kind_total(test_runtime(), ASX_TRACE_CANCEL_REQUEST), (uint64_t)1u);
 }
 
 TEST(witness_of_a_cancelled_task_carries_its_task_region_and_epoch) {
@@ -2076,7 +2076,7 @@ TEST(budget_cancel_is_attributed_to_the_task_and_records_no_request) {
     ASSERT_EQ((int)got.kind, (int)ASX_CANCEL_POLL_QUOTA);
     ASSERT_EQ(got.origin_region, rid);
     ASSERT_TRUE(asx_handle_index(got.origin_task) == asx_handle_index(tid));
-    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_CANCEL_REQUEST), (uint64_t)0u);
+    ASSERT_EQ(asx_trace_kind_total(test_runtime(), ASX_TRACE_CANCEL_REQUEST), (uint64_t)0u);
 }
 
 /* The obligations are held by the task that runs this, and only its poll
@@ -2356,9 +2356,9 @@ TEST(cancel_request_newly_cancels_a_record_with_a_pending_budget_cancel) {
     ASSERT_EQ(spend_masked(&rid, &tid), ASX_E_WOULD_BLOCK);
     /* A region cancel newly cancels the record (a cancel.requested event),
      * its reason the stronger of the two: Shutdown over PollQuota. */
-    requests_before = asx_trace_kind_total(ASX_TRACE_CANCEL_REQUEST);
+    requests_before = asx_trace_kind_total(test_runtime(), ASX_TRACE_CANCEL_REQUEST);
     ASSERT_EQ(asx_cancel_propagate(rid, ASX_CANCEL_SHUTDOWN), (uint32_t)1);
-    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_CANCEL_REQUEST), requests_before + 1u);
+    ASSERT_EQ(asx_trace_kind_total(test_runtime(), ASX_TRACE_CANCEL_REQUEST), requests_before + 1u);
     ASSERT_EQ(asx_task_get_state(tid, &state), ASX_OK);
     ASSERT_EQ((int)state, (int)ASX_TASK_CANCEL_REQUESTED);
     ASSERT_EQ(asx_task_get_cancel_reason(tid, &r), ASX_OK);
@@ -2450,7 +2450,7 @@ TEST(scheduler_refuses_to_complete_a_task_whose_state_is_corrupt) {
     ASSERT_EQ(asx_task_slot_lookup(tid, &slot), ASX_OK);
     slot->state = (asx_task_state)6;
 
-    mark = asx_trace_event_count();
+    mark = asx_trace_event_count(test_runtime());
     budget = asx_budget_from_polls(4);
     ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_task_slot_lookup(tid, &slot), ASX_OK);

@@ -390,7 +390,7 @@ TEST(scenario_tracks_scheduler_polls) {
     memset(&state, 0, sizeof(state));
     asx_lab_config_init(&cfg);
     MUST_OK(asx_lab_init(&lab, &cfg));
-    asx_trace_reset();
+    asx_trace_reset(&lab.rt);
     asx_lab_scenario_init(&sc, "poll-count");
     MUST_OK(asx_lab_scenario_add_step(&sc, step_run_two_polls, &state));
 
@@ -412,7 +412,7 @@ TEST(scenario_enforces_max_polls_per_step) {
     asx_lab_config_init(&cfg);
     cfg.max_polls = 1u;
     MUST_OK(asx_lab_init(&lab, &cfg));
-    asx_trace_reset();
+    asx_trace_reset(&lab.rt);
     asx_lab_scenario_init(&sc, "poll-budget");
     MUST_OK(asx_lab_scenario_add_step(&sc, step_run_two_polls, &state));
 
@@ -711,7 +711,7 @@ TEST(lab_run_scenario_dispatches_in_the_seeds_order) {
     asx_lab_config_init(&cfg);
     cfg.seed = 1u;
     MUST_OK(asx_lab_init(&lab, &cfg));
-    asx_trace_reset();
+    asx_trace_reset(&lab.rt);
     asx_lab_scenario_init(&sc, "race");
     MUST_OK(asx_lab_scenario_add_step(&sc, step_race, &r));
 

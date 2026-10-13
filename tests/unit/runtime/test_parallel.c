@@ -1071,7 +1071,7 @@ TEST(parallel_multi_worker_trace_matches_single_worker) {
     asx_trace_event single_events[96];
 
     reset_all();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     c1 = 2;
     c2 = 1;
     c3 = 0;
@@ -1084,13 +1084,15 @@ TEST(parallel_multi_worker_trace_matches_single_worker) {
     budget = asx_budget_from_polls(100);
     ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
 
-    single_count = asx_trace_event_count();
+    single_count = asx_trace_event_count(test_runtime());
     ASSERT_TRUE(single_count > 0u);
     ASSERT_TRUE(single_count <= 96u);
-    for (i = 0; i < single_count; i++) { ASSERT_TRUE(asx_trace_event_get(i, &single_events[i])); }
+    for (i = 0; i < single_count; i++) {
+        ASSERT_TRUE(asx_trace_event_get(test_runtime(), i, &single_events[i]));
+    }
 
     reset_all();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     c1 = 2;
     c2 = 1;
     c3 = 0;
@@ -1103,10 +1105,10 @@ TEST(parallel_multi_worker_trace_matches_single_worker) {
     budget = asx_budget_from_polls(100);
     ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
 
-    ASSERT_EQ(asx_trace_event_count(), single_count);
+    ASSERT_EQ(asx_trace_event_count(test_runtime()), single_count);
     for (i = 0; i < single_count; i++) {
         asx_trace_event ev;
-        ASSERT_TRUE(asx_trace_event_get(i, &ev));
+        ASSERT_TRUE(asx_trace_event_get(test_runtime(), i, &ev));
         ASSERT_EQ((int)ev.kind, (int)single_events[i].kind);
         ASSERT_EQ(ev.entity_id, single_events[i].entity_id);
         ASSERT_EQ(ev.aux, single_events[i].aux);
@@ -1178,7 +1180,7 @@ TEST(parallel_single_worker_trace_matches_core_scheduler) {
 
     /* Core scheduler run. */
     reset_all();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     c1 = 1;
     c2 = 1;
     ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
@@ -1187,14 +1189,16 @@ TEST(parallel_single_worker_trace_matches_core_scheduler) {
     budget = asx_budget_from_polls(100);
     ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
 
-    core_count = asx_trace_event_count();
+    core_count = asx_trace_event_count(test_runtime());
     ASSERT_TRUE(core_count > 0u);
     ASSERT_TRUE(core_count <= 64u);
-    for (i = 0; i < core_count; i++) { ASSERT_TRUE(asx_trace_event_get(i, &core_events[i])); }
+    for (i = 0; i < core_count; i++) {
+        ASSERT_TRUE(asx_trace_event_get(test_runtime(), i, &core_events[i]));
+    }
 
     /* Parallel single-worker run with identical setup. */
     reset_all();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     c1 = 1;
     c2 = 1;
     ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
@@ -1204,10 +1208,10 @@ TEST(parallel_single_worker_trace_matches_core_scheduler) {
     budget = asx_budget_from_polls(100);
     ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
 
-    ASSERT_EQ(asx_trace_event_count(), core_count);
+    ASSERT_EQ(asx_trace_event_count(test_runtime()), core_count);
     for (i = 0; i < core_count; i++) {
         asx_trace_event ev;
-        ASSERT_TRUE(asx_trace_event_get(i, &ev));
+        ASSERT_TRUE(asx_trace_event_get(test_runtime(), i, &ev));
         ASSERT_EQ((int)ev.kind, (int)core_events[i].kind);
         ASSERT_EQ(ev.entity_id, core_events[i].entity_id);
         ASSERT_EQ(ev.aux, core_events[i].aux);
@@ -1375,7 +1379,7 @@ TEST(parallel_worker_sharded_trace_matches_compact) {
     asx_trace_event compact_events[96];
 
     reset_all();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     c1 = 2;
     c2 = 1;
     c3 = 0;
@@ -1388,13 +1392,15 @@ TEST(parallel_worker_sharded_trace_matches_compact) {
     budget = asx_budget_from_polls(100);
     ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
 
-    compact_count = asx_trace_event_count();
+    compact_count = asx_trace_event_count(test_runtime());
     ASSERT_TRUE(compact_count > 0u);
     ASSERT_TRUE(compact_count <= 96u);
-    for (i = 0; i < compact_count; i++) { ASSERT_TRUE(asx_trace_event_get(i, &compact_events[i])); }
+    for (i = 0; i < compact_count; i++) {
+        ASSERT_TRUE(asx_trace_event_get(test_runtime(), i, &compact_events[i]));
+    }
 
     reset_all();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     c1 = 2;
     c2 = 1;
     c3 = 0;
@@ -1410,10 +1416,10 @@ TEST(parallel_worker_sharded_trace_matches_compact) {
     budget = asx_budget_from_polls(100);
     ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
 
-    ASSERT_EQ(asx_trace_event_count(), compact_count);
+    ASSERT_EQ(asx_trace_event_count(test_runtime()), compact_count);
     for (i = 0; i < compact_count; i++) {
         asx_trace_event ev;
-        ASSERT_TRUE(asx_trace_event_get(i, &ev));
+        ASSERT_TRUE(asx_trace_event_get(test_runtime(), i, &ev));
         ASSERT_EQ((int)ev.kind, (int)compact_events[i].kind);
         ASSERT_EQ(ev.entity_id, compact_events[i].entity_id);
         ASSERT_EQ(ev.aux, compact_events[i].aux);

@@ -23,6 +23,7 @@
 #endif
 
 #include "../../test_harness.h"
+#include "../../test_runtime.h"
 #include <asx/asx.h>
 #include <asx/runtime/journal.h>
 #include <asx/runtime/journal_replay.h>
@@ -725,12 +726,12 @@ static int record_clocks(uint32_t n, uint32_t chain_every, uint64_t *times) {
     uint32_t i;
     g_fake_clock = 0u;
     fake_table(&hooks);
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     if (open_journal(&j, chain_every) != ASX_OK) return 0;
     if (asx_journal_wrap_hooks(&j, &hooks) != ASX_OK) return 0;
     for (i = 0; i < n; i++) {
         times[i] = (uint64_t)hooks.clock.now_ns_fn(hooks.clock.ctx);
-        asx_trace_emit(ASX_TRACE_SCHED_POLL, (uint64_t)i, 0u);
+        asx_trace_emit(test_runtime(), ASX_TRACE_SCHED_POLL, (uint64_t)i, 0u);
     }
     asx_journal_uninstall();
     return asx_journal_finish(&j) == ASX_OK;
@@ -741,10 +742,10 @@ static int record_clocks(uint32_t n, uint32_t chain_every, uint64_t *times) {
 static void replay_clocks(const asx_runtime_hooks *hooks, uint32_t n, uint64_t *times,
                           uint64_t bias) {
     uint32_t i;
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     for (i = 0; i < n; i++) {
         times[i] = (uint64_t)hooks->clock.now_ns_fn(hooks->clock.ctx);
-        asx_trace_emit(ASX_TRACE_SCHED_POLL, (uint64_t)i + bias, 0u);
+        asx_trace_emit(test_runtime(), ASX_TRACE_SCHED_POLL, (uint64_t)i + bias, 0u);
     }
 }
 
@@ -827,7 +828,7 @@ TEST(a_log_the_watchdog_store_wrote_is_cut_between_checkpoints_and_replays_its_p
 
     g_fake_clock = 0u;
     fake_table(&hooks);
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     asx_journal_uninstall();
     g_out_len = 0u;
     ASSERT_EQ(asx_journal_wdog_init(&w, ring, (uint32_t)sizeof(ring), log_write, NULL,
@@ -849,7 +850,7 @@ TEST(a_log_the_watchdog_store_wrote_is_cut_between_checkpoints_and_replays_its_p
     ASSERT_EQ(asx_journal_wrap_hooks(&j, &hooks), ASX_OK);
     for (i = 0; i < 10u; i++) {
         rec_t[i] = (uint64_t)hooks.clock.now_ns_fn(hooks.clock.ctx);
-        asx_trace_emit(ASX_TRACE_SCHED_POLL, (uint64_t)i, 0u);
+        asx_trace_emit(test_runtime(), ASX_TRACE_SCHED_POLL, (uint64_t)i, 0u);
     }
     asx_journal_uninstall(); /* the process dies here: no finish */
 
@@ -1019,7 +1020,7 @@ TEST(a_recovery_replay_checks_identity_and_only_the_prefix_s_records) {
      * (5-6), chain (7). Reads kept as a hash cannot be served. */
     g_fake_clock = 0u;
     fake_table(&hooks);
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     ASSERT_EQ(open_journal_flags(&j, 3u, ASX_JOURNAL_FLAG_SHAPE), ASX_OK);
     ASSERT_EQ(asx_journal_wrap_hooks(&j, &hooks), ASX_OK);
     (void)hooks.clock.now_ns_fn(hooks.clock.ctx);
@@ -1135,7 +1136,7 @@ static asx_status run_program(program_obs *o, int reordered) {
     budget = asx_budget_from_polls(1000u);
     o->run_st = asx_scheduler_run(region, &budget);
     st = asx_runtime_now_ns(test_runtime(), &o->t1);
-    o->digest = asx_trace_digest();
+    o->digest = asx_trace_digest(test_runtime());
     return st;
 }
 
@@ -2083,7 +2084,7 @@ static asx_status tcp_program(void *obs) {
     o->run_st = asx_scheduler_run(region, &budget);
     o->reply_len = c->reply_len;
     memcpy(o->reply, c->reply, c->reply_len <= sizeof(o->reply) ? c->reply_len : 0u);
-    o->digest = asx_trace_digest();
+    o->digest = asx_trace_digest(test_runtime());
     return asx_tcp_listener_close(s->listener);
 }
 
@@ -2216,7 +2217,7 @@ static asx_status job_program(void *obs) {
     o->resolve_status = w->resolve_status;
     o->addr_count = w->addr_count;
     o->addr_port = w->addr_port;
-    o->digest = asx_trace_digest();
+    o->digest = asx_trace_digest(test_runtime());
     return ASX_OK;
 }
 

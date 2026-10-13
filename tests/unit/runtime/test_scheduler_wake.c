@@ -691,7 +691,7 @@ TEST(sleep_ends_early_on_a_user_cancel_and_drops_its_timer) {
     ASSERT_EQ(asx_sleep_init(&s->sleep, 3600u * 1000u * MS), ASX_OK);
     budget = asx_budget_from_polls(100);
     ASSERT_EQ(asx_scheduler_run_until_idle(r, &budget), ASX_E_PENDING);
-    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_TIMER_SET), (uint64_t)1u);
+    ASSERT_EQ(asx_trace_kind_total(&g_rt, ASX_TRACE_TIMER_SET), (uint64_t)1u);
 
     /* A User cancel wakes the sleeper, which acknowledges it and ends
      * without waiting for its hour (Rust Sleep is a cancellation point). */
@@ -700,8 +700,8 @@ TEST(sleep_ends_early_on_a_user_cancel_and_drops_its_timer) {
     ASSERT_EQ(asx_runtime_virtual_now(&g_rt), (asx_time)0);
     ASSERT_EQ(asx_task_get_outcome(t, &out), ASX_OK);
     ASSERT_EQ((int)asx_outcome_severity_of(&out), (int)ASX_OUTCOME_CANCELLED);
-    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_TIMER_CANCEL), (uint64_t)1u);
-    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_TIMER_FIRE), (uint64_t)0u);
+    ASSERT_EQ(asx_trace_kind_total(&g_rt, ASX_TRACE_TIMER_CANCEL), (uint64_t)1u);
+    ASSERT_EQ(asx_trace_kind_total(&g_rt, ASX_TRACE_TIMER_FIRE), (uint64_t)0u);
 }
 
 TEST(sleep_records_how_it_ended_not_when_its_timer_woke_it) {
@@ -726,8 +726,8 @@ TEST(sleep_records_how_it_ended_not_when_its_timer_woke_it) {
     asx_runtime_virtual_advance(&g_rt, 50u); /* due, not yet fired */
     ASSERT_EQ(asx_task_cancel(t, ASX_CANCEL_SHUTDOWN), ASX_OK);
     ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
-    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_TIMER_FIRE), (uint64_t)0u);
-    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_TIMER_CANCEL), (uint64_t)1u);
+    ASSERT_EQ(asx_trace_kind_total(&g_rt, ASX_TRACE_TIMER_FIRE), (uint64_t)0u);
+    ASSERT_EQ(asx_trace_kind_total(&g_rt, ASX_TRACE_TIMER_CANCEL), (uint64_t)1u);
 
     /* Control: no cancel, the sleep completes at its deadline: fired. */
     setup();
@@ -738,8 +738,8 @@ TEST(sleep_records_how_it_ended_not_when_its_timer_woke_it) {
     ASSERT_EQ(asx_sleep_init(&s->sleep, 50u), ASX_OK);
     budget = asx_budget_from_polls(100);
     ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
-    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_TIMER_FIRE), (uint64_t)1u);
-    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_TIMER_CANCEL), (uint64_t)0u);
+    ASSERT_EQ(asx_trace_kind_total(&g_rt, ASX_TRACE_TIMER_FIRE), (uint64_t)1u);
+    ASSERT_EQ(asx_trace_kind_total(&g_rt, ASX_TRACE_TIMER_CANCEL), (uint64_t)0u);
 }
 
 TEST(deadline_cancelled_sleeper_sleeps_to_its_own_deadline) {
@@ -767,9 +767,9 @@ TEST(deadline_cancelled_sleeper_sleeps_to_its_own_deadline) {
     budget = asx_budget_from_polls(1000);
     ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
     ASSERT_EQ(asx_runtime_virtual_now(&g_rt), (asx_time)200u);
-    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_TIMER_FIRE), (uint64_t)1u);
-    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_TIMER_CANCEL), (uint64_t)0u);
-    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_CANCEL_REQUEST), (uint64_t)0u);
+    ASSERT_EQ(asx_trace_kind_total(&g_rt, ASX_TRACE_TIMER_FIRE), (uint64_t)1u);
+    ASSERT_EQ(asx_trace_kind_total(&g_rt, ASX_TRACE_TIMER_CANCEL), (uint64_t)0u);
+    ASSERT_EQ(asx_trace_kind_total(&g_rt, ASX_TRACE_CANCEL_REQUEST), (uint64_t)0u);
     ASSERT_EQ(asx_task_get_cancel_reason(t, &reason), ASX_OK);
     ASSERT_EQ((int)reason.kind, (int)ASX_CANCEL_DEADLINE);
     ASSERT_EQ(reason.timestamp, (asx_time)100u);

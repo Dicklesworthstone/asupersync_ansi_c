@@ -6,6 +6,7 @@
  */
 
 #include "../../test_harness.h"
+#include "../../test_runtime.h"
 #include <asx/runtime/replay.h>
 #include <asx/runtime/runtime.h>
 
@@ -346,18 +347,18 @@ TEST(replay_render_current_diff_json_reports_mismatch_context) {
     asx_trace_event ref[2];
     asx_report_buf out;
 
-    asx_trace_reset();
-    asx_trace_emit(ASX_TRACE_SCHED_POLL, 1u, 0u);
-    asx_trace_emit(ASX_TRACE_SCHED_COMPLETE, 1u, 0u);
-    ASSERT_TRUE(asx_trace_event_get(0u, &ref[0]));
-    ASSERT_TRUE(asx_trace_event_get(1u, &ref[1]));
+    asx_trace_reset(test_runtime());
+    asx_trace_emit(test_runtime(), ASX_TRACE_SCHED_POLL, 1u, 0u);
+    asx_trace_emit(test_runtime(), ASX_TRACE_SCHED_COMPLETE, 1u, 0u);
+    ASSERT_TRUE(asx_trace_event_get(test_runtime(), 0u, &ref[0]));
+    ASSERT_TRUE(asx_trace_event_get(test_runtime(), 1u, &ref[1]));
     MUST_OK(asx_replay_load_reference(ref, 2u));
 
-    asx_trace_reset();
-    asx_trace_emit(ASX_TRACE_SCHED_POLL, 1u, 0u);
-    asx_trace_emit(ASX_TRACE_SCHED_BUDGET, 1u, 0u);
+    asx_trace_reset(test_runtime());
+    asx_trace_emit(test_runtime(), ASX_TRACE_SCHED_POLL, 1u, 0u);
+    asx_trace_emit(test_runtime(), ASX_TRACE_SCHED_BUDGET, 1u, 0u);
 
-    MUST_OK(asx_replay_render_current_diff_json(&out));
+    MUST_OK(asx_replay_render_current_diff_json(test_runtime(), &out));
     ASSERT_TRUE(strstr(asx_report_buf_cstr(&out), "\"reference_loaded\":true") != NULL);
     ASSERT_TRUE(strstr(asx_report_buf_cstr(&out), "\"current_count\":2") != NULL);
     ASSERT_TRUE(strstr(asx_report_buf_cstr(&out), "\"result\":\"kind_mismatch\"") != NULL);

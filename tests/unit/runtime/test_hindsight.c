@@ -29,7 +29,7 @@ TEST(hindsight_log_single_event) {
     asx_hindsight_event ev;
 
     asx_hindsight_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
 
     asx_hindsight_log(ASX_ND_CLOCK_READ, 0x1000, 42);
 
@@ -49,10 +49,10 @@ TEST(hindsight_log_multiple_events) {
     asx_hindsight_event ev;
 
     asx_hindsight_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
 
     asx_hindsight_log(ASX_ND_CLOCK_READ, 0x10, 100);
-    asx_trace_emit(ASX_TRACE_SCHED_POLL, 0x20, 0);
+    asx_trace_emit(test_runtime(), ASX_TRACE_SCHED_POLL, 0x20, 0);
     asx_hindsight_log(ASX_ND_ENTROPY_READ, 0x20, 200);
     asx_hindsight_log(ASX_ND_IO_READY, 0x30, 300);
 
@@ -82,7 +82,7 @@ TEST(hindsight_monotonic_sequence) {
     uint32_t i;
 
     asx_hindsight_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
 
     for (i = 0; i < 10; i++) { asx_hindsight_log(ASX_ND_CLOCK_READ, 0, (uint64_t)i); }
 
@@ -103,7 +103,7 @@ TEST(hindsight_wraps_at_capacity) {
     asx_hindsight_event ev;
 
     asx_hindsight_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
 
     /* Fill ring exactly to capacity */
     for (i = 0; i < ASX_HINDSIGHT_CAPACITY; i++) {
@@ -136,7 +136,7 @@ TEST(hindsight_heavy_wrapping) {
     uint32_t expected_oldest;
 
     asx_hindsight_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
 
     /* Write 3x capacity */
     for (i = 0; i < ASX_HINDSIGHT_CAPACITY * 3u; i++) {
@@ -174,7 +174,7 @@ TEST(hindsight_get_oob_after_wrap) {
     uint32_t i;
 
     asx_hindsight_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
 
     for (i = 0; i < ASX_HINDSIGHT_CAPACITY + 10u; i++) {
         asx_hindsight_log(ASX_ND_CLOCK_READ, 0, (uint64_t)i);
@@ -190,7 +190,7 @@ TEST(hindsight_all_event_kinds) {
     asx_hindsight_event ev;
 
     asx_hindsight_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
 
     asx_hindsight_log(ASX_ND_CLOCK_READ, 0, 1);
     asx_hindsight_log(ASX_ND_CLOCK_SKEW, 0, 2);
@@ -235,7 +235,7 @@ TEST(hindsight_digest_deterministic) {
 
     /* Run 1 */
     asx_hindsight_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     for (i = 0; i < 5; i++) {
         asx_hindsight_log(ASX_ND_CLOCK_READ, (uint64_t)i, (uint64_t)(i * 100));
     }
@@ -243,7 +243,7 @@ TEST(hindsight_digest_deterministic) {
 
     /* Run 2 — identical events */
     asx_hindsight_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     for (i = 0; i < 5; i++) {
         asx_hindsight_log(ASX_ND_CLOCK_READ, (uint64_t)i, (uint64_t)(i * 100));
     }
@@ -256,12 +256,12 @@ TEST(hindsight_digest_differs_on_different_input) {
     uint64_t d1, d2;
 
     asx_hindsight_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     asx_hindsight_log(ASX_ND_CLOCK_READ, 0, 42);
     d1 = asx_hindsight_digest();
 
     asx_hindsight_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     asx_hindsight_log(ASX_ND_CLOCK_READ, 0, 43);
     d2 = asx_hindsight_digest();
 
@@ -274,7 +274,7 @@ static uint64_t hindsight_digest_of_run(uint32_t total, uint32_t perturb_at) {
     uint32_t i;
 
     asx_hindsight_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     for (i = 0; i < total; i++) {
         asx_hindsight_log(ASX_ND_CLOCK_READ, (uint64_t)i,
                           i == perturb_at ? (uint64_t)0xBADu : (uint64_t)i);
@@ -320,12 +320,12 @@ TEST(hindsight_digest_within_capacity_is_fold_of_readable_events) {
     uint32_t i;
 
     asx_hindsight_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     for (i = 0; i < n; i++) {
         asx_hindsight_event ev;
 
         /* Interleave trace events so trace_seq takes several values */
-        if (i % 3u == 0u) asx_trace_emit(ASX_TRACE_SCHED_POLL, (uint64_t)i, 0);
+        if (i % 3u == 0u) asx_trace_emit(test_runtime(), ASX_TRACE_SCHED_POLL, (uint64_t)i, 0);
         asx_hindsight_log((i % 2u == 0u) ? ASX_ND_CLOCK_READ : ASX_ND_ENTROPY_READ,
                           (uint64_t)i << 20, ~(uint64_t)i);
         ASSERT_TRUE(asx_hindsight_get(i, &ev));
@@ -350,7 +350,7 @@ TEST(hindsight_digest_matches_byte_reference_across_wraps_and_reads) {
     uint32_t i;
 
     asx_hindsight_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     for (i = 0; i < total; i++) {
         asx_nd_event_kind kind = (i % 3u == 0u)   ? ASX_ND_CLOCK_READ
                                  : (i % 3u == 1u) ? ASX_ND_ENTROPY_READ
@@ -359,8 +359,8 @@ TEST(hindsight_digest_matches_byte_reference_across_wraps_and_reads) {
         uint64_t observed = (i % 5u == 0u) ? 0u : ((uint64_t)i << 40) | (uint64_t)i;
         uint32_t trace_seq;
 
-        if (i % 3u == 0u) asx_trace_emit(ASX_TRACE_SCHED_POLL, (uint64_t)i, 0u);
-        trace_seq = (uint32_t)(asx_trace_emitted_total() & 0xFFFFFFFFu);
+        if (i % 3u == 0u) asx_trace_emit(test_runtime(), ASX_TRACE_SCHED_POLL, (uint64_t)i, 0u);
+        trace_seq = (uint32_t)(asx_trace_emitted_total(test_runtime()) & 0xFFFFFFFFu);
         asx_hindsight_log(kind, entity, observed);
 
         expected = hs_ref_fnv_le(expected, i, 4u);
@@ -382,9 +382,9 @@ TEST(hindsight_digest_matches_byte_reference_across_wraps_and_reads) {
 
     /* never read until the end */
     asx_hindsight_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     for (i = 0; i < total; i++) {
-        if (i % 3u == 0u) asx_trace_emit(ASX_TRACE_SCHED_POLL, (uint64_t)i, 0u);
+        if (i % 3u == 0u) asx_trace_emit(test_runtime(), ASX_TRACE_SCHED_POLL, (uint64_t)i, 0u);
         asx_hindsight_log((i % 3u == 0u)   ? ASX_ND_CLOCK_READ
                           : (i % 3u == 1u) ? ASX_ND_ENTROPY_READ
                                            : ASX_ND_IO_READY,
@@ -422,7 +422,7 @@ TEST(hindsight_flush_json_with_events) {
     asx_status st;
 
     asx_hindsight_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
 
     asx_hindsight_log(ASX_ND_CLOCK_READ, 0x1234, 42);
     asx_hindsight_log(ASX_ND_ENTROPY_READ, 0x5678, 99);
@@ -451,7 +451,7 @@ TEST(hindsight_flush_json_after_wrap) {
     uint32_t i;
 
     asx_hindsight_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
 
     /* Fill past capacity */
     for (i = 0; i < ASX_HINDSIGHT_CAPACITY + 5u; i++) {
@@ -483,7 +483,7 @@ TEST(hindsight_flush_on_divergence_with_events) {
     asx_status st;
 
     asx_hindsight_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
 
     asx_hindsight_log(ASX_ND_CLOCK_READ, 0, 42);
 
@@ -519,12 +519,12 @@ TEST(hindsight_trace_seq_tracks_trace_count) {
     asx_hindsight_event ev;
 
     asx_hindsight_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
 
     /* Emit 3 trace events, then log a hindsight event */
-    asx_trace_emit(ASX_TRACE_SCHED_POLL, 0, 0);
-    asx_trace_emit(ASX_TRACE_SCHED_POLL, 0, 0);
-    asx_trace_emit(ASX_TRACE_SCHED_POLL, 0, 0);
+    asx_trace_emit(test_runtime(), ASX_TRACE_SCHED_POLL, 0, 0);
+    asx_trace_emit(test_runtime(), ASX_TRACE_SCHED_POLL, 0, 0);
+    asx_trace_emit(test_runtime(), ASX_TRACE_SCHED_POLL, 0, 0);
 
     asx_hindsight_log(ASX_ND_CLOCK_READ, 0, 42);
 
@@ -536,7 +536,7 @@ TEST(hindsight_trace_seq_tracks_trace_count) {
 
 TEST(hindsight_reset_clears_all) {
     asx_hindsight_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
 
     asx_hindsight_log(ASX_ND_CLOCK_READ, 0, 1);
     asx_hindsight_log(ASX_ND_CLOCK_READ, 0, 2);
@@ -555,13 +555,13 @@ TEST(hindsight_deterministic_scenario_zero_events) {
      * events should be logged. This proves that deterministic code
      * paths produce zero hindsight entries. */
     asx_hindsight_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
 
     /* Only trace (deterministic) events */
-    asx_trace_emit(ASX_TRACE_REGION_OPEN, 0x1, 0);
-    asx_trace_emit(ASX_TRACE_TASK_SPAWN, 0x2, 0x1);
-    asx_trace_emit(ASX_TRACE_SCHED_POLL, 0x2, 0);
-    asx_trace_emit(ASX_TRACE_SCHED_COMPLETE, 0x2, 0);
+    asx_trace_emit(test_runtime(), ASX_TRACE_REGION_OPEN, 0x1, 0);
+    asx_trace_emit(test_runtime(), ASX_TRACE_TASK_SPAWN, 0x2, 0x1);
+    asx_trace_emit(test_runtime(), ASX_TRACE_SCHED_POLL, 0x2, 0);
+    asx_trace_emit(test_runtime(), ASX_TRACE_SCHED_COMPLETE, 0x2, 0);
 
     /* Hindsight ring must remain empty */
     ASSERT_EQ(asx_hindsight_total_count(), (uint32_t)0);
@@ -581,7 +581,7 @@ TEST(hindsight_clock_read_produces_event) {
     asx_time now;
 
     asx_hindsight_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     setup_hooks();
 
     /* Clock read should log a hindsight event */
@@ -598,7 +598,7 @@ TEST(hindsight_entropy_read_produces_event) {
     uint64_t val;
 
     asx_hindsight_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     setup_hooks();
 
     /* Entropy read should log a hindsight event */
@@ -615,7 +615,7 @@ TEST(hindsight_multiple_hook_calls_accumulate) {
     uint64_t val;
 
     asx_hindsight_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     setup_hooks();
 
     ASSERT_EQ(asx_runtime_now_ns(test_runtime(), &now), ASX_OK);
@@ -639,7 +639,7 @@ TEST(hindsight_policy_disables_divergence_flush) {
     asx_status st;
 
     asx_hindsight_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     asx_hindsight_log(ASX_ND_CLOCK_READ, 0, 42);
 
     /* Disable divergence flush */
@@ -665,7 +665,7 @@ TEST(hindsight_policy_disables_invariant_flush) {
     asx_status st;
 
     asx_hindsight_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     asx_hindsight_log(ASX_ND_CLOCK_READ, 0, 42);
 
     /* Even with events, invariant flush should be pending when no
@@ -684,7 +684,7 @@ TEST(hindsight_check_divergence_same_digest) {
     uint64_t digest;
 
     asx_hindsight_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     asx_hindsight_log(ASX_ND_CLOCK_READ, 0, 42);
 
     digest = asx_hindsight_digest();
@@ -693,7 +693,7 @@ TEST(hindsight_check_divergence_same_digest) {
 
 TEST(hindsight_check_divergence_different_digest) {
     asx_hindsight_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     asx_hindsight_log(ASX_ND_CLOCK_READ, 0, 42);
 
     /* Pass wrong digest — should detect divergence */
@@ -702,7 +702,7 @@ TEST(hindsight_check_divergence_different_digest) {
 
 TEST(hindsight_check_divergence_empty_ring) {
     asx_hindsight_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
 
     /* Empty ring digest = FNV offset basis */
     ASSERT_FALSE(asx_hindsight_check_divergence(0x517cc1b727220a95ULL));
@@ -718,7 +718,7 @@ TEST(hindsight_hook_events_digest_stable_across_runs) {
 
     /* Run 1 */
     asx_hindsight_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     setup_hooks();
     (void)asx_runtime_now_ns(test_runtime(), &now);
     (void)asx_runtime_random_u64(test_runtime(), &val);
@@ -730,7 +730,7 @@ TEST(hindsight_hook_events_digest_stable_across_runs) {
      * but the ring content digest should differ from run 1 because
      * the entropy values advanced. Verify digest is nonzero. */
     asx_hindsight_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     d2 = asx_hindsight_digest();
 
     /* After reset, digest should be FNV offset basis */

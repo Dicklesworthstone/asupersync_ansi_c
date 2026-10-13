@@ -129,11 +129,11 @@ static asx_status poll_authority_thief(void *ud, asx_task_id self) {
     if (p->obligation == ASX_INVALID_ID) return ASX_E_PENDING;
     st = asx_obligation_get_info(p->obligation, &p->before);
     if (st != ASX_OK) return st;
-    p->trace_before = asx_trace_digest();
+    p->trace_before = asx_trace_digest(&g_rt);
     p->commit_status = asx_obligation_commit(p->obligation);
     p->abort_status = asx_obligation_abort(p->obligation);
     p->drop_status = asx_obligation_drop(p->obligation);
-    p->trace_after = asx_trace_digest();
+    p->trace_after = asx_trace_digest(&g_rt);
     st = asx_obligation_get_info(p->obligation, &p->after);
     if (st != ASX_OK) return st;
     p->inspected = 1;
@@ -242,14 +242,14 @@ static asx_status poll_handoff_source(void *ud, asx_task_id self) {
         p->exhausted_status = asx_obligation_reserve(p->source_region, &extra);
     }
     p->count_before = asx_runtime_obligation_count(&g_rt);
-    p->trace_before = asx_trace_digest();
+    p->trace_before = asx_trace_digest(&g_rt);
     p->transfer_status = asx_obligation_handoff(p->obligation, p->destination);
-    p->trace_after = asx_trace_digest();
+    p->trace_after = asx_trace_digest(&g_rt);
     st = asx_obligation_get_info(p->obligation, &p->after);
     if (st != ASX_OK) return st;
     p->count_after = asx_runtime_obligation_count(&g_rt);
-    p->denial_trace_before = asx_trace_digest();
-    p->denial_total_before = asx_trace_emitted_total();
+    p->denial_trace_before = asx_trace_digest(&g_rt);
+    p->denial_total_before = asx_trace_emitted_total(&g_rt);
     p->transferred = p->transfer_status == ASX_OK;
     if (p->transferred) {
         check_raw_refusals(p->obligation, p->source_region, p->destination_region, p->destination);
@@ -259,8 +259,8 @@ static asx_status poll_handoff_source(void *ud, asx_task_id self) {
     if (p->transferred) {
         p->source_abort_status = asx_obligation_abort(p->obligation);
         p->source_drop_status = asx_obligation_drop(p->obligation);
-        p->denial_trace_after = asx_trace_digest();
-        p->denial_total_after = asx_trace_emitted_total();
+        p->denial_trace_after = asx_trace_digest(&g_rt);
+        p->denial_total_after = asx_trace_emitted_total(&g_rt);
     }
     if (p->transferred) asx_trace_user(self, "handoff-after-transfer");
     return asx_task_wake(p->destination);
@@ -324,9 +324,9 @@ static void check_handoff(int different_region, int full_destination, int lab) {
     }
     run = asx_budget_from_polls(20u);
     memset(&g_handoff_trace, 0, sizeof(g_handoff_trace));
-    asx_trace_set_observer(capture_handoff_trace, NULL);
+    asx_trace_set_observer(&g_rt, capture_handoff_trace, NULL);
     run_status = asx_scheduler_run(root, &run);
-    asx_trace_set_observer(NULL, NULL);
+    asx_trace_set_observer(&g_rt, NULL, NULL);
     ASSERT_EQ(run_status, ASX_OK);
     if (full_destination) {
         ASSERT_EQ(p.transfer_status, ASX_E_ADMISSION_LIMIT);
@@ -349,7 +349,7 @@ static void check_handoff(int different_region, int full_destination, int lab) {
         ASSERT_EQ(asx_handle_index(p.after.region), asx_handle_index(p.destination_region));
         ASSERT_EQ(p.destination_status, ASX_OK);
         ASSERT_EQ(p.destination_twice, ASX_E_OBLIGATION_ALREADY_RESOLVED);
-        ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_OBLIGATION_HANDOFF), UINT64_C(1));
+        ASSERT_EQ(asx_trace_kind_total(&g_rt, ASX_TRACE_OBLIGATION_HANDOFF), UINT64_C(1));
         ASSERT_EQ(g_handoff_trace.missing_metadata, 0);
         ASSERT_EQ(g_handoff_trace.count, 4u);
         ASSERT_EQ(asx_handle_index(g_handoff_trace.reservation.holder), asx_handle_index(source));
@@ -399,8 +399,8 @@ static void observe_obligation(asx_obligation_id id, asx_region_id source,
     ASSERT_EQ(asx_region_drain_progress(destination, &out->destination), ASX_OK);
     ASSERT_EQ(asx_task_get_state(target, &out->target_state), ASX_OK);
     out->count = asx_runtime_obligation_count(&g_rt);
-    out->emitted = asx_trace_emitted_total();
-    out->digest = asx_trace_digest();
+    out->emitted = asx_trace_emitted_total(&g_rt);
+    out->digest = asx_trace_digest(&g_rt);
 }
 
 static void check_same_progress(const asx_drain_progress *a, const asx_drain_progress *b) {
@@ -2004,14 +2004,14 @@ TEST(reserve_outside_a_poll_is_refused_and_creates_nothing) {
     setup();
     ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     count_before = asx_runtime_obligation_count(&g_rt);
-    emitted_before = asx_trace_emitted_total();
-    digest_before = asx_trace_digest();
+    emitted_before = asx_trace_emitted_total(&g_rt);
+    digest_before = asx_trace_digest(&g_rt);
 
     ASSERT_EQ(asx_obligation_reserve(r, &o), ASX_E_PERMISSION_DENIED);
     ASSERT_EQ(o, ASX_INVALID_ID);
     ASSERT_EQ(asx_runtime_obligation_count(&g_rt), count_before);
-    ASSERT_EQ(asx_trace_emitted_total(), emitted_before);
-    ASSERT_EQ(asx_trace_digest(), digest_before);
+    ASSERT_EQ(asx_trace_emitted_total(&g_rt), emitted_before);
+    ASSERT_EQ(asx_trace_digest(&g_rt), digest_before);
     ASSERT_EQ(asx_obligation_leak_count(), UINT64_C(0));
 
     /* Argument and region errors keep their own codes ahead of it. */

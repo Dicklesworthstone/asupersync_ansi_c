@@ -237,10 +237,10 @@ TEST(evidence_to_sink_resource_exhausted_is_failure_atomic) {
 
 TEST(flake_capture_basic) {
     asx_browser_flake_snapshot snap;
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     asx_ghost_reset();
 
-    asx_browser_flake_capture(&snap, NULL);
+    asx_browser_flake_capture(test_runtime(), &snap, NULL);
 
     ASSERT_EQ((int)snap.profile, (int)asx_profile_active());
     ASSERT_EQ(snap.is_deterministic, 1);
@@ -252,7 +252,7 @@ TEST(flake_capture_with_sink) {
     asx_browser_flake_snapshot snap;
     asx_evidence_sink sink;
 
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     asx_ghost_reset();
     asx_evidence_sink_init(&sink);
 
@@ -262,7 +262,7 @@ TEST(flake_capture_with_sink) {
         (void)rc;
     }
 
-    asx_browser_flake_capture(&snap, &sink);
+    asx_browser_flake_capture(test_runtime(), &snap, &sink);
 
     ASSERT_EQ(snap.evidence_warn_count, (uint32_t)1);
     ASSERT_EQ(snap.evidence_fail_count, (uint32_t)0);
@@ -271,11 +271,11 @@ TEST(flake_capture_with_sink) {
 TEST(flake_match_identical) {
     asx_browser_flake_snapshot a, b;
 
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     asx_ghost_reset();
 
-    asx_browser_flake_capture(&a, NULL);
-    asx_browser_flake_capture(&b, NULL);
+    asx_browser_flake_capture(test_runtime(), &a, NULL);
+    asx_browser_flake_capture(test_runtime(), &b, NULL);
 
     ASSERT_EQ(asx_browser_flake_match(&a, &b), 1);
 }
@@ -283,13 +283,13 @@ TEST(flake_match_identical) {
 TEST(flake_match_different_digest) {
     asx_browser_flake_snapshot a, b;
 
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     asx_ghost_reset();
 
-    asx_browser_flake_capture(&a, NULL);
+    asx_browser_flake_capture(test_runtime(), &a, NULL);
 
     /* Emit a trace event to change the digest */
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     {
         asx_runtime_reset(test_runtime());
         asx_region_id rid;
@@ -300,7 +300,7 @@ TEST(flake_match_different_digest) {
         (void)rc;
     }
 
-    asx_browser_flake_capture(&b, NULL);
+    asx_browser_flake_capture(test_runtime(), &b, NULL);
 
     /* Different trace digests → no match */
     ASSERT_EQ(asx_browser_flake_match(&a, &b), 0);

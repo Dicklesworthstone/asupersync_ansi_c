@@ -15,6 +15,7 @@
 /* ASX_CHECKPOINT_WAIVER_FILE() -- regression localize test, no checkpoint coverage needed */
 
 #include "test_harness.h"
+#include "test_runtime.h"
 #include <asx/asx.h>
 #include <asx/runtime/regression_localize.h>
 #include <asx/runtime/trace.h>
@@ -28,17 +29,23 @@
 
 static void emit_scheduler_events(uint32_t count) {
     uint32_t i;
-    for (i = 0; i < count; i++) { asx_trace_emit(ASX_TRACE_SCHED_POLL, (uint64_t)i, (uint64_t)i); }
+    for (i = 0; i < count; i++) {
+        asx_trace_emit(test_runtime(), ASX_TRACE_SCHED_POLL, (uint64_t)i, (uint64_t)i);
+    }
 }
 
 static void emit_lifecycle_events(uint32_t count) {
     uint32_t i;
-    for (i = 0; i < count; i++) { asx_trace_emit(ASX_TRACE_REGION_OPEN, (uint64_t)i, 0); }
+    for (i = 0; i < count; i++) {
+        asx_trace_emit(test_runtime(), ASX_TRACE_REGION_OPEN, (uint64_t)i, 0);
+    }
 }
 
 static void emit_channel_events(uint32_t count) {
     uint32_t i;
-    for (i = 0; i < count; i++) { asx_trace_emit(ASX_TRACE_CHANNEL_SEND, (uint64_t)i, 0); }
+    for (i = 0; i < count; i++) {
+        asx_trace_emit(test_runtime(), ASX_TRACE_CHANNEL_SEND, (uint64_t)i, 0);
+    }
 }
 
 static uint64_t transition_aux(asx_task_state from, asx_task_state to) {
@@ -48,7 +55,7 @@ static uint64_t transition_aux(asx_task_state from, asx_task_state to) {
 static void emit_cancel_transition_events(uint32_t count) {
     uint32_t i;
     for (i = 0; i < count; i++) {
-        asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)i,
+        asx_trace_emit(test_runtime(), ASX_TRACE_TASK_TRANSITION, (uint64_t)i,
                        transition_aux(ASX_TASK_RUNNING, ASX_TASK_CANCEL_REQUESTED));
     }
 }
@@ -106,8 +113,8 @@ TEST(subsystem_names) {
 TEST(snapshot_empty_trace) {
     asx_perf_snapshot snap;
 
-    asx_trace_reset();
-    asx_perf_snapshot_build(&snap);
+    asx_trace_reset(test_runtime());
+    asx_perf_snapshot_build(test_runtime(), &snap);
 
     ASSERT_EQ(snap.total_events, (uint32_t)0);
 }
@@ -115,12 +122,12 @@ TEST(snapshot_empty_trace) {
 TEST(snapshot_counts_events) {
     asx_perf_snapshot snap;
 
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     emit_scheduler_events(10);
     emit_lifecycle_events(5);
     emit_channel_events(3);
 
-    asx_perf_snapshot_build(&snap);
+    asx_perf_snapshot_build(test_runtime(), &snap);
 
     ASSERT_EQ(snap.total_events, (uint32_t)18);
     ASSERT_EQ(snap.subsystems[ASX_SUBSYS_SCHEDULER].event_count, (uint32_t)10);
@@ -131,11 +138,11 @@ TEST(snapshot_counts_events) {
 TEST(snapshot_accumulates_aux) {
     asx_perf_snapshot snap;
 
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     /* SCHED_POLL events with aux = index: 0+1+2+3+4 = 10 */
     emit_scheduler_events(5);
 
-    asx_perf_snapshot_build(&snap);
+    asx_perf_snapshot_build(test_runtime(), &snap);
 
     ASSERT_EQ(snap.subsystems[ASX_SUBSYS_SCHEDULER].total_aux, (uint64_t)10);
 }
@@ -143,16 +150,16 @@ TEST(snapshot_accumulates_aux) {
 TEST(snapshot_classifies_cancel_transitions) {
     asx_perf_snapshot snap;
 
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     emit_cancel_transition_events(4);
 
-    asx_perf_snapshot_build(&snap);
+    asx_perf_snapshot_build(test_runtime(), &snap);
 
     ASSERT_EQ(snap.subsystems[ASX_SUBSYS_CANCEL].event_count, (uint32_t)4);
     ASSERT_EQ(snap.subsystems[ASX_SUBSYS_LIFECYCLE].event_count, (uint32_t)0);
 }
 
-TEST(snapshot_null_safety) { asx_perf_snapshot_build(NULL); /* should not crash */ }
+TEST(snapshot_null_safety) { asx_perf_snapshot_build(test_runtime(), NULL); /* should not crash */ }
 
 /* RB1: the ring keeps only the latest events. The subsystem counters cover
  * that window, while total_events and the digest cover the whole trace. */
@@ -162,9 +169,9 @@ TEST(snapshot_total_events_exact_beyond_capacity) {
     uint64_t window_aux = 0u;
     uint32_t i;
 
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     emit_scheduler_events(cap * 3u);
-    asx_perf_snapshot_build(&snap);
+    asx_perf_snapshot_build(test_runtime(), &snap);
 
     ASSERT_EQ(snap.total_events, cap * 3u);
     ASSERT_EQ(snap.window_events, cap);
@@ -172,7 +179,7 @@ TEST(snapshot_total_events_exact_beyond_capacity) {
     /* aux of event i is i; the window is events [2*cap, 3*cap) */
     for (i = cap * 2u; i < cap * 3u; i++) window_aux += (uint64_t)i;
     ASSERT_EQ(snap.subsystems[ASX_SUBSYS_SCHEDULER].total_aux, window_aux);
-    ASSERT_EQ(snap.trace_digest, asx_trace_digest());
+    ASSERT_EQ(snap.trace_digest, asx_trace_digest(test_runtime()));
 }
 
 TEST(snapshot_digest_and_regression_see_divergence_before_the_window) {
@@ -182,16 +189,17 @@ TEST(snapshot_digest_and_regression_see_divergence_before_the_window) {
     const uint32_t cap = (uint32_t)ASX_TRACE_CAPACITY;
     uint32_t i;
 
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     emit_scheduler_events(cap * 3u);
-    asx_perf_snapshot_build(&baseline);
+    asx_perf_snapshot_build(test_runtime(), &baseline);
 
     /* Same run, except event 1 (long gone from the ring) has another aux */
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     for (i = 0; i < cap * 3u; i++) {
-        asx_trace_emit(ASX_TRACE_SCHED_POLL, (uint64_t)i, i == 1u ? 999u : (uint64_t)i);
+        asx_trace_emit(test_runtime(), ASX_TRACE_SCHED_POLL, (uint64_t)i,
+                       i == 1u ? 999u : (uint64_t)i);
     }
-    asx_perf_snapshot_build(&current);
+    asx_perf_snapshot_build(test_runtime(), &current);
 
     /* Windows are identical; only the rolling digest differs */
     ASSERT_EQ(current.total_events, baseline.total_events);
@@ -212,9 +220,9 @@ TEST(no_regression_on_identical_snapshots) {
     asx_perf_snapshot current;
     asx_regression_report report;
 
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     emit_scheduler_events(10);
-    asx_perf_snapshot_build(&baseline);
+    asx_perf_snapshot_build(test_runtime(), &baseline);
 
     /* Same trace — build again */
     memcpy(&current, &baseline, sizeof(current));
@@ -230,15 +238,15 @@ TEST(regression_detected_on_different_digests) {
     asx_regression_report report;
 
     /* Build baseline */
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     emit_scheduler_events(10);
-    asx_perf_snapshot_build(&baseline);
+    asx_perf_snapshot_build(test_runtime(), &baseline);
 
     /* Build different current */
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     emit_scheduler_events(15);
     emit_lifecycle_events(3);
-    asx_perf_snapshot_build(&current);
+    asx_perf_snapshot_build(test_runtime(), &current);
 
     asx_regression_localize(&baseline, &current, NULL, &report);
 
@@ -252,14 +260,14 @@ TEST(regression_blames_scheduler_for_extra_polls) {
     asx_regression_report report;
 
     /* Baseline: 10 scheduler events */
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     emit_scheduler_events(10);
-    asx_perf_snapshot_build(&baseline);
+    asx_perf_snapshot_build(test_runtime(), &baseline);
 
     /* Current: 20 scheduler events (regression) */
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     emit_scheduler_events(20);
-    asx_perf_snapshot_build(&current);
+    asx_perf_snapshot_build(test_runtime(), &current);
 
     asx_regression_localize(&baseline, &current, NULL, &report);
 
@@ -276,15 +284,15 @@ TEST(regression_includes_replay_divergence) {
     asx_regression_report report;
 
     /* Build baseline */
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     emit_scheduler_events(10);
-    asx_perf_snapshot_build(&baseline);
+    asx_perf_snapshot_build(test_runtime(), &baseline);
 
     /* Build different current */
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     emit_scheduler_events(10);
     emit_lifecycle_events(5);
-    asx_perf_snapshot_build(&current);
+    asx_perf_snapshot_build(test_runtime(), &current);
 
     /* Simulate replay divergence */
     memset(&replay, 0, sizeof(replay));
@@ -303,13 +311,13 @@ TEST(regression_blames_cancel_subsystem_for_cancel_growth) {
     asx_perf_snapshot current;
     asx_regression_report report;
 
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     emit_cancel_transition_events(1);
-    asx_perf_snapshot_build(&baseline);
+    asx_perf_snapshot_build(test_runtime(), &baseline);
 
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     emit_cancel_transition_events(6);
-    asx_perf_snapshot_build(&current);
+    asx_perf_snapshot_build(test_runtime(), &current);
 
     asx_regression_localize(&baseline, &current, NULL, &report);
 
@@ -488,15 +496,15 @@ TEST(workflow_regression_trips_breaker) {
     asx_cb_init(&ctx);
 
     /* Build baseline */
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     emit_scheduler_events(10);
-    asx_perf_snapshot_build(&baseline);
+    asx_perf_snapshot_build(test_runtime(), &baseline);
 
     /* Simulate 2 regressed runs — breaker should trip */
     for (i = 0; i < 2; i++) {
-        asx_trace_reset();
+        asx_trace_reset(test_runtime());
         emit_scheduler_events(20);
-        asx_perf_snapshot_build(&current);
+        asx_perf_snapshot_build(test_runtime(), &current);
         asx_regression_localize(&baseline, &current, NULL, &report);
 
         if (report.regressed) {
@@ -514,9 +522,9 @@ TEST(workflow_regression_trips_breaker) {
     ASSERT_EQ((int)ctx.state, (int)ASX_CB_HALF_OPEN);
 
     /* Probe with good run */
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     emit_scheduler_events(10);
-    asx_perf_snapshot_build(&current);
+    asx_perf_snapshot_build(test_runtime(), &current);
     asx_regression_localize(&baseline, &current, NULL, &report);
 
     if (!report.regressed) { asx_cb_record_success(&ctx, &cfg); }

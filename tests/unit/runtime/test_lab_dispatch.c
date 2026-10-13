@@ -1448,11 +1448,11 @@ TEST(a_permit_registration_is_admitted_when_the_poll_returns) {
     memset(&p, 0, sizeof(p));
     p.region = r;
     g_ob_events = 0;
-    asx_trace_set_observer(observe_obligations, NULL);
+    asx_trace_set_observer(&g_rt, observe_obligations, NULL);
     ASSERT_EQ(asx_task_spawn(r, poll_oblig_poster, &p, &t), ASX_OK);
     run = asx_budget_from_polls(10);
     ASSERT_EQ(asx_scheduler_run(r, &run), ASX_OK);
-    asx_trace_set_observer(NULL, NULL);
+    asx_trace_set_observer(&g_rt, NULL, NULL);
 
     ASSERT_EQ(p.checked_st, ASX_OK);
     ASSERT_EQ(p.permit_st, ASX_OK);
@@ -1484,11 +1484,11 @@ TEST(a_permit_registration_past_the_limit_is_refused_at_the_drain) {
     p.region = r;
     p.permit_first = 1;
     g_ob_events = 0;
-    asx_trace_set_observer(observe_obligations, NULL);
+    asx_trace_set_observer(&g_rt, observe_obligations, NULL);
     ASSERT_EQ(asx_task_spawn(r, poll_oblig_poster, &p, &t), ASX_OK);
     run = asx_budget_from_polls(10);
     ASSERT_EQ(asx_scheduler_run(r, &run), ASX_OK);
-    asx_trace_set_observer(NULL, NULL);
+    asx_trace_set_observer(&g_rt, NULL, NULL);
 
     ASSERT_EQ(p.permit_st, ASX_OK);  /* posted */
     ASSERT_EQ(p.checked_st, ASX_OK); /* admitted at the call */
@@ -3179,8 +3179,8 @@ static void fl_observe(void *ctx, const asx_trace_event *ev, const asx_trace_pay
 
 static void fl_begin(void) {
     memset(&g_fl, 0, sizeof(g_fl));
-    asx_trace_reset();
-    asx_trace_set_observer(fl_observe, NULL);
+    asx_trace_reset(&g_rt);
+    asx_trace_set_observer(&g_rt, fl_observe, NULL);
 }
 
 /* Reserves one obligation, parks until `released`, then commits it. */
@@ -3250,10 +3250,10 @@ TEST(the_futurelock_check_reports_a_holder_at_every_step_it_stays_idle) {
 
     budget = asx_budget_infinite();
     ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
-    asx_trace_set_observer(NULL, NULL);
+    asx_trace_set_observer(&g_rt, NULL, NULL);
 
     ASSERT_TRUE(g_fl.n >= 3u);
-    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_LAB_FUTURELOCK), (uint64_t)g_fl.n);
+    ASSERT_EQ(asx_trace_kind_total(&g_rt, ASX_TRACE_LAB_FUTURELOCK), (uint64_t)g_fl.n);
     ASSERT_EQ(g_fl.idle[0], (uint64_t)4u); /* threshold 3, so the first idle count over it */
     for (i = 0; i < g_fl.n; i++) {
         ASSERT_TRUE(asx_handle_index((asx_task_id)g_fl.task[i]) == asx_handle_index(th));
@@ -3296,7 +3296,7 @@ TEST(the_futurelock_check_reports_holders_in_task_id_order) {
 
     budget = asx_budget_infinite();
     ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_E_WOULD_BLOCK);
-    asx_trace_set_observer(NULL, NULL);
+    asx_trace_set_observer(&g_rt, NULL, NULL);
 
     ASSERT_EQ(asx_lab_futurelocks(2u, fl, 4u), 2u);
     ASSERT_TRUE(asx_handle_index(fl[0].task) == asx_handle_index(ta));
@@ -3312,7 +3312,7 @@ TEST(the_futurelock_check_reports_holders_in_task_id_order) {
     ASSERT_TRUE(saw_a && saw_b);
     /* The run stays stuck for 1000 steps with both reported at each, far
      * more than the capture holds. */
-    ASSERT_TRUE(asx_trace_kind_total(ASX_TRACE_LAB_FUTURELOCK) > (uint64_t)FL_CAP);
+    ASSERT_TRUE(asx_trace_kind_total(&g_rt, ASX_TRACE_LAB_FUTURELOCK) > (uint64_t)FL_CAP);
 }
 
 /* Negative: a holder polled at every step never passes the threshold. The
@@ -3337,8 +3337,8 @@ TEST(the_futurelock_check_is_silent_for_a_polled_holder_and_when_off) {
     budget = asx_budget_from_polls(40u);
     ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_E_POLL_BUDGET_EXHAUSTED);
     ASSERT_EQ(g_fl.n, 0u);
-    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_LAB_FUTURELOCK), (uint64_t)0u);
-    asx_trace_set_observer(NULL, NULL);
+    ASSERT_EQ(asx_trace_kind_total(&g_rt, ASX_TRACE_LAB_FUTURELOCK), (uint64_t)0u);
+    asx_trace_set_observer(&g_rt, NULL, NULL);
 
     /* Off by default: a fresh lab reports nothing for a holder idle for
      * 1000 steps, though the on-demand query names it. */
@@ -3355,10 +3355,10 @@ TEST(the_futurelock_check_is_silent_for_a_polled_holder_and_when_off) {
         ASSERT_EQ(asx_task_spawn(r, poll_holder, &hp, &t), ASX_OK);
         budget = asx_budget_infinite();
         ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_E_WOULD_BLOCK);
-        ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_LAB_FUTURELOCK), (uint64_t)0u);
+        ASSERT_EQ(asx_trace_kind_total(&g_rt, ASX_TRACE_LAB_FUTURELOCK), (uint64_t)0u);
         ASSERT_EQ(asx_lab_futurelocks(3u, fl, 2u), 1u);
     }
-    asx_trace_set_observer(NULL, NULL);
+    asx_trace_set_observer(&g_rt, NULL, NULL);
 }
 
 int main(void) {

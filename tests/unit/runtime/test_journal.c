@@ -20,6 +20,7 @@
 #endif
 
 #include "../../test_harness.h"
+#include "../../test_runtime.h"
 #include <asx/asx.h>
 #if defined(ASX_PROFILE_POSIX)
 #include <asx/platform/posix.h>
@@ -982,13 +983,13 @@ TEST(a_sampled_window_carries_a_trace_checkpoint_the_chain_covers) {
     uint64_t digest;
 
     sink_reset();
-    asx_trace_reset();
-    asx_trace_emit(ASX_TRACE_SCHED_POLL, 1u, 0u);
-    asx_trace_emit(ASX_TRACE_SCHED_POLL, 2u, 0u);
+    asx_trace_reset(test_runtime());
+    asx_trace_emit(test_runtime(), ASX_TRACE_SCHED_POLL, 1u, 0u);
+    asx_trace_emit(test_runtime(), ASX_TRACE_SCHED_POLL, 2u, 0u);
     ASSERT_EQ(open_persist(&j, 4u, 1u), ASX_OK);
     ASSERT_EQ(asx_journal_install(&j), ASX_OK);
     for (i = 0; i < 4u; i++) asx_journal_note_net_ctl(0u, (uint64_t)i, (int32_t)ASX_OK);
-    digest = asx_trace_digest();
+    digest = asx_trace_digest(test_runtime());
 
     /* The window's last record was taken on the runtime thread: the commit
      * carries the trace position and digest of that moment. */

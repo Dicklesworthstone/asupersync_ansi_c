@@ -74,7 +74,7 @@ TEST(snapshot_capture_empty) {
     asx_status s;
 
     asx_runtime_reset(test_runtime());
-    s = asx_runtime_snapshot_capture(&snap);
+    s = asx_runtime_snapshot_capture(test_runtime(), &snap);
     ASSERT_EQ(s, ASX_OK);
     ASSERT_EQ(snap.io_driver_initialized, 0);
     ASSERT_EQ(snap.io_registration_count, 0u);
@@ -86,7 +86,7 @@ TEST(snapshot_capture_empty) {
 }
 
 TEST(snapshot_capture_null_returns_error) {
-    asx_status s = asx_runtime_snapshot_capture(NULL);
+    asx_status s = asx_runtime_snapshot_capture(test_runtime(), NULL);
     ASSERT_EQ(s, ASX_E_INVALID_ARGUMENT);
 }
 
@@ -103,7 +103,7 @@ TEST(snapshot_capture_with_region) {
     s = asx_region_open(test_runtime(), &rid);
     ASSERT_EQ(s, ASX_OK);
 
-    s = asx_runtime_snapshot_capture(&snap);
+    s = asx_runtime_snapshot_capture(test_runtime(), &snap);
     ASSERT_EQ(s, ASX_OK);
     ASSERT_EQ(snap.region_count, 1u);
     ASSERT_EQ(snap.regions[0].id, rid);
@@ -124,7 +124,7 @@ TEST(snapshot_capture_with_task) {
     s = asx_task_spawn(rid, dummy_poll, NULL, &tid);
     ASSERT_EQ(s, ASX_OK);
 
-    s = asx_runtime_snapshot_capture(&snap);
+    s = asx_runtime_snapshot_capture(test_runtime(), &snap);
     ASSERT_EQ(s, ASX_OK);
     ASSERT_EQ(snap.region_count, 1u);
     ASSERT_EQ(snap.task_count, 1u);
@@ -150,7 +150,7 @@ TEST(snapshot_capture_completed_task_preserves_outcome_severity) {
     s = asx_scheduler_run(rid, &budget);
     ASSERT_EQ(s, ASX_E_INVALID_STATE);
 
-    s = asx_runtime_snapshot_capture(&snap);
+    s = asx_runtime_snapshot_capture(test_runtime(), &snap);
     ASSERT_EQ(s, ASX_OK);
     ASSERT_EQ(snap.task_count, 1u);
     ASSERT_EQ(snap.tasks[0].id, tid);
@@ -176,7 +176,7 @@ TEST(snapshot_capture_with_obligation) {
     s = asx_obligation_reserve_ex(rid, ASX_OBLIGATION_KIND_GENERIC, holder, &oid);
     ASSERT_EQ(s, ASX_OK);
 
-    s = asx_runtime_snapshot_capture(&snap);
+    s = asx_runtime_snapshot_capture(test_runtime(), &snap);
     ASSERT_EQ(s, ASX_OK);
     ASSERT_EQ(snap.obligation_count, 1u);
     ASSERT_EQ(snap.obligations[0].id, oid);
@@ -198,7 +198,7 @@ TEST(snapshot_capture_includes_subsystem_state) {
         ASSERT_EQ(asx_io_register(test_io_fd(42), ASX_IO_READABLE, &w, &tok), ASX_OK);
     }
 
-    s = asx_runtime_snapshot_capture(&snap);
+    s = asx_runtime_snapshot_capture(&rt, &snap);
     ASSERT_EQ(s, ASX_OK);
     ASSERT_EQ(snap.io_driver_initialized, asx_io_driver_is_initialized());
     ASSERT_EQ(snap.io_registration_count, asx_io_active_count());
@@ -218,7 +218,7 @@ TEST(snapshot_eq_identical) {
     asx_status s;
 
     asx_runtime_reset(test_runtime());
-    s = asx_runtime_snapshot_capture(&a);
+    s = asx_runtime_snapshot_capture(test_runtime(), &a);
     ASSERT_EQ(s, ASX_OK);
     memcpy(&b, &a, sizeof(b));
 
@@ -258,14 +258,14 @@ TEST(snapshot_capture_deterministic) {
     asx_runtime_reset(test_runtime());
     st = asx_region_open(test_runtime(), &rid);
     ASSERT_EQ(st, ASX_OK);
-    st = asx_runtime_snapshot_capture(&s1);
+    st = asx_runtime_snapshot_capture(test_runtime(), &s1);
     ASSERT_EQ(st, ASX_OK);
 
     /* Second identical run */
     asx_runtime_reset(test_runtime());
     st = asx_region_open(test_runtime(), &rid);
     ASSERT_EQ(st, ASX_OK);
-    st = asx_runtime_snapshot_capture(&s2);
+    st = asx_runtime_snapshot_capture(test_runtime(), &s2);
     ASSERT_EQ(st, ASX_OK);
 
     ASSERT_EQ(asx_runtime_snapshot_eq(&s1, &s2), ASX_OK);
@@ -281,7 +281,7 @@ TEST(snapshot_to_json_empty) {
     asx_status s;
 
     asx_runtime_reset(test_runtime());
-    s = asx_runtime_snapshot_capture(&snap);
+    s = asx_runtime_snapshot_capture(test_runtime(), &snap);
     ASSERT_EQ(s, ASX_OK);
     asx_codec_buffer_init(&buf);
 
@@ -303,7 +303,7 @@ TEST(snapshot_to_json_with_entities) {
     asx_runtime_reset(test_runtime());
     s = asx_region_open(test_runtime(), &rid);
     ASSERT_EQ(s, ASX_OK);
-    s = asx_runtime_snapshot_capture(&snap);
+    s = asx_runtime_snapshot_capture(test_runtime(), &snap);
     ASSERT_EQ(s, ASX_OK);
     asx_codec_buffer_init(&buf);
 

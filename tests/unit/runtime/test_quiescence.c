@@ -223,7 +223,7 @@ TEST(region_drain_advances_draining_region_to_closed_and_runs_cleanup) {
 
     asx_runtime_reset(test_runtime());
     asx_ghost_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
 
     ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_region_slot_lookup(rid, &region), ASX_OK);
@@ -236,9 +236,9 @@ TEST(region_drain_advances_draining_region_to_closed_and_runs_cleanup) {
     ASSERT_EQ(asx_region_drain(rid, &budget), ASX_OK);
     ASSERT_EQ(region->state, ASX_REGION_CLOSED);
     ASSERT_EQ(cleaned, 1);
-    event_count = asx_trace_event_count();
+    event_count = asx_trace_event_count(test_runtime());
     ASSERT_TRUE(event_count > 0u);
-    ASSERT_TRUE(asx_trace_event_get(event_count - 1u, &ev));
+    ASSERT_TRUE(asx_trace_event_get(test_runtime(), event_count - 1u, &ev));
     ASSERT_EQ(ev.kind, ASX_TRACE_REGION_CLOSED);
     ASSERT_EQ(ev.entity_id, rid);
 }
@@ -2426,19 +2426,19 @@ static asx_status poll_body_close_task(void *data, asx_task_id self) {
 
 static uint32_t body_close_trace_count(asx_trace_event_kind kind) {
     uint32_t i, count = 0u;
-    for (i = 0u; i < asx_trace_event_count(); i++) {
+    for (i = 0u; i < asx_trace_event_count(test_runtime()); i++) {
         asx_trace_event event;
-        if (asx_trace_event_get(i, &event) && event.kind == kind) count++;
+        if (asx_trace_event_get(test_runtime(), i, &event) && event.kind == kind) count++;
     }
     return count;
 }
 
 static uint32_t body_close_trace_index(asx_region_id id) {
     uint32_t i;
-    for (i = 0u; i < asx_trace_event_count(); i++) {
+    for (i = 0u; i < asx_trace_event_count(test_runtime()); i++) {
         asx_trace_event event;
-        if (asx_trace_event_get(i, &event) && event.kind == ASX_TRACE_REGION_CLOSED &&
-            event.entity_id == id) {
+        if (asx_trace_event_get(test_runtime(), i, &event) &&
+            event.kind == ASX_TRACE_REGION_CLOSED && event.entity_id == id) {
             return i;
         }
     }
@@ -2718,7 +2718,7 @@ TEST(body_close_invalid_arguments_refuse_without_state_or_trace_mutation) {
     ASSERT_EQ(asx_region_slot_lookup(region, &slot), ASX_OK);
     memcpy(&before, slot, sizeof(before));
     memcpy(&budget_before, &budget, sizeof(budget_before));
-    events = asx_trace_event_count();
+    events = asx_trace_event_count(test_runtime());
     ASSERT_EQ(asx_region_close_with_outcome(region, NULL, NULL), ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_region_close_with_outcome(region, &invalid, NULL), ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_region_close_with_outcome(region, &cancelled, NULL), ASX_E_INVALID_ARGUMENT);
@@ -2729,7 +2729,7 @@ TEST(body_close_invalid_arguments_refuse_without_state_or_trace_mutation) {
     ASSERT_EQ(asx_region_wait_closed(region, &budget), ASX_E_INVALID_STATE);
     ASSERT_EQ(memcmp(slot, &before, sizeof(before)), 0);
     ASSERT_EQ(memcmp(&budget, &budget_before, sizeof(budget)), 0);
-    ASSERT_EQ(asx_trace_event_count(), events);
+    ASSERT_EQ(asx_trace_event_count(test_runtime()), events);
     ASSERT_EQ(asx_region_close_with_outcome(region, &ok, NULL), ASX_OK);
     ASSERT_EQ(asx_region_wait_closed(region, &budget), ASX_OK);
 }
@@ -2759,7 +2759,7 @@ TEST(body_close_bad_stale_and_poisoned_handles_refuse_atomically) {
     ASSERT_EQ(asx_region_slot_lookup(region, &slot), ASX_OK);
     memcpy(&before, slot, sizeof(before));
     memcpy(&budget_before, &budget, sizeof(budget_before));
-    events = asx_trace_event_count();
+    events = asx_trace_event_count(test_runtime());
     ASSERT_EQ(asx_region_close_with_outcome(region, &body, NULL), ASX_E_REGION_POISONED);
     ASSERT_EQ(asx_region_wait_closed(region, &budget), ASX_E_REGION_POISONED);
     ASSERT_EQ(asx_region_get_close_outcome(region, NULL), ASX_E_INVALID_ARGUMENT);
@@ -2769,7 +2769,7 @@ TEST(body_close_bad_stale_and_poisoned_handles_refuse_atomically) {
     ASSERT_EQ(out.severity, ASX_OUTCOME_PANICKED);
     ASSERT_EQ(memcmp(slot, &before, sizeof(before)), 0);
     ASSERT_EQ(memcmp(&budget, &budget_before, sizeof(budget)), 0);
-    ASSERT_EQ(asx_trace_event_count(), events);
+    ASSERT_EQ(asx_trace_event_count(test_runtime()), events);
 }
 
 /* The leak policy applies when the holder completes with its obligation
@@ -2839,7 +2839,7 @@ static asx_status poll_body_close_host_guard(void *data, asx_task_id self) {
     asx_scope scope_before;
     asx_budget budget_before;
     asx_outcome body = asx_outcome_make(ASX_OUTCOME_OK);
-    uint32_t events = asx_trace_event_count();
+    uint32_t events = asx_trace_event_count(test_runtime());
     (void)self;
     memcpy(&scope_before, ctx->scope, sizeof(scope_before));
     memcpy(&budget_before, &ctx->budget, sizeof(budget_before));
@@ -2847,7 +2847,7 @@ static asx_status poll_body_close_host_guard(void *data, asx_task_id self) {
     ctx->finish_status = asx_scope_finish(ctx->scope, &body, NULL);
     ctx->unchanged = memcmp(ctx->scope, &scope_before, sizeof(scope_before)) == 0 &&
                      memcmp(&ctx->budget, &budget_before, sizeof(budget_before)) == 0 &&
-                     asx_trace_event_count() == events;
+                     asx_trace_event_count(test_runtime()) == events;
     return ASX_OK;
 }
 
@@ -2918,13 +2918,13 @@ TEST(body_close_closed_exception_emits_receipts_without_reopening_or_rerunning) 
         for (i = 0u; i < 3u; i++) {
             asx_outcome body = asx_outcome_make(exceptional[i]);
             asx_trace_event receipt;
-            uint32_t events = asx_trace_event_count();
+            uint32_t events = asx_trace_event_count(test_runtime());
             ASSERT_EQ(asx_region_close_with_outcome(region, &body, i == 0u ? &requested : NULL),
                       ASX_OK);
             /* RuntimeState emits the receipt before skipping Closed state;
              * it neither records a new reason nor changes terminal work. */
-            ASSERT_EQ(asx_trace_event_count(), events + 1u);
-            ASSERT_TRUE(asx_trace_event_get(events, &receipt));
+            ASSERT_EQ(asx_trace_event_count(test_runtime()), events + 1u);
+            ASSERT_TRUE(asx_trace_event_get(test_runtime(), events, &receipt));
             ASSERT_EQ(receipt.kind, ASX_TRACE_REGION_CANCELLED);
             ASSERT_EQ(receipt.entity_id, region);
             ASSERT_EQ(receipt.aux,

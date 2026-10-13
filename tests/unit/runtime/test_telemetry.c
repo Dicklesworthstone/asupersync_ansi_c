@@ -8,6 +8,7 @@
  */
 
 #include "../../test_harness.h"
+#include "../../test_runtime.h"
 #include <asx/asx.h>
 #include <asx/runtime/telemetry.h>
 #include <asx/runtime/trace.h>
@@ -61,7 +62,7 @@ TEST(telemetry_tier_str_coverage) {
 
 TEST(telemetry_forensic_records_all) {
     asx_telemetry_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
 
     asx_telemetry_emit(ASX_TRACE_SCHED_POLL, 0x10, 0);
     asx_telemetry_emit(ASX_TRACE_TASK_SPAWN, 0x20, 0x10);
@@ -70,7 +71,7 @@ TEST(telemetry_forensic_records_all) {
     asx_telemetry_emit(ASX_TRACE_OBLIGATION_RESERVE, 0x50, 0);
 
     /* All 5 events should be in the trace ring */
-    ASSERT_EQ(asx_trace_event_count(), (uint32_t)5);
+    ASSERT_EQ(asx_trace_event_count(test_runtime()), (uint32_t)5);
     ASSERT_EQ(asx_telemetry_emitted_count(), (uint32_t)5);
     ASSERT_EQ(asx_telemetry_filtered_count(), (uint32_t)0);
 }
@@ -81,7 +82,7 @@ TEST(telemetry_ops_light_filters_polls) {
     asx_status st;
 
     asx_telemetry_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
 
     st = asx_telemetry_set_tier(ASX_TELEMETRY_OPS_LIGHT);
     ASSERT_EQ(st, ASX_OK);
@@ -110,7 +111,7 @@ TEST(telemetry_ops_light_filters_polls) {
 
     /* 8 retained + 10 filtered = 18 total */
     ASSERT_EQ(asx_telemetry_emitted_count(), (uint32_t)18);
-    ASSERT_EQ(asx_trace_event_count(), (uint32_t)8);
+    ASSERT_EQ(asx_trace_event_count(test_runtime()), (uint32_t)8);
     ASSERT_EQ(asx_telemetry_filtered_count(), (uint32_t)10);
 }
 
@@ -120,7 +121,7 @@ TEST(telemetry_ultra_min_stores_nothing) {
     asx_status st;
 
     asx_telemetry_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
 
     st = asx_telemetry_set_tier(ASX_TELEMETRY_ULTRA_MIN);
     ASSERT_EQ(st, ASX_OK);
@@ -131,7 +132,7 @@ TEST(telemetry_ultra_min_stores_nothing) {
     asx_telemetry_emit(ASX_TRACE_SCHED_COMPLETE, 0x20, 0);
 
     /* Zero events in trace ring */
-    ASSERT_EQ(asx_trace_event_count(), (uint32_t)0);
+    ASSERT_EQ(asx_trace_event_count(test_runtime()), (uint32_t)0);
     ASSERT_EQ(asx_telemetry_emitted_count(), (uint32_t)4);
     ASSERT_EQ(asx_telemetry_filtered_count(), (uint32_t)4);
 }
@@ -144,7 +145,7 @@ TEST(telemetry_digest_identical_across_tiers) {
 
     /* Run same scenario at FORENSIC tier */
     asx_telemetry_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     asx_telemetry_emit(ASX_TRACE_REGION_OPEN, 0x10, 0);
     asx_telemetry_emit(ASX_TRACE_TASK_SPAWN, 0x20, 0x10);
     asx_telemetry_emit(ASX_TRACE_SCHED_POLL, 0x20, 0);
@@ -154,7 +155,7 @@ TEST(telemetry_digest_identical_across_tiers) {
 
     /* Same scenario at OPS_LIGHT tier */
     asx_telemetry_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     st = asx_telemetry_set_tier(ASX_TELEMETRY_OPS_LIGHT);
     ASSERT_EQ(st, ASX_OK);
     asx_telemetry_emit(ASX_TRACE_REGION_OPEN, 0x10, 0);
@@ -166,7 +167,7 @@ TEST(telemetry_digest_identical_across_tiers) {
 
     /* Same scenario at ULTRA_MIN tier */
     asx_telemetry_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     st = asx_telemetry_set_tier(ASX_TELEMETRY_ULTRA_MIN);
     ASSERT_EQ(st, ASX_OK);
     asx_telemetry_emit(ASX_TRACE_REGION_OPEN, 0x10, 0);
@@ -188,7 +189,7 @@ static uint64_t telemetry_stream(asx_telemetry_tier tier, uint32_t total, uint32
     uint32_t i;
 
     asx_telemetry_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     if (asx_telemetry_set_tier(tier) != ASX_OK) return 0u;
     for (i = 0; i < total; i++) {
         asx_trace_event_kind kind = (i % 3u == 0u) ? ASX_TRACE_SCHED_POLL : ASX_TRACE_TASK_SPAWN;
@@ -202,18 +203,18 @@ TEST(telemetry_digest_identical_across_tiers_beyond_trace_capacity) {
     uint64_t d_forensic, d_ops, d_ultra;
 
     d_forensic = telemetry_stream(ASX_TELEMETRY_FORENSIC, total, UINT32_MAX);
-    ASSERT_EQ(asx_trace_emitted_total(), (uint64_t)total);
-    ASSERT_TRUE(asx_trace_dropped() > 0u);
+    ASSERT_EQ(asx_trace_emitted_total(test_runtime()), (uint64_t)total);
+    ASSERT_TRUE(asx_trace_dropped(test_runtime()) > 0u);
     /* Every event went through the trace, so its digest is the same fold */
-    ASSERT_EQ(d_forensic, asx_trace_digest());
+    ASSERT_EQ(d_forensic, asx_trace_digest(test_runtime()));
 
     d_ops = telemetry_stream(ASX_TELEMETRY_OPS_LIGHT, total, UINT32_MAX);
-    ASSERT_TRUE(asx_trace_emitted_total() < (uint64_t)total); /* polls filtered */
-    ASSERT_TRUE(asx_trace_emitted_total() > 0u);
+    ASSERT_TRUE(asx_trace_emitted_total(test_runtime()) < (uint64_t)total); /* polls filtered */
+    ASSERT_TRUE(asx_trace_emitted_total(test_runtime()) > 0u);
 
     d_ultra = telemetry_stream(ASX_TELEMETRY_ULTRA_MIN, total, UINT32_MAX);
-    ASSERT_EQ(asx_trace_emitted_total(), (uint64_t)0);
-    ASSERT_EQ(asx_trace_event_count(), (uint32_t)0);
+    ASSERT_EQ(asx_trace_emitted_total(test_runtime()), (uint64_t)0);
+    ASSERT_EQ(asx_trace_event_count(test_runtime()), (uint32_t)0);
     ASSERT_EQ(asx_telemetry_emitted_count(), total);
 
     ASSERT_EQ(d_ops, d_forensic);
@@ -227,7 +228,7 @@ TEST(telemetry_digest_identical_across_tiers_beyond_trace_capacity) {
     ASSERT_TRUE(telemetry_stream(ASX_TELEMETRY_ULTRA_MIN, total, 0u) != d_forensic);
 
     asx_telemetry_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
 }
 
 TEST(telemetry_digest_deterministic_across_runs) {
@@ -235,7 +236,7 @@ TEST(telemetry_digest_deterministic_across_runs) {
 
     /* Run 1 */
     asx_telemetry_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     asx_telemetry_emit(ASX_TRACE_TASK_SPAWN, 0x1, 0);
     asx_telemetry_emit(ASX_TRACE_SCHED_POLL, 0x1, 0);
     asx_telemetry_emit(ASX_TRACE_SCHED_COMPLETE, 0x1, 0);
@@ -243,7 +244,7 @@ TEST(telemetry_digest_deterministic_across_runs) {
 
     /* Run 2 — identical */
     asx_telemetry_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     asx_telemetry_emit(ASX_TRACE_TASK_SPAWN, 0x1, 0);
     asx_telemetry_emit(ASX_TRACE_SCHED_POLL, 0x1, 0);
     asx_telemetry_emit(ASX_TRACE_SCHED_COMPLETE, 0x1, 0);
@@ -256,12 +257,12 @@ TEST(telemetry_digest_differs_on_different_input) {
     uint64_t d1, d2;
 
     asx_telemetry_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     asx_telemetry_emit(ASX_TRACE_TASK_SPAWN, 0x1, 0);
     d1 = asx_telemetry_digest();
 
     asx_telemetry_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     asx_telemetry_emit(ASX_TRACE_TASK_SPAWN, 0x2, 0);
     d2 = asx_telemetry_digest();
 
@@ -307,7 +308,7 @@ TEST(telemetry_reset_clears_all) {
     asx_status st;
 
     asx_telemetry_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
 
     st = asx_telemetry_set_tier(ASX_TELEMETRY_ULTRA_MIN);
     ASSERT_EQ(st, ASX_OK);
@@ -332,7 +333,7 @@ TEST(telemetry_mid_scenario_tier_switch) {
 
     /* Pure forensic run */
     asx_telemetry_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     asx_telemetry_emit(ASX_TRACE_REGION_OPEN, 0x10, 0);
     asx_telemetry_emit(ASX_TRACE_TASK_SPAWN, 0x20, 0x10);
     asx_telemetry_emit(ASX_TRACE_SCHED_POLL, 0x20, 0);
@@ -341,7 +342,7 @@ TEST(telemetry_mid_scenario_tier_switch) {
 
     /* Switch tier mid-scenario — digest must still match */
     asx_telemetry_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     asx_telemetry_emit(ASX_TRACE_REGION_OPEN, 0x10, 0);
     st = asx_telemetry_set_tier(ASX_TELEMETRY_OPS_LIGHT);
     ASSERT_EQ(st, ASX_OK);
@@ -363,7 +364,7 @@ TEST(telemetry_high_volume_filtered) {
     asx_status st;
 
     asx_telemetry_reset();
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
 
     st = asx_telemetry_set_tier(ASX_TELEMETRY_ULTRA_MIN);
     ASSERT_EQ(st, ASX_OK);
@@ -372,7 +373,7 @@ TEST(telemetry_high_volume_filtered) {
 
     ASSERT_EQ(asx_telemetry_emitted_count(), (uint32_t)1000);
     ASSERT_EQ(asx_telemetry_filtered_count(), (uint32_t)1000);
-    ASSERT_EQ(asx_trace_event_count(), (uint32_t)0);
+    ASSERT_EQ(asx_trace_event_count(test_runtime()), (uint32_t)0);
 
     /* Digest must still be non-trivial (not the offset basis) */
     ASSERT_TRUE(asx_telemetry_digest() != (uint64_t)0x517cc1b727220a95ULL);
