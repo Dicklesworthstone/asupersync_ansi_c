@@ -590,11 +590,20 @@ asx_status asx_replay_hooks(asx_replay *r, asx_runtime_hooks *hooks) {
 /* Activation, outcome                                                 */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_replay_activate(asx_replay *r) {
+/* Whether `r` may become the active replay: the check without the store, so
+ * replay_run can store only after it has passed (a store that some path
+ * returns past is what gcc's -Wdangling-pointer reports at -O2 for the stack
+ * replay it activates). */
+static asx_status replay_activation_status(const asx_replay *r) {
     if (r == NULL || !r->opened) return ASX_E_INVALID_ARGUMENT;
     if ((g_replay != NULL && g_replay != r) || asx_journal_active()) return ASX_E_INVALID_STATE;
-    g_replay = r;
     return ASX_OK;
+}
+
+asx_status asx_replay_activate(asx_replay *r) {
+    asx_status st = replay_activation_status(r);
+    if (st == ASX_OK) g_replay = r;
+    return st;
 }
 
 void asx_replay_deactivate(void) { g_replay = NULL; }
@@ -1113,8 +1122,9 @@ static asx_replay_error replay_run(const uint8_t *bytes, size_t len,
         st = asx_runtime_config_init(&cfg);
         if (st != ASX_OK) return replay_run_failed(report, st, program_status, "runtime config");
     }
-    st = asx_replay_activate(&r);
+    st = replay_activation_status(&r);
     if (st != ASX_OK) return replay_run_failed(report, st, program_status, "replay activation");
+    g_replay = &r; /* cleared by asx_replay_deactivate on every path out of here */
     st = asx_runtime_init(&rt, &cfg, &hooks);
     if (st != ASX_OK) {
         asx_replay_deactivate();
