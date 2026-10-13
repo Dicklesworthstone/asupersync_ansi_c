@@ -9,6 +9,67 @@
 > The remaining assessment is bound to its audited revision; earlier dates, counts,
 > divergences and line numbers are historical evidence, not present status.
 
+## Status at `be9472f`, 2026-10-13 (supersedes the counts below)
+
+Measured by batch verify #27 on worker B, built from a `git archive` of exactly
+`be9472f`, except where a line names batch #26 (`5ec1997`).
+
+**Rust parity**
+- All 346 Rust-captured v2 fixtures compare: forced replay on 325 and codec round trip
+  on 346.
+- The sweep scheduler gives 319 pass and 27 listed differences, each proven
+  order-dependent from the fixture's `schedule.dispatches`, with 0 failures.
+- Parser differential, as CI's gate-mode steps run at `be9472f`: HTTP request,
+  HTTP response, WebSocket and RaptorQ all pass. The only divergences left are the
+  three approved RFC exceptions in FEATURE_PARITY §2.2.
+
+**Lanes green at `be9472f`**
+- `make test`, metamorphic, R1/R2/R3 and the x4 lane.
+- POSIX live, ASan-live, TSan and two runtimes under ASan.
+- resource-pressure, and every `tests/gates/*.sh`.
+- The browser and minimal-browser checks, model-check, and the oracles over the corpus.
+- The native record/replay and crash-continuity e2e scripts.
+- Strict format, lint, cppcheck and clang-tidy.
+
+**Also green (batch #26)**
+- The e2e suite, 28/28, including the CLI smoke test.
+- gcc-analyzer, with 0 must-fix findings.
+- wasm32 replay, digest-identical to the native runner.
+- Bare-metal Cortex-M4 and RISC-V 32 under qemu, identical at R2/R3. At R1, the 18
+  fixtures that exceed R1's capacity are listed and required to differ.
+- musl mips (big-endian) and aarch64 under qemu-user, identical.
+- `fuzz-metamorphic`: 10,000 cases per relation, 0 violations.
+
+**Measured**
+- The musl mips R1 kernel-only app is 122,776 B of flash at `-Os`, under the 128 KiB
+  router target.
+- Parser fuzz soak: 1 h per harness on 12 harnesses, 1.1e9 executions, 0 crashes. That
+  is one hour per harness; the 24 h soak has not been run.
+
+**Open**
+- K18 (independent runtime-owned state, `bd-9kll.3.20`). Done: the API, wakers,
+  timers, wait queues, sync primitives, and MPSC, oneshot and watch channels. Not done:
+  broadcast and session channels, actors, supervisors, links, monitors, lab dispatch and
+  parallel lanes.
+- Supervision surfaces (`bd-9kll.8.6`): landing 1 of 3.
+- Time parity: DelayQueue and interval (`bd-9kll.7.7`).
+- No physical-device run (`bd-9kll.15.8`).
+- Performance: spawn+run costs about 5x March's instruction count (`bd-bzt3`). The cause
+  is about 40 small additions, with no single fix.
+- The Perf Gates size budget is red, pending an owner decision on which surface it
+  measures.
+
+**Process record for this window**
+- A batch reported conformance green from the compare count while `make conformance`
+  had exited 2 on its sweep.
+- 12 fixtures were committed after compare only (`3d20b7a`). The sweep then failed one,
+  until `335a273` fixed a real C bug.
+- `8bd095a` and `48a7938` were pushed before a full batch, to stop reset loss.
+- A repo-sync job (`ru sync`) hard-reset the shared checkout to `origin/main` several
+  times, wiping uncommitted work. A process outside the swarm pushed `5ec1997` and
+  `be9472f` and committed rate-limited panes' work.
+- The Guarantee Impact `artifact links` fields name `build/` paths that are not kept.
+
 ## Implementation update after the audit
 
 The implementation increment in `1972ba5` and `82e26eb` connects the existing cleanup
