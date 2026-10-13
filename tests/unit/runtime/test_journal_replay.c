@@ -2024,21 +2024,23 @@ TEST(a_cut_live_run_replays_its_committed_prefix_and_ends_at_the_cut) {
     ASSERT_TRUE(pfx.checkpoints > 0u);
 }
 
-static asx_status draw_three_program(void *obs) {
-    uint64_t v = 0u;
-    uint32_t i;
-    (void)obs;
-    for (i = 0; i < 3u; i++) { (void)asx_runtime_random_u64(&v); }
-    return ASX_OK;
-}
-
 /* A task that treats every refusal as "try again": polled, it draws
- * entropy and yields without parking, so it is runnable for ever. */
+ * entropy and yields without parking, so it is runnable for ever. With a
+ * limit it completes at that poll: the recording is the same program, ended
+ * early, so the replay serves its first polls from the stream and the
+ * program then asks for more than the recording did. (Not a stream of bare
+ * entropy draws: a live scheduler reads the clock hook at the start of
+ * every round, so such a stream diverges at its first record.) */
+static uint32_t g_spin_limit;
+static uint32_t g_spin_polls;
+
 static asx_status spin_poll(void *ud, asx_task_id self) {
     uint64_t v = 0u;
     (void)ud;
     (void)self;
+    g_spin_polls++;
     (void)asx_runtime_random_u64(&v);
+    if (g_spin_limit != 0u && g_spin_polls >= g_spin_limit) return ASX_OK;
     return ASX_E_PENDING;
 }
 
@@ -2065,15 +2067,31 @@ TEST(a_failed_replay_ends_the_scheduler_run_it_is_driving) {
     asx_replay_identity id = ours();
     asx_status ps = ASX_E_INVALID_STATE;
     asx_status run = ASX_OK;
+    asx_status rec_run = ASX_E_INVALID_STATE;
+    asx_replay_error err;
 
-    ASSERT_TRUE(record_program(draw_three_program, NULL));
-    /* The spinner asks for more entropy than the stream has: the first
-     * request past it fails the replay, and the scheduler ends the run at
-     * its next round instead of polling the task for ever. */
-    ASSERT_EQ((int)asx_journal_replay(g_out, g_out_len, &id, NULL, spin_program, &run, &ps, &rep),
-              (int)ASX_REPLAY_E_EXHAUSTED);
+    /* Record the spinner ending at its third poll. */
+    g_spin_limit = 3u;
+    g_spin_polls = 0u;
+    ASSERT_TRUE(record_program(spin_program, &rec_run));
+    ASSERT_EQ(rec_run, ASX_OK);
+    ASSERT_EQ(g_spin_polls, 3u);
+
+    /* Replay the same program, which never ends: its first polls are
+     * served, then it asks for what the recording never did and the replay
+     * fails (which request that is, the stream's end or a different kind
+     * of boundary call, depends on what the scheduler reads after the third
+     * poll). The scheduler must end the run at its next round rather than
+     * poll the task for ever, long before the poll budget. */
+    g_spin_limit = 0u;
+    g_spin_polls = 0u;
+    err = asx_journal_replay(g_out, g_out_len, &id, NULL, spin_program, &run, &ps, &rep);
+    ASSERT_TRUE(err == ASX_REPLAY_E_EXHAUSTED || err == ASX_REPLAY_E_DIVERGED);
     ASSERT_EQ(ps, ASX_OK);
     ASSERT_EQ(run, ASX_E_REPLAY_MISMATCH);
+    ASSERT_TRUE(g_spin_polls >= 3u);
+    ASSERT_TRUE(g_spin_polls < 1000u);
+    g_spin_limit = 0u;
 }
 
 #endif /* ASX_PROFILE_POSIX && !ASX_DETERMINISTIC */
