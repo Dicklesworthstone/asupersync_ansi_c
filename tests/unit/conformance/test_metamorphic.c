@@ -1662,11 +1662,18 @@ int main(int argc, char **argv) {
     RUN_TEST(the_comparator_reports_a_planted_difference_in_each_part);
     RUN_TEST(the_no_op_filter_hides_the_no_op_and_nothing_else);
     RUN_TEST(m1_permuting_independent_tasks_keeps_the_projection);
-    RUN_TEST(m2_a_no_op_task_changes_no_other_entity);
-    RUN_TEST(m3_nested_region_budgets_equal_their_meet);
+    /* The no-op takes a task and a region, and M3's nested form four regions
+     * and the root: in a class with fewer, a scenario at the edge has a
+     * spawn or a region refused that the other form did not, which is the
+     * class's limit and not a semantic difference. */
+    RUN_TEST_IF(ASX_MAX_REGIONS >= 8 && ASX_MAX_TASKS >= 64,
+                m2_a_no_op_task_changes_no_other_entity,
+                "this resource class has too few regions or tasks for the added no-op");
+    RUN_TEST_IF(ASX_MAX_REGIONS >= 6, m3_nested_region_budgets_equal_their_meet,
+                "this resource class has too few regions for M3's nested form");
     RUN_TEST(m4_a_weaker_cancel_after_a_stronger_one_changes_nothing);
     RUN_TEST(m4_a_stronger_cancel_after_a_weaker_one_is_seen);
-    RUN_TEST_IF(ASX_MAX_TASKS >= 64, the_corpus_exercises_the_relations,
+    RUN_TEST_IF(ASX_MAX_REGIONS >= 8 && ASX_MAX_TASKS >= 64, the_corpus_exercises_the_relations,
                 "this resource class is too small to run most of the corpus");
     TEST_REPORT();
     return test_failures;
