@@ -1221,7 +1221,8 @@ static int cmd_constants(const char *path) {
 static int usage(void) {
     fprintf(stderr, "usage: asx-conformance run <scenario.json>\n"
                     "       asx-conformance compare <fixture.json>...\n"
-                    "       asx-conformance compare-sweep [--known <file>] <fixture.json>...\n"
+                    "       asx-conformance compare-sweep [--trace] [--known <file>] "
+                    "<fixture.json>...\n"
                     "       asx-conformance self-test <fixture.json>\n"
                     "       asx-conformance canon <cases.jsonl>\n"
                     "       asx-conformance constants <rust_kernel_constants.json>\n");
@@ -1351,6 +1352,24 @@ static void sweep_detail(uint32_t want_snapshot, uint32_t want_obs, uint32_t run
     }
 }
 
+/* --trace: the fixture's trace and the sweep run's, one Foata layer per line.
+ * The two orders differ by design; what to read is which events one side has
+ * and the other lacks, and their payloads. */
+static int g_sweep_trace;
+
+static void trace_dump(const char *label, const asx_json_doc *doc, uint32_t trace, char *buf) {
+    uint32_t n;
+    uint32_t i;
+    if (trace == ASX_JSON_NONE) return;
+    n = asx_json_count(doc, trace);
+    fprintf(stdout, "    %s trace, %u layers\n", label, (unsigned)n);
+    for (i = 0; i < n; i++) {
+        if (canonical(doc, asx_json_item(doc, trace, i), buf)) {
+            fprintf(stdout, "      %3u %s\n", (unsigned)i, buf);
+        }
+    }
+}
+
 /* One fixture under the sweep scheduler. */
 static sweep_result sweep_one(const char *path) {
     uint32_t root;
@@ -1415,20 +1434,33 @@ static sweep_result sweep_one(const char *path) {
     if (known != NULL) {
         known->used = 1;
         fprintf(stdout, "KNOWN %s: %s differ; %s\n", id, why, known->reason);
+        if (g_sweep_trace && st == ASX_OK) {
+            sweep_detail(want_snapshot, want_obs, run, snap_ok, obs_ok);
+            trace_dump("rust", &g_fixture, asx_json_get(&g_fixture, root, "trace"), g_a);
+            trace_dump("c", &g_run, asx_json_get(&g_run, run, "trace"), g_b);
+        }
         return SWEEP_KNOWN;
     }
     fprintf(stdout, "FAIL %s: %s differ under the sweep\n", id, why);
     if (st == ASX_OK) sweep_detail(want_snapshot, want_obs, run, snap_ok, obs_ok);
+    if (g_sweep_trace && st == ASX_OK) {
+        trace_dump("rust", &g_fixture, asx_json_get(&g_fixture, root, "trace"), g_a);
+        trace_dump("c", &g_run, asx_json_get(&g_run, run, "trace"), g_b);
+    }
     return SWEEP_FAIL;
 }
 
-/* compare-sweep [--known FILE] fixture.json... */
+/* compare-sweep [--trace] [--known FILE] fixture.json... */
 static int cmd_compare_sweep(int argc, char **argv) {
     unsigned counts[5] = {0u, 0u, 0u, 0u, 0u};
     unsigned unmatched = 0u;
     int i = 2;
     uint32_t k;
 
+    if (i < argc && strcmp(argv[i], "--trace") == 0) {
+        g_sweep_trace = 1;
+        i++;
+    }
     if (i + 1 < argc && strcmp(argv[i], "--known") == 0) {
         if (!load_known(argv[i + 1])) return 2;
         i += 2;
