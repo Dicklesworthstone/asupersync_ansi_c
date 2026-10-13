@@ -5837,21 +5837,24 @@ static const char *g_default_oracles;
 
 void asx_conformance_set_oracles(const char *csv) { g_default_oracles = csv; }
 
-static void run_oracle(const char *name) {
-    asx_oracle_result r;
+static void run_named_oracle(const char *name) {
+    asx_oracle_result r = asx_oracle_check_named(name);
     char buf[192];
-    if (strcmp(name, "all") == 0) {
-        uint32_t i;
-        for (i = 0; i < asx_oracle_kernel_count() && !g_failed; i++) {
-            run_oracle(asx_oracle_kernel_name(i));
-        }
-        return;
-    }
-    r = asx_oracle_check_named(name);
     if (r.verdict == ASX_ORACLE_PASS) return;
     (void)snprintf(buf, sizeof(buf), "%s, %u violation(s): %s", name, (unsigned)r.detail_count,
                    r.message != NULL ? r.message : "");
     it_fail("oracle failed", buf);
+}
+
+static void run_oracle(const char *name) {
+    if (strcmp(name, "all") == 0) {
+        uint32_t i;
+        for (i = 0; i < asx_oracle_kernel_count() && !g_failed; i++) {
+            run_named_oracle(asx_oracle_kernel_name(i));
+        }
+        return;
+    }
+    run_named_oracle(name);
 }
 
 static void check_oracles(uint32_t scenario) {
