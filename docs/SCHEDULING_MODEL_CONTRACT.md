@@ -84,6 +84,24 @@ Pending: cache (waker, prio); if acknowledged: schedule_cancel(t, cleanup priori
 A pick of a task that already completed (a retired id a due cancel waker
 scheduled, §5) is a dispatch that polls nothing (LR:4772-4790).
 
+`check_futurelocks` (LR:5674-5723) runs at every step that reaches the draw,
+after it and before the timers fire. It reports every task that is not
+terminal, holds a pending obligation and was last polled more than
+`futurelock_max_idle_steps` steps ago (default 10000; `steps` must be past
+the threshold; 0 switches it off), in `TaskId` order, as a
+`FuturelockDetected` trace event, and panics with `panic_on_futurelock`
+(default on). There is no dedup: an idle holder is reported again at every
+following step. A task's last polled step is stamped after its poll
+(`mark_polled`, LR:4811), so a dispatch that polls nothing stamps nothing.
+C: `asx_lab_set_futurelock_check` switches the check on (off by default,
+and it never panics); the step's draw is `asx_lab_step_draw_internal`
+(`lab_dispatch.c`), which emits `ASX_TRACE_LAB_FUTURELOCK` per reported task.
+`asx_lab_futurelocks` is the same scan on demand and
+`asx_scheduler_stuck_tasks` names what a run that ended
+`ASX_E_WOULD_BLOCK` (Rust's `StuckBailout`, which names nothing) was waiting
+on (DEC-012). Scenarios: `futurelock-holder-idle-001`,
+`futurelock-holder-polled-001`, `futurelock-idle-without-obligation-001`.
+
 Consequences:
 - A child spawned during step N's poll is admitted at the start of step
   N+1, before that step's draw.
