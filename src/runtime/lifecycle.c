@@ -142,6 +142,7 @@ void asx_runtime_clear_internal(asx_kernel *k) {
     asx_timer_wheel_reset_app_internal(k);
     /* Before the primitives: every wait queue of k is empty afterwards. */
     asx_wait_pool_reset_internal(k);
+    asx_semaphore_reset_internal(k);
     if (asx_kernel_other_held(k)) { /* the subsystems below are process-wide */
         asx_trace_reset_internal(k);
         return;
@@ -171,7 +172,6 @@ void asx_runtime_clear_internal(asx_kernel *k) {
     asx_event_log_reset();
     asx_error_ledger_reset();
     asx_notify_reset();
-    asx_semaphore_reset();
     asx_rwlock_reset();
     asx_barrier_reset();
     asx_once_reset();

@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../runtime/runtime_internal.h"
 #include <asx/runtime/runtime.h>
 #include <asx/sync/contended_mutex.h>
 #include <string.h>
@@ -55,7 +56,7 @@ asx_status asx_contended_mutex_create(asx_contended_mutex_handle *out) {
                                              asx_contended_mutex_reset);
     for (i = 0; i < ASX_CONTENDED_MUTEX_MAX; i++) {
         if (!g_slots[i].alive) {
-            st = asx_mutex_create(&g_slots[i].inner);
+            st = asx_semaphore_create_untracked(g_kernels[0], 1u, &g_slots[i].inner.sem);
             if (st != ASX_OK) return st;
 
             g_slots[i].alive = 1;

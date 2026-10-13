@@ -101,6 +101,8 @@
 /* No node: list ends and the "no record" result. */
 #define ASX_WAIT_NIL UINT32_MAX
 
+struct asx_kernel; /* runtime_internal.h */
+
 typedef struct asx_wait_queue asx_wait_queue;
 
 /* Retire the dead waiters of a record queue with the primitive's own
@@ -263,7 +265,8 @@ void asx_wait_wake_task(asx_task_id task);
  * the mutex is a one-permit semaphore, and Rust's Mutex guard is not an
  * obligation (sync/mutex.rs registers none). Otherwise as
  * asx_semaphore_create. */
-asx_status asx_semaphore_create_untracked(uint32_t initial_permits, asx_semaphore_handle *out);
+asx_status asx_semaphore_create_untracked(struct asx_kernel *k, uint32_t initial_permits,
+                                          asx_semaphore_handle *out);
 
 /* Mutex slots: release `permit` as a guard dropped while its task panics
  * (the slot is poisoned first), and whether the slot is poisoned. */

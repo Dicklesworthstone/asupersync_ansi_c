@@ -6359,7 +6359,7 @@ static asx_status conformance_run(const asx_json_doc *in, uint32_t scenario, asx
     /* Sync objects (DSL §3.7); their arenas are not part of the runtime
      * reset. */
     asx_notify_reset();
-    asx_semaphore_reset();
+    asx_semaphore_reset(&g_rt);
     asx_rwlock_reset();
     asx_barrier_reset();
     g_n_sync = 0;
@@ -6378,7 +6378,7 @@ static asx_status conformance_run(const asx_json_doc *in, uint32_t scenario, asx
         s->name = it_str(d, "name");
         if (strcmp(type, "mutex") == 0) {
             s->type = IT_SYNC_MUTEX;
-            st = asx_mutex_create(&s->mutex);
+            st = asx_mutex_create(&g_rt, &s->mutex);
         } else if (strcmp(type, "rwlock") == 0) {
             s->type = IT_SYNC_RWLOCK;
             st = asx_rwlock_create(&s->rwlock);
@@ -6388,7 +6388,7 @@ static asx_status conformance_run(const asx_json_doc *in, uint32_t scenario, asx
         } else if (strcmp(type, "semaphore") == 0 &&
                    asx_json_u64(in, asx_json_get(in, d, "permits"), &n) && n <= UINT32_MAX) {
             s->type = IT_SYNC_SEMAPHORE;
-            st = asx_semaphore_create((uint32_t)n, &s->semaphore);
+            st = asx_semaphore_create(&g_rt, (uint32_t)n, &s->semaphore);
         } else if (strcmp(type, "barrier") == 0 &&
                    asx_json_u64(in, asx_json_get(in, d, "parties"), &n) && n <= UINT32_MAX) {
             s->type = IT_SYNC_BARRIER;

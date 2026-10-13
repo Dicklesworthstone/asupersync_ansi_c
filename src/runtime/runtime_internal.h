@@ -10,7 +10,7 @@
 #ifndef ASX_RUNTIME_INTERNAL_H
 #define ASX_RUNTIME_INTERNAL_H
 
-#include "../sync/wait_queue.h"
+#include "../sync/sync_state.h"
 #include "fnv_fold.h"
 #include <asx/asx_config.h>
 #include <asx/asx_ids.h>
@@ -458,6 +458,9 @@ typedef struct asx_kernel {
     /* The wait-node pool (sync/wait_queue.c): a queue names this kernel's
      * pool by tag, a node id carries it. */
     asx_wait_pool waits;
+    /* The sync primitives' arenas (sync/sync_state.h), each moved in as its
+     * primitive became per runtime. */
+    asx_sem_state sems;
     /* The runtime's trace: ring, digest, counters, observer. */
     asx_trace_state trace;
     uint32_t rt_generation; /* nonzero while an initialized runtime holds it */
@@ -541,7 +544,6 @@ void asx_kernel_release_internal(uint16_t tag);
  * state a second runtime would share. Each is defined with its subsystem;
  * rt.c evaluates them at a second initialization and names the first that
  * answers nonzero. */
-int asx_semaphore_in_use_internal(void);
 int asx_rwlock_in_use_internal(void);
 int asx_barrier_in_use_internal(void);
 int asx_once_in_use_internal(void);
@@ -619,6 +621,10 @@ void asx_timer_wheel_reset_app_internal(asx_kernel *k);
 /* Release every node of kernel `k`'s wait pool and empty every queue that
  * names it (a clear). Defined in sync/wait_queue.c. */
 void asx_wait_pool_reset_internal(asx_kernel *k);
+
+/* Invalidate every semaphore (and mutex) of kernel `k` and empty its arena
+ * (a clear). Defined in sync/semaphore.c. */
+void asx_semaphore_reset_internal(asx_kernel *k);
 
 /* Initialize the scheduling fields of a freshly allocated task slot. */
 void asx_task_sched_init_internal(asx_task_slot *task);

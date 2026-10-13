@@ -44,8 +44,10 @@ typedef struct {
  * Lifecycle
  * ------------------------------------------------------------------- */
 
-/* Create a mutex (initially unlocked). */
-ASX_API ASX_MUST_USE asx_status asx_mutex_create(asx_mutex_handle *out);
+/* Create a mutex (initially unlocked) in a runtime's arena: its handles
+ * name that runtime by the tag in their slot. ASX_E_INVALID_ARGUMENT for a
+ * NULL rt or out, ASX_E_INVALID_STATE for a tag no runtime holds. */
+ASX_API ASX_MUST_USE asx_status asx_mutex_create(const asx_runtime *rt, asx_mutex_handle *out);
 
 /* Close a mutex, waking all waiters with ASX_E_DISCONNECTED. */
 ASX_API asx_status asx_mutex_close(asx_mutex_handle handle);

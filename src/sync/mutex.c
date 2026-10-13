@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../runtime/runtime_internal.h"
 #include "wait_queue.h"
 #include <asx/sync/mutex.h>
 
@@ -11,9 +12,9 @@
 /* Lifecycle                                                           */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_mutex_create(asx_mutex_handle *out) {
-    if (out == NULL) return ASX_E_INVALID_ARGUMENT;
-    return asx_semaphore_create_untracked(1, &out->sem);
+asx_status asx_mutex_create(const asx_runtime *rt, asx_mutex_handle *out) {
+    if (out == NULL || rt == NULL) return ASX_E_INVALID_ARGUMENT;
+    return asx_semaphore_create_untracked(asx_kernel_of_runtime(rt), 1, &out->sem);
 }
 
 asx_status asx_mutex_close(asx_mutex_handle handle) { return asx_semaphore_close(handle.sem); }

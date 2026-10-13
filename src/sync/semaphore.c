@@ -63,31 +63,18 @@
 /* Arena                                                               */
 /* ------------------------------------------------------------------ */
 
-typedef struct {
-    uint16_t generation;
-    int alive;
-    uint32_t permits;       /* available permits */
-    uint32_t max_permits;   /* initial capacity (for queries) */
-    uint32_t outstanding;   /* permits held by handed-out permit values */
-    asx_wait_queue waiters; /* waiter records, arrival order */
-    /* The lock under asx_mutex: Rust's Mutex hand-off, and no obligation
-     * (Rust's Mutex registers none). Otherwise a Semaphore, whose permits
-     * reserve SemaphorePermit obligations. */
-    int is_mutex;
-    /* Mutex only: a holder's guard was dropped while its task panicked
-     * (Rust's MutexGuard drop, sync/mutex.rs:758-763). Every later lock
-     * fails with LockError::Poisoned, ASX_E_INVALID_STATE. */
-    int poisoned;
-    /* Mutex only: the serial of the guard holding the lock (0 while
-     * nobody holds it) and the last serial handed out. A guard unlocks
-     * only while it holds the lock, as Rust's guard is consumed by its
-     * drop. */
-    uint32_t holder_serial;
-    uint32_t last_serial;
-} sem_slot;
+/* The arenas are the kernels' (asx_kernel.sems, sync_state.h): the slot
+ * field of a handle, permit or waiter holds the index in its low half and
+ * the tag of the runtime that issued it above. */
 
-static sem_slot g_slots[ASX_SEMAPHORE_MAX];
-static uint32_t g_slot_count;
+/* The slot a slot field names, NULL when no runtime holds its tag or the
+ * index is out of range. */
+static asx_sem_slot *sem_slot_at(uint32_t field) {
+    asx_kernel *k = asx_kernel_for_tag((uint16_t)(field >> ASX_SYNC_SLOT_TAG_SHIFT));
+    uint32_t idx = field & ASX_SYNC_SLOT_INDEX_MASK;
+    if (k == NULL || idx >= ASX_SEMAPHORE_MAX) return NULL;
+    return &k->sems.slots[idx];
+}
 
 static uint16_t next_gen(uint16_t g) {
     g++;
@@ -103,14 +90,14 @@ static asx_wait_node *sem_node(uint32_t i) { return asx_wait_node_at(i); }
 
 /* Release a waiter record, returning a permit it was granted but never
  * consumed to the pool. */
-static void sem_waiter_retire(sem_slot *s, uint32_t i) {
+static void sem_waiter_retire(asx_sem_slot *s, uint32_t i) {
     if ((sem_node(i)->flags & SEM_ACQUIRED) != 0u) s->permits++;
     asx_wait_record_release(&s->waiters, i);
 }
 
 /* Semaphore: the front of the line, the oldest queued waiter, or
  * ASX_WAIT_NIL. */
-static uint32_t sem_front(const sem_slot *s) {
+static uint32_t sem_front(const asx_sem_slot *s) {
     uint32_t i;
     for (i = asx_wait_queue_first(&s->waiters); i != ASX_WAIT_NIL; i = asx_wait_queue_next(i)) {
         ASX_CHECKPOINT_WAIVER("bounded: waiters <= ASX_WAIT_NODE_CAPACITY");
@@ -121,7 +108,7 @@ static uint32_t sem_front(const sem_slot *s) {
 
 /* Semaphore: wake the front waiter if it can take what it asked for now
  * (front_waiter_waker_if_runnable). */
-static void sem_wake_front(const sem_slot *s) {
+static void sem_wake_front(const asx_sem_slot *s) {
     uint32_t i = sem_front(s);
     if (i != ASX_WAIT_NIL && s->permits >= sem_node(i)->value) {
         asx_wait_wake_task(sem_node(i)->task);
@@ -130,7 +117,7 @@ static void sem_wake_front(const sem_slot *s) {
 
 /* Semaphore: a waiter leaves the line without a permit; the next one is
  * woken only if this one was the front (remove_waiter_and_take_next_waker). */
-static void sem_leave(sem_slot *s, uint32_t i) {
+static void sem_leave(asx_sem_slot *s, uint32_t i) {
     int was_front = (sem_node(i)->flags & SEM_QUEUED) != 0u && sem_front(s) == i;
     sem_waiter_retire(s, i);
     if (was_front) sem_wake_front(s);
@@ -138,7 +125,7 @@ static void sem_leave(sem_slot *s, uint32_t i) {
 
 /* Reclaim waiters whose parked task completed (or whose slot was reused)
  * without cancelling the acquire. */
-static void sem_reap(sem_slot *s) {
+static void sem_reap(asx_sem_slot *s) {
     uint32_t i = asx_wait_queue_first(&s->waiters);
     while (i != ASX_WAIT_NIL) {
         uint32_t next = asx_wait_queue_next(i);
@@ -157,7 +144,7 @@ static void sem_reap(sem_slot *s) {
 
 /* Mutex: the oldest un-granted waiter other than `except` (ASX_WAIT_NIL
  * for none), or ASX_WAIT_NIL. */
-static uint32_t sem_first_in_line(const sem_slot *s, uint32_t except) {
+static uint32_t sem_first_in_line(const asx_sem_slot *s, uint32_t except) {
     uint32_t i;
     for (i = asx_wait_queue_first(&s->waiters); i != ASX_WAIT_NIL; i = asx_wait_queue_next(i)) {
         ASX_CHECKPOINT_WAIVER("bounded: waiters <= ASX_WAIT_NODE_CAPACITY");
@@ -168,7 +155,7 @@ static uint32_t sem_first_in_line(const sem_slot *s, uint32_t except) {
 }
 
 /* Mutex: 1 if no waiter that arrived before `idx` still waits. */
-static int sem_next_in_line(const sem_slot *s, uint32_t idx) {
+static int sem_next_in_line(const asx_sem_slot *s, uint32_t idx) {
     uint32_t i;
     for (i = asx_wait_queue_first(&s->waiters); i != ASX_WAIT_NIL && i != idx;
          i = asx_wait_queue_next(i)) {
@@ -188,7 +175,7 @@ static void sem_grant(uint32_t i) {
  * parked. Stops at the first one that is not parked: it takes the lock
  * when it polls, so granting past it would break arrival order. A
  * semaphore grants nothing: its waiters take permits when they poll. */
-static void sem_dispatch_parked(sem_slot *s) {
+static void sem_dispatch_parked(asx_sem_slot *s) {
     if (!s->is_mutex) return;
     while (s->permits > 0) {
         uint32_t i = sem_first_in_line(s, ASX_WAIT_NIL);
@@ -201,7 +188,7 @@ static void sem_dispatch_parked(sem_slot *s) {
 
 /* Every acquisition has a distinct binding, including equal-count
  * semaphore permits. A mutex also records its current guard's serial. */
-static uint32_t sem_hold_serial(sem_slot *s) {
+static uint32_t sem_hold_serial(asx_sem_slot *s) {
     /* Zero is reserved for a permit that has not been handed out. */
     s->last_serial++;
     if (s->last_serial == 0u) s->last_serial = 1u;
@@ -214,7 +201,7 @@ static uint32_t sem_hold_serial(sem_slot *s) {
  * resolved (committed by its release or its drop with the holder task,
  * aborted by forget); otherwise its count exceeds what handed-out permits
  * still hold. */
-static int sem_permit_spent(const sem_slot *s, const asx_semaphore_permit *permit) {
+static int sem_permit_spent(const asx_sem_slot *s, const asx_semaphore_permit *permit) {
     asx_obligation_state state;
     if (s->is_mutex) return permit->count != 1u || permit->serial != s->holder_serial;
     if (permit->obligation != ASX_INVALID_ID &&
@@ -226,13 +213,13 @@ static int sem_permit_spent(const sem_slot *s, const asx_semaphore_permit *permi
 
 /* Wait-node pool reclamation: retire this semaphore's dead waiters. */
 static void sem_reap_queue(asx_wait_queue *q) {
-    sem_slot *s = (sem_slot *)((char *)q - offsetof(sem_slot, waiters));
+    asx_sem_slot *s = (asx_sem_slot *)((char *)q - offsetof(asx_sem_slot, waiters));
     sem_reap(s);
     sem_dispatch_parked(s);
 }
 
 /* The live record a waiter handle names, or ASX_WAIT_NIL. */
-static uint32_t sem_waiter_index(sem_slot *s, const asx_semaphore_waiter *waiter) {
+static uint32_t sem_waiter_index(asx_sem_slot *s, const asx_semaphore_waiter *waiter) {
     if (asx_wait_record_get(&s->waiters, waiter->waiter_slot, waiter->waiter_generation) == NULL) {
         return ASX_WAIT_NIL;
     }
@@ -243,48 +230,53 @@ static uint32_t sem_waiter_index(sem_slot *s, const asx_semaphore_waiter *waiter
 /* Lifecycle                                                           */
 /* ------------------------------------------------------------------ */
 
-/* Whether any semaphore (or mutex over one) was created since the last
- * reset: a second runtime would share the table. */
-int asx_semaphore_in_use_internal(void) { return g_slot_count != 0u; }
-
-static asx_status sem_create(uint32_t initial_permits, int is_mutex, asx_semaphore_handle *out) {
+/* A semaphore (or the lock of a mutex) of kernel `k`, in its first free
+ * slot; the handle names the kernel by its tag. */
+static asx_status sem_create(asx_kernel *k, uint32_t initial_permits, int is_mutex,
+                             asx_semaphore_handle *out) {
+    asx_sem_state *st;
     uint32_t i;
     if (out == NULL) return ASX_E_INVALID_ARGUMENT;
-    if (asx_runtime_shared_state_refused_internal("semaphores")) return ASX_E_INVALID_STATE;
+    if (k == NULL) return ASX_E_INVALID_STATE;
+    st = &k->sems;
 
     for (i = 0; i < ASX_SEMAPHORE_MAX; i++) {
-        if (!g_slots[i].alive) {
-            g_slots[i].alive = 1;
-            g_slots[i].generation = next_gen(g_slots[i].generation);
-            g_slots[i].permits = initial_permits;
-            g_slots[i].max_permits = initial_permits;
-            g_slots[i].outstanding = 0u;
-            g_slots[i].is_mutex = is_mutex;
-            g_slots[i].poisoned = 0;
-            g_slots[i].holder_serial = 0u;
-            asx_wait_records_init(&g_slots[i].waiters, sem_reap_queue, 0u);
-            out->slot = i;
-            out->generation = g_slots[i].generation;
-            if (i >= g_slot_count) g_slot_count = i + 1;
+        asx_sem_slot *s = &st->slots[i];
+        if (!s->alive) {
+            s->alive = 1;
+            s->generation = next_gen(s->generation);
+            s->permits = initial_permits;
+            s->max_permits = initial_permits;
+            s->outstanding = 0u;
+            s->is_mutex = is_mutex;
+            s->poisoned = 0;
+            s->holder_serial = 0u;
+            asx_wait_records_init(&s->waiters, sem_reap_queue, k->tag);
+            out->slot = ((uint32_t)k->tag << ASX_SYNC_SLOT_TAG_SHIFT) | i;
+            out->generation = s->generation;
+            if (i >= st->slot_count) st->slot_count = i + 1;
             return ASX_OK;
         }
     }
     return ASX_E_RESOURCE_EXHAUSTED;
 }
 
-asx_status asx_semaphore_create(uint32_t initial_permits, asx_semaphore_handle *out) {
-    return sem_create(initial_permits, 0, out);
+asx_status asx_semaphore_create(const asx_runtime *rt, uint32_t initial_permits,
+                                asx_semaphore_handle *out) {
+    asx_kernel *k = asx_kernel_of_runtime(rt);
+    if (rt == NULL) return ASX_E_INVALID_ARGUMENT;
+    return sem_create(k, initial_permits, 0, out);
 }
 
-asx_status asx_semaphore_create_untracked(uint32_t initial_permits, asx_semaphore_handle *out) {
-    return sem_create(initial_permits, 1, out);
+asx_status asx_semaphore_create_untracked(asx_kernel *k, uint32_t initial_permits,
+                                          asx_semaphore_handle *out) {
+    return sem_create(k, initial_permits, 1, out);
 }
 
 asx_status asx_semaphore_close(asx_semaphore_handle handle) {
-    sem_slot *s;
+    asx_sem_slot *s = sem_slot_at(handle.slot);
     uint32_t i;
-    if (handle.slot >= ASX_SEMAPHORE_MAX) return ASX_E_INVALID_ARGUMENT;
-    s = &g_slots[handle.slot];
+    if (s == NULL) return ASX_E_INVALID_ARGUMENT;
     if (!s->alive || s->generation != handle.generation) return ASX_E_STALE_HANDLE;
 
     /* Wake all waiters as disconnected */
@@ -308,10 +300,9 @@ asx_status asx_semaphore_try_acquire(asx_semaphore_handle handle, asx_semaphore_
 
 asx_status asx_semaphore_try_acquire_many(asx_semaphore_handle handle, uint32_t count,
                                           asx_semaphore_permit *out) {
-    sem_slot *s;
+    asx_sem_slot *s = sem_slot_at(handle.slot);
     if (out == NULL) return ASX_E_INVALID_ARGUMENT;
-    if (handle.slot >= ASX_SEMAPHORE_MAX) return ASX_E_INVALID_ARGUMENT;
-    s = &g_slots[handle.slot];
+    if (s == NULL) return ASX_E_INVALID_ARGUMENT;
     if (!s->alive || s->generation != handle.generation) return ASX_E_STALE_HANDLE;
     if (s->is_mutex && count != 1u) return ASX_E_INVALID_ARGUMENT;
     /* Rust's try_lock checks poisoning first (sync/mutex.rs:251). */
@@ -346,11 +337,10 @@ asx_status asx_semaphore_acquire_begin(asx_semaphore_handle handle, asx_semaphor
 
 asx_status asx_semaphore_acquire_many_begin(asx_semaphore_handle handle, uint32_t count,
                                             asx_semaphore_waiter *out) {
-    sem_slot *s;
+    asx_sem_slot *s = sem_slot_at(handle.slot);
     uint32_t i;
     if (out == NULL) return ASX_E_INVALID_ARGUMENT;
-    if (handle.slot >= ASX_SEMAPHORE_MAX) return ASX_E_INVALID_ARGUMENT;
-    s = &g_slots[handle.slot];
+    if (s == NULL) return ASX_E_INVALID_ARGUMENT;
     if (!s->alive || s->generation != handle.generation) return ASX_E_STALE_HANDLE;
     if (s->is_mutex && count != 1u) return ASX_E_INVALID_ARGUMENT;
 
@@ -372,10 +362,8 @@ asx_status asx_semaphore_acquire_many_begin(asx_semaphore_handle handle, uint32_
  * release's do, and the drop commits the obligation. `slot_gen` packs the
  * slot and its generation. The caller's permit value is spent. */
 static int sem_permit_drop(uint64_t slot_gen, uint64_t count) {
-    sem_slot *s;
-    uint32_t slot = (uint32_t)(slot_gen & 0xFFFFFFFFu);
-    if (slot >= ASX_SEMAPHORE_MAX) return 1;
-    s = &g_slots[slot];
+    asx_sem_slot *s = sem_slot_at((uint32_t)(slot_gen & 0xFFFFFFFFu));
+    if (s == NULL) return 1;
     if (!s->alive || s->generation != (uint16_t)(slot_gen >> 32) || count > s->outstanding) {
         return 1;
     }
@@ -394,7 +382,7 @@ static int sem_permit_drop(uint64_t slot_gen, uint64_t count) {
  * semaphore's, not the mutex's). A refused reservation leaves the permit
  * untracked. A tracked permit still held when its task completes is
  * dropped with it. */
-static asx_status sem_hand_out(sem_slot *s, const asx_semaphore_waiter *waiter, uint32_t count,
+static asx_status sem_hand_out(asx_sem_slot *s, const asx_semaphore_waiter *waiter, uint32_t count,
                                asx_semaphore_permit *out, const asx_cx *cx) {
     s->outstanding += count;
     out->sem_slot = waiter->sem_slot;
@@ -417,7 +405,7 @@ static asx_status sem_hand_out(sem_slot *s, const asx_semaphore_waiter *waiter, 
 }
 
 /* Hand a granted permit to the polling caller and retire its waiter. */
-static asx_status sem_consume_grant(sem_slot *s, uint32_t i, const asx_semaphore_waiter *waiter,
+static asx_status sem_consume_grant(asx_sem_slot *s, uint32_t i, const asx_semaphore_waiter *waiter,
                                     asx_semaphore_permit *out, const asx_cx *cx) {
     /* consumed, not returned to the pool */
     sem_node(i)->flags = (uint8_t)(sem_node(i)->flags & ~SEM_ACQUIRED);
@@ -437,7 +425,7 @@ static void sem_drop_deadline_sleep(const asx_semaphore_waiter *waiter, asx_task
 }
 
 /* Mutex: take the lock handed to this waiter. */
-static asx_status sem_take_grant(sem_slot *s, uint32_t i, const asx_semaphore_waiter *waiter,
+static asx_status sem_take_grant(asx_sem_slot *s, uint32_t i, const asx_semaphore_waiter *waiter,
                                  asx_semaphore_permit *out, const asx_cx *cx) {
     asx_status st = sem_consume_grant(s, i, waiter, out, cx);
     sem_drop_deadline_sleep(waiter, asx_task_current());
@@ -446,13 +434,12 @@ static asx_status sem_take_grant(sem_slot *s, uint32_t i, const asx_semaphore_wa
 
 asx_status asx_semaphore_poll_acquire(asx_semaphore_waiter *waiter, asx_semaphore_permit *out,
                                       asx_cx *cx) {
-    sem_slot *s;
+    asx_sem_slot *s;
     uint32_t i;
 
     if (waiter == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
-    if (waiter->sem_slot >= ASX_SEMAPHORE_MAX) return ASX_E_INVALID_ARGUMENT;
-
-    s = &g_slots[waiter->sem_slot];
+    s = sem_slot_at(waiter->sem_slot);
+    if (s == NULL) return ASX_E_INVALID_ARGUMENT;
     if (!s->alive || s->generation != waiter->generation) return ASX_E_DISCONNECTED;
     if (waiter->waiter_slot >= ASX_WAIT_NODE_CAPACITY) return ASX_E_INVALID_ARGUMENT;
 
@@ -565,12 +552,12 @@ asx_status asx_semaphore_poll_acquire(asx_semaphore_waiter *waiter, asx_semaphor
 }
 
 asx_status asx_semaphore_acquire_cancel(asx_semaphore_waiter *waiter) {
-    sem_slot *s;
+    asx_sem_slot *s;
     uint32_t i;
     asx_task_id owner;
     if (waiter == NULL) return ASX_E_INVALID_ARGUMENT;
-    if (waiter->sem_slot >= ASX_SEMAPHORE_MAX) return ASX_E_INVALID_ARGUMENT;
-    s = &g_slots[waiter->sem_slot];
+    s = sem_slot_at(waiter->sem_slot);
+    if (s == NULL) return ASX_E_INVALID_ARGUMENT;
     if (!s->alive || s->generation != waiter->generation) return ASX_OK;
     if (waiter->waiter_slot >= ASX_WAIT_NODE_CAPACITY) return ASX_E_INVALID_ARGUMENT;
 
@@ -609,7 +596,7 @@ static void sem_commit_obligation(const asx_semaphore_permit *permit) {
 }
 
 asx_status asx_semaphore_release(asx_semaphore_permit permit) {
-    sem_slot *s;
+    asx_sem_slot *s;
     uint32_t i;
     asx_status st;
     if (permit.obligation != ASX_INVALID_ID) {
@@ -619,8 +606,8 @@ asx_status asx_semaphore_release(asx_semaphore_permit permit) {
                                                  (uint64_t)permit.count, permit.serial);
         if (st != ASX_OK && st != ASX_E_OBLIGATION_ALREADY_RESOLVED) return st;
     }
-    if (permit.sem_slot >= ASX_SEMAPHORE_MAX) return ASX_E_INVALID_ARGUMENT;
-    s = &g_slots[permit.sem_slot];
+    s = sem_slot_at(permit.sem_slot);
+    if (s == NULL) return ASX_E_INVALID_ARGUMENT;
     if (!s->alive || s->generation != permit.generation) {
         sem_commit_obligation(&permit);
         return ASX_E_STALE_HANDLE;
@@ -661,7 +648,7 @@ asx_status asx_semaphore_release(asx_semaphore_permit permit) {
  * (sync/mutex.rs:758-763). The unlock hands the lock on as usual; each
  * waiter in turn fails at its next poll and passes it on. */
 asx_status asx_semaphore_mutex_release_poisoned(asx_semaphore_permit permit) {
-    sem_slot *s;
+    asx_sem_slot *s;
     asx_status st;
     if (permit.obligation != ASX_INVALID_ID) {
         st = asx_obligation_check_token_internal(permit.obligation, sem_permit_drop,
@@ -670,8 +657,8 @@ asx_status asx_semaphore_mutex_release_poisoned(asx_semaphore_permit permit) {
                                                  (uint64_t)permit.count, permit.serial);
         if (st != ASX_OK && st != ASX_E_OBLIGATION_ALREADY_RESOLVED) return st;
     }
-    if (permit.sem_slot >= ASX_SEMAPHORE_MAX) return ASX_E_INVALID_ARGUMENT;
-    s = &g_slots[permit.sem_slot];
+    s = sem_slot_at(permit.sem_slot);
+    if (s == NULL) return ASX_E_INVALID_ARGUMENT;
     if (!s->alive || s->generation != permit.generation) return ASX_E_STALE_HANDLE;
     if (!s->is_mutex || sem_permit_spent(s, &permit)) return ASX_E_INVALID_STATE;
     s->poisoned = 1;
@@ -679,15 +666,14 @@ asx_status asx_semaphore_mutex_release_poisoned(asx_semaphore_permit permit) {
 }
 
 int asx_semaphore_mutex_poisoned(asx_semaphore_handle handle) {
-    if (handle.slot >= ASX_SEMAPHORE_MAX) return 0;
-    if (!g_slots[handle.slot].alive || g_slots[handle.slot].generation != handle.generation) {
-        return 0;
-    }
-    return g_slots[handle.slot].poisoned;
+    const asx_sem_slot *s = sem_slot_at(handle.slot);
+    if (s == NULL) return 0;
+    if (!s->alive || s->generation != handle.generation) return 0;
+    return s->poisoned;
 }
 
 asx_status asx_semaphore_forget(asx_semaphore_permit permit) {
-    sem_slot *s;
+    asx_sem_slot *s;
     asx_status st = ASX_OK;
     if (permit.obligation != ASX_INVALID_ID) {
         st = asx_obligation_check_token_internal(permit.obligation, sem_permit_drop,
@@ -696,8 +682,8 @@ asx_status asx_semaphore_forget(asx_semaphore_permit permit) {
                                                  (uint64_t)permit.count, permit.serial);
         if (st != ASX_OK && st != ASX_E_OBLIGATION_ALREADY_RESOLVED) return st;
     }
-    if (permit.sem_slot >= ASX_SEMAPHORE_MAX) return ASX_E_INVALID_ARGUMENT;
-    s = &g_slots[permit.sem_slot];
+    s = sem_slot_at(permit.sem_slot);
+    if (s == NULL) return ASX_E_INVALID_ARGUMENT;
     if (!s->alive || s->generation != permit.generation) {
         st = ASX_E_STALE_HANDLE;
     } else if (s->is_mutex) {
@@ -720,9 +706,8 @@ asx_status asx_semaphore_forget(asx_semaphore_permit permit) {
 }
 
 asx_status asx_semaphore_add_permits(asx_semaphore_handle handle, uint32_t count) {
-    sem_slot *s;
-    if (handle.slot >= ASX_SEMAPHORE_MAX) return ASX_E_INVALID_ARGUMENT;
-    s = &g_slots[handle.slot];
+    asx_sem_slot *s = sem_slot_at(handle.slot);
+    if (s == NULL) return ASX_E_INVALID_ARGUMENT;
     if (!s->alive || s->generation != handle.generation) return ASX_E_STALE_HANDLE;
     if (s->is_mutex) return ASX_E_INVALID_ARGUMENT;
     if (count == 0u) return ASX_OK;
@@ -740,24 +725,30 @@ asx_status asx_semaphore_add_permits(asx_semaphore_handle handle, uint32_t count
 /* ------------------------------------------------------------------ */
 
 uint32_t asx_semaphore_available(asx_semaphore_handle handle) {
-    if (handle.slot >= ASX_SEMAPHORE_MAX) return 0;
-    if (!g_slots[handle.slot].alive || g_slots[handle.slot].generation != handle.generation)
-        return 0;
-    return g_slots[handle.slot].permits;
+    const asx_sem_slot *s = sem_slot_at(handle.slot);
+    if (s == NULL) return 0;
+    if (!s->alive || s->generation != handle.generation) return 0;
+    return s->permits;
 }
 
 /* ------------------------------------------------------------------ */
 /* Arena management                                                    */
 /* ------------------------------------------------------------------ */
 
-void asx_semaphore_reset(void) {
+void asx_semaphore_reset_internal(asx_kernel *k) {
+    asx_sem_state *st = &k->sems;
     uint32_t i;
-    for (i = 0; i < g_slot_count; i++) {
-        g_slots[i].generation = next_gen(g_slots[i].generation);
-        g_slots[i].alive = 0;
-        g_slots[i].permits = 0;
-        g_slots[i].outstanding = 0;
-        asx_wait_records_init(&g_slots[i].waiters, sem_reap_queue, 0u);
+    for (i = 0; i < st->slot_count; i++) {
+        st->slots[i].generation = next_gen(st->slots[i].generation);
+        st->slots[i].alive = 0;
+        st->slots[i].permits = 0;
+        st->slots[i].outstanding = 0;
+        asx_wait_records_init(&st->slots[i].waiters, sem_reap_queue, k->tag);
     }
-    g_slot_count = 0;
+    st->slot_count = 0;
+}
+
+void asx_semaphore_reset(const asx_runtime *rt) {
+    asx_kernel *k = asx_kernel_of_runtime(rt);
+    if (k != NULL) asx_semaphore_reset_internal(k);
 }

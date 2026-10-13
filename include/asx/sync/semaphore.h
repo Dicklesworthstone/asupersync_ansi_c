@@ -74,7 +74,8 @@ typedef struct {
  * ------------------------------------------------------------------- */
 
 /* Create a counting semaphore with initial permits. */
-ASX_API ASX_MUST_USE asx_status asx_semaphore_create(uint32_t initial_permits,
+ASX_API ASX_MUST_USE asx_status asx_semaphore_create(const asx_runtime *rt,
+                                                     uint32_t initial_permits,
                                                      asx_semaphore_handle *out);
 
 /* Close a semaphore, waking all waiters with ASX_E_DISCONNECTED. */
@@ -177,8 +178,8 @@ ASX_API uint32_t asx_semaphore_available(asx_semaphore_handle handle);
  * Arena management
  * ------------------------------------------------------------------- */
 
-/* Reset all semaphore arena state (test support). */
-ASX_API void asx_semaphore_reset(void);
+/* Reset one runtime's semaphore (and mutex) arena state (test support). */
+ASX_API void asx_semaphore_reset(const asx_runtime *rt);
 
 #ifdef __cplusplus
 }

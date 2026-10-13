@@ -274,7 +274,6 @@ typedef struct {
 /* The still process-wide subsystems, as a second initialization names
  * them. Each moves out of the table as it becomes per runtime. */
 static const runtime_shared_subsystem g_shared_subsystems[] = {
-    {"semaphores", asx_semaphore_in_use_internal},
     {"rwlocks", asx_rwlock_in_use_internal},
     {"barriers", asx_barrier_in_use_internal},
     {"once cells", asx_once_in_use_internal},
