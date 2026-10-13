@@ -209,7 +209,7 @@ Completed         .        .        .           .           .           .
 
 ### 2.4 Task Poll Contract
 
-C has no `ASX_POLL_*` codes (the first extraction named some). A C poll function (`asx_task_poll_fn`, `include/asx/runtime/runtime.h:63`) returns an `asx_status`; the scheduler maps it in `sched_poll_slot` (`src/runtime/scheduler.c:1065`). Rust's equivalent is the `Poll` of the task's future plus the panic catch at the poll boundary.
+C has no `ASX_POLL_*` codes (the first extraction named some). A C poll function (`asx_task_poll_fn`, `include/asx/runtime/runtime.h:63`) returns an `asx_status`; the scheduler maps it in `sched_poll_slot` (`src/runtime/scheduler.c:1066`). Rust's equivalent is the `Poll` of the task's future plus the panic catch at the poll boundary.
 
 | Poll Return | Meaning | State Transition |
 |------------|---------|-----------------|
@@ -664,7 +664,7 @@ The Expected Result column gives C's current status (checked directly against `s
 
 ### 8.2 Resource Exhaustion Forbidden Behaviors
 
-These rows describe C's fixed-capacity resource plane; Rust allocates and has no counterpart. They were not re-verified in this pass, except: a full C lab lane makes the lab step fail with `ASX_E_RESOURCE_EXHAUSTED` (`src/runtime/scheduler.c:1266`), and a full `src/time/timer_wheel.c` table returns `ASX_E_RESOURCE_EXHAUSTED`.
+These rows describe C's fixed-capacity resource plane; Rust allocates and has no counterpart. They were not re-verified in this pass, except: a full C lab lane makes the lab step fail with `ASX_E_RESOURCE_EXHAUSTED` (`src/runtime/scheduler.c:1267`), and a full `src/time/timer_wheel.c` table returns `ASX_E_RESOURCE_EXHAUSTED`.
 
 | ID | Forbidden Behavior | Expected Result | Fixture Category |
 |----|-------------------|-----------------|------------------|
