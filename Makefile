@@ -99,7 +99,7 @@ CLASS_DEF := $(if $(RESOURCE_CLASS),-DASX_RESOURCE_CLASS=$(RESOURCE_CLASS),)
 # and sized that.
 # ---------------------------------------------------------------------------
 BENCH_GOALS := bench bench-json bench-build parallel-bench-json parallel-bench-gate slo-gate \
-               size-gate evidence-dashboard
+               size-gate evidence-dashboard perf-compare
 ifneq ($(filter $(BENCH_GOALS),$(MAKECMDGOALS)),)
 BUILD_TYPE ?= release
 endif
@@ -2620,6 +2620,40 @@ size-report:
 		$(if $(filter 1,$(SIZE_REPORT_STRICT)),--strict,)
 
 # ---------------------------------------------------------------------------
+# perf-compare — asx against asupersync on the same workloads, in one
+# process, one sample of each engine in turn (bd-9kll.14.1,
+# tools/perf_compare). The library and tools/perf_compare/c/asx_workloads.c
+# are built here with the release flags (the workloads read arena-size
+# macros, so they take the library's flags); the Rust program then links
+# both and runs, with asupersync pinned by rev in its Cargo.toml. Output:
+# report.json and report.txt in PERF_COMPARE_DIR.
+#   make perf-compare                         # the full run
+#   make perf-compare PERF_COMPARE_ARGS=--quick
+#   make perf-compare PERF_COMPARE_ARGS="--history .bench-history --check-history"
+# On a worker: rch exec -- make perf-compare
+# ---------------------------------------------------------------------------
+PERF_COMPARE_DIR ?= $(BUILD_DIR)/perf-compare
+PERF_COMPARE_ARGS ?=
+PERF_COMPARE_OBJ := $(PERF_COMPARE_DIR)/asx_workloads.o
+PERF_COMPARE_LIB := $(PERF_COMPARE_DIR)/libasx_workloads.a
+
+.PHONY: perf-compare
+
+$(PERF_COMPARE_DIR):
+	@mkdir -p $@
+
+$(PERF_COMPARE_OBJ): tools/perf_compare/c/asx_workloads.c $(BUILD_CONFIG_FILE) | $(PERF_COMPARE_DIR)
+	$(CC) $(ALL_CFLAGS) -c -o $@ $<
+
+$(PERF_COMPARE_LIB): $(PERF_COMPARE_OBJ)
+	$(AR) rcs $@ $<
+
+perf-compare: $(LIB_A) $(PERF_COMPARE_LIB)
+	ASX_LIB_DIR="$(abspath $(LIB_DIR))" ASX_WORKLOADS_DIR="$(abspath $(PERF_COMPARE_DIR))" \
+		cargo run --release --manifest-path tools/perf_compare/Cargo.toml -- \
+		--out "$(abspath $(PERF_COMPARE_DIR))" $(PERF_COMPARE_ARGS)
+
+# ---------------------------------------------------------------------------
 # release-artifacts — deterministic tar.xz bundles + integrity metadata
 # ---------------------------------------------------------------------------
 release-artifacts:
@@ -2938,6 +2972,7 @@ help:
 	@echo "  kernel-only        ASX_KERNEL_ONLY archive: no conformance interpreter, CLI or protocol models"
 	@echo "  kernel-only-check  Fail if a kernel-only object needs a left-out module"
 	@echo "  size-report        Footprint per profile x class: objects, archive, linked quickstart"
+	@echo "  perf-compare       asx vs asupersync, same workloads, one process (needs cargo)"
 	@echo "  release-artifacts  Build release tar.xz + checksum/signature/provenance bundles"
 	@echo "  release-install-smoke Install release tarball into a prefix and run README quickstart"
 	@echo "  install            Install to PREFIX (default /usr/local)"

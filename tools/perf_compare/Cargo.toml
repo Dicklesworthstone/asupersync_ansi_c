@@ -1,0 +1,27 @@
+[package]
+name = "perf-compare"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "bd-9kll.14.1: asx (C, through its C ABI) against asupersync (Rust, current-thread runtime) on the same workloads, in one process, in turn."
+
+[[bin]]
+name = "perf_compare"
+path = "src/main.rs"
+
+[dependencies]
+# The semantic authority and the performance reference, pinned by rev as
+# tools/twin_run pins it (0.6.0 is not on crates.io). Keep in sync with
+# tools/twin_run/Cargo.toml and docs/rust_baseline_inventory.json.
+asupersync = { git = "https://github.com/Dicklesworthstone/asupersync", rev = "5e60b1c4c53d62aaddae68de3ee7de4732f1755b" }
+serde_json = "1"
+
+# Both engines are measured optimized: the C library is built with the
+# Makefile's release flags (-O2), this crate with the release profile.
+[profile.release]
+opt-level = 3
+codegen-units = 1
+debug = false
+
+# Standalone: not a member of any parent workspace.
+[workspace]

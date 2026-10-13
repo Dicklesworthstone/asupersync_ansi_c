@@ -1036,6 +1036,24 @@ P2 remains in progress, including raw-sample/profile evidence, governed
 baseline refresh and automotive acceptance. See
 `docs/REALITY_CHECK_AND_BRIDGE_PLAN.md` for revision-bound results and limits.
 
+### C against Rust
+
+`make perf-compare` (one command, `rch exec -- make perf-compare` on a worker)
+runs the same workloads on asupersync's current-thread runtime and on `asx`
+in one process, one sample of each engine in turn so both see the same host
+in the same minute (`tools/perf_compare`, the pinned asupersync rev linked as
+a library, `asx` through its C ABI in the release build). It reports per
+operation p50, p95, p99, the mean and the coefficient of variation, and flags
+a row whose cv is above 5% as noise. The workloads are spawn plus join, yield,
+an mpsc ping-pong, cancel latency, timer arm and cancel on a wheel, and region
+open and close (asupersync's side of the last one is not reachable through
+its public runtime API); TCP request/response and HTTP/1.1 keep-alive are not
+run. `asx` holds its objects in fixed arenas, so its spawn, timer and region
+workloads run in batches no larger than the arena and the report records the
+batch sizes. No comparison figures are published here: the harness has not
+been run on a recorded host yet, and this README states no number it has not
+measured.
+
 Recommended benchmark flow:
 
 ```bash
