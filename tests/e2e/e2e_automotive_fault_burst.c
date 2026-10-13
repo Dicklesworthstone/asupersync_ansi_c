@@ -12,6 +12,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../test_runtime.h"
 #include <asx/asx.h>
 #include <asx/runtime/runtime.h>
 #include <asx/runtime/telemetry.h>
@@ -83,7 +84,7 @@ static asx_status poll_checkpoint_cooperative(void *ud, asx_task_id self) {
 /* auto-fault-burst-001: clock skew fault injection and recovery */
 static void scenario_clock_skew_fault(void) {
     SCENARIO_BEGIN("auto-fault-burst-001.clock_skew");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_fault_injection fault;
     memset(&fault, 0, sizeof(fault));
@@ -100,7 +101,7 @@ static void scenario_clock_skew_fault(void) {
     /* Normal operations should still work under skew */
     asx_region_id rid;
     asx_task_id tid;
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
     SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK,
                    "task_spawn_under_skew");
 
@@ -122,7 +123,7 @@ static void scenario_clock_skew_fault(void) {
 /* auto-fault-burst-002: clock reversal fault */
 static void scenario_clock_reversal(void) {
     SCENARIO_BEGIN("auto-fault-burst-002.clock_reversal");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_fault_injection fault;
     memset(&fault, 0, sizeof(fault));
@@ -135,7 +136,7 @@ static void scenario_clock_reversal(void) {
 
     asx_region_id rid;
     asx_task_id tid;
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
     SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK,
                    "spawn_under_reversal");
 
@@ -150,7 +151,7 @@ static void scenario_clock_reversal(void) {
 /* auto-fault-burst-003: constant entropy fault */
 static void scenario_entropy_const(void) {
     SCENARIO_BEGIN("auto-fault-burst-003.entropy_const");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_fault_injection fault;
     memset(&fault, 0, sizeof(fault));
@@ -164,7 +165,7 @@ static void scenario_entropy_const(void) {
     /* Operations should still complete deterministically */
     asx_region_id rid;
     asx_task_id tid;
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
 
     uint32_t i;
     for (i = 0; i < 4; i++) {
@@ -183,7 +184,7 @@ static void scenario_entropy_const(void) {
 /* auto-fault-burst-004: multi-fault cascade */
 static void scenario_multi_fault_cascade(void) {
     SCENARIO_BEGIN("auto-fault-burst-004.multi_fault_cascade");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     /* Inject clock skew */
     asx_fault_injection f1;
@@ -210,7 +211,7 @@ static void scenario_multi_fault_cascade(void) {
     /* Runtime should still function under compound faults */
     asx_region_id rid;
     asx_task_id tid;
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
 
     uint32_t i;
     for (i = 0; i < 4; i++) {
@@ -231,13 +232,13 @@ static void scenario_multi_fault_cascade(void) {
 /* auto-fault-burst-005: poison containment after fault-induced degradation */
 static void scenario_fault_containment(void) {
     SCENARIO_BEGIN("auto-fault-burst-005.fault_containment");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_region_id r_faulty, r_healthy;
     asx_task_id tid;
 
-    SCENARIO_CHECK(asx_region_open(&r_faulty) == ASX_OK, "open_faulty");
-    SCENARIO_CHECK(asx_region_open(&r_healthy) == ASX_OK, "open_healthy");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &r_faulty) == ASX_OK, "open_faulty");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &r_healthy) == ASX_OK, "open_healthy");
 
     /* Spawn work in both regions */
     SCENARIO_CHECK(asx_task_spawn(r_faulty, poll_complete, NULL, &tid) == ASX_OK, "spawn_faulty");
@@ -263,7 +264,7 @@ static void scenario_fault_containment(void) {
 /* auto-fault-burst-006: deadline cancel under active fault */
 static void scenario_deadline_under_fault(void) {
     SCENARIO_BEGIN("auto-fault-burst-006.deadline_under_fault");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     /* Inject clock skew to simulate timing pressure */
     asx_fault_injection fault;
@@ -278,7 +279,7 @@ static void scenario_deadline_under_fault(void) {
     asx_region_id rid;
     asx_task_id tid;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
     SCENARIO_CHECK(asx_task_spawn(rid, poll_checkpoint_cooperative, NULL, &tid) == ASX_OK,
                    "spawn_cooperative");
 
@@ -307,14 +308,14 @@ static void scenario_fault_trace_digest(void) {
     SCENARIO_BEGIN("auto-fault-burst-007.trace_deterministic");
 
     /* Run 1 */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_trace_reset();
 
     asx_region_id rid;
     asx_task_id tid;
     uint32_t i;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open_1");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open_1");
     for (i = 0; i < 4; i++) {
         SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "spawn_1");
     }
@@ -323,10 +324,10 @@ static void scenario_fault_trace_digest(void) {
     uint64_t digest1 = asx_trace_digest();
 
     /* Run 2: identical scenario */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_trace_reset();
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open_2");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open_2");
     for (i = 0; i < 4; i++) {
         SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "spawn_2");
     }

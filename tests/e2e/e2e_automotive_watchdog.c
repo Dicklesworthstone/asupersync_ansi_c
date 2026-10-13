@@ -11,6 +11,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../test_runtime.h"
 #include <asx/asx.h>
 #include <asx/core/cancel.h>
 #include <asx/runtime/runtime.h>
@@ -88,12 +89,12 @@ static asx_status poll_stubborn(void *ud, asx_task_id self) {
 /* auto-watchdog-checkpoint-001: cooperative cancel under deadline */
 static void scenario_watchdog_checkpoint(void) {
     SCENARIO_BEGIN("auto-watchdog-checkpoint-001.cooperative");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_region_id rid;
     asx_task_id tid;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
     SCENARIO_CHECK(asx_task_spawn(rid, poll_checkpoint_cooperative, NULL, &tid) == ASX_OK,
                    "task_spawn");
 
@@ -121,12 +122,12 @@ static void scenario_watchdog_checkpoint(void) {
 /* auto-degraded-transition-002: phase progression under DEADLINE */
 static void scenario_degraded_transition(void) {
     SCENARIO_BEGIN("auto-degraded-transition-002.phase_progression");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_region_id rid;
     asx_task_id tid;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
     SCENARIO_CHECK(asx_task_spawn(rid, poll_checkpoint_cooperative, NULL, &tid) == ASX_OK,
                    "task_spawn");
 
@@ -176,7 +177,7 @@ static void scenario_deadline_miss(void) {
     asx_region_id rid;
     asx_task_id tid;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
     SCENARIO_CHECK(asx_task_spawn(rid, poll_stubborn, NULL, &tid) == ASX_OK, "task_spawn");
 
     /* Run once to get to RUNNING */
@@ -206,13 +207,13 @@ static void scenario_deadline_miss(void) {
 /* auto-watchdog containment: poisoned region isolates fault */
 static void scenario_watchdog_containment(void) {
     SCENARIO_BEGIN("auto-watchdog-containment.poison_isolates");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_region_id r1, r2;
     asx_task_id tid;
 
-    SCENARIO_CHECK(asx_region_open(&r1) == ASX_OK, "region_open_r1");
-    SCENARIO_CHECK(asx_region_open(&r2) == ASX_OK, "region_open_r2");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &r1) == ASX_OK, "region_open_r1");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &r2) == ASX_OK, "region_open_r2");
 
     /* Poison r1 (watchdog containment) */
     SCENARIO_CHECK(asx_region_poison(r1) == ASX_OK, "poison_r1");
@@ -235,23 +236,23 @@ static void scenario_trace_digest(void) {
     SCENARIO_BEGIN("auto-watchdog-trace.digest_deterministic");
 
     /* Run 1 */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_trace_reset();
 
     asx_region_id rid;
     asx_task_id tid;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open_1");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open_1");
     SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "spawn_1");
     asx_budget budget = asx_budget_from_polls(10);
     IGNORE_RC(asx_scheduler_run(rid, &budget));
     uint64_t digest1 = asx_trace_digest();
 
     /* Run 2: replay */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_trace_reset();
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open_2");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open_2");
     SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "spawn_2");
     budget = asx_budget_from_polls(10);
     IGNORE_RC(asx_scheduler_run(rid, &budget));

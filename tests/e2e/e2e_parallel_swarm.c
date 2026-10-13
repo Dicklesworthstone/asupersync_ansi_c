@@ -9,6 +9,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../test_runtime.h"
 #include <asx/asx.h>
 #include <inttypes.h>
 #include <stdint.h>
@@ -211,7 +212,7 @@ static asx_parallel_config default_parallel_config(uint32_t worker_count) {
 static asx_status reset_parallel(uint32_t worker_count) {
     asx_parallel_config cfg = default_parallel_config(worker_count);
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_trace_reset();
     reset_order();
     return asx_parallel_init(&cfg);
@@ -551,7 +552,7 @@ static void scenario_short_lived_batches(void) {
             result_fail(&result, "parallel_init", st);
             break;
         }
-        st = asx_region_open(&rid);
+        st = asx_region_open(test_runtime(), &rid);
         if (st != ASX_OK) {
             result_fail(&result, "region_open", st);
             break;
@@ -611,7 +612,7 @@ static void scenario_cancel_wave(void) {
         finish_result(&result);
         return;
     }
-    st = asx_region_open(&rid);
+    st = asx_region_open(test_runtime(), &rid);
     if (st != ASX_OK) {
         result_fail(&result, "region_open", st);
         finish_result(&result);
@@ -712,7 +713,7 @@ static void scenario_mpsc_pressure(void) {
         finish_result(&result);
         return;
     }
-    st = asx_region_open(&rid);
+    st = asx_region_open(test_runtime(), &rid);
     if (st != ASX_OK) {
         result_fail(&result, "region_open", st);
         finish_result(&result);
@@ -831,7 +832,7 @@ static void scenario_timer_burst(void) {
         finish_result(&result);
         return;
     }
-    st = asx_region_open(&rid);
+    st = asx_region_open(test_runtime(), &rid);
     if (st != ASX_OK) {
         result_fail(&result, "region_open", st);
         finish_result(&result);
@@ -928,7 +929,7 @@ static void scenario_blocking_storm(void) {
         finish_result(&result);
         return;
     }
-    st = asx_region_open(&rid);
+    st = asx_region_open(test_runtime(), &rid);
     if (st != ASX_OK) {
         result_fail(&result, "region_open", st);
         finish_result(&result);
@@ -1021,7 +1022,7 @@ static void scenario_admission_pressure(void) {
     cfg.admission_policy.mode = ASX_PARALLEL_ADMISSION_REJECT;
     cfg.admission_policy.pressure_threshold_pct = 80u;
     cfg.admission_policy.enforce = 0;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_trace_reset();
     reset_order();
     st = asx_parallel_init(&cfg);
@@ -1030,7 +1031,7 @@ static void scenario_admission_pressure(void) {
         finish_result(&result);
         return;
     }
-    st = asx_region_open(&rid);
+    st = asx_region_open(test_runtime(), &rid);
     if (st != ASX_OK) {
         result_fail(&result, "region_open", st);
         finish_result(&result);

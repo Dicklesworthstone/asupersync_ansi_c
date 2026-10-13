@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../test_runtime.h"
 #include <asx/asx.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -66,7 +67,7 @@ static void scenario_line(const char *id, int pass, const char *detail) {
 
 static asx_region_id make_region(void) {
     asx_region_id region = ASX_INVALID_ID;
-    if (asx_region_open(&region) != ASX_OK) { return ASX_INVALID_ID; }
+    if (asx_region_open(test_runtime(), &region) != ASX_OK) { return ASX_INVALID_ID; }
     return region;
 }
 
@@ -208,7 +209,7 @@ static int run_actor_lifecycle(unsigned long long *digest) {
     e2e_actor_state state;
     asx_region_id region;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     memset(&state, 0, sizeof(state));
     region = make_region();
     if (region == ASX_INVALID_ID) {
@@ -293,7 +294,7 @@ static int run_gen_server(unsigned long long *digest) {
     asx_gen_server_ref ref;
     uint64_t reply = 0u;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     if (asx_gen_server_start_named(&ref, "counter", &callbacks, NULL) != ASX_OK) {
         scenario_line("gen_server.request_reply", 0, "start_failed");
         return 0;
@@ -436,7 +437,7 @@ static int run_supervisor_restart_policy(unsigned long long *digest) {
     e2e_child temporary;
     asx_region_id root;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     memset(&permanent, 0, sizeof(permanent));
     memset(&temporary, 0, sizeof(temporary));
     permanent.fail_until = 2u; /* the first generation fails, later ones end ok */
@@ -472,7 +473,7 @@ static int run_restart_intensity(unsigned long long *digest) {
     asx_region_id root;
     asx_cancel_reason reason;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     memset(&child, 0, sizeof(child));
     child.fail_until = 999u;
     child.fail_status = ASX_E_INVALID_STATE;
@@ -485,7 +486,7 @@ static int run_restart_intensity(unsigned long long *digest) {
         return 0;
     }
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     memset(&child, 0, sizeof(child));
     child.fail_until = 999u;
     child.fail_status = ASX_E_INVALID_STATE;
@@ -514,7 +515,7 @@ static int run_cancel_during_restart(unsigned long long *digest) {
     e2e_child stable;
     asx_region_id root;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     memset(&failing, 0, sizeof(failing));
     memset(&stable, 0, sizeof(stable));
     failing.fail_until = 999u;
@@ -547,7 +548,7 @@ static int run_child_specs(unsigned long long *digest) {
     e2e_child beta;
     asx_region_id root;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     memset(&alpha, 0, sizeof(alpha));
     memset(&beta, 0, sizeof(beta));
     root = e2e_supervisor_setup(&o, 3u);
@@ -579,7 +580,7 @@ static int run_obligation_cleanup(unsigned long long *digest) {
     uint32_t i;
     uint32_t reserved = 0u;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     memset(&state, 0, sizeof(state));
     region = make_region();
     state.region = region;

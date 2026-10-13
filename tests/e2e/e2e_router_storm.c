@@ -12,6 +12,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../test_runtime.h"
 #include <asx/asx.h>
 #include <asx/runtime/runtime.h>
 #include <asx/runtime/telemetry.h>
@@ -136,7 +137,7 @@ static asx_status poll_yield_once(void *ud, asx_task_id self) {
 /* router-storm-001: rapid region open/close churn */
 static void scenario_region_churn(void) {
     SCENARIO_BEGIN("router-storm-001.region_churn");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     uint32_t cycles = 0;
     uint32_t i;
@@ -144,7 +145,7 @@ static void scenario_region_churn(void) {
     /* Open and close regions in rapid succession */
     for (i = 0; i < 50; i++) {
         asx_region_id rid;
-        asx_status rc = asx_region_open(&rid);
+        asx_status rc = asx_region_open(test_runtime(), &rid);
         if (rc == ASX_E_RESOURCE_EXHAUSTED) break;
         SCENARIO_CHECK(rc == ASX_OK, "region_open");
 
@@ -167,7 +168,7 @@ static void scenario_region_churn(void) {
 /* router-storm-002: multi-region concurrent task saturation */
 static void scenario_multi_region_saturation(void) {
     SCENARIO_BEGIN("router-storm-002.multi_region_saturation");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_region_id regions[4];
     uint32_t i, j;
@@ -175,7 +176,7 @@ static void scenario_multi_region_saturation(void) {
 
     /* Open multiple regions */
     for (i = 0; i < 4; i++) {
-        asx_status rc = asx_region_open(&regions[i]);
+        asx_status rc = asx_region_open(test_runtime(), &regions[i]);
         if (rc != ASX_OK) break;
         region_count++;
     }
@@ -203,14 +204,14 @@ static void scenario_multi_region_saturation(void) {
 /* router-storm-003: exhaustion handling and state consistency */
 static void scenario_exhaustion_handling(void) {
     SCENARIO_BEGIN("router-storm-003.exhaustion_handling");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_region_id rid;
     asx_task_id tid;
     int spawned = 0;
     asx_status rc;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
 
     /* Fill task arena to exhaustion */
     for (;;) {
@@ -243,13 +244,13 @@ static void scenario_exhaustion_handling(void) {
 /* router-storm-004: obligation churn under resource pressure */
 static void scenario_obligation_churn(void) {
     SCENARIO_BEGIN("router-storm-004.obligation_churn");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_region_id rid;
     asx_task_id tid;
     churn_state churn;
     asx_budget budget = asx_budget_from_polls(10);
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
 
     /* Reserve and commit obligations in rapid cycles: the churn runs in the
      * poll of the task that holds them */
@@ -267,13 +268,13 @@ static void scenario_obligation_churn(void) {
 /* router-storm-005: poison isolation during storm */
 static void scenario_poison_during_storm(void) {
     SCENARIO_BEGIN("router-storm-005.poison_isolation");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_region_id r_healthy, r_faulted;
     asx_task_id tid;
 
-    SCENARIO_CHECK(asx_region_open(&r_healthy) == ASX_OK, "open_healthy");
-    SCENARIO_CHECK(asx_region_open(&r_faulted) == ASX_OK, "open_faulted");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &r_healthy) == ASX_OK, "open_healthy");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &r_faulted) == ASX_OK, "open_faulted");
 
     /* Spawn tasks in both */
     SCENARIO_CHECK(asx_task_spawn(r_healthy, poll_complete, NULL, &tid) == ASX_OK, "spawn_healthy");
@@ -300,7 +301,7 @@ static void scenario_poison_during_storm(void) {
 /* router-storm-006: cancel propagation under load */
 static void scenario_cancel_under_load(void) {
     SCENARIO_BEGIN("router-storm-006.cancel_under_load");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_region_id rid;
     asx_task_id tids[8];
@@ -309,7 +310,7 @@ static void scenario_cancel_under_load(void) {
     uint32_t i;
     uint32_t spawned = 0;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
 
     /* Spawn cancel-aware tasks */
     for (i = 0; i < 8; i++) {
@@ -342,14 +343,14 @@ static void scenario_trace_digest(void) {
     SCENARIO_BEGIN("router-storm-007.trace_deterministic");
 
     /* Run 1 */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_trace_reset();
 
     asx_region_id rid;
     asx_task_id tid;
     uint32_t i;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open_1");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open_1");
     for (i = 0; i < 4; i++) {
         SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "spawn_1");
     }
@@ -358,10 +359,10 @@ static void scenario_trace_digest(void) {
     uint64_t digest1 = asx_trace_digest();
 
     /* Run 2: identical scenario */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_trace_reset();
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open_2");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open_2");
     for (i = 0; i < 4; i++) {
         SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "spawn_2");
     }

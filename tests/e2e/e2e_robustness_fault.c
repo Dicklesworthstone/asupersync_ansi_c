@@ -11,6 +11,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../test_runtime.h"
 #include <asx/asx.h>
 #include <asx/runtime/runtime.h>
 #include <stdio.h>
@@ -141,7 +142,7 @@ static asx_status poll_complete_fn(void *ud, asx_task_id self) {
 /* robust-fault-time-001: clock backward jump does not corrupt state */
 static void scenario_clock_backward(void) {
     SCENARIO_BEGIN("robust-fault-time-001.clock_backward");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     reset_fault_state();
     install_fault_hooks();
 
@@ -150,7 +151,7 @@ static void scenario_clock_backward(void) {
 
     g_clock_value = 2000000000ULL; /* 2 seconds */
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
     SCENARIO_CHECK(asx_task_spawn(rid, poll_complete_fn, NULL, &tid) == ASX_OK, "task_spawn");
 
     /* Jump clock backward */
@@ -170,7 +171,7 @@ static void scenario_clock_backward(void) {
 /* robust-fault-time-002: clock at zero does not crash */
 static void scenario_clock_zero(void) {
     SCENARIO_BEGIN("robust-fault-time-002.clock_zero");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     reset_fault_state();
     install_fault_hooks();
 
@@ -179,7 +180,7 @@ static void scenario_clock_zero(void) {
     asx_region_id rid;
     asx_task_id tid;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
     SCENARIO_CHECK(asx_task_spawn(rid, poll_complete_fn, NULL, &tid) == ASX_OK, "task_spawn");
 
     asx_budget budget = asx_budget_from_polls(10);
@@ -192,7 +193,7 @@ static void scenario_clock_zero(void) {
 /* robust-fault-time-003: clock overflow (max uint64) */
 static void scenario_clock_overflow(void) {
     SCENARIO_BEGIN("robust-fault-time-003.clock_overflow");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     reset_fault_state();
     install_fault_hooks();
 
@@ -201,7 +202,7 @@ static void scenario_clock_overflow(void) {
     asx_region_id rid;
     asx_task_id tid;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
     SCENARIO_CHECK(asx_task_spawn(rid, poll_complete_fn, NULL, &tid) == ASX_OK, "task_spawn");
 
     asx_budget budget = asx_budget_from_polls(10);
@@ -214,7 +215,7 @@ static void scenario_clock_overflow(void) {
 /* robust-fault-entropy-001: seeded entropy is deterministic across runs */
 static void scenario_entropy_deterministic(void) {
     SCENARIO_BEGIN("robust-fault-entropy-001.seeded_deterministic");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     reset_fault_state();
 
     /* Install seeded entropy */
@@ -252,7 +253,7 @@ static void scenario_entropy_deterministic(void) {
 /* robust-fault-entropy-002: constant entropy does not cause infinite loops */
 static void scenario_entropy_constant(void) {
     SCENARIO_BEGIN("robust-fault-entropy-002.constant_entropy");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     reset_fault_state();
     install_fault_hooks();
 
@@ -262,7 +263,7 @@ static void scenario_entropy_constant(void) {
     asx_region_id rid;
     asx_task_id tid;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
     SCENARIO_CHECK(asx_task_spawn(rid, poll_complete_fn, NULL, &tid) == ASX_OK, "task_spawn");
 
     asx_budget budget = asx_budget_from_polls(10);
@@ -275,7 +276,7 @@ static void scenario_entropy_constant(void) {
 /* robust-fault-alloc-001: allocator seal blocks new allocations */
 static void scenario_allocator_seal(void) {
     SCENARIO_BEGIN("robust-fault-alloc-001.seal_blocks_alloc");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     reset_fault_state();
     install_fault_hooks();
 
@@ -295,7 +296,7 @@ static void scenario_allocator_seal(void) {
 /* robust-fault-alloc-002: task completion survives allocator failure */
 static void scenario_allocator_failure_during_run(void) {
     SCENARIO_BEGIN("robust-fault-alloc-002.alloc_fail_during_run");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     reset_fault_state();
     install_fault_hooks();
 
@@ -305,7 +306,7 @@ static void scenario_allocator_failure_during_run(void) {
     asx_region_id rid;
     asx_task_id tid;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
     SCENARIO_CHECK(asx_task_spawn(rid, poll_complete_fn, NULL, &tid) == ASX_OK, "task_spawn");
 
     asx_budget budget = asx_budget_from_polls(10);
@@ -323,7 +324,7 @@ static void scenario_allocator_failure_during_run(void) {
 /* robust-fault-trace-001: trace digest stable under fault hooks */
 static void scenario_trace_digest_stable_under_faults(void) {
     SCENARIO_BEGIN("robust-fault-trace-001.digest_stable");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_trace_reset();
     reset_fault_state();
     install_fault_hooks();
@@ -332,7 +333,7 @@ static void scenario_trace_digest_stable_under_faults(void) {
     asx_task_id tid;
     asx_budget budget;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
     SCENARIO_CHECK(asx_task_spawn(rid, poll_complete_fn, NULL, &tid) == ASX_OK, "task_spawn");
     budget = asx_budget_from_polls(10);
     IGNORE_RC(asx_scheduler_run(rid, &budget));
@@ -340,12 +341,12 @@ static void scenario_trace_digest_stable_under_faults(void) {
     uint64_t digest1 = asx_trace_digest();
 
     /* Replay with same fault hooks */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_trace_reset();
     reset_fault_state();
     install_fault_hooks();
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open_2");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open_2");
     SCENARIO_CHECK(asx_task_spawn(rid, poll_complete_fn, NULL, &tid) == ASX_OK, "task_spawn_2");
     budget = asx_budget_from_polls(10);
     IGNORE_RC(asx_scheduler_run(rid, &budget));
@@ -363,13 +364,13 @@ static void scenario_trace_digest_stable_under_faults(void) {
 /* robust-fault-containment-001: poisoned region blocks spawn but allows query */
 static void scenario_fault_containment_poison(void) {
     SCENARIO_BEGIN("robust-fault-containment-001.poison_isolation");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_region_id r1, r2;
     asx_task_id tid;
 
-    SCENARIO_CHECK(asx_region_open(&r1) == ASX_OK, "region_open_r1");
-    SCENARIO_CHECK(asx_region_open(&r2) == ASX_OK, "region_open_r2");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &r1) == ASX_OK, "region_open_r1");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &r2) == ASX_OK, "region_open_r2");
 
     /* Poison r1 */
     SCENARIO_CHECK(asx_region_poison(r1) == ASX_OK, "poison_r1");
@@ -391,12 +392,12 @@ static void scenario_fault_containment_poison(void) {
 /* robust-fault-containment-002: scheduler drains existing tasks on poisoned region */
 static void scenario_fault_containment_drain_poisoned(void) {
     SCENARIO_BEGIN("robust-fault-containment-002.drain_poisoned");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_region_id rid;
     asx_task_id tid;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
     SCENARIO_CHECK(asx_task_spawn(rid, poll_complete_fn, NULL, &tid) == ASX_OK, "task_spawn");
 
     /* Poison region — existing task should still be schedulable */

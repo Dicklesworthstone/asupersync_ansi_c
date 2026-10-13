@@ -11,6 +11,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../test_runtime.h"
 #include <asx/asx.h>
 #include <asx/runtime/lab.h>
 #include <asx/time/timer_wheel.h>
@@ -354,13 +355,13 @@ static asx_status poll_commit_holder(void *ud, asx_task_id self) {
 
 static void scenario_region_open_close(void) {
     SCENARIO_BEGIN("region.open_close");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_region_id rid;
     asx_region_state st;
     asx_status rc;
 
-    rc = asx_region_open(&rid);
+    rc = asx_region_open(test_runtime(), &rid);
     SCENARIO_CHECK(rc == ASX_OK, "region_open failed");
 
     rc = asx_region_get_state(rid, &st);
@@ -374,7 +375,7 @@ static void scenario_region_open_close(void) {
 
 static void scenario_task_spawn_complete(void) {
     SCENARIO_BEGIN("task.spawn_complete");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_region_id rid;
     asx_task_id tid;
@@ -382,7 +383,7 @@ static void scenario_task_spawn_complete(void) {
     asx_outcome out;
     asx_budget budget = asx_budget_infinite();
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
     SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "task_spawn");
 
     SCENARIO_CHECK(asx_task_get_state(tid, &ts) == ASX_OK && ts == ASX_TASK_CREATED,
@@ -401,7 +402,7 @@ static void scenario_task_spawn_complete(void) {
 
 static void scenario_task_coroutine_yields(void) {
     SCENARIO_BEGIN("task.coroutine_yields");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_region_id rid;
     asx_task_id tid;
@@ -409,7 +410,7 @@ static void scenario_task_coroutine_yields(void) {
     countdown_state *cs;
     asx_budget budget;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
     SCENARIO_CHECK(asx_task_spawn_captured(rid, poll_countdown, (uint32_t)sizeof(countdown_state),
                                            NULL, &tid, &state) == ASX_OK,
                    "task_spawn_captured");
@@ -430,7 +431,7 @@ static void scenario_task_coroutine_yields(void) {
 
 static void scenario_obligation_reserve_commit(void) {
     SCENARIO_BEGIN("obligation.reserve_commit");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_region_id rid;
     asx_task_id tid;
@@ -443,7 +444,7 @@ static void scenario_obligation_reserve_commit(void) {
     probe.state_rc = ASX_E_INVALID_STATE;
     probe.settle_rc = ASX_E_INVALID_STATE;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
     probe.region = rid;
     SCENARIO_CHECK(asx_task_spawn(rid, poll_obligation_probe, &probe, &tid) == ASX_OK,
                    "task_spawn");
@@ -465,7 +466,7 @@ static void scenario_obligation_reserve_commit(void) {
 
 static void scenario_obligation_reserve_abort(void) {
     SCENARIO_BEGIN("obligation.reserve_abort");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_region_id rid;
     asx_task_id tid;
@@ -479,7 +480,7 @@ static void scenario_obligation_reserve_abort(void) {
     probe.state_rc = ASX_E_INVALID_STATE;
     probe.settle_rc = ASX_E_INVALID_STATE;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
     probe.region = rid;
     SCENARIO_CHECK(asx_task_spawn(rid, poll_obligation_probe, &probe, &tid) == ASX_OK,
                    "task_spawn");
@@ -498,7 +499,7 @@ static void scenario_obligation_reserve_abort(void) {
 
 static void scenario_cancel_checkpoint_finalize(void) {
     SCENARIO_BEGIN("cancel.checkpoint_finalize");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_region_id rid;
     asx_task_id tid;
@@ -506,7 +507,7 @@ static void scenario_cancel_checkpoint_finalize(void) {
     countdown_state *cs;
     asx_budget budget;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
     SCENARIO_CHECK(asx_task_spawn_captured(rid, poll_cancel_aware,
                                            (uint32_t)sizeof(countdown_state), NULL, &tid,
                                            &state) == ASX_OK,
@@ -535,14 +536,14 @@ static void scenario_cancel_checkpoint_finalize(void) {
 
 static void scenario_cancel_propagate_region(void) {
     SCENARIO_BEGIN("cancel.propagate_region");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_region_id rid;
     asx_task_id t1, t2, t3;
     void *s1, *s2, *s3;
     countdown_state *cs;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
 
     /* Spawn 3 long-running tasks */
     SCENARIO_CHECK(asx_task_spawn_captured(rid, poll_cancel_aware,
@@ -590,12 +591,12 @@ static void scenario_cancel_propagate_region(void) {
 
 static void scenario_quiescence_empty_region(void) {
     SCENARIO_BEGIN("quiescence.empty_region");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_region_id rid;
     asx_budget budget = asx_budget_from_polls(10);
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
 
     /* Drain drives region through Close → Finalize → Closed */
     asx_status rc = asx_region_drain(rid, &budget);
@@ -610,14 +611,14 @@ static void scenario_quiescence_empty_region(void) {
 
 static void scenario_quiescence_after_drain(void) {
     SCENARIO_BEGIN("quiescence.after_drain");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_region_id rid;
     asx_task_id tid;
     void *state;
     countdown_state *cs;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
     SCENARIO_CHECK(asx_task_spawn_captured(rid, poll_countdown, (uint32_t)sizeof(countdown_state),
                                            NULL, &tid, &state) == ASX_OK,
                    "spawn");
@@ -705,7 +706,7 @@ static void scenario_timer_deterministic_order(void) {
 
 static void scenario_channel_reserve_send_recv(void) {
     SCENARIO_BEGIN("channel.reserve_send_recv");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_channel_reset();
 
     asx_region_id rid;
@@ -713,7 +714,7 @@ static void scenario_channel_reserve_send_recv(void) {
     asx_send_permit permit;
     uint64_t value;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
     SCENARIO_CHECK(asx_channel_create(rid, 4, &cid) == ASX_OK, "channel_create");
 
     /* Reserve and send */
@@ -734,14 +735,14 @@ static void scenario_channel_reserve_send_recv(void) {
 
 static void scenario_channel_reserve_abort(void) {
     SCENARIO_BEGIN("channel.reserve_abort");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_channel_reset();
 
     asx_region_id rid;
     asx_channel_id cid;
     asx_send_permit permit;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
     SCENARIO_CHECK(asx_channel_create(rid, 2, &cid) == ASX_OK, "channel_create");
 
     SCENARIO_CHECK(asx_channel_try_reserve(cid, &permit) == ASX_OK, "try_reserve");
@@ -758,7 +759,7 @@ static void scenario_channel_reserve_abort(void) {
 
 static void scenario_channel_fifo_order(void) {
     SCENARIO_BEGIN("channel.fifo_order");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_channel_reset();
 
     asx_region_id rid;
@@ -766,7 +767,7 @@ static void scenario_channel_fifo_order(void) {
     asx_send_permit p;
     uint64_t v;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
     SCENARIO_CHECK(asx_channel_create(rid, 8, &cid) == ASX_OK, "channel_create");
 
     /* Send 3 values */
@@ -787,7 +788,7 @@ static void scenario_channel_fifo_order(void) {
 
 static void scenario_channel_close_sender(void) {
     SCENARIO_BEGIN("channel.close_sender");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_channel_reset();
 
     asx_region_id rid;
@@ -796,7 +797,7 @@ static void scenario_channel_close_sender(void) {
     uint64_t v;
     asx_channel_state cs;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
     SCENARIO_CHECK(asx_channel_create(rid, 4, &cid) == ASX_OK, "channel_create");
 
     /* Send one value, then close sender */
@@ -819,24 +820,24 @@ static void scenario_channel_close_sender(void) {
 
 static void scenario_trace_digest_deterministic(void) {
     SCENARIO_BEGIN("trace.digest_deterministic");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_trace_reset();
 
     asx_region_id rid;
     asx_task_id tid;
     asx_budget budget = asx_budget_infinite();
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
     SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "task_spawn");
     SCENARIO_CHECK(asx_scheduler_run(rid, &budget) == ASX_OK, "scheduler_run");
 
     uint64_t digest1 = asx_trace_digest();
 
     /* Reset and replay identical scenario */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_trace_reset();
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open_2");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open_2");
     SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "task_spawn_2");
     SCENARIO_CHECK(asx_scheduler_run(rid, &budget) == ASX_OK, "scheduler_run_2");
 
@@ -850,12 +851,12 @@ static void scenario_trace_digest_deterministic(void) {
 
 static void scenario_region_poison_containment(void) {
     SCENARIO_BEGIN("region.poison_containment");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_region_id rid;
     int poisoned;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
 
     SCENARIO_CHECK(asx_region_is_poisoned(rid, &poisoned) == ASX_OK && poisoned == 0,
                    "should not be poisoned initially");
@@ -883,9 +884,9 @@ static void scenario_region_poison_containment(void) {
 static void scenario_drain_progress_snapshot(void) {
     SCENARIO_BEGIN("drain_progress.snapshot");
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_region_id rid;
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
 
     /* Spawn two tasks and create one obligation: t1 is its holder and
      * commits it in its own poll, which the drain below runs. */
@@ -931,9 +932,9 @@ static void scenario_drain_progress_snapshot(void) {
 static void scenario_quiescence_evidence(void) {
     SCENARIO_BEGIN("quiescence.evidence");
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_region_id rid;
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
 
     /* Spawn a task (still READY, not yet polled) */
     asx_task_id tid;
@@ -1195,7 +1196,7 @@ static void scenario_real_holders(const char *id, holder_case_kind kind) {
 
     memset(&c, 0, sizeof(c));
     c.kind = kind;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_lab_config_init(&cfg);
     cfg.seed = g_seed;
     cfg.max_polls = 128u;

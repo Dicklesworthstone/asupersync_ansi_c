@@ -12,6 +12,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../test_runtime.h"
 #include "runtime/runtime_internal.h"
 #include <asx/asx.h>
 #include <asx/runtime/trace.h>
@@ -121,9 +122,9 @@ static void scenario_nested_lifecycle_full(void) {
     asx_quiescence_report report;
     asx_budget budget;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    SCENARIO_CHECK(asx_region_open(&root) == ASX_OK, "open_root");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &root) == ASX_OK, "open_root");
     SCENARIO_CHECK(asx_region_open_child(root, &child1) == ASX_OK, "open_child1");
     SCENARIO_CHECK(asx_region_open_child(root, &child2) == ASX_OK, "open_child2");
     SCENARIO_CHECK(asx_region_open_child(child1, &grandchild) == ASX_OK, "open_grandchild");
@@ -201,9 +202,9 @@ static void scenario_nested_inside_out_pending(void) {
     asx_region_slot *child_slot = NULL;
     asx_budget budget;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    SCENARIO_CHECK(asx_region_open(&root) == ASX_OK, "open_root");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &root) == ASX_OK, "open_root");
     SCENARIO_CHECK(asx_region_open_child(root, &child) == ASX_OK, "open_child");
     SCENARIO_CHECK(asx_region_open_child(child, &grandchild) == ASX_OK, "open_grandchild");
     SCENARIO_CHECK(asx_region_slot_lookup(root, &root_slot) == ASX_OK, "lookup_root");
@@ -234,9 +235,9 @@ static void scenario_nested_q2_evidence(void) {
     asx_quiescence_report report;
     asx_budget budget;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    SCENARIO_CHECK(asx_region_open(&root) == ASX_OK, "open_root");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &root) == ASX_OK, "open_root");
     SCENARIO_CHECK(asx_region_open_child(root, &child) == ASX_OK, "open_child");
     SCENARIO_CHECK(asx_quiescence_check_detailed(root, &report) == ASX_OK, "report_open_child");
     log_quiescence_state("root-with-open-child", root);
@@ -308,9 +309,9 @@ static void scenario_nested_body_ok_waits(void) {
     asx_outcome body = asx_outcome_make(ASX_OUTCOME_OK), outcome;
     asx_budget budget = asx_budget_from_polls(1u);
     uint32_t i;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     memset(contexts, 0, sizeof(contexts));
-    SCENARIO_CHECK(asx_region_open(&regions[0]) == ASX_OK, "open_root");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &regions[0]) == ASX_OK, "open_root");
     SCENARIO_CHECK(asx_region_open_child(regions[0], &regions[1]) == ASX_OK, "open_child");
     SCENARIO_CHECK(asx_region_open_child(regions[1], &regions[2]) == ASX_OK, "open_grandchild");
     for (i = 0u; i < 3u; i++) {
@@ -371,9 +372,9 @@ static void scenario_nested_body_exception(asx_outcome_severity severity) {
     asx_cancel_reason reason;
     asx_budget budget = asx_budget_from_polls(16u);
     uint32_t i;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     memset(contexts, 0, sizeof(contexts));
-    SCENARIO_CHECK(asx_region_open(&regions[0]) == ASX_OK, "open_root");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &regions[0]) == ASX_OK, "open_root");
     SCENARIO_CHECK(asx_region_open_child(regions[0], &regions[1]) == ASX_OK, "open_child");
     SCENARIO_CHECK(asx_region_open_child(regions[1], &regions[2]) == ASX_OK, "open_grandchild");
     for (i = 0u; i < 3u; i++) {
@@ -414,10 +415,10 @@ static void scenario_scope_finish_wake_retry(void) {
     body_child_ctx context;
     asx_outcome body = asx_outcome_make(ASX_OUTCOME_OK);
     asx_outcome changed = asx_outcome_make(ASX_OUTCOME_ERR), outcome;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     memset(&context, 0, sizeof(context));
     context.park_first = 1;
-    SCENARIO_CHECK(asx_region_open(&region) == ASX_OK, "open_scope_region");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &region) == ASX_OK, "open_scope_region");
     SCENARIO_CHECK(asx_cx_init(&cx, region, ASX_INVALID_ID, ASX_CAP_ALL) == ASX_OK, "init_host_cx");
     SCENARIO_CHECK(asx_scope_init(&scope, region, &cx, asx_budget_from_polls(8u)) == ASX_OK,
                    "init_scope");
@@ -649,8 +650,8 @@ static void scenario_nested_guarded_mask(int mode) {
     ctx.scenario = _scenario_id;
     ctx.mode = mode;
     ctx.leaf_depth = mode == 2 ? ASX_MAX_MASK_DEPTH : mode == 1 ? 3u : 2u;
-    asx_runtime_reset();
-    SCENARIO_CHECK(asx_region_open(&root) == ASX_OK, "open_mask_root");
+    asx_runtime_reset(test_runtime());
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &root) == ASX_OK, "open_mask_root");
     SCENARIO_CHECK(asx_region_open_child(root, &child) == ASX_OK, "open_mask_child");
     /* The joiner polls before its child worker, genuinely parks, then is
      * woken by completion rather than by a test-injected notification. */

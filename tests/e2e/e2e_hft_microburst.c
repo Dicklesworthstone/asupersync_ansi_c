@@ -11,6 +11,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../test_runtime.h"
 #include <asx/asx.h>
 #include <asx/runtime/runtime.h>
 #include <stdio.h>
@@ -103,14 +104,14 @@ static asx_status poll_cancel_aware(void *ud, asx_task_id self) {
 /* hft-microburst-overload-001: capacity saturation + overload rejection */
 static void scenario_overload_saturation(void) {
     SCENARIO_BEGIN("hft-microburst-overload-001.saturation");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_region_id rid;
     asx_task_id tid;
     int spawned = 0;
     asx_status rc;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
 
     /* Fill task arena */
     for (;;) {
@@ -133,7 +134,7 @@ static void scenario_overload_saturation(void) {
 /* hft-microburst-fairness-002: round-robin no starvation */
 static void scenario_fairness_round_robin(void) {
     SCENARIO_BEGIN("hft-microburst-fairness-002.no_starvation");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_trace_reset();
 
     asx_region_id rid;
@@ -143,7 +144,7 @@ static void scenario_fairness_round_robin(void) {
     uint32_t i;
     asx_budget budget;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
 
     /* Spawn 4 yield-once tasks */
     for (i = 0; i < 4; i++) {
@@ -174,7 +175,7 @@ static void scenario_fairness_round_robin(void) {
 /* hft-microburst-fairness-002b: tight budget partial completion */
 static void scenario_fairness_partial_budget(void) {
     SCENARIO_BEGIN("hft-microburst-fairness-002b.partial_budget");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_region_id rid;
     asx_task_id tid;
@@ -182,7 +183,7 @@ static void scenario_fairness_partial_budget(void) {
     uint32_t i;
     int completed;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
 
     /* Spawn 8 immediate-complete tasks */
     for (i = 0; i < 8; i++) {
@@ -214,7 +215,7 @@ static void scenario_fairness_partial_budget(void) {
 /* hft-overload-recovery-003: mass cancel + drain to quiescence */
 static void scenario_overload_recovery(void) {
     SCENARIO_BEGIN("hft-overload-recovery-003.mass_cancel_drain");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_region_id rid;
     asx_task_id tids[8];
@@ -222,7 +223,7 @@ static void scenario_overload_recovery(void) {
     yield_once_state *ys;
     uint32_t i;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
 
     /* Spawn 8 cancel-aware tasks */
     for (i = 0; i < 8; i++) {
@@ -262,7 +263,7 @@ static void scenario_replay_digest(void) {
     SCENARIO_BEGIN("hft-microburst-replay.digest_deterministic");
 
     /* Run 1 */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_trace_reset();
 
     asx_region_id rid;
@@ -271,7 +272,7 @@ static void scenario_replay_digest(void) {
     yield_once_state *ys;
     uint32_t i;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open_1");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open_1");
     for (i = 0; i < 4; i++) {
         SCENARIO_CHECK(asx_task_spawn_captured(rid, poll_yield_once,
                                                (uint32_t)sizeof(yield_once_state), NULL, &tids[i],
@@ -286,10 +287,10 @@ static void scenario_replay_digest(void) {
     uint64_t digest1 = asx_trace_digest();
 
     /* Run 2: identical scenario */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_trace_reset();
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open_2");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open_2");
     for (i = 0; i < 4; i++) {
         SCENARIO_CHECK(asx_task_spawn_captured(rid, poll_yield_once,
                                                (uint32_t)sizeof(yield_once_state), NULL, &tids[i],

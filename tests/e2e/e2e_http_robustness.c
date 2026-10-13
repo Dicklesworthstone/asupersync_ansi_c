@@ -121,7 +121,7 @@ int main(int argc, char **argv) {
     st = asx_signal_subscribe(&g_sub, ASX_SIGNAL_TERM);
     if (st != ASX_OK) return fail("signal subscribe", st);
 
-    st = asx_region_open(&region);
+    st = asx_region_open(&rt, &region);
     if (st != ASX_OK) return fail("region", st);
     st = asx_task_spawn(region, server_task, NULL, &g_server_task);
     if (st != ASX_OK) return fail("spawn server", st);

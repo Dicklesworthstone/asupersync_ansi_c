@@ -72,6 +72,7 @@
 #endif
 
 #include "../../src/net/net_native.h"
+#include "../test_runtime.h"
 #include <arpa/inet.h>
 #include <asx/asx.h>
 #include <asx/net/http.h>
@@ -246,7 +247,7 @@ static asx_status serve_program(void *obs) {
     st = asx_signal_subscribe(&g_sub, ASX_SIGNAL_TERM);
     if (st != ASX_OK) return st;
 
-    st = asx_region_open(&region);
+    st = asx_region_open(test_runtime(), &region);
     if (st != ASX_OK) return st;
     st = asx_task_spawn(region, server_task, NULL, &g_server_task);
     if (st != ASX_OK) return st;

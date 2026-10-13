@@ -11,6 +11,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../test_runtime.h"
 #include <asx/asx.h>
 #include <asx/time/timer_wheel.h>
 #include <stdio.h>
@@ -128,7 +129,7 @@ static asx_status poll_double_settle(void *ud, asx_task_id self) {
 
 static void scenario_region_exhaustion(void) {
     SCENARIO_BEGIN("exhaustion.region_arena");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_region_id regions[ASX_MAX_REGIONS + 1];
     uint32_t i;
@@ -136,12 +137,12 @@ static void scenario_region_exhaustion(void) {
 
     /* Fill all region slots */
     for (i = 0; i < ASX_MAX_REGIONS; i++) {
-        rc = asx_region_open(&regions[i]);
+        rc = asx_region_open(test_runtime(), &regions[i]);
         SCENARIO_CHECK(rc == ASX_OK, "region_open during fill");
     }
 
     /* Next open should fail with resource exhaustion */
-    rc = asx_region_open(&regions[ASX_MAX_REGIONS]);
+    rc = asx_region_open(test_runtime(), &regions[ASX_MAX_REGIONS]);
     SCENARIO_CHECK(rc == ASX_E_RESOURCE_EXHAUSTED,
                    "expected RESOURCE_EXHAUSTED on region overflow");
 
@@ -154,14 +155,14 @@ static void scenario_region_exhaustion(void) {
 
 static void scenario_task_exhaustion(void) {
     SCENARIO_BEGIN("exhaustion.task_arena");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_region_id rid;
     asx_task_id tid;
     uint32_t i;
     asx_status rc;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
 
     /* Fill task slots */
     for (i = 0; i < ASX_MAX_TASKS; i++) {
@@ -182,14 +183,14 @@ static void scenario_task_exhaustion(void) {
 
 static void scenario_obligation_exhaustion(void) {
     SCENARIO_BEGIN("exhaustion.obligation_arena");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_region_id rid;
     asx_task_id tid;
     arena_fill_state fill;
     asx_budget budget = asx_budget_from_polls(10);
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
 
     memset(&fill, 0, sizeof(fill));
     fill.region = rid;
@@ -243,7 +244,7 @@ static void scenario_timer_exhaustion(void) {
 
 static void scenario_channel_full(void) {
     SCENARIO_BEGIN("exhaustion.channel_full");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_channel_reset();
 
     asx_region_id rid;
@@ -252,7 +253,7 @@ static void scenario_channel_full(void) {
     uint32_t i;
     asx_status rc;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
     SCENARIO_CHECK(asx_channel_create(rid, 4, &cid) == ASX_OK, "channel_create");
 
     /* Fill channel to capacity */
@@ -276,19 +277,19 @@ static void scenario_channel_full(void) {
 
 static void scenario_stale_region_handle(void) {
     SCENARIO_BEGIN("stale.region_handle");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_region_id rid1;
     asx_region_state st;
     asx_budget budget = asx_budget_from_polls(10);
 
     /* Open and close a region (slot becomes reusable) */
-    SCENARIO_CHECK(asx_region_open(&rid1) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid1) == ASX_OK, "region_open");
     SCENARIO_CHECK(asx_region_drain(rid1, &budget) == ASX_OK, "region_drain");
 
     /* Open a new region in the same slot (generation incremented) */
     asx_region_id rid2;
-    SCENARIO_CHECK(asx_region_open(&rid2) == ASX_OK, "region_open_2");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid2) == ASX_OK, "region_open_2");
 
     /* Old handle should be stale */
     asx_status rc = asx_region_get_state(rid1, &st);
@@ -304,14 +305,14 @@ static void scenario_stale_region_handle(void) {
 
 static void scenario_poison_blocks_mutations(void) {
     SCENARIO_BEGIN("poison.blocks_mutations");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_region_id rid;
     asx_task_id tid;
     asx_obligation_id oid;
     int poisoned;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
     SCENARIO_CHECK(asx_region_poison(rid) == ASX_OK, "region_poison");
 
     SCENARIO_CHECK(asx_region_is_poisoned(rid, &poisoned) == ASX_OK && poisoned == 1,
@@ -339,14 +340,14 @@ static void scenario_poison_blocks_mutations(void) {
 
 static void scenario_fault_containment_isolation(void) {
     SCENARIO_BEGIN("fault.containment_isolation");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_region_id r1, r2;
     asx_task_id tid;
     int poisoned;
 
-    SCENARIO_CHECK(asx_region_open(&r1) == ASX_OK, "region_open_r1");
-    SCENARIO_CHECK(asx_region_open(&r2) == ASX_OK, "region_open_r2");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &r1) == ASX_OK, "region_open_r1");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &r2) == ASX_OK, "region_open_r2");
 
     /* Poison r1 */
     SCENARIO_CHECK(asx_region_poison(r1) == ASX_OK, "poison_r1");
@@ -371,7 +372,7 @@ static void scenario_fault_containment_isolation(void) {
 
 static void scenario_double_commit_rejected(void) {
     SCENARIO_BEGIN("misuse.double_commit");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_region_id rid;
     asx_task_id tid;
@@ -379,7 +380,7 @@ static void scenario_double_commit_rejected(void) {
     double_settle_state ds;
     asx_budget budget = asx_budget_from_polls(10);
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
 
     /* The holder task reserves, commits, then commits again in its poll */
     memset(&ds, 0, sizeof(ds));
@@ -410,14 +411,14 @@ static void scenario_double_commit_rejected(void) {
 
 static void scenario_double_abort_rejected(void) {
     SCENARIO_BEGIN("misuse.double_abort");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_region_id rid;
     asx_task_id tid;
     double_settle_state ds;
     asx_budget budget = asx_budget_from_polls(10);
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
 
     /* The holder task reserves, aborts, then aborts again in its poll */
     memset(&ds, 0, sizeof(ds));
@@ -443,7 +444,7 @@ static void scenario_double_abort_rejected(void) {
 
 static void scenario_resource_query_accuracy(void) {
     SCENARIO_BEGIN("resource.query_accuracy");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     uint32_t cap = asx_resource_capacity(ASX_RESOURCE_REGION);
     SCENARIO_CHECK(cap == ASX_MAX_REGIONS, "region capacity mismatch");
@@ -451,7 +452,7 @@ static void scenario_resource_query_accuracy(void) {
     uint32_t used_before = asx_resource_used(ASX_RESOURCE_REGION);
 
     asx_region_id rid;
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
 
     uint32_t used_after = asx_resource_used(ASX_RESOURCE_REGION);
     SCENARIO_CHECK(used_after == used_before + 1, "used count should increment");
@@ -468,14 +469,14 @@ static void scenario_resource_query_accuracy(void) {
 
 static void scenario_recv_empty_would_block(void) {
     SCENARIO_BEGIN("misuse.recv_empty");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_channel_reset();
 
     asx_region_id rid;
     asx_channel_id cid;
     uint64_t val;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
     SCENARIO_CHECK(asx_channel_create(rid, 4, &cid) == ASX_OK, "channel_create");
 
     asx_status rc = asx_channel_try_recv(cid, &val);
@@ -490,14 +491,14 @@ static void scenario_recv_empty_would_block(void) {
 
 static void scenario_reserve_after_sender_closed(void) {
     SCENARIO_BEGIN("misuse.reserve_after_close");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_channel_reset();
 
     asx_region_id rid;
     asx_channel_id cid;
     asx_send_permit p;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
     SCENARIO_CHECK(asx_channel_create(rid, 4, &cid) == ASX_OK, "channel_create");
     SCENARIO_CHECK(asx_channel_close_sender(cid) == ASX_OK, "close_sender");
 
@@ -513,7 +514,7 @@ static void scenario_reserve_after_sender_closed(void) {
 
 static void scenario_fault_injection_clock(void) {
     SCENARIO_BEGIN("fault.injection_clock");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_fault_injection fault;
     memset(&fault, 0, sizeof(fault));
@@ -543,7 +544,7 @@ static void scenario_fault_injection_clock(void) {
 
 static void scenario_ghost_violation_recording(void) {
     SCENARIO_BEGIN("ghost.violation_recording");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
 
     /*
@@ -574,14 +575,14 @@ static void scenario_ghost_violation_recording(void) {
 
 static void scenario_capture_arena_rollback(void) {
     SCENARIO_BEGIN("exhaustion.capture_arena_rollback");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_region_id rid;
     asx_task_id tid;
     void *state;
     asx_status rc;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
 
     /* Spawn tasks with large captured state to exhaust capture arena */
     uint32_t remaining = 0;
@@ -614,11 +615,11 @@ static void scenario_deterministic_exhaustion(void) {
     asx_status results[2][ASX_MAX_REGIONS + 1];
 
     for (pass = 0; pass < 2; pass++) {
-        asx_runtime_reset();
+        asx_runtime_reset(test_runtime());
         uint32_t i;
         for (i = 0; i <= ASX_MAX_REGIONS; i++) {
             asx_region_id rid;
-            results[pass][i] = asx_region_open(&rid);
+            results[pass][i] = asx_region_open(test_runtime(), &rid);
         }
     }
 

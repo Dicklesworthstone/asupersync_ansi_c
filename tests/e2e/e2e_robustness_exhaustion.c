@@ -11,6 +11,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../test_runtime.h"
 #include <asx/asx.h>
 #include <asx/runtime/runtime.h>
 #include <asx/time/timer_wheel.h>
@@ -98,14 +99,14 @@ static asx_status poll_fill_obligations(void *ud, asx_task_id self) {
 /* robust-exhaustion-001: task arena exhaustion returns deterministic error */
 static void scenario_task_arena_exhaustion(void) {
     SCENARIO_BEGIN("robust-exhaustion-001.task_arena_full");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_region_id rid;
     asx_task_id tid;
     int spawned = 0;
     asx_status rc;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
 
     /* Fill task arena to capacity */
     for (;;) {
@@ -129,7 +130,7 @@ static void scenario_task_arena_exhaustion(void) {
 /* robust-exhaustion-002: region arena exhaustion returns deterministic error */
 static void scenario_region_arena_exhaustion(void) {
     SCENARIO_BEGIN("robust-exhaustion-002.region_arena_full");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_region_id rid;
     int opened = 0;
@@ -137,7 +138,7 @@ static void scenario_region_arena_exhaustion(void) {
 
     /* Fill region arena to capacity */
     for (;;) {
-        rc = asx_region_open(&rid);
+        rc = asx_region_open(test_runtime(), &rid);
         if (rc != ASX_OK) break;
         opened++;
     }
@@ -152,7 +153,7 @@ static void scenario_region_arena_exhaustion(void) {
 /* robust-exhaustion-003: channel capacity exhaustion */
 static void scenario_channel_capacity_exhaustion(void) {
     SCENARIO_BEGIN("robust-exhaustion-003.channel_full");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_channel_reset();
 
     asx_region_id rid;
@@ -161,7 +162,7 @@ static void scenario_channel_capacity_exhaustion(void) {
     int sent = 0;
     asx_status rc;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
     SCENARIO_CHECK(asx_channel_create(rid, 4, &cid) == ASX_OK, "channel_create");
 
     /* Fill channel to capacity */
@@ -213,14 +214,14 @@ static void scenario_timer_wheel_exhaustion(void) {
 /* robust-exhaustion-005: obligation arena exhaustion */
 static void scenario_obligation_arena_exhaustion(void) {
     SCENARIO_BEGIN("robust-exhaustion-005.obligation_arena_full");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_region_id rid;
     asx_task_id tid;
     fill_state fill;
     asx_budget budget = asx_budget_from_polls(10);
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
 
     /* Fill obligation arena to capacity: the holder task's poll reserves
      * until the arena refuses, then parks (the run reports WOULD_BLOCK) */
@@ -240,12 +241,12 @@ static void scenario_obligation_arena_exhaustion(void) {
 /* robust-exhaustion-006: poll budget exhaustion is deterministic */
 static void scenario_budget_exhaustion_deterministic(void) {
     SCENARIO_BEGIN("robust-exhaustion-006.budget_deterministic");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_region_id rid;
     asx_task_id tid;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
     SCENARIO_CHECK(asx_task_spawn(rid, poll_pending, NULL, &tid) == ASX_OK, "task_spawn");
 
     /* Run with tight budget — should exhaust deterministically */
@@ -256,8 +257,8 @@ static void scenario_budget_exhaustion_deterministic(void) {
     uint32_t events1 = asx_scheduler_event_count();
 
     /* Replay same scenario — event count must match */
-    asx_runtime_reset();
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open_2");
+    asx_runtime_reset(test_runtime());
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open_2");
     SCENARIO_CHECK(asx_task_spawn(rid, poll_pending, NULL, &tid) == ASX_OK, "task_spawn_2");
 
     asx_budget b2 = asx_budget_from_polls(5);
@@ -273,13 +274,13 @@ static void scenario_budget_exhaustion_deterministic(void) {
 /* robust-exhaustion-007: exhaustion does not corrupt partial state */
 static void scenario_exhaustion_no_partial_mutation(void) {
     SCENARIO_BEGIN("robust-exhaustion-007.no_partial_mutation");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_region_id rid;
     asx_task_id t1;
     asx_budget budget;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
     SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &t1) == ASX_OK, "task_spawn");
 
     /* Complete t1 first */
@@ -311,12 +312,12 @@ static void scenario_exhaustion_no_partial_mutation(void) {
 /* robust-exhaustion-008: quiescence check on region with exhausted budget */
 static void scenario_quiescence_budget_exhausted(void) {
     SCENARIO_BEGIN("robust-exhaustion-008.quiescence_budget");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_region_id rid;
     asx_task_id tid;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
     SCENARIO_CHECK(asx_task_spawn(rid, poll_pending, NULL, &tid) == ASX_OK, "task_spawn");
 
     /* Quiescence should fail with active tasks */

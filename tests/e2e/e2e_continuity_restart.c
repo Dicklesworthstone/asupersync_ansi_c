@@ -11,6 +11,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../test_runtime.h"
 #include <asx/asx.h>
 #include <asx/runtime/runtime.h>
 #include <asx/runtime/telemetry.h>
@@ -99,13 +100,13 @@ static void scenario_crash_restart_simple(void) {
     SCENARIO_BEGIN("continuity-crash-midflight-001.simple_restart");
 
     /* Phase 1: run a scenario and export trace */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_trace_reset();
 
     asx_region_id rid;
     asx_task_id tid;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
     SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "task_spawn");
 
     asx_budget budget = asx_budget_from_polls(10);
@@ -123,14 +124,14 @@ static void scenario_crash_restart_simple(void) {
     SCENARIO_CHECK(trace_len > 0, "exported trace should not be empty");
 
     /* Phase 2: simulate restart — reset everything, import trace */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_trace_reset();
 
     rc = asx_trace_import_binary(trace_buf, trace_len);
     SCENARIO_CHECK(rc == ASX_OK, "trace_import");
 
     /* Replay identical scenario */
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open_2");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open_2");
     SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "task_spawn_2");
 
     budget = asx_budget_from_polls(10);
@@ -150,13 +151,13 @@ static void scenario_continuity_check_matching(void) {
     SCENARIO_BEGIN("continuity-checkpoint-rollback-002.matching_check");
 
     /* Run scenario and capture trace */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_trace_reset();
 
     asx_region_id rid;
     asx_task_id tid;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
     SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "task_spawn");
 
     asx_budget budget = asx_budget_from_polls(10);
@@ -171,10 +172,10 @@ static void scenario_continuity_check_matching(void) {
                    "trace_export");
 
     /* Reset and replay same scenario */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_trace_reset();
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open_2");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open_2");
     SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "task_spawn_2");
 
     budget = asx_budget_from_polls(10);
@@ -193,13 +194,13 @@ static void scenario_continuity_mismatch_detected(void) {
     SCENARIO_BEGIN("continuity-replay-identity-003.mismatch_detected");
 
     /* Run scenario A: single task */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_trace_reset();
 
     asx_region_id rid;
     asx_task_id tid;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open_a");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open_a");
     SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "task_spawn_a");
 
     asx_budget budget = asx_budget_from_polls(10);
@@ -214,10 +215,10 @@ static void scenario_continuity_mismatch_detected(void) {
                    "export_a");
 
     /* Run scenario B: two tasks (different event sequence) */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_trace_reset();
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open_b");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open_b");
     SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "task_spawn_b1");
     SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "task_spawn_b2");
 
@@ -236,7 +237,7 @@ static void scenario_continuity_mismatch_detected(void) {
 static void scenario_multi_task_roundtrip(void) {
     SCENARIO_BEGIN("continuity-multi-task.trace_roundtrip");
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_trace_reset();
 
     asx_region_id rid;
@@ -244,7 +245,7 @@ static void scenario_multi_task_roundtrip(void) {
     void *s1, *s2;
     yield_state *ys;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
     SCENARIO_CHECK(asx_task_spawn_captured(rid, poll_yield_once, (uint32_t)sizeof(yield_state),
                                            NULL, &t1, &s1) == ASX_OK,
                    "spawn_t1");
@@ -291,13 +292,13 @@ static void scenario_multi_task_roundtrip(void) {
 static void scenario_corrupted_trace_detected(void) {
     SCENARIO_BEGIN("continuity-corruption.detected");
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_trace_reset();
 
     asx_region_id rid;
     asx_task_id tid;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
     SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "task_spawn");
 
     asx_budget budget = asx_budget_from_polls(10);
@@ -326,13 +327,13 @@ static void scenario_corrupted_trace_detected(void) {
 static void scenario_snapshot_capture(void) {
     SCENARIO_BEGIN("continuity-snapshot.capture_digest");
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_trace_reset();
 
     asx_region_id rid;
     asx_task_id tid;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
     SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "task_spawn");
 
     asx_budget budget = asx_budget_from_polls(10);
@@ -350,10 +351,10 @@ static void scenario_snapshot_capture(void) {
     SCENARIO_CHECK(snap_digest != 0, "snapshot digest should not be zero");
 
     /* Same snapshot digest on identical replay */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_trace_reset();
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open_2");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open_2");
     SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "task_spawn_2");
 
     budget = asx_budget_from_polls(10);

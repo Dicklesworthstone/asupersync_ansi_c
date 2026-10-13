@@ -11,6 +11,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../test_runtime.h"
 #include <asx/asx.h>
 #include <asx/runtime/telemetry.h>
 #include <asx/runtime/trace.h>
@@ -101,7 +102,7 @@ static void run_canonical_scenario(void) {
     asx_task_id tid;
     asx_budget budget;
 
-    IGNORE_RC(asx_region_open(&rid));
+    IGNORE_RC(asx_region_open(test_runtime(), &rid));
     IGNORE_RC(asx_task_spawn(rid, poll_complete, NULL, &tid));
     IGNORE_RC(asx_task_spawn(rid, poll_complete, NULL, &tid));
 
@@ -120,7 +121,7 @@ static void scenario_export_import_roundtrip(void) {
 
     SCENARIO_BEGIN("continuity.export_import_roundtrip");
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_trace_reset();
     run_canonical_scenario();
 
@@ -157,7 +158,7 @@ static void scenario_continuity_across_restart(void) {
     SCENARIO_BEGIN("continuity.across_restart");
 
     /* "Before crash": run scenario, export trace */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_trace_reset();
     run_canonical_scenario();
     uint64_t pre_crash_digest = asx_trace_digest();
@@ -166,7 +167,7 @@ static void scenario_continuity_across_restart(void) {
     SCENARIO_CHECK(rc == ASX_OK, "pre-crash export");
 
     /* "After restart": reset everything, replay same scenario */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_trace_reset();
     run_canonical_scenario();
     uint64_t post_restart_digest = asx_trace_digest();
@@ -192,7 +193,7 @@ static void scenario_divergence_detection(void) {
     SCENARIO_BEGIN("continuity.divergence_detection");
 
     /* Run scenario A */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_trace_reset();
     run_canonical_scenario();
 
@@ -200,14 +201,14 @@ static void scenario_divergence_detection(void) {
     SCENARIO_CHECK(rc == ASX_OK, "export scenario A");
 
     /* Run a DIFFERENT scenario */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_trace_reset();
     {
         asx_region_id rid;
         asx_task_id tid;
         asx_budget budget;
 
-        IGNORE_RC(asx_region_open(&rid));
+        IGNORE_RC(asx_region_open(test_runtime(), &rid));
         /* Different: spawn 3 tasks instead of 2 */
         IGNORE_RC(asx_task_spawn(rid, poll_complete, NULL, &tid));
         IGNORE_RC(asx_task_spawn(rid, poll_complete, NULL, &tid));
@@ -234,7 +235,7 @@ static void scenario_digest_stability(void) {
     SCENARIO_BEGIN("continuity.digest_stability");
 
     for (i = 0; i < 4; i++) {
-        asx_runtime_reset();
+        asx_runtime_reset(test_runtime());
         asx_trace_reset();
         run_canonical_scenario();
         digests[i] = asx_trace_digest();
@@ -260,7 +261,7 @@ static void scenario_export_buffer_too_small(void) {
 
     SCENARIO_BEGIN("continuity.buffer_too_small");
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_trace_reset();
     run_canonical_scenario();
 
@@ -280,7 +281,7 @@ static void scenario_import_bad_magic(void) {
 
     SCENARIO_BEGIN("continuity.bad_magic");
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_trace_reset();
     run_canonical_scenario();
 
@@ -307,7 +308,7 @@ static void scenario_empty_trace(void) {
 
     SCENARIO_BEGIN("continuity.empty_trace");
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_trace_reset();
     /* No scenario — export empty trace */
 
@@ -339,7 +340,7 @@ static void scenario_captured_state_replay(void) {
     SCENARIO_BEGIN("continuity.captured_state_replay");
 
     /* Run 1: scenario with yielding tasks (uses captured state) */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_trace_reset();
     {
         asx_region_id rid;
@@ -348,7 +349,7 @@ static void scenario_captured_state_replay(void) {
         yield_state *ys;
         asx_budget budget;
 
-        IGNORE_RC(asx_region_open(&rid));
+        IGNORE_RC(asx_region_open(test_runtime(), &rid));
         IGNORE_RC(asx_task_spawn_captured(rid, poll_yield_once, (uint32_t)sizeof(yield_state), NULL,
                                           &tid, &st));
         ys = (yield_state *)st;
@@ -363,7 +364,7 @@ static void scenario_captured_state_replay(void) {
     SCENARIO_CHECK(rc == ASX_OK, "export run 1");
 
     /* Run 2: identical */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_trace_reset();
     {
         asx_region_id rid;
@@ -372,7 +373,7 @@ static void scenario_captured_state_replay(void) {
         yield_state *ys;
         asx_budget budget;
 
-        IGNORE_RC(asx_region_open(&rid));
+        IGNORE_RC(asx_region_open(test_runtime(), &rid));
         IGNORE_RC(asx_task_spawn_captured(rid, poll_yield_once, (uint32_t)sizeof(yield_state), NULL,
                                           &tid, &st));
         ys = (yield_state *)st;

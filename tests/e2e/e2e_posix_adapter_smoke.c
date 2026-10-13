@@ -251,7 +251,7 @@ int main(void) {
         if (st != ASX_OK) ok = 0;
 
         if (ok) {
-            st = asx_region_open(&rid);
+            st = asx_region_open(&rt, &rid);
             scenario("posix_adapter_smoke.region_open", st == ASX_OK, NULL);
             if (st != ASX_OK) ok = 0;
         }

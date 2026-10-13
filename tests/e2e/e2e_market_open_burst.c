@@ -12,6 +12,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../test_runtime.h"
 #include <asx/asx.h>
 #include <asx/runtime/runtime.h>
 #include <asx/runtime/telemetry.h>
@@ -115,14 +116,14 @@ static asx_status poll_cancel_aware(void *ud, asx_task_id self) {
 /* market-open-burst-001: extreme admission spike */
 static void scenario_admission_spike(void) {
     SCENARIO_BEGIN("market-open-burst-001.admission_spike");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_region_id rid;
     asx_task_id tid;
     int admitted = 0;
     int rejected = 0;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
 
     /* Fire rapid task spawns until capacity */
     for (;;) {
@@ -148,7 +149,7 @@ static void scenario_admission_spike(void) {
 /* market-open-burst-002: burst with interleaved obligations */
 static void scenario_burst_obligations(void) {
     SCENARIO_BEGIN("market-open-burst-002.burst_obligations");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_region_id rid;
     asx_task_id tid;
@@ -156,7 +157,7 @@ static void scenario_burst_obligations(void) {
     uint32_t spawned = 0;
     uint32_t i;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
 
     /* Spawn tasks in a tight burst; each holds one obligation, reserved in
      * its poll. Commit every other, abort the rest — tests linearity */
@@ -196,14 +197,14 @@ static void scenario_burst_obligations(void) {
 /* market-open-burst-003: partial budget drain under spike */
 static void scenario_partial_drain(void) {
     SCENARIO_BEGIN("market-open-burst-003.partial_drain");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_region_id rid;
     asx_task_id tid;
     uint32_t spawned = 0;
     uint32_t i;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
 
     /* Spawn many tasks */
     for (i = 0; i < 16; i++) {
@@ -229,12 +230,12 @@ static void scenario_partial_drain(void) {
 /* market-open-burst-004: burst recovery and graceful degradation */
 static void scenario_burst_recovery(void) {
     SCENARIO_BEGIN("market-open-burst-004.burst_recovery");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_region_id rid;
     asx_task_id tid;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
 
     /* Phase 1: saturate */
     int saturated = 0;
@@ -267,7 +268,7 @@ static void scenario_burst_recovery(void) {
 /* market-open-burst-005: mass cancel during burst */
 static void scenario_mass_cancel_burst(void) {
     SCENARIO_BEGIN("market-open-burst-005.mass_cancel_burst");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_region_id rid;
     asx_task_id tids[8];
@@ -276,7 +277,7 @@ static void scenario_mass_cancel_burst(void) {
     uint32_t i;
     uint32_t spawned = 0;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open");
 
     /* Spawn cancel-aware tasks */
     for (i = 0; i < 8; i++) {
@@ -315,14 +316,14 @@ static void scenario_mass_cancel_burst(void) {
 /* market-open-burst-006: multi-region burst isolation */
 static void scenario_multi_region_burst(void) {
     SCENARIO_BEGIN("market-open-burst-006.multi_region_isolation");
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     asx_region_id r1, r2;
     asx_task_id tid;
     uint32_t i;
 
-    SCENARIO_CHECK(asx_region_open(&r1) == ASX_OK, "open_r1");
-    SCENARIO_CHECK(asx_region_open(&r2) == ASX_OK, "open_r2");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &r1) == ASX_OK, "open_r1");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &r2) == ASX_OK, "open_r2");
 
     /* Saturate r1 */
     for (i = 0; i < 16; i++) {
@@ -347,14 +348,14 @@ static void scenario_trace_digest(void) {
     SCENARIO_BEGIN("market-open-burst-007.trace_deterministic");
 
     /* Run 1 */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_trace_reset();
 
     asx_region_id rid;
     asx_task_id tid;
     uint32_t i;
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open_1");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open_1");
     for (i = 0; i < 6; i++) {
         SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "spawn_1");
     }
@@ -363,10 +364,10 @@ static void scenario_trace_digest(void) {
     uint64_t digest1 = asx_trace_digest();
 
     /* Run 2: identical scenario */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_trace_reset();
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open_2");
+    SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open_2");
     for (i = 0; i < 6; i++) {
         SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "spawn_2");
     }
