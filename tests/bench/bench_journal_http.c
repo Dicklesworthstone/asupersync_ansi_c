@@ -101,6 +101,22 @@ static int dial(uint16_t port) {
     return fd;
 }
 
+/* The asx HTTP server writes a response's head and its body as two writes
+ * and does not set TCP_NODELAY, so over loopback its second write waits
+ * for the ACK of the first, which a client that has nothing to send holds
+ * back for ~40 ms (delayed ACK). Asking the kernel to ACK at once keeps
+ * that stall out of the measurement, so it is the server's work, journal on
+ * or off, that is timed. (Linux; the bit does not stick, so it is set
+ * before every receive.) */
+static void ack_at_once(int fd) {
+#ifdef TCP_QUICKACK
+    int one = 1;
+    (void)setsockopt(fd, IPPROTO_TCP, TCP_QUICKACK, &one, sizeof(one));
+#else
+    (void)fd;
+#endif
+}
+
 /* One GET /hello and its whole response, 1 on a 200 with body "hello". */
 static int one_request(int fd) {
     static const char req[] = "GET /hello HTTP/1.1\r\nHost: bench\r\n\r\n";
@@ -119,6 +135,7 @@ static int one_request(int fd) {
     for (;;) {
         ssize_t r;
         if (n >= sizeof(buf) - 1u) return 0;
+        ack_at_once(fd);
         r = recv(fd, buf + n, sizeof(buf) - 1u - n, 0);
         if (r <= 0) return 0;
         n += (size_t)r;
@@ -304,6 +321,7 @@ static int run_once(int mode, uint32_t n, const char *dir, run_result *out) {
     if (st == ASX_OK) st = asx_tcp_listener_local_addr(g_srv.listener, &bound);
     asx_http_server_config_init(&hcfg, &g_router);
     hcfg.idle_timeout_ms = 0u;
+    hcfg.max_requests = 0u; /* the default closes a connection after 1000 */
     if (st == ASX_OK) st = asx_http_server_init(&g_hs, &g_srv, &hcfg);
     if (st == ASX_OK) st = asx_region_open(&region);
     if (st == ASX_OK) st = asx_task_spawn(region, server_task, NULL, &task);
