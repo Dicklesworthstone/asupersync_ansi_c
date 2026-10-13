@@ -4087,6 +4087,7 @@ static const char *supervisor_error_name(asx_supervisor_error e) {
     case ASX_SUPERVISOR_ERR_RESTART_LIMIT: return "RestartLimit";
     case ASX_SUPERVISOR_ERR_GENERATION_EXHAUSTED: return "GenerationExhausted";
     case ASX_SUPERVISOR_ERR_ESCALATION: return "Escalation";
+    case ASX_SUPERVISOR_ERR_REGISTRATION: return "Registration";
     case ASX_SUPERVISOR_ERR_NONE: break;
     }
     return NULL;
