@@ -261,11 +261,17 @@ o2_out="$(cd "$REPO_ROOT" && make -j"$JOBS" --no-print-directory conformance \
     CONFORMANCE_ORACLES= 2>&1)"
 o2_rc=$?
 printf '%s\n' "$o2_out" >"$O_DIR/conformance-no-oracles.log"
-if [ "$o2_rc" -eq 0 ] && ! grep -Eq '^(FAIL|ERROR) ' <<<"$o2_out"; then
+# A clean lane prints FAIL lines by design: the self-test corrupts an expectation
+# and reports that the runner caught it. So the evidence that parity passed is
+# the runner's own exit and compare summary (fail=0 error=0), and that no
+# oracle named a failure.
+if [ "$o2_rc" -eq 0 ] &&
+    grep -Eq '^asx-conformance: compared=[0-9]+ pass=[0-9]+ fail=0 error=0 ' <<<"$o2_out" &&
+    ! grep -q 'oracle failed' <<<"$o2_out"; then
     echo "  PASS: ORACLE_LIVE_COUNT_DRIFT is invisible to the lane without its oracles (parity passes)"
     log_case "ORACLE_LIVE_COUNT_DRIFT" "lane-without-oracles-passes" "exit$o2_rc" "pass" "$O_DIR/conformance-no-oracles.log"
 else
-    echo "  FAIL: ORACLE_LIVE_COUNT_DRIFT changes what parity sees; it must not (exit$o2_rc; log $O_DIR/conformance-no-oracles.log)"
+    echo "  FAIL: ORACLE_LIVE_COUNT_DRIFT is visible to parity or the lane without oracles failed; it must not (exit$o2_rc; log $O_DIR/conformance-no-oracles.log)"
     log_case "ORACLE_LIVE_COUNT_DRIFT" "lane-without-oracles-passes" "exit$o2_rc" "fail" "$O_DIR/conformance-no-oracles.log"
     failures=$((failures + 1))
 fi
