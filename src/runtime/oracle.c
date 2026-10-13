@@ -17,8 +17,12 @@
 #include "runtime_internal.h"
 #include <asx/core/cancel.h>
 #include <asx/core/transition.h>
+/* The minimal browser profile hides the replay and trace families from the
+ * public surface; the oracles implement over them, as replay.c does. */
+#define ASX_INTERNAL_TRACE_FAMILY_ACCESS 1
 #include <asx/runtime/replay.h>
 #include <asx/runtime/trace.h>
+#undef ASX_INTERNAL_TRACE_FAMILY_ACCESS
 #include <string.h>
 
 static asx_oracle_result oracle_verdict(asx_oracle_verdict verdict, const char *name,

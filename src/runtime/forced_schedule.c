@@ -16,7 +16,11 @@
  * SPDX-License-Identifier: MIT
  */
 
+/* The minimal browser profile hides the lab family from the public surface
+ * (lab.h); this unit implements it, as lab.c and lab_dispatch.c do. */
+#define ASX_INTERNAL_TRACE_FAMILY_ACCESS 1
 #include <asx/runtime/lab.h>
+#undef ASX_INTERNAL_TRACE_FAMILY_ACCESS
 #include <asx/security/crypto.h>
 #include <string.h>
 
