@@ -369,9 +369,13 @@ ASX_API asx_resource_limits asx_resource_limits_for_class(asx_resource_class cls
 #if (ASX_REGION_CAPTURE_ARENA_BYTES) < 8u
 #error "ASX_REGION_CAPTURE_ARENA_BYTES must be at least 8"
 #endif
-#ifndef ASX_MAX_MASK_DEPTH
-#define ASX_MAX_MASK_DEPTH 64u
+/* asupersync's MAX_MASK_DEPTH (types/task_context.rs, asserted in
+ * Cx::masked): a semantic bound, not a capacity. Masking a 65th level panics
+ * in Rust, so a build cannot choose another value. */
+#ifdef ASX_MAX_MASK_DEPTH
+#error "ASX_MAX_MASK_DEPTH is asupersync MAX_MASK_DEPTH (64): a semantic bound, not a capacity"
 #endif
+#define ASX_MAX_MASK_DEPTH 64u
 /* One witness per task that was cancelled and has not completed, so R1's 16
  * tasks need at most 16 (bd-f5bs); R2, R3 and an unclassed build keep 64. */
 #define ASX_CLASS_R1_MAX_CANCEL_WITNESSES 16u

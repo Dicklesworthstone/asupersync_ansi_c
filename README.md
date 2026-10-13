@@ -818,7 +818,6 @@ it drifts from the headers or a new capacity macro is missing.
 | `ASX_MAX_EPOCH_OBSERVERS` | 8 | `include/asx/asx_config.h` |
 | `ASX_MAX_FS_ENTRIES` | 16 | `include/asx/asx_config.h` |
 | `ASX_MAX_IO_TOKENS` | 64 | `include/asx/asx_config.h` |
-| `ASX_MAX_MASK_DEPTH` | 64 | `include/asx/asx_config.h` |
 | `ASX_MAX_OBLIGATIONS` | 128 | `include/asx/asx_config.h` |
 | `ASX_MAX_ONESHOTS` | 32 | `include/asx/asx_config.h` |
 | `ASX_MAX_OPEN_DIRS` | 8 | `include/asx/asx_config.h` |
@@ -1249,7 +1248,7 @@ Each cancel carries an **origin attribution chain** (source region, source task,
 
 Cancelling a region (`asx_region_cancel` with a reason, `asx_cancel_propagate` with a kind) reaches its whole subtree: the root's tasks get the requested reason, descendants get `PARENT`. Draining (`asx_region_drain`) closes the subtree parent-first, cancels with `PARENT` the tasks not cancelled yet, runs it to completion, then finalizes it deepest-first; to drain with a reason, as Rust's region close command does, call `asx_region_cancel` first. A parked task is woken by its cancel.
 
-**Masking** (`asx_task_mask` / `asx_task_unmask`, nestable to `ASX_MAX_MASK_DEPTH` = 64) defers acknowledgement for a critical section, such as committing a transaction or a finalizer. While a task is masked, `asx_checkpoint` reports `masked = 1` instead of `cancelled`, the cancel can still strengthen, and even the opt-in hard cleanup bound neither consumes cleanup polls nor force-completes the task. The cancel becomes observable at the first checkpoint after the depth returns to zero.
+**Masking** (`asx_task_mask` / `asx_task_unmask`, nestable to `ASX_MAX_MASK_DEPTH` = 64, asupersync's `MAX_MASK_DEPTH`: a semantic bound a build cannot change) defers acknowledgement for a critical section, such as committing a transaction or a finalizer. While a task is masked, `asx_checkpoint` reports `masked = 1` instead of `cancelled`, the cancel can still strengthen, and even the opt-in hard cleanup bound neither consumes cleanup polls nor force-completes the task. The cancel becomes observable at the first checkpoint after the depth returns to zero.
 
 `asx_task_masked(self, body, user_data)` runs a synchronous callback with one
 extra mask and releases that level whenever the callback returns, including
