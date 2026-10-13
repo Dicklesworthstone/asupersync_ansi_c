@@ -34,6 +34,13 @@ typedef struct {
 static mon_entry g_mon[ASX_MONITOR_CAPACITY];
 static asx_monitor_ref g_next_ref = 1u;
 
+/* A task handle carries the task's state in its tag, so the handle the
+ * runtime holds at completion is not bit-equal to the one a monitor was made
+ * with: tasks are the same when slot and generation are. */
+static int same_task(asx_task_id a, asx_task_id b) {
+    return asx_handle_index(a) == asx_handle_index(b);
+}
+
 /* Rust's live_owner (state.rs:4973): a task is live while its record exists
  * and is not terminal. */
 static int task_is_live(asx_task_id task) {
@@ -110,72 +117,62 @@ void asx_monitor_release(asx_monitor_ref ref) {
     if (e != NULL && !e->to_server) memset(e, 0, sizeof(*e));
 }
 
-/* DownBatch::into_sorted (:509) for one exit: every notification has the
- * exit's completion time and monitored task, so the key is the reference.
- * Insertion sort of table indexes; the count is at most the capacity. */
-static uint32_t collect_firing(asx_task_id task, uint32_t *order) {
-    uint32_t n = 0;
+/* The next monitor on `task` to fire: the lowest reference left. Every
+ * notification of one exit has its completion time and monitored task, so
+ * DownBatch::into_sorted (:509) orders them by reference alone; picking the
+ * minimum repeatedly gives that order without a buffer, which matters
+ * because this runs at every task completion. */
+static mon_entry *next_firing(asx_task_id task) {
+    mon_entry *next = NULL;
     uint32_t i;
     for (i = 0; i < ASX_MONITOR_CAPACITY; i++) {
-        uint32_t j;
-        if (g_mon[i].state != MON_ACTIVE || g_mon[i].monitored != task) continue;
-        j = n++;
-        while (j > 0u && g_mon[order[j - 1u]].ref > g_mon[i].ref) {
-            order[j] = order[j - 1u];
-            j--;
-        }
-        order[j] = i;
+        mon_entry *e = &g_mon[i];
+        if (e->state != MON_ACTIVE || !same_task(e->monitored, task)) continue;
+        if (next == NULL || e->ref < next->ref) next = e;
     }
-    return n;
+    return next;
 }
 
 void asx_monitor_task_finished(asx_task_id task, const asx_outcome *outcome, asx_time vt) {
-    uint32_t order[ASX_MONITOR_CAPACITY];
-    asx_down downs[ASX_MONITOR_CAPACITY];
-    mon_entry firing[ASX_MONITOR_CAPACITY];
-    uint32_t n;
+    mon_entry *e;
     uint32_t i;
 
-    /* remove_monitored (:1404): the monitors on the task leave the set
-     * before any notification is delivered. */
-    n = collect_firing(task, order);
-    for (i = 0; i < n; i++) {
-        mon_entry *e = &g_mon[order[i]];
-        downs[i].monitored = task;
-        downs[i].reason = outcome != NULL ? *outcome : asx_outcome_make(ASX_OUTCOME_ERR);
-        downs[i].vt = vt;
-        downs[i].ref = e->ref;
-        firing[i] = *e;
+    /* Each monitor on the task leaves the set as it fires (remove_monitored
+     * removes them all first, :1404; nothing delivered here can add or
+     * remove a monitor, so the order of the two is not observable). */
+    while ((e = next_firing(task)) != NULL) {
+        asx_down down;
+        down.monitored = task;
+        down.reason = outcome != NULL ? *outcome : asx_outcome_make(ASX_OUTCOME_ERR);
+        down.vt = vt;
+        down.ref = e->ref;
         if (e->to_server) {
+            /* Delivery (WatchEffects::dispatch, :1523): the server's lane
+             * takes a DOWN message; a stopped server drops it, as Rust's
+             * closed lane does, and the lane cannot be full
+             * (ASX_MONITOR_CAPACITY <= its capacity). */
+            asx_actor_info_msg msg;
+            asx_status st;
+            memset(&msg, 0, sizeof(msg));
+            msg.kind = ASX_ACTOR_INFO_DOWN;
+            msg.task = down.monitored;
+            msg.vt = down.vt;
+            msg.reason = down.reason;
+            msg.ref = down.ref;
+            st = asx_actor_system_push(e->server, &msg);
+            (void)st; /* DISCONNECTED: the server stopped, the message is dropped */
             memset(e, 0, sizeof(*e));
         } else {
             e->state = MON_FIRED;
-            e->notice = downs[i];
+            e->notice = down;
         }
     }
 
     /* The task's own monitors end with it, silently (:1425). */
     for (i = 0; i < ASX_MONITOR_CAPACITY; i++) {
-        if (g_mon[i].state == MON_ACTIVE && g_mon[i].watcher == task) {
+        if (g_mon[i].state == MON_ACTIVE && same_task(g_mon[i].watcher, task)) {
             memset(&g_mon[i], 0, sizeof(g_mon[i]));
         }
-    }
-
-    /* Delivery (WatchEffects::dispatch, :1523): a server's lane takes a
-     * DOWN message; a stopped server drops it, as Rust's closed lane does,
-     * and the lane cannot be full (ASX_MONITOR_CAPACITY <= its capacity). */
-    for (i = 0; i < n; i++) {
-        asx_actor_info_msg msg;
-        asx_status st;
-        if (!firing[i].to_server) continue;
-        memset(&msg, 0, sizeof(msg));
-        msg.kind = ASX_ACTOR_INFO_DOWN;
-        msg.task = downs[i].monitored;
-        msg.vt = downs[i].vt;
-        msg.reason = downs[i].reason;
-        msg.ref = downs[i].ref;
-        st = asx_actor_system_push(firing[i].server, &msg);
-        (void)st; /* DISCONNECTED: the server stopped, the message is dropped */
     }
 }
 

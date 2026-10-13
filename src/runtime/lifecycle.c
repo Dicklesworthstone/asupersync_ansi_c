@@ -715,11 +715,10 @@ asx_status asx_region_audit_leaks_internal(asx_region_id region) {
 }
 
 void asx_task_on_complete_internal(asx_task_slot *task, asx_region_slot *region) {
-    /* Rust's outcome carries its payload: Cancelled(reason), Panicked(
-     * payload). Every completion path sets the severity, and the slot's
-     * reason (the Cx's, once reconciled) or panic message, before this
-     * runs, so the outcome takes its payload here, once, for the task's
-     * join, its handle, its group and its region's close outcome. */
+    /* Rust's outcome carries its payload: Cancelled(reason), Panicked(payload). Every completion
+     * path sets the severity, and the slot's reason (the Cx's, once reconciled) or panic message,
+     * before this runs, so the outcome takes its payload here, once, for the task's join, its
+     * handle, its group and its region's close outcome. */
     if (task->outcome.severity == ASX_OUTCOME_CANCELLED) {
         task->outcome.cancel_reason = task->cancel_reason;
     } else if (task->outcome.severity == ASX_OUTCOME_PANICKED) {
@@ -729,8 +728,7 @@ void asx_task_on_complete_internal(asx_task_slot *task, asx_region_slot *region)
         int fail_fast = 0;
         (void)asx_task_resolve_held_obligations_internal(task, &fail_fast);
         if (fail_fast && region != NULL) {
-            /* PANIC policy: route the leak through the region's
-             * containment policy (fail-fast / poison / error-only). */
+            /* PANIC: route the leak through the region's containment policy. */
             asx_status fc = asx_region_contain_fault(task->region, ASX_E_UNRESOLVED_OBLIGATIONS);
             if (fc != ASX_OK && asx_containment_policy_active() != ASX_CONTAIN_POISON_REGION) {
                 g_pending_fault = fc;
@@ -738,8 +736,7 @@ void asx_task_on_complete_internal(asx_task_slot *task, asx_region_slot *region)
         }
     }
     asx_task_timer_disarm_internal(task);
-    /* Drop captured servers and remaining broadcast credits, then pass
-     * on any wake or grant the finished task still held. */
+    /* Drop captured servers and remaining broadcast credits; pass on any wake or grant held. */
     asx_broadcast_task_finished_internal(asx_task_handle_for_slot((uint32_t)(task - g_tasks)));
     asx_actor_task_finished(asx_task_handle_for_slot((uint32_t)(task - g_tasks)));
     asx_wait_task_finished(asx_task_handle_for_slot((uint32_t)(task - g_tasks)));
@@ -757,6 +754,9 @@ void asx_task_on_complete_internal(asx_task_slot *task, asx_region_slot *region)
         asx_region_finalizer_task_done_internal(region, task);
     }
     if (region != NULL && region->task_count > 0u) region->task_count--;
+    /* Watch effects dispatch after the join waiters (lab/runtime.rs:5010). */
+    asx_monitor_task_finished(asx_task_handle_for_slot((uint32_t)(task - g_tasks)), &task->outcome,
+                              obligation_clock());
     if (task->detached) { asx_task_slot_release((uint32_t)(task - g_tasks)); }
 }
 

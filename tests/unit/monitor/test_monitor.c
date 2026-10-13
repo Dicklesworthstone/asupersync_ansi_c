@@ -41,12 +41,16 @@ static asx_status st_sink_;
         if (g_fail == before_) g_pass++;                                                           \
     } while (0)
 
+/* g_root is run; g_idle never is, so a task spawned in it stays live until
+ * a test finishes it by hand with asx_monitor_task_finished. */
 static asx_region_id g_root;
+static asx_region_id g_idle;
 
 static void setup(void) {
     asx_runtime_reset();
     asx_monitor_reset();
     MUST_OK(asx_region_open(&g_root));
+    MUST_OK(asx_region_open(&g_idle));
 }
 
 static void run(asx_region_id region) {
@@ -61,16 +65,29 @@ static asx_status finish_poll(void *user_data, asx_task_id self) {
     return ASX_OK;
 }
 
-/* A task that has not been polled: created, so live. */
+static asx_status fail_poll(void *user_data, asx_task_id self) {
+    (void)user_data;
+    (void)self;
+    return ASX_E_INVALID_STATE;
+}
+
+/* A task that is never polled: created, so live. */
 static asx_task_id spawn_task(void) {
     asx_task_id id = ASX_INVALID_ID;
-    MUST_OK(asx_task_spawn(g_root, finish_poll, NULL, &id));
+    MUST_OK(asx_task_spawn(g_idle, finish_poll, NULL, &id));
+    return id;
+}
+
+/* A task in the run region: it completes when the test runs it. */
+static asx_task_id spawn_runnable(asx_task_poll_fn poll) {
+    asx_task_id id = ASX_INVALID_ID;
+    MUST_OK(asx_task_spawn(g_root, poll, NULL, &id));
     return id;
 }
 
 /* A task that ran to completion: not live. */
 static asx_task_id spawn_finished_task(void) {
-    asx_task_id id = spawn_task();
+    asx_task_id id = spawn_runnable(finish_poll);
     run(g_root);
     return id;
 }
@@ -458,6 +475,93 @@ static void test_reset_forgets_monitors_and_restarts_references(void) {
     ASSERT(ref == 1u, "references restart at 1");
 }
 
+/* ------------------------------------------------------------------ */
+/* The runtime fires monitors at task completion                       */
+/* ------------------------------------------------------------------ */
+
+static void test_the_runtime_fires_a_servers_monitor_at_completion(void) {
+    rec_state s;
+    asx_actor_handle h;
+    asx_task_id target;
+    asx_monitor_ref ref = 0;
+    setup();
+    h = spawn_server(&s);
+    target = spawn_runnable(finish_poll);
+    MUST_OK(asx_monitor_establish_server(h, target, &ref));
+    run(g_root);
+    ASSERT(s.n == 1u, "the completion fired the monitor");
+    ASSERT(s.got[0].kind == ASX_ACTOR_INFO_DOWN && s.got[0].ref == ref,
+           "a DOWN with its reference");
+    ASSERT(asx_handle_index(s.got[0].task) == asx_handle_index(target),
+           "for the monitored task (its handle's state tag has changed since)");
+    ASSERT(s.got[0].reason.severity == ASX_OUTCOME_OK, "Normal");
+    ASSERT(s.got[0].vt == asx_runtime_virtual_now(), "at the runtime's virtual time");
+    ASSERT(asx_monitor_count() == 0u, "and it is gone");
+}
+
+static void test_the_runtime_reports_an_error_exit(void) {
+    rec_state s;
+    asx_actor_handle h;
+    asx_task_id target;
+    asx_monitor_ref ref = 0;
+    setup();
+    h = spawn_server(&s);
+    target = spawn_runnable(fail_poll);
+    MUST_OK(asx_monitor_establish_server(h, target, &ref));
+    run(g_root);
+    ASSERT(s.n == 1u && s.got[0].reason.severity == ASX_OUTCOME_ERR, "an Error exit");
+}
+
+static void test_the_runtime_fires_a_polled_monitor(void) {
+    asx_task_id watcher;
+    asx_task_id target;
+    asx_monitor_ref ref = 0;
+    asx_down d;
+    setup();
+    watcher = spawn_task();
+    target = spawn_runnable(finish_poll);
+    MUST_OK(asx_monitor_establish(watcher, target, &ref));
+    ASSERT(asx_monitor_down(ref, &d) == ASX_E_PENDING, "waiting");
+    run(g_root);
+    ASSERT(asx_monitor_down(ref, &d) == ASX_OK, "delivered by the completion");
+    ASSERT(d.ref == ref && d.reason.severity == ASX_OUTCOME_OK, "its content");
+}
+
+static void test_a_watchers_completion_ends_its_monitors_silently(void) {
+    rec_state s;
+    asx_actor_handle h;
+    asx_task_id watcher;
+    asx_task_id target;
+    asx_monitor_ref r_task = 0;
+    asx_monitor_ref r_server = 0;
+    asx_down d;
+    asx_outcome out = ok_outcome();
+    setup();
+    h = spawn_server(&s);
+    watcher = spawn_runnable(finish_poll);
+    target = spawn_task();
+    MUST_OK(asx_monitor_establish(watcher, target, &r_task));
+    MUST_OK(asx_monitor_establish_server(h, target, &r_server));
+    MUST_OK(asx_actor_stop(h));
+    run(g_root);
+    ASSERT(asx_monitor_count() == 0u, "both watchers finished: their monitors ended with them");
+    ASSERT(asx_monitor_down(r_task, &d) == ASX_E_NOT_FOUND, "the task's never fired");
+    asx_monitor_task_finished(target, &out, 1u);
+    ASSERT(s.n == 0u, "and the stopped server was told nothing");
+}
+
+static void test_a_runtime_reset_forgets_monitors(void) {
+    asx_task_id watcher;
+    asx_task_id target;
+    asx_monitor_ref ref = 0;
+    setup();
+    watcher = spawn_task();
+    target = spawn_task();
+    MUST_OK(asx_monitor_establish(watcher, target, &ref));
+    asx_runtime_reset();
+    ASSERT(asx_monitor_count() == 0u, "the runtime reset reaches the monitors");
+}
+
 int main(void) {
     printf("test_monitor:\n");
 
@@ -480,6 +584,11 @@ int main(void) {
     RUN(test_the_outcome_is_carried);
     RUN(test_no_outcome_is_an_error_exit);
     RUN(test_reset_forgets_monitors_and_restarts_references);
+    RUN(test_the_runtime_fires_a_servers_monitor_at_completion);
+    RUN(test_the_runtime_reports_an_error_exit);
+    RUN(test_the_runtime_fires_a_polled_monitor);
+    RUN(test_a_watchers_completion_ends_its_monitors_silently);
+    RUN(test_a_runtime_reset_forgets_monitors);
 
     printf("\n  %d passed, %d failed\n", g_pass, g_fail);
     return g_fail > 0 ? 1 : 0;

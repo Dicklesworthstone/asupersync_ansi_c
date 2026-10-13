@@ -14,6 +14,7 @@
 
 #include "../runtime/runtime_internal.h"
 #include <asx/actor/actor.h>
+#include <asx/monitor/monitor.h>
 #include <asx/runtime/runtime.h>
 #include <asx/runtime/trace.h>
 #include <string.h>
@@ -1187,3 +1188,6 @@ void asx_actor_reset(void) {
     g_actor_hwm = 0u;
     g_live_servers = 0;
 }
+    /* The monitor table holds server handles and task ids, so it goes with
+     * the servers on a runtime reset. */
+    asx_monitor_reset();
