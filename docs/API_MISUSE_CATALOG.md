@@ -40,7 +40,8 @@ records.
 
 | API | Misuse Mode | Expected Error | Test |
 |-----|------------|----------------|------|
-| `asx_region_open(NULL)` | NULL output pointer | ASX_E_INVALID_ARGUMENT | test_safety_posture:null_out_pointers_rejected |
+| `asx_region_open(rt, NULL)` | NULL output pointer | ASX_E_INVALID_ARGUMENT | test_safety_posture:null_out_pointers_rejected |
+| `asx_region_open(NULL, &id)` | NULL runtime | ASX_E_INVALID_ARGUMENT | test_rt:region_open_names_its_runtime |
 | `asx_region_close(INVALID_ID)` | Invalid handle | ASX_E_NOT_FOUND | test_safety_posture:zero_handle_rejected_everywhere |
 | `asx_region_close(stale)` | Stale handle | ASX_E_STALE_HANDLE | test_safety_posture:stale_handle_close_after_recycle |
 | `asx_region_close(rid)` x2 | Double close | ASX_E_INVALID_TRANSITION | test_safety_posture:double_close_rejected |

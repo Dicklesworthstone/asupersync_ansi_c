@@ -129,7 +129,7 @@ int main(void) {
     st = asx_runtime_init(&rt, &cfg, &hooks);
     if (st != ASX_OK) return 1;
 
-    st = asx_region_open(&rid);
+    st = asx_region_open(&rt, &rid);
     if (st != ASX_OK) {
         asx_runtime_shutdown(&rt);
         return 1;
@@ -150,10 +150,13 @@ int main(void) {
 
 See `examples/` for more: channel flow, actor supervision, cancellation draining, timers and budgets, trace replay, browser boundary, and network surface demos.
 
-The current runtime owns one process-wide kernel. Every init while it is active,
-including reinitializing the active object, returns `ASX_E_INVALID_STATE`,
-preserving the active work, hooks and destination object. Shut down the active
-runtime or explicitly reset the raw kernel before starting a replacement.
+A runtime object names its kernel: `asx_region_open(&rt, &rid)` opens the
+region in the kernel `rt` holds, and `asx_runtime_reset(&rt)` clears it. A
+zeroed `asx_runtime` is the library's static kernel (tag 0). By default there
+is one kernel (`ASX_MAX_RUNTIMES` 1): every init while it is active, including
+reinitializing the active object, returns `ASX_E_INVALID_STATE`, preserving the
+active work, hooks and destination object. Shut down the active runtime or
+explicitly reset the raw kernel before starting a replacement.
 
 The kernel's region, task and obligation arenas are one storage block. By
 default it is the library's static block, as before. A runtime can instead be
@@ -162,9 +165,16 @@ at least `asx_runtime_storage_size()` bytes aligned to
 `asx_runtime_storage_align()`, which init zeroes and the runtime keeps until
 shutdown. A block that is too small, misaligned, without its size or the
 library's own is refused before anything is bound or reset, and a refused init
-never rebinds a live runtime. The rest of the kernel state (scheduler, trace,
-hooks, channels, synchronization tables) is still process-wide, and
-cross-runtime handle isolation remains architecture work in `bd-9kll.3.20`.
+never rebinds a live runtime. With `ASX_MAX_RUNTIMES` above 1 a second runtime
+with its own storage block is admitted, and its handles carry its tag, so the
+first runtime's lookups answer `ASX_E_NOT_FOUND` for them. The virtual clock,
+entropy stream, scheduler, timer wheel and trace are the runtime's own. Hooks,
+the io backend and the cancel chain limits are process-wide and must equal the
+live runtime's; channels, synchronization tables, actors, links, monitors, the
+lab and parallel modes and the native adapters still are too, so a second init
+while one holds state, and the acquisition of such state while two runtimes are
+live, answer `ASX_E_INVALID_STATE` with `asx_runtime_last_refusal_reason()`
+naming the subsystem. Threading them is the remaining work of `bd-9kll.3.20`.
 
 ## Design Philosophy
 
@@ -2628,12 +2638,16 @@ Provide the required hook families through `asx_runtime_hooks`,
 
 ### Runtime init returns `ASX_E_INVALID_STATE`
 
-Another runtime object is still initialized. The runtime's state (arenas,
-hooks, scheduler) is process-wide, so initializing a second runtime would
-destroy the first one's regions and tasks; the call refuses and changes
-nothing. Shut the live runtime down first (`asx_runtime_shutdown`; tests may
-use `asx_runtime_reset`). Initializing the live runtime object itself again
-also returns `ASX_E_INVALID_STATE`, preserving its active work and hooks.
+Another runtime object is still initialized and this build cannot host a
+second one: `ASX_MAX_RUNTIMES` is 1 (the default), or the second runtime has no
+storage block of its own, its hooks, io backend or cancel chain limits differ
+from the live runtime's (they are process-wide), or a process-wide subsystem
+(channels, synchronization tables, actors, the lab, an adapter) already holds
+state. `asx_runtime_last_refusal_reason()` names which. The call refuses and
+changes nothing. Shut the live runtime down first (`asx_runtime_shutdown`;
+tests may use `asx_runtime_reset(&rt)`). Initializing the live runtime object
+itself again also returns `ASX_E_INVALID_STATE`, preserving its active work and
+hooks.
 
 ### Non-deterministic replay mismatch
 

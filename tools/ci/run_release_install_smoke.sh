@@ -416,7 +416,7 @@ int main(void) {
     st = asx_runtime_init(&rt, &cfg, &hooks);
     if (st != ASX_OK) return fail("asx_runtime_init", st);
 
-    st = asx_region_open(&rid);
+    st = asx_region_open(&rt, &rid);
     if (st != ASX_OK) {
         asx_runtime_shutdown(&rt);
         return fail("asx_region_open", st);

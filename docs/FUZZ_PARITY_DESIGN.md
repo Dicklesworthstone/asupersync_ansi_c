@@ -291,7 +291,7 @@ poll(state, self_id):
 
 Before each execution:
 ```
-asx_runtime_reset()
+asx_runtime_reset(rt)
 asx_channel_reset()
 asx_timer_wheel_reset(global_wheel)
 fuzz_reset_task_states()
