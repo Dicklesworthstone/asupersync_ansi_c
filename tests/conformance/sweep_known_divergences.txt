@@ -19,7 +19,6 @@
 actor-cancel-before-start-drains-001 order: seed 2 puts the parent's two yields and the cancel before the server's first run; the sweep runs worker and server in the round they are spawned
 actor-refused-reply-before-sleep-001 lab-model: a refused server spawn keeps a handle only under lab dispatch (refused at admission); the sweep returns the error at the spawn
 actor-spawn-in-closing-region-001 lab-model: a refused server spawn keeps a handle only under lab dispatch (refused at admission); the sweep returns the error at the spawn
-cancel-region-request-lane-priority-001 drift bd-9kll.4.15: a checkpoint outside lab dispatch does not strengthen a pending cancel with the passed deadline
 cancel-request-event-reason-001 lab-model: the lab's region-open command costs the task a dispatch, so its poll quota is spent before the region cancel and folds into the record; the sweep spends it after
 cancel-subtree-order-after-child-close-001 lab-model: close_region from a poll is a deferred lab command and the child ends ok; the sweep applies it at once and cancels the child
 lab-dispatch-cached-abort-at-admission-001 lab-model: Rust's handle-cancel queue and next-step admission order a supervisor's abort before its child starts; the sweep admits at once

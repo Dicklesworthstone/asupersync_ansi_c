@@ -627,16 +627,16 @@ asx_status asx_checkpoint(asx_task_id self, asx_checkpoint_result *out) {
     before = *task_cx_reason(t);
     was_pending = t->cancel_pending;
 
-    /* Budget deadline observed inline, between scheduler polls. Under lab
-     * dispatch, as Rust's checkpoint does (checkpoint_budget_exhaustion,
-     * cx.rs:3112-3130): a passed deadline is a DEADLINE candidate stamped
-     * now, strengthening a cancel already pending; the budget-deadline
-     * timer has stamped the first one with the deadline itself. */
-    if (t->budget.deadline != ASX_TIME_INFINITE && !asx_task_is_terminal(t->state) &&
-        (asx_lab_dispatch_active() || !t->cancel_pending)) {
+    /* Budget deadline observed inline, between scheduler polls, as Rust's
+     * checkpoint does (checkpoint_budget_exhaustion, cx.rs:3112-3130): a
+     * passed deadline is a DEADLINE candidate stamped now, strengthening a
+     * cancel already pending. Only a first cancel of a task with a deadline
+     * timer (not a cleanup task) is stamped with the deadline, as the timer. */
+    if (t->budget.deadline != ASX_TIME_INFINITE && !asx_task_is_terminal(t->state)) {
         asx_time now = asx_cancel_now_internal();
         if (now >= t->budget.deadline) {
-            asx_time stamp = asx_lab_dispatch_active() ? now : t->budget.deadline;
+            asx_time stamp = t->budget.deadline;
+            if (asx_lab_dispatch_active() || t->cancel_pending || t->cleanup_only) stamp = now;
             st = asx_task_cancel_budget_internal(self, ASX_CANCEL_DEADLINE, stamp);
             (void)st;
             budget_cancel = 1;

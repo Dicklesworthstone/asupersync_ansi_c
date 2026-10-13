@@ -758,18 +758,18 @@ static void sched_enforce_budget(const asx_task_slot *t, asx_task_id tid, asx_ti
     asx_status st;
     /* Under lab dispatch the budget-deadline timer cancels the task (lab_deadline_fire),
      * and a cleanup task has none in Rust (state.rs:4401): no deadline check here. */
-    if (!asx_lab_dispatch_active() && !t->cancel_pending && !t->cleanup_only &&
-        t->budget.deadline != ASX_TIME_INFINITE) {
+    if (!asx_lab_dispatch_active() && !t->cleanup_only && t->budget.deadline != ASX_TIME_INFINITE) {
         if (!*have_now) {
             *now = sched_now();
             *have_now = 1;
         }
         if (*now >= t->budget.deadline) {
-            /* Stamped with the deadline itself, as Rust's deadline timer
-             * stamps it (cx.rs:357). */
+            int fresh = !t->cancel_pending;
+            /* Stamped with the deadline, as Rust's deadline timer stamps it (cx.rs:357); a
+             * cancel already pending is strengthened, as the timer did at the deadline. */
             st = asx_task_cancel_budget_internal(tid, ASX_CANCEL_DEADLINE, t->budget.deadline);
             (void)st;
-            return;
+            if (fresh) return;
         }
     }
     if (t->budget.poll_quota == 0u) {

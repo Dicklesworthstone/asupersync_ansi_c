@@ -1516,6 +1516,35 @@ TEST(checkpoint_observes_budget_deadline_inline) {
     ASSERT_EQ((int)cr.kind, (int)ASX_CANCEL_DEADLINE);
 }
 
+/* Rust's checkpoint (checkpoint_budget_exhaustion, cx.rs:3112-3160) is the
+ * same code in the lab and in production: a passed deadline is a DEADLINE
+ * candidate stamped now that strengthens a cancel already pending (the
+ * deadline timer has stamped the first one with the deadline itself;
+ * bd-9kll.4.15). Outside lab dispatch the check was skipped for a task
+ * with a cancel pending, so a User cancel stayed User. */
+TEST(checkpoint_strengthens_a_pending_cancel_with_a_passed_budget_deadline) {
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_budget tb;
+    asx_checkpoint_result cr;
+    asx_cancel_reason got;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    tb = asx_budget_infinite();
+    tb.deadline = asx_runtime_virtual_now() + 1000u;
+    ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_pending, NULL, &tb, &tid), ASX_OK);
+    ASSERT_EQ(asx_task_cancel(tid, ASX_CANCEL_USER), ASX_OK);
+
+    asx_runtime_virtual_advance(tb.deadline + 500u);
+    ASSERT_EQ(asx_checkpoint(tid, &cr), ASX_OK);
+    ASSERT_EQ(cr.cancelled, 1);
+    ASSERT_EQ((int)cr.kind, (int)ASX_CANCEL_DEADLINE);
+    ASSERT_EQ(asx_task_get_cancel_reason(tid, &got), ASX_OK);
+    ASSERT_EQ((int)got.kind, (int)ASX_CANCEL_DEADLINE);
+    ASSERT_EQ(got.timestamp, (asx_time)(tb.deadline + 500u));
+}
+
 /* -------------------------------------------------------------------
  * Region cancel (Rust RuntimeState::cancel_request) and reason semantics
  * ------------------------------------------------------------------- */
@@ -2480,6 +2509,7 @@ int main(void) {
     RUN_TEST(nested_masked_work_drains_after_the_outer_mask_while_a_joiner_waits);
     RUN_TEST(a_mask_never_released_keeps_the_cancel_out_and_the_joiner_waiting);
     RUN_TEST(checkpoint_observes_budget_deadline_inline);
+    RUN_TEST(checkpoint_strengthens_a_pending_cancel_with_a_passed_budget_deadline);
     RUN_TEST(region_cancel_closes_subtree_and_chains_parent_reasons);
     RUN_TEST(region_cancel_of_an_idle_region_finalizes_at_once);
     RUN_TEST(cancel_strengthen_replaces_the_whole_reason_and_records_no_event);

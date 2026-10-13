@@ -697,6 +697,81 @@ TEST(scheduler_does_not_cancel_a_finalizer_at_its_time_budget_before_it_polls) {
     ASSERT_EQ((int)rs, (int)ASX_REGION_CLOSED);
 }
 
+/* ---- A passed budget deadline strengthens a pending cancel (bd-9kll.4.15) ---- */
+
+typedef struct {
+    asx_sleep_state sleep;
+    int started;
+    asx_task_id victim;
+} canceller_state;
+
+/* Sleeps 100 ns, then cancels its victim with User. */
+static asx_status poll_cancel_after_sleep(void *data, asx_task_id self) {
+    canceller_state *c = (canceller_state *)data;
+    asx_status st;
+    if (!c->started) {
+        c->started = 1;
+        st = asx_sleep_init(&c->sleep, 100u);
+        if (st != ASX_OK) return st;
+    }
+    st = asx_sleep_poll(&c->sleep, self);
+    if (st != ASX_OK) return st;
+    return asx_task_cancel(c->victim, ASX_CANCEL_USER);
+}
+
+typedef struct {
+    asx_sleep_state sleep;
+    int started;
+} sleeper_state;
+
+/* Sleeps 150 ns. */
+static asx_status poll_sleep_150(void *data, asx_task_id self) {
+    sleeper_state *s = (sleeper_state *)data;
+    asx_status st;
+    if (!s->started) {
+        s->started = 1;
+        st = asx_sleep_init(&s->sleep, 150u);
+        if (st != ASX_OK) return st;
+    }
+    return asx_sleep_poll(&s->sleep, self);
+}
+
+/* The victim's budget deadline (100) passes at the instant a task cancels it
+ * with User. Rust's deadline timer fires at the deadline in the same step,
+ * so the task holds the stronger Deadline and its sleep, which a Deadline
+ * cancel does not end, runs to 150. The sweep checked the deadline only for
+ * a task with no cancel pending, so the User cancel ended the sleep at 100
+ * (fixture cancel-region-request-lane-priority-001). */
+TEST(scheduler_a_passed_deadline_strengthens_a_user_cancel_that_arrived_first) {
+    asx_region_id rid;
+    asx_task_id canceller;
+    asx_task_id victim;
+    asx_budget budget;
+    asx_budget victim_budget;
+    asx_cancel_reason reason;
+    canceller_state c;
+    sleeper_state s;
+
+    asx_runtime_reset();
+    asx_ghost_reset();
+    memset(&c, 0, sizeof(c));
+    memset(&s, 0, sizeof(s));
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    /* The canceller is first in arena order, so it runs before the victim in
+     * the round both wake in. */
+    ASSERT_EQ(asx_task_spawn(rid, poll_cancel_after_sleep, &c, &canceller), ASX_OK);
+    victim_budget = asx_budget_infinite();
+    victim_budget.deadline = 100u;
+    ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_sleep_150, &s, &victim_budget, &victim), ASX_OK);
+    c.victim = victim;
+
+    budget = asx_budget_from_polls(1000);
+    ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
+    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)150u);
+    ASSERT_EQ(asx_task_get_cancel_reason(victim, &reason), ASX_OK);
+    ASSERT_EQ((int)reason.kind, (int)ASX_CANCEL_DEADLINE);
+}
+
 /* ---- Poll quota enforced before a poll (bd-9kll.4.13) ---- */
 
 typedef struct {
@@ -803,6 +878,7 @@ int main(void) {
     RUN_TEST(scheduler_polls_a_task_spawned_in_a_round_in_that_round);
     RUN_TEST(scheduler_polls_a_task_in_a_region_opened_in_the_round_before_its_opener_resumes);
     RUN_TEST(scheduler_does_not_cancel_a_finalizer_at_its_time_budget_before_it_polls);
+    RUN_TEST(scheduler_a_passed_deadline_strengthens_a_user_cancel_that_arrived_first);
 
     /* Budget enforcement before a poll */
     RUN_TEST(scheduler_stamps_an_exhausted_poll_quota_with_the_poll_quota_defaults);
