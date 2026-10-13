@@ -98,8 +98,8 @@ Consumers:
   fails if fewer than 90% of the scenarios were captured, and compares the
   captured fixtures with `asx-conformance compare`. CI runs it with seed 9 and
   200 scenarios on every push (`.github/workflows/ci.yml:978-1009`, job
-  `fuzz-rust-differential`) and with three seeds of 200 scenarios nightly
-  (`.github/workflows/nightly.yml:66-72`).
+  `fuzz-rust-differential`) and nightly with 20000 scenarios, 5 shards of 4000
+  on seeds `day*5+shard` (`.github/workflows/nightly.yml:83-94`).
 - `make fuzz-minimize` (`Makefile:1617-1623`) runs `twin_run minimize` on each
   scenario the last `fuzz-differential` run reported as FAIL.
 - `make fuzz-timers` (`FUZZ_TIMERS_SEED`, default 7100, and

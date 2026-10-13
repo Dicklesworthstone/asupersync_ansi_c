@@ -302,8 +302,8 @@ calls `asx_codec_cross_codec_verify`. It is not evidence of Rust parity.
   each captured scenario the same way. CI job `fuzz-rust-differential` runs
   200 scenarios with seed 9 on every push (`.github/workflows/ci.yml:978-1009`);
   in run 38051289151 all 200 were captured and all 200 compared as `PASS`.
-  The nightly workflow runs three further seeds of 200 scenarios each
-  (`.github/workflows/nightly.yml:66-72`).
+  The nightly workflow runs 20000 further scenarios, 5 shards of 4000 on
+  seeds `day*5+shard` (`.github/workflows/nightly.yml:83-94`).
 - Semantics without a passing v2 fixture are Rust-parity unchecked even when
   their C unit tests pass; the status cells above say which.
 

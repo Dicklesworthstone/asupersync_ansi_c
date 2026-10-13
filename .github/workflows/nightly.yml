@@ -5,7 +5,7 @@
 #
 # Jobs:
 #   fuzz-nightly             Extended C differential fuzzing (100K iterations)
-#   fuzz-rust-differential   Rust-vs-C differential fuzzing over DSL v2 (bd-ij9w)
+#   fuzz-rust-differential   Rust-vs-C differential fuzzing over DSL v2, 5 x 4000 scenarios (bd-ij9w)
 #   fuzz-metamorphic         M1-M4 over generated scenarios, 5 x 50000 cases (bd-9kll.12.1)
 #   e2e-extended             Full e2e suite including vertical lanes
 #   schema-check             Strict schema validation of all fixtures
@@ -29,20 +29,33 @@ env:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # fuzz-rust-differential — Rust vs C over DSL v2 (bd-ij9w). twin_run
-  # generates seeded scenarios and runs them in asupersync's LabRuntime at
-  # the pinned rev; the C runtime runs every one Rust captured (lab
-  # dispatch, same seed) and must match trace, snapshot and observations
-  # exactly. Any divergence fails the job; twin_run minimize reduces each
-  # one (build/fuzz_v2/seed-<seed>/minimized) and the scenarios, fixtures
-  # and reductions are uploaded. Seeds change daily and are printed, so a
-  # failure replays with
-  # `make fuzz-differential FUZZ_V2_SEED=<seed> FUZZ_V2_COUNT=200`.
+  # fuzz-rust-differential — Rust vs C over DSL v2 (bd-ij9w), 20000
+  # scenarios a night (bd-9kll.4.2: the schedule-certificate criterion is
+  # "equal to Rust's on >= 20k random scenarios"). twin_run generates seeded
+  # scenarios and runs them in asupersync's LabRuntime at the pinned rev; the
+  # C runtime runs every one Rust captured (lab dispatch, same seed) and must
+  # match trace, snapshot, observations, dispatch order and schedule
+  # certificate, and replay Rust's own schedule. Any divergence fails its
+  # shard (fail-fast is off: the other shards still report). The 20000 are 5
+  # shards of 4000, one runner each, seed day*5+shard, so no seed repeats
+  # across shards or days. One shard of 4000 (seed 103695, 3998 captured and
+  # compared, 0 divergent) took 633 s on worker B, one core on a host at
+  # load 8 to 10, after a cold twin_run build of 8 min that the cache below
+  # removes from the second night; the timeout stops a hang or a slow runner
+  # instead of the 6 h limit. The seed is printed and a failure replays with
+  # `make fuzz-differential FUZZ_V2_SEED=<seed> FUZZ_V2_COUNT=4000`; twin_run
+  # minimize reduces each divergence (build/fuzz_v2/seed-<seed>/minimized)
+  # and those, with the shard's compare and capture logs, are uploaded.
+  # A push runs seed 9 x 200 (ci.yml) as the regression gate.
   # ---------------------------------------------------------------------------
   fuzz-rust-differential:
-    name: "fuzz: Rust vs C differential (DSL v2)"
+    name: "fuzz: Rust vs C differential (DSL v2, shard ${{ matrix.shard }}, 4000 scenarios each)"
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v4
 
@@ -64,25 +77,31 @@ jobs:
             tools/twin_run/target
           key: twin-run-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'tools/twin_run/Cargo.lock') }}
 
-      - name: Differential fuzzing (3 seeds x 200 scenarios)
+      - name: twin_run release build
+        run: make twin-run-build
+
+      - name: Differential fuzzing (seed per day and shard, 4000 scenarios each)
         run: |
           day=$(( $(date -u +%s) / 86400 ))
-          for i in 0 1 2; do
-            seed=$(( day * 3 + i ))
-            echo "== seed $seed"
-            if ! make fuzz-differential FUZZ_V2_SEED=$seed FUZZ_V2_COUNT=200; then
-              # Reduce each divergence for the artifact; the job fails either way.
-              make fuzz-minimize FUZZ_V2_SEED=$seed || true
-              exit 1
-            fi
-          done
+          seed=$(( day * 5 + ${{ matrix.shard }} ))
+          echo "== seed $seed"
+          if ! make fuzz-differential FUZZ_V2_SEED=$seed FUZZ_V2_COUNT=4000 \
+              ASX_TWIN_BIN=tools/twin_run/target/release/twin_run; then
+            # Reduce each divergence for the artifact; the shard fails either way.
+            make fuzz-minimize FUZZ_V2_SEED=$seed \
+              ASX_TWIN_BIN=tools/twin_run/target/release/twin_run || true
+            exit 1
+          fi
 
-      - name: Upload divergent scenarios
+      - name: Upload divergences and logs
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: fuzz-rust-differential-${{ env.ASX_CI_RUN_TAG }}
-          path: build/fuzz_v2/
+          name: fuzz-rust-differential-${{ matrix.shard }}-${{ env.ASX_CI_RUN_TAG }}
+          path: |
+            build/fuzz_v2/seed-*/minimized/
+            build/fuzz_v2/seed-*/compare.log
+            build/fuzz_v2/seed-*/capture.log
           if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------
