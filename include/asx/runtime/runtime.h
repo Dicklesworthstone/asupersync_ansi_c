@@ -1529,6 +1529,23 @@ ASX_API ASX_MUST_USE asx_status asx_region_open_child_with_capability_budget(
 ASX_API ASX_MUST_USE asx_status asx_region_capability_budget(asx_region_id region,
                                                              asx_capability_budget *out);
 
+/* asx_region_open_child_poll for a child that carries an envelope: Rust's
+ * Cx::open_child_region with a ChildRegionSpec's capability_budget and
+ * requirements (child_region.rs:55, cx.rs:4491). `capability_budget` is the
+ * request's envelope, as Rust sends it: the caller's own met with the spec's
+ * (asx_cx_open_child_region does that for a Cx); NULL is none, as NULL
+ * `requirements` requires nothing. The wait protocol is
+ * asx_region_open_child_poll's. Under lab dispatch the open is planned when
+ * the scheduler applies it, against the parent's envelope, so a refusal
+ * arrives on the call after the one that parked: ASX_E_CAPABILITY_BUDGET_
+ * REFUSED with *refusal (if non-NULL) naming the dimension, no region
+ * minted and the opener's budget, wait state and every counter as after any
+ * other refused open. Without lab dispatch it is applied at once. */
+ASX_API ASX_MUST_USE asx_status asx_region_open_child_poll_with_capability_budget(
+    asx_task_id self, asx_region_id parent, const asx_budget *budget,
+    const asx_capability_budget *capability_budget, const asx_capability_requirements *requirements,
+    asx_region_id *out_child, asx_capability_refusal *refusal);
+
 #ifdef __cplusplus
 }
 #endif

@@ -248,6 +248,30 @@ TEST(scope_spawn_with_cx_escalation_does_not_spawn_task) {
     teardown();
 }
 
+/* A scope carries the envelope its Cx held when it was made (Rust
+ * Scope::new_with_capability_budget), and the Cx of a task spawned through
+ * it applies that (scope.rs:1542): the task's Cx can only be as wide as the
+ * scope's (bd-9kll.3.27). */
+TEST(scope_spawned_cx_carries_the_scopes_envelope) {
+    asx_scope scope;
+    asx_task_handle h;
+    asx_cx child_cx;
+    asx_cx narrowed;
+    asx_capability_budget env =
+        asx_capability_budget_with_memory_bytes(asx_capability_budget_unspecified(), 64u);
+    setup();
+    MUST_OK(asx_cx_init(&narrowed, g_rid, ASX_INVALID_ID, ASX_CAP_SPAWN));
+    MUST_OK(asx_cx_apply_child_capability_budget(&narrowed, &env, NULL, NULL, NULL));
+    MUST_OK(asx_scope_init(&scope, g_rid, &narrowed, asx_budget_infinite()));
+    ASSERT_EQ(asx_scope_spawn_with_cx(&scope, ASX_CAP_SPAWN, poll_immediate_ok, NULL, &h,
+                                      &child_cx),
+              ASX_OK);
+    ASSERT_TRUE(asx_cx_capability_budget(&child_cx).has_memory_bytes);
+    ASSERT_EQ(asx_cx_capability_budget(&child_cx).memory_bytes, (uint64_t)64);
+    ASSERT_FALSE(asx_cx_capability_budget(&child_cx).has_cpu_units);
+    teardown();
+}
+
 /* ------------------------------------------------------------------ */
 /* Task handle tests                                                   */
 /* ------------------------------------------------------------------ */
@@ -845,6 +869,7 @@ int main(void) {
     RUN_TEST(scope_spawn_with_cx_binds_spawned_task);
     RUN_TEST(scope_spawn_with_cx_escalation_fails);
     RUN_TEST(scope_spawn_with_cx_escalation_does_not_spawn_task);
+    RUN_TEST(scope_spawned_cx_carries_the_scopes_envelope);
 
     /* Task handle */
     RUN_TEST(handle_null_returns_invalid);

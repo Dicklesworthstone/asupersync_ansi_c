@@ -269,6 +269,14 @@ run_unit_mutant CAPABILITY_SLOT_BEFORE_REFUSAL unit/runtime/test_budget_obligati
     capability_budget_refused_child_is_failure_atomic
 run_unit_mutant CAPABILITY_APPLY_ON_REFUSAL unit/cx/test_cx \
     capability_budget_apply_child_refusal_leaves_the_cx_unchanged
+# A task's open of a child region carries the Cx's envelope met with the
+# spec's (cx.rs:4514-4516), and a command that carries an envelope is planned
+# when the scheduler applies it, so a refusal reaches the opener parked.
+run_unit_mutant CAPABILITY_CX_OPEN_IGNORES_CX unit/cx/test_cx \
+    open_child_region_sends_the_cx_envelope_met_with_the_spec \
+    open_child_region_does_not_replenish_a_spent_cx
+run_unit_mutant CAPABILITY_LAB_OPEN_DROPS_ENVELOPE unit/runtime/test_lab_dispatch \
+    capability_open_refusal_reaches_the_opener_after_it_parked
 
 if [ "$failures" -eq 0 ]; then
     echo "test_oracle_mutants: every mutant caught"

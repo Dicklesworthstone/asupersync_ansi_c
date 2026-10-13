@@ -80,6 +80,36 @@ asx_status asx_region_capability_budget(asx_region_id region, asx_capability_bud
     return ASX_OK;
 }
 
+/* Stub for asx_region_open_child_poll_with_capability_budget, which Cx's
+ * open_child_region sends its request to: it records the request and
+ * returns g_stub_open_status. */
+static uint32_t g_stub_open_calls;
+static asx_task_id g_stub_open_self;
+static asx_region_id g_stub_open_parent;
+static asx_capability_budget g_stub_open_request;
+static asx_capability_requirements g_stub_open_requirements;
+static asx_status g_stub_open_status = ASX_OK;
+
+asx_status asx_region_open_child_poll_with_capability_budget(
+    asx_task_id self, asx_region_id parent, const asx_budget *budget,
+    const asx_capability_budget *capability_budget, const asx_capability_requirements *requirements,
+    asx_region_id *out_child, asx_capability_refusal *refusal);
+asx_status asx_region_open_child_poll_with_capability_budget(
+    asx_task_id self, asx_region_id parent, const asx_budget *budget,
+    const asx_capability_budget *capability_budget, const asx_capability_requirements *requirements,
+    asx_region_id *out_child, asx_capability_refusal *refusal) {
+    (void)budget;
+    (void)refusal;
+    g_stub_open_calls++;
+    g_stub_open_self = self;
+    g_stub_open_parent = parent;
+    g_stub_open_request = *capability_budget;
+    memset(&g_stub_open_requirements, 0, sizeof(g_stub_open_requirements));
+    if (requirements != NULL) g_stub_open_requirements = *requirements; /* NULL: none */
+    *out_child = ASX_INVALID_ID;
+    return g_stub_open_status;
+}
+
 /* ------------------------------------------------------------------ */
 /* Lifecycle tests                                                     */
 /* ------------------------------------------------------------------ */
@@ -989,6 +1019,91 @@ TEST(capability_budget_a_tightened_cx_narrows_to_a_tightened_child) {
     ASSERT_EQ(asx_cx_capability_budget(&cx).cpu_units, (uint64_t)10);
 }
 
+TEST(open_child_region_needs_the_spawn_capability) {
+    asx_cx cx;
+    asx_region_id child = ASX_INVALID_ID;
+    cap_region_with_envelopes();
+    ASSERT_EQ(asx_cx_init(&cx, CAP_REGION, 9, ASX_CAP_CLOCK_READ), ASX_OK);
+    g_stub_open_calls = 0;
+    ASSERT_EQ(asx_cx_open_child_region(&cx, NULL, NULL, NULL, &child, NULL),
+              ASX_E_PERMISSION_DENIED);
+    ASSERT_EQ(g_stub_open_calls, 0u); /* refused before the runtime is asked */
+
+    /* The permitted near-identical case: the same Cx with SPAWN. */
+    ASSERT_EQ(asx_cx_init(&cx, CAP_REGION, 9, ASX_CAP_SPAWN), ASX_OK);
+    ASSERT_EQ(asx_cx_open_child_region(&cx, NULL, NULL, NULL, &child, NULL), ASX_OK);
+    ASSERT_EQ(g_stub_open_calls, 1u);
+    cap_no_region();
+}
+
+TEST(open_child_region_sends_the_cx_envelope_met_with_the_spec) {
+    asx_cx cx;
+    asx_capability_budget narrower = asx_capability_budget_unspecified();
+    asx_capability_budget spec = asx_capability_budget_unspecified();
+    asx_capability_requirements need_io = {0, 0, 1, 0, 0};
+    asx_region_id child = ASX_INVALID_ID;
+
+    cap_region_with_envelopes(); /* region: 1024 bytes, 100 CPU units */
+    ASSERT_EQ(asx_cx_init(&cx, CAP_REGION, 9, ASX_CAP_SPAWN), ASX_OK);
+    cap_no_region();
+    narrower = asx_capability_budget_with_memory_bytes(narrower, 100u);
+    ASSERT_EQ(asx_cx_apply_child_capability_budget(&cx, &narrower, NULL, NULL, NULL), ASX_OK);
+
+    /* The spec asks for more memory than the Cx holds and adds I/O: the
+     * request is the tighter memory, the Cx's CPU and the spec's I/O. */
+    spec = asx_capability_budget_with_memory_bytes(spec, 500u);
+    spec = asx_capability_budget_with_io_bytes(spec, 7u);
+    g_stub_open_calls = 0;
+    ASSERT_EQ(asx_cx_open_child_region(&cx, NULL, &spec, &need_io, &child, NULL), ASX_OK);
+    ASSERT_EQ(g_stub_open_calls, 1u);
+    ASSERT_EQ(g_stub_open_self, (asx_task_id)9);
+    ASSERT_EQ(g_stub_open_parent, CAP_REGION);
+    ASSERT_EQ(g_stub_open_request.memory_bytes, (uint64_t)100);
+    ASSERT_EQ(g_stub_open_request.cpu_units, (uint64_t)100);
+    ASSERT_TRUE(g_stub_open_request.has_io_bytes);
+    ASSERT_EQ(g_stub_open_request.io_bytes, (uint64_t)7);
+    ASSERT_EQ(g_stub_open_requirements.io_bytes, (uint8_t)1);
+    ASSERT_EQ(g_stub_open_requirements.memory_bytes, (uint8_t)0);
+
+    /* The Cx itself is not changed by opening a child. */
+    ASSERT_EQ(asx_cx_capability_budget(&cx).memory_bytes, (uint64_t)100);
+    ASSERT_FALSE(asx_cx_capability_budget(&cx).has_io_bytes);
+}
+
+TEST(open_child_region_does_not_replenish_a_spent_cx) {
+    /* Rust child_region_cannot_replenish_an_exhausted_caller_envelope: the
+     * Cx's zero meets the spec's 4096 to a zero. */
+    asx_cx cx;
+    asx_capability_budget spent =
+        asx_capability_budget_with_cpu_units(asx_capability_budget_unspecified(), 0u);
+    asx_capability_budget spec =
+        asx_capability_budget_with_cpu_units(asx_capability_budget_unspecified(), 4096u);
+    asx_capability_requirements need_cpu = {0, 1, 0, 0, 0};
+    asx_region_id child = ASX_INVALID_ID;
+
+    cap_region_with_envelopes();
+    ASSERT_EQ(asx_cx_init(&cx, CAP_REGION, 9, ASX_CAP_SPAWN), ASX_OK);
+    cap_no_region();
+    ASSERT_EQ(asx_cx_apply_child_capability_budget(&cx, &spent, NULL, NULL, NULL), ASX_OK);
+    ASSERT_EQ(asx_cx_open_child_region(&cx, NULL, &spec, &need_cpu, &child, NULL), ASX_OK);
+    ASSERT_TRUE(g_stub_open_request.has_cpu_units);
+    ASSERT_EQ(g_stub_open_request.cpu_units, (uint64_t)0);
+}
+
+TEST(open_child_region_rejects_null_and_invalid_arguments) {
+    asx_cx cx;
+    asx_cx invalid;
+    asx_region_id child = ASX_INVALID_ID;
+    ASSERT_EQ(asx_cx_init(&cx, CAP_REGION, 9, ASX_CAP_SPAWN), ASX_OK);
+    ASSERT_EQ(asx_cx_open_child_region(NULL, NULL, NULL, NULL, &child, NULL),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_cx_open_child_region(&cx, NULL, NULL, NULL, NULL, NULL), ASX_E_INVALID_ARGUMENT);
+    asx_cx_invalidate(&cx);
+    invalid = cx;
+    ASSERT_EQ(asx_cx_open_child_region(&invalid, NULL, NULL, NULL, &child, NULL),
+              ASX_E_INVALID_STATE);
+}
+
 TEST(capability_budget_plan_and_apply_reject_a_null_cx) {
     asx_capability_budget out;
     asx_capability_refusal refusal;
@@ -1116,6 +1231,10 @@ int main(void) {
     RUN_TEST(capability_budget_apply_child_tightens_and_never_loosens);
     RUN_TEST(capability_budget_apply_child_refusal_leaves_the_cx_unchanged);
     RUN_TEST(capability_budget_a_tightened_cx_narrows_to_a_tightened_child);
+    RUN_TEST(open_child_region_needs_the_spawn_capability);
+    RUN_TEST(open_child_region_sends_the_cx_envelope_met_with_the_spec);
+    RUN_TEST(open_child_region_does_not_replenish_a_spent_cx);
+    RUN_TEST(open_child_region_rejects_null_and_invalid_arguments);
     RUN_TEST(capability_budget_plan_and_apply_reject_a_null_cx);
 
     /* Status string */

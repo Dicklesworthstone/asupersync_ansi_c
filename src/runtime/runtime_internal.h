@@ -281,6 +281,10 @@ typedef struct {
     uint16_t lab_ent_parent_gen;
     uint8_t lab_ent_parent_region;
     uint64_t lab_last_polled_step; /* lab steps at its last poll (Rust last_polled_step) */
+    /* Why an open carrying a capability envelope was refused, packed by
+     * asx_capability_refusal_pack_internal: written with region_wait_status
+     * = ASX_E_CAPABILITY_BUDGET_REFUSED and read only when it is that. */
+    uint8_t region_wait_refusal;
 } asx_task_slot;
 
 /* The drop of a permit an obligation tracks (asx_obligation_set_drop_internal). */
@@ -873,7 +877,38 @@ void asx_lab_cancel_batch_end(void);
  * nothing. A Cancel's reason (and its message) must outlive the command. */
 asx_status asx_lab_region_open_command(asx_task_slot *opener, asx_region_id parent,
                                        const asx_budget *budget);
+/* The same open when it carries an envelope and requirements
+ * (ChildRegionSpec::capability_budget/requirements, child_region.rs:55):
+ * the request's `envelope` is the caller's met with the spec's. Planned
+ * when applied, against the parent's, so a refusal reaches the opener after
+ * it has parked (region_wait_status ASX_E_CAPABILITY_BUDGET_REFUSED,
+ * region_wait_refusal). */
+asx_status asx_lab_region_open_capability_command(asx_task_slot *opener, asx_region_id parent,
+                                                  const asx_budget *budget,
+                                                  const asx_capability_budget *envelope,
+                                                  const asx_capability_requirements *requirements);
 asx_status asx_lab_region_cancel_command(asx_region_id region, const asx_cancel_reason *reason);
+
+/* A queued region command's payload: a Cancel's reason, or the envelope and
+ * requirements of an open that carries one. */
+typedef union {
+    asx_cancel_reason reason;
+    struct {
+        asx_capability_budget envelope;
+        asx_capability_requirements requirements;
+    } open;
+} asx_lab_region_payload;
+
+static inline uint8_t asx_capability_refusal_pack_internal(const asx_capability_refusal *r) {
+    return (uint8_t)(((unsigned)r->kind << 4) | ((unsigned)r->dimension & 0x0Fu));
+}
+
+static inline asx_capability_refusal asx_capability_refusal_unpack_internal(uint8_t packed) {
+    asx_capability_refusal r;
+    r.kind = (asx_capability_refusal_kind)(packed >> 4);
+    r.dimension = (asx_capability_dimension)(packed & 0x0Fu);
+    return r;
+}
 /* Rust RegionCommand::Watch (monitor.rs WatchCommand): a monitor request
  * for `holder` (the opener's own task, or the GenServer whose slot and
  * generation are given when `to_server`) on `target`, or the removal of the

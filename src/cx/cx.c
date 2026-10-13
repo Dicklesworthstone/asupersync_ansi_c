@@ -480,3 +480,25 @@ asx_status asx_cx_apply_child_capability_budget(asx_cx *cx, const asx_capability
     if (out != NULL) *out = effective;
     return ASX_OK;
 }
+
+asx_status asx_cx_open_child_region(const asx_cx *cx, const asx_budget *budget,
+                                    const asx_capability_budget *capability_budget,
+                                    const asx_capability_requirements *requirements,
+                                    asx_region_id *out_child, asx_capability_refusal *refusal) {
+    asx_capability_budget request;
+    if (cx == NULL || out_child == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (!asx_cx_is_valid(cx)) return ASX_E_INVALID_STATE;
+    if (!asx_cx_has_cap(cx, ASX_CAP_SPAWN)) return ASX_E_PERMISSION_DENIED;
+        /* cx.rs:4514-4516: the Cx's own envelope met with the spec's; the mint
+         * meets the parent record's with it. */
+#ifdef ASX_MUTANT_CAPABILITY_CX_OPEN_IGNORES_CX
+    /* Gate mutant (tests/gates/test_oracle_mutants.sh): the Cx's own envelope
+     * is left out, so a Cx that gave up authority gets it back. */
+    request = asx_capability_budget_meet(NULL, capability_budget);
+#else
+    request = asx_capability_budget_meet(&cx->capability_budget, capability_budget);
+#endif
+    return asx_region_open_child_poll_with_capability_budget(cx->task_id, cx->region_id, budget,
+                                                             &request, requirements, out_child,
+                                                             refusal);
+}

@@ -9,14 +9,14 @@
 ![C99](https://img.shields.io/badge/C-C99-00599C)
 ![No external deps](https://img.shields.io/badge/dependencies-none-brightgreen)
 ![Deterministic replay](https://img.shields.io/badge/replay-deterministic-orange)
-![Public API declarations](https://img.shields.io/badge/public%20API-2%2C244%20declarations-blue)
+![Public API declarations](https://img.shields.io/badge/public%20API-2%2C262%20declarations-blue)
 ![C test programs](https://img.shields.io/badge/tests-238%20programs-brightgreen)
 ![9 profiles](https://img.shields.io/badge/profiles-9%20deployment%20targets-blue)
 [![License: MIT+Rider](https://img.shields.io/badge/License-MIT%2BOpenAI%2FAnthropic%20Rider-blue.svg)](./LICENSE)
 
 </div>
 
-Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->2,244<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->238<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
+Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->2,262<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->238<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
 
 <div align="center">
 <h3>Quick Source Build</h3>
@@ -59,14 +59,14 @@ The port targets asupersync commit `5e60b1c4c` (2026-10).
 
 | Feature | What It Gives You |
 |---|---|
-| **<!-- fact:api_declarations -->2,244<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> header families** | Async runtime API: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
+| **<!-- fact:api_declarations -->2,262<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> header families** | Async runtime API: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
 | **No external dependencies** | Pure C runtime core; ships into constrained and audited environments unchanged |
 | **Deterministic replay and trace hashing** | Deterministic builds replay a scenario exactly from its seed and input; trace digests let you diff behavior across builds, profiles, and codec modes |
 | **Structured cancellation with witness protocol** | 11 cancel kinds with severity lattice, witness phase tracking, and cleanup budgets (advisory as in Rust; an opt-in hard bound) |
 | **Async combinators** | Poll-based join, race, select, timeout, retry, bracket, pipeline, quorum, first-ok, hedge and map-reduce (plus race and retry with a timeout), and bulkhead and rate-limit admission counters |
 | **Circuit breaker and epoch-based execution** | Failure containment with open/half-open/closed states; phase-scoped execution with barrier triggers |
 | **Dual codecs (JSON + binary)** | JSON for debugging and diffing, binary for compact encoding; both encode the same canonical fixture model, and round trips through each are checked to agree |
-| **<!-- fact:status_codes -->67<!-- /fact --> typed error codes with recovery guidance** | Each error has a category, recoverability class, recovery action, and backoff hints |
+| **<!-- fact:status_codes -->68<!-- /fact --> typed error codes with recovery guidance** | Each error has a category, recoverability class, recovery action, and backoff hints |
 | **Resource contracts instead of silent degradation** | Explicit memory/queue/timer ceilings with deterministic failure taxonomy per resource class (R1/R2/R3) |
 | **9 deployment profiles** | CORE, POSIX, WIN32, FREESTANDING, EMBEDDED_ROUTER, HFT, AUTOMOTIVE, PARALLEL, BROWSER |
 | **<!-- fact:test_programs -->238<!-- /fact --> tracked C test programs across 7 categories** | <!-- fact:test_unit -->175<!-- /fact --> unit, <!-- fact:test_e2e -->24<!-- /fact --> e2e, <!-- fact:test_invariant -->3<!-- /fact --> invariant, <!-- fact:test_vignettes -->12<!-- /fact --> vignette, <!-- fact:test_conformance -->6<!-- /fact --> conformance, <!-- fact:test_fuzz -->5<!-- /fact --> fuzz, and <!-- fact:test_formal -->13<!-- /fact --> formal files in the current tree |
@@ -1241,6 +1241,8 @@ Budgets are **enforced**, not advisory. Regions carry a budget that child region
 | deadline | checked before every poll and at every checkpoint; a parked task arms its deadline as a timer, so it wakes up in order to be cancelled | `DEADLINE` |
 | poll quota | decremented per poll; at zero the task is cancelled | `POLL_QUOTA` |
 | cost quota | `asx_task_consume_cost(self, n)` charges abstract cost, as Rust's `Budget::consume_cost`: a charge the quota cannot cover is refused (`ASX_E_COST_QUOTA_EXHAUSTED`, nothing changes); a checkpoint that finds the quota spent to exactly 0 cancels the task | `COST_BUDGET` |
+
+Separate from that budget, a region and a Cx carry a **capability budget** (`asx_capability_budget`, Rust's `CapabilityBudget`): optional envelopes for memory, CPU, I/O, cleanup and artifact bytes. A child region's is the meet of its parent's and its own (a dimension only one side has is kept, both give the smaller), so it can only tighten; a Cx loads its region's at init and `asx_cx_apply_child_capability_budget` narrows it. Admission can require dimensions: a child opened with `asx_region_open_child_with_capability_budget`, or by a task through `asx_cx_open_child_region`, is refused with `ASX_E_CAPABILITY_BUDGET_REFUSED` (and the dimension in `asx_capability_refusal`) when a required one is missing or spent, before any slot is taken. As in Rust nothing else is gated on it: it bounds what a child can be given, and the consumption side (capacity tickets) is not ported (`bd-sbgy`).
 
 ### Cancellation Protocol and Severity Lattice
 
@@ -2743,7 +2745,7 @@ It has not been benchmarked against live builds here, and the two differ in more
 
 ### Can I embed this as a library without the CLI?
 
-Yes. The C API is first-class: <!-- fact:api_declarations -->2,244<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact -->
+Yes. The C API is first-class: <!-- fact:api_declarations -->2,262<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact -->
 public header families in the current `include/asx/` tree, and one umbrella
 `#include <asx/asx.h>`. The repository is library-first: `make install`
 installs only `libasx.a` and the headers. The `asx` CLI (`version`, `info`,

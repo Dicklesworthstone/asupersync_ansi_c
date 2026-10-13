@@ -778,6 +778,133 @@ TEST(child_region_commands_apply_at_once_without_lab_dispatch) {
     ASSERT_EQ((int)out.severity, (int)ASX_OUTCOME_CANCELLED);
 }
 
+/* A child-region open that carries an envelope (Rust Cx::open_child_region
+ * with a ChildRegionSpec's capability_budget and requirements, bd-9kll.3.27)
+ * is a command like any open: planned when the scheduler applies it, so a
+ * refusal reaches the opener after it parked. The opener tries the open
+ * (phase 0), then a plain one through its Cx (phase 1). */
+typedef struct {
+    asx_region_id parent;
+    asx_capability_budget spec;
+    asx_capability_requirements requirements;
+    int narrow_cx;
+    asx_capability_budget narrow;
+    asx_cx cx;
+    uint32_t polls;
+    uint32_t phase;
+    asx_status first;  /* the first call of phase 0 */
+    asx_status result; /* phase 0's result */
+    asx_capability_refusal refusal;
+    asx_region_id child;
+    asx_status plain_first;
+    asx_status plain_result;
+    asx_region_id plain_child;
+} cap_opener;
+
+static asx_status poll_cap_opener(void *ud, asx_task_id self) {
+    cap_opener *o = (cap_opener *)ud;
+    asx_status st;
+    o->polls++;
+    if (o->polls == 1u) {
+        st = asx_cx_init(&o->cx, o->parent, self, ASX_CAP_SPAWN);
+        if (st == ASX_OK && o->narrow_cx) {
+            st = asx_cx_apply_child_capability_budget(&o->cx, &o->narrow, NULL, NULL, NULL);
+        }
+        if (st != ASX_OK) return st;
+    }
+    if (o->phase == 0u) {
+        st = asx_cx_open_child_region(&o->cx, NULL, &o->spec, &o->requirements, &o->child,
+                                      &o->refusal);
+        if (o->first == ASX_OK && o->polls == 1u) o->first = st;
+        if (st == ASX_E_PENDING) return ASX_E_PENDING;
+        o->result = st;
+        o->phase = 1u;
+    }
+    if (o->phase == 1u) {
+        st = asx_cx_open_child_region(&o->cx, NULL, NULL, NULL, &o->plain_child, NULL);
+        if (o->plain_first == ASX_OK) o->plain_first = st;
+        if (st == ASX_E_PENDING) return ASX_E_PENDING;
+        o->plain_result = st;
+        o->phase = 2u;
+    }
+    return ASX_OK;
+}
+
+static asx_status run_cap_opener(cap_opener *o, asx_region_id *region_out) {
+    asx_task_id t;
+    asx_capability_budget env = asx_capability_budget_unspecified();
+    asx_budget budget = asx_budget_from_polls(100);
+    asx_status st = setup();
+    if (st == ASX_OK) st = asx_scheduler_use_lab_dispatch(42u);
+    env = asx_capability_budget_with_memory_bytes(env, 1024u);
+    env = asx_capability_budget_with_cpu_units(env, 100u);
+    o->child = ASX_INVALID_ID;
+    o->plain_child = ASX_INVALID_ID;
+    o->first = ASX_OK;
+    o->plain_first = ASX_OK;
+    if (st == ASX_OK) st = asx_region_open_with_capability_budget(&g_rt, &env, &o->parent);
+    if (st == ASX_OK) st = asx_task_spawn(o->parent, poll_cap_opener, o, &t);
+    if (st == ASX_OK) st = asx_scheduler_run(o->parent, &budget);
+    *region_out = o->parent;
+    return st;
+}
+
+/* The refusal arrives with the second call, after the opener parked, and
+ * nothing was minted: the region count is the parent's alone, as after any
+ * other refused open. The plain open that follows is admitted, and the
+ * spent dimension is not replenished by it (Rust
+ * child_region_cannot_replenish_an_exhausted_caller_envelope). */
+TEST(capability_open_refusal_reaches_the_opener_after_it_parked) {
+    cap_opener o;
+    asx_region_id parent;
+    asx_capability_budget got;
+
+    memset(&o, 0, sizeof(o));
+    o.narrow_cx = 1;
+    o.narrow = asx_capability_budget_with_cpu_units(asx_capability_budget_unspecified(), 0u);
+    o.spec = asx_capability_budget_with_cpu_units(asx_capability_budget_unspecified(), 4096u);
+    o.requirements.cpu_units = 1u;
+    ASSERT_EQ(run_cap_opener(&o, &parent), ASX_OK);
+
+    ASSERT_EQ(o.first, ASX_E_PENDING);
+    ASSERT_EQ(o.result, ASX_E_CAPABILITY_BUDGET_REFUSED);
+    ASSERT_EQ(o.refusal.kind, ASX_CAPABILITY_EXHAUSTED);
+    ASSERT_EQ(o.refusal.dimension, ASX_CAPABILITY_CPU_UNITS);
+    ASSERT_EQ(o.child, ASX_INVALID_ID);
+
+    /* Plain open: PENDING, then admitted, carrying the Cx's zero. */
+    ASSERT_EQ(o.plain_first, ASX_E_PENDING);
+    ASSERT_EQ(o.plain_result, ASX_OK);
+    ASSERT_EQ(asx_region_capability_budget(o.plain_child, &got), ASX_OK);
+    ASSERT_TRUE(got.has_cpu_units);
+    ASSERT_EQ(got.cpu_units, (uint64_t)0);
+    ASSERT_EQ(got.memory_bytes, (uint64_t)1024);
+    ASSERT_EQ(asx_region_capability_budget(parent, &got), ASX_OK);
+    ASSERT_EQ(got.cpu_units, (uint64_t)100);        /* the region's own is not touched */
+    ASSERT_EQ(asx_runtime_region_count(&g_rt), 2u); /* the parent and the plain child */
+}
+
+/* The permitted near-identical case: the Cx has not spent its CPU, so the
+ * same open with the same requirement is admitted at the same step, with
+ * the meet of the Cx's, the region's and the spec's. */
+TEST(capability_open_is_admitted_at_the_same_step_with_the_meet) {
+    cap_opener o;
+    asx_region_id parent;
+    asx_capability_budget got;
+
+    memset(&o, 0, sizeof(o));
+    o.spec = asx_capability_budget_with_cpu_units(asx_capability_budget_unspecified(), 4096u);
+    o.requirements.cpu_units = 1u;
+    ASSERT_EQ(run_cap_opener(&o, &parent), ASX_OK);
+
+    ASSERT_EQ(o.first, ASX_E_PENDING);
+    ASSERT_EQ(o.result, ASX_OK);
+    ASSERT_EQ(asx_region_capability_budget(o.child, &got), ASX_OK);
+    ASSERT_EQ(got.cpu_units, (uint64_t)100); /* the region's, not the spec's 4096 */
+    ASSERT_EQ(got.memory_bytes, (uint64_t)1024);
+    ASSERT_EQ(asx_runtime_region_count(&g_rt), 3u); /* the parent and two children */
+}
+
 /* The poll quota a task spawned from a poll inherits is what its spawner
  * has left when it spawns (Cx::inherited_budget, cx.rs:2504). The lab's
  * region-open command costs the owner a dispatch, so an owner with a quota
@@ -3189,6 +3316,8 @@ int main(void) {
     RUN_TEST(child_region_open_and_close_are_next_step_commands);
     RUN_TEST(closing_an_empty_child_region_wakes_the_closer);
     RUN_TEST(child_region_commands_apply_at_once_without_lab_dispatch);
+    RUN_TEST(capability_open_refusal_reaches_the_opener_after_it_parked);
+    RUN_TEST(capability_open_is_admitted_at_the_same_step_with_the_meet);
     RUN_TEST(spawned_members_inherit_what_the_owner_has_left_after_its_region_command);
     RUN_TEST(region_cancel_request_applies_at_the_next_step);
     RUN_TEST(region_command_queue_full_is_failure_atomic);

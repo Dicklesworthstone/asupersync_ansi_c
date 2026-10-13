@@ -141,14 +141,14 @@ static uint32_t g_lab_batch = 0;
 #define LAB_REGION_CMD_CAP ((uint32_t)ASX_MAX_TASKS + (uint32_t)ASX_MAX_REGIONS)
 
 typedef struct {
-    uint8_t cancel;
+    uint8_t cancel, has_capability; /* has_capability: Create carries payload.open */
     uint16_t opener_gen;
     uint32_t opener;       /* Create: the opener's slot */
     uint32_t principal_id; /* Create: the principal's mailbox id */
     asx_region_id region;
     int has_budget;
     asx_budget budget;
-    asx_cancel_reason reason; /* Cancel */
+    asx_lab_region_payload payload; /* Cancel: reason; Create with has_capability: open */
 } lab_region_cmd;
 
 static lab_region_cmd g_lab_rcmd[LAB_REGION_CMD_CAP];
@@ -975,6 +975,7 @@ asx_status asx_lab_region_open_command(asx_task_slot *opener, asx_region_id pare
     if (g_lab_rcmd_n >= LAB_REGION_CMD_CAP) return ASX_E_RESOURCE_EXHAUSTED;
     c = &g_lab_rcmd[g_lab_rcmd_n++];
     c->cancel = 0u;
+    c->has_capability = 0u;
     c->opener = lab_slot_of(opener);
     c->opener_gen = opener->generation;
     /* The principal's id comes from the spawn mailbox at the request
@@ -986,17 +987,35 @@ asx_status asx_lab_region_open_command(asx_task_slot *opener, asx_region_id pare
     return ASX_OK;
 }
 
+/* The open with an envelope: the request carries `envelope` (the caller's
+ * met with the spec's, cx.rs:4514-4516) and `requirements`, which the mint
+ * plans against the parent's when the command is applied. */
+asx_status asx_lab_region_open_capability_command(asx_task_slot *opener, asx_region_id parent,
+                                                  const asx_budget *budget,
+                                                  const asx_capability_budget *envelope,
+                                                  const asx_capability_requirements *requirements) {
+    lab_region_cmd *c;
+    asx_status st = asx_lab_region_open_command(opener, parent, budget);
+    if (st != ASX_OK) return st;
+    c = &g_lab_rcmd[g_lab_rcmd_n - 1u];
+    c->has_capability = 1u;
+    c->payload.open.envelope = *envelope;
+    c->payload.open.requirements = *requirements;
+    return ASX_OK;
+}
+
 asx_status asx_lab_region_cancel_command(asx_region_id region, const asx_cancel_reason *reason) {
     lab_region_cmd *c;
     if (g_lab_rcmd_n >= LAB_REGION_CMD_CAP) return ASX_E_RESOURCE_EXHAUSTED;
     c = &g_lab_rcmd[g_lab_rcmd_n++];
     c->cancel = 1u;
+    c->has_capability = 0u;
     c->opener = ASX_SLOT_NONE;
     c->opener_gen = 0u;
     c->principal_id = 0u;
     c->region = region;
     c->has_budget = 0;
-    c->reason = *reason;
+    c->payload.reason = *reason;
     return ASX_OK;
 }
 
@@ -1137,6 +1156,7 @@ void asx_lab_drain_region_commands(void) {
         const lab_region_cmd *c = &batch[i];
         asx_task_slot *t;
         asx_region_id id = ASX_INVALID_ID;
+        asx_capability_refusal refusal = {ASX_CAPABILITY_REFUSAL_NONE, ASX_CAPABILITY_MEMORY_BYTES};
         asx_status st;
         ASX_CHECKPOINT_WAIVER("bounded: n <= LAB_REGION_BATCH");
         if (c->cancel == LAB_CMD_RETAIN) {
@@ -1148,10 +1168,26 @@ void asx_lab_drain_region_commands(void) {
             continue;
         }
         if (c->cancel) {
-            lab_cancel_region(c->region, &c->reason);
+            lab_cancel_region(c->region, &c->payload.reason);
             continue;
         }
+        /* An open with an envelope is planned here, against the parent's
+         * (mint_child_region_parts, state.rs:5058), and a refusal mints no
+         * region: its status reaches the opener like any other result. */
+#ifdef ASX_MUTANT_CAPABILITY_LAB_OPEN_DROPS_ENVELOPE
         st = asx_region_open_child_with_budget(c->region, c->has_budget ? &c->budget : NULL, &id);
+#else
+        if (c->has_capability) {
+            st = asx_region_open_child_with_capability_budget(c->region,
+                                                              c->has_budget ? &c->budget : NULL,
+                                                              &c->payload.open.envelope,
+                                                              &c->payload.open.requirements, &id,
+                                                              &refusal);
+        } else {
+            st = asx_region_open_child_with_budget(c->region, c->has_budget ? &c->budget : NULL,
+                                                   &id);
+        }
+#endif
         if (st == ASX_OK) {
             /* Minting gives the principal a fork of the runtime source
              * (mint_child_region_parts, state.rs:5093). */
@@ -1172,6 +1208,9 @@ void asx_lab_drain_region_commands(void) {
         t->region_wait = ASX_REGION_WAIT_OPENED;
         t->region_wait_status = st;
         t->region_wait_region = id;
+        if (st == ASX_E_CAPABILITY_BUDGET_REFUSED) {
+            t->region_wait_refusal = asx_capability_refusal_pack_internal(&refusal);
+        }
         opened[n_opened++] = c->opener;
     }
     g_lab_deferring = 0;

@@ -87,17 +87,20 @@ typedef enum {
     ASX_CAPABILITY_DIMENSION_COUNT = 5
 } asx_capability_dimension;
 
+/* The presence flags are grouped after the values: 64 bytes, where a flag
+ * between each pair of 8-byte fields made it 96 (a region slot, a Cx and a
+ * queued region command each hold one). */
 typedef struct {
-    uint8_t has_memory_bytes;
     uint64_t memory_bytes;
-    uint8_t has_cpu_units;
     uint64_t cpu_units;
-    uint8_t has_io_bytes;
     uint64_t io_bytes;
-    uint8_t has_cleanup_budget;
-    asx_budget cleanup_budget;
-    uint8_t has_artifact_bytes;
     uint64_t artifact_bytes;
+    asx_budget cleanup_budget;
+    uint8_t has_memory_bytes;
+    uint8_t has_cpu_units;
+    uint8_t has_io_bytes;
+    uint8_t has_cleanup_budget;
+    uint8_t has_artifact_bytes;
 } asx_capability_budget;
 
 /* Dimensions admission requires (Rust CapabilityBudgetRequirements): a

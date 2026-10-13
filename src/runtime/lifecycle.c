@@ -2272,6 +2272,10 @@ asx_status asx_region_open_child_with_capability_budget(
     asx_status st;
 
     if (out_child == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (refusal != NULL) {
+        refusal->kind = ASX_CAPABILITY_REFUSAL_NONE;
+        refusal->dimension = ASX_CAPABILITY_MEMORY_BYTES;
+    }
     st = asx_region_slot_lookup(parent, &parent_slot);
     if (st != ASX_OK) return st;
 
@@ -2306,4 +2310,56 @@ asx_status asx_region_capability_budget(asx_region_id region, asx_capability_bud
     if (st != ASX_OK) return st;
     *out = slot->capability_budget;
     return ASX_OK;
+}
+
+/* A task's open of a child region that carries an envelope (Rust
+ * Cx::open_child_region with a ChildRegionSpec's capability_budget and
+ * requirements, cx.rs:4491-4529). The budget is asx_region_open_child_poll's.
+ * Under lab dispatch the open is a command and its plan happens when it is
+ * applied (state.rs:5058): the first call parks the opener, and a refusal
+ * comes with the second, after nothing was minted. The wait states are
+ * asx_region_open_child_poll_internal's; this adds only the queueing of a
+ * command that carries the envelope and the refusal's detail. */
+asx_status asx_region_open_child_poll_with_capability_budget(
+    asx_task_id self, asx_region_id parent, const asx_budget *budget,
+    const asx_capability_budget *capability_budget, const asx_capability_requirements *requirements,
+    asx_region_id *out_child, asx_capability_refusal *refusal) {
+    asx_capability_budget none = asx_capability_budget_unspecified();
+    asx_capability_requirements no_requirements = {0, 0, 0, 0, 0};
+    asx_task_slot *t;
+    asx_region_slot *p;
+    asx_budget inherited;
+    asx_status st;
+
+    if (out_child == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (refusal != NULL) {
+        refusal->kind = ASX_CAPABILITY_REFUSAL_NONE;
+        refusal->dimension = ASX_CAPABILITY_MEMORY_BYTES;
+    }
+    if (capability_budget == NULL) capability_budget = &none;
+    if (requirements == NULL) requirements = &no_requirements;
+    st = asx_task_slot_lookup(self, &t);
+    if (st != ASX_OK) return st;
+    if (asx_kernel_of(parent) != asx_kernel_of(self)) return ASX_E_NOT_FOUND;
+    inherited = t->budget;
+    if (t->cleanup_applied) inherited.poll_quota = UINT32_MAX;
+    if (budget != NULL) inherited = asx_budget_meet(&inherited, budget);
+
+    if (!asx_lab_dispatch_active()) {
+        return asx_region_open_child_with_capability_budget(parent, &inherited, capability_budget,
+                                                            requirements, out_child, refusal);
+    }
+    if (t->region_wait == ASX_REGION_WAIT_NONE) {
+        st = asx_region_slot_lookup(parent, &p);
+        if (st != ASX_OK) return st;
+        st = asx_lab_region_open_capability_command(t, parent, &inherited, capability_budget,
+                                                    requirements);
+        if (st != ASX_OK) return st;
+        t->region_wait = ASX_REGION_WAIT_OPEN;
+    }
+    st = asx_region_open_child_poll_internal(t, parent, &inherited, out_child);
+    if (st == ASX_E_CAPABILITY_BUDGET_REFUSED && refusal != NULL) {
+        *refusal = asx_capability_refusal_unpack_internal(t->region_wait_refusal);
+    }
+    return st;
 }

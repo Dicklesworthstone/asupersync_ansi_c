@@ -269,6 +269,22 @@ ASX_API ASX_MUST_USE asx_status asx_cx_apply_child_capability_budget(
     asx_cx *cx, const asx_capability_budget *child, const asx_capability_requirements *requirements,
     asx_capability_budget *out, asx_capability_refusal *refusal);
 
+/* Open a child region of this Cx's region from its task's poll (Rust
+ * Cx::open_child_region(ChildRegionSpec), cx.rs:4491): the request's
+ * envelope is this Cx's met with *capability_budget (NULL: none), so a Cx
+ * that narrowed its own cannot open a child with more than it holds, even
+ * where its region has more, and a spent one is not replenished
+ * (child_region_cannot_replenish_an_exhausted_caller_envelope).
+ * Admission, the wait protocol and the refusal are
+ * asx_region_open_child_poll_with_capability_budget's. Needs
+ * ASX_CAP_SPAWN (Rust: the runtime mask's SPAWN, else RuntimeUnavailable):
+ * ASX_E_PERMISSION_DENIED without it. ASX_E_INVALID_STATE for a Cx that is
+ * not valid. */
+ASX_API ASX_MUST_USE asx_status asx_cx_open_child_region(
+    const asx_cx *cx, const asx_budget *budget, const asx_capability_budget *capability_budget,
+    const asx_capability_requirements *requirements, asx_region_id *out_child,
+    asx_capability_refusal *refusal);
+
 /* ------------------------------------------------------------------ */
 /* Clock access                                                        */
 /* ------------------------------------------------------------------ */

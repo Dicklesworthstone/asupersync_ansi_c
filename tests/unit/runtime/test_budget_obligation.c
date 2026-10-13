@@ -1667,6 +1667,177 @@ TEST(capability_budget_cx_of_a_region_carries_its_envelope) {
     ASSERT_EQ(got.cpu_units, (uint64_t)100);
 }
 
+/* A task that opens a child region carrying an envelope: through the
+ * runtime call (cx 0) or through a Cx it first narrows by `narrow`. */
+typedef struct {
+    asx_region_id region;
+    asx_capability_budget spec;
+    asx_capability_requirements requirements;
+    int use_cx;
+    int narrow_cx;
+    asx_capability_budget narrow;
+    uint32_t polls;
+    asx_status status;
+    asx_region_id child;
+    asx_capability_refusal refusal;
+} cap_opener;
+
+static asx_status poll_cap_opener(void *ud, asx_task_id self) {
+    cap_opener *o = (cap_opener *)ud;
+    o->polls++;
+    if (o->use_cx) {
+        asx_cx cx;
+        asx_status st = asx_cx_init(&cx, o->region, self, ASX_CAP_SPAWN);
+        if (st == ASX_OK && o->narrow_cx) {
+            st = asx_cx_apply_child_capability_budget(&cx, &o->narrow, NULL, NULL, NULL);
+        }
+        if (st != ASX_OK) {
+            o->status = st;
+            return ASX_OK;
+        }
+        o->status =
+            asx_cx_open_child_region(&cx, NULL, &o->spec, &o->requirements, &o->child, &o->refusal);
+    } else {
+        o->status = asx_region_open_child_poll_with_capability_budget(self, o->region, NULL,
+                                                                      &o->spec, &o->requirements,
+                                                                      &o->child, &o->refusal);
+    }
+    return ASX_OK;
+}
+
+/* Runs `o` as a task of `o->region` to completion. */
+static asx_status run_cap_opener(cap_opener *o) {
+    asx_task_id t;
+    asx_budget run = asx_budget_from_polls(10);
+    asx_status st = asx_task_spawn(o->region, poll_cap_opener, o, &t);
+    if (st != ASX_OK) return st;
+    return asx_scheduler_run(o->region, &run);
+}
+
+TEST(capability_budget_poll_open_admits_with_the_meet) {
+    asx_region_id root;
+    asx_capability_budget env = cap_envelope();
+    asx_capability_budget got;
+    cap_opener o;
+
+    setup();
+    memset(&o, 0, sizeof(o));
+    ASSERT_EQ(asx_region_open_with_capability_budget(&g_rt, &env, &root), ASX_OK);
+    o.region = root;
+    o.child = ASX_INVALID_ID;
+    o.spec = asx_capability_budget_with_memory_bytes(asx_capability_budget_unspecified(), 256u);
+    ASSERT_EQ(run_cap_opener(&o), ASX_OK);
+    ASSERT_EQ(o.status, ASX_OK);
+    ASSERT_EQ(asx_region_capability_budget(o.child, &got), ASX_OK);
+    ASSERT_EQ(got.memory_bytes, (uint64_t)256);
+    ASSERT_EQ(got.cpu_units, (uint64_t)100);
+    ASSERT_TRUE(got.has_cleanup_budget);
+}
+
+TEST(capability_budget_poll_open_refusal_is_failure_atomic) {
+    asx_region_id root;
+    asx_region_slot *slot;
+    asx_capability_budget env = cap_envelope();
+    uint32_t regions;
+    uint32_t children;
+    cap_opener o;
+
+    setup();
+    memset(&o, 0, sizeof(o));
+    ASSERT_EQ(asx_region_open_with_capability_budget(&g_rt, &env, &root), ASX_OK);
+    ASSERT_EQ(asx_region_slot_lookup(root, &slot), ASX_OK);
+    regions = asx_runtime_region_count(&g_rt);
+    children = slot->child_count;
+
+    o.region = root;
+    o.child = ASX_INVALID_ID;
+    o.requirements.io_bytes = 1u; /* the envelope has no io_bytes */
+    ASSERT_EQ(run_cap_opener(&o), ASX_OK);
+    ASSERT_EQ(o.status, ASX_E_CAPABILITY_BUDGET_REFUSED);
+    ASSERT_EQ(o.refusal.kind, ASX_CAPABILITY_MISSING_REQUIRED);
+    ASSERT_EQ(o.refusal.dimension, ASX_CAPABILITY_IO_BYTES);
+    ASSERT_EQ(o.child, ASX_INVALID_ID);
+    ASSERT_EQ(asx_runtime_region_count(&g_rt), regions);
+    ASSERT_EQ(slot->child_count, children);
+
+    /* Permitted, near-identical: the spec supplies the dimension. */
+    memset(&o, 0, sizeof(o));
+    o.region = root;
+    o.child = ASX_INVALID_ID;
+    o.requirements.io_bytes = 1u;
+    o.spec = asx_capability_budget_with_io_bytes(asx_capability_budget_unspecified(), 64u);
+    ASSERT_EQ(run_cap_opener(&o), ASX_OK);
+    ASSERT_EQ(o.status, ASX_OK);
+    ASSERT_EQ(asx_runtime_region_count(&g_rt), regions + 1u);
+    ASSERT_EQ(slot->child_count, children + 1u);
+}
+
+TEST(capability_budget_cx_open_is_bounded_by_the_cxs_own_envelope) {
+    /* The region holds 1024 bytes; its task's Cx narrowed itself to 100, so
+     * a spec asking for 500 gets 100: opening a child cannot restore what
+     * the caller gave up (cx.rs:4506-4510). */
+    asx_region_id root;
+    asx_capability_budget env = cap_envelope();
+    asx_capability_budget got;
+    cap_opener o;
+
+    setup();
+    memset(&o, 0, sizeof(o));
+    ASSERT_EQ(asx_region_open_with_capability_budget(&g_rt, &env, &root), ASX_OK);
+    o.region = root;
+    o.child = ASX_INVALID_ID;
+    o.use_cx = 1;
+    o.narrow_cx = 1;
+    o.narrow = asx_capability_budget_with_memory_bytes(asx_capability_budget_unspecified(), 100u);
+    o.spec = asx_capability_budget_with_memory_bytes(asx_capability_budget_unspecified(), 500u);
+    ASSERT_EQ(run_cap_opener(&o), ASX_OK);
+    ASSERT_EQ(o.status, ASX_OK);
+    ASSERT_EQ(asx_region_capability_budget(o.child, &got), ASX_OK);
+    ASSERT_EQ(got.memory_bytes, (uint64_t)100);
+    ASSERT_EQ(got.cpu_units, (uint64_t)100);
+
+    /* The region is as it was. */
+    ASSERT_EQ(asx_region_capability_budget(root, &got), ASX_OK);
+    ASSERT_EQ(got.memory_bytes, (uint64_t)1024);
+}
+
+TEST(capability_budget_cx_open_does_not_replenish_a_spent_cx) {
+    /* Rust child_region_cannot_replenish_an_exhausted_caller_envelope: the
+     * region has CPU units, the task's Cx spent its own. */
+    asx_region_id root;
+    asx_capability_budget env = cap_envelope();
+    cap_opener o;
+    uint32_t regions;
+
+    setup();
+    memset(&o, 0, sizeof(o));
+    ASSERT_EQ(asx_region_open_with_capability_budget(&g_rt, &env, &root), ASX_OK);
+    regions = asx_runtime_region_count(&g_rt);
+    o.region = root;
+    o.child = ASX_INVALID_ID;
+    o.use_cx = 1;
+    o.narrow_cx = 1;
+    o.narrow = asx_capability_budget_with_cpu_units(asx_capability_budget_unspecified(), 0u);
+    o.spec = asx_capability_budget_with_cpu_units(asx_capability_budget_unspecified(), 4096u);
+    o.requirements.cpu_units = 1u;
+    ASSERT_EQ(run_cap_opener(&o), ASX_OK);
+    ASSERT_EQ(o.status, ASX_E_CAPABILITY_BUDGET_REFUSED);
+    ASSERT_EQ(o.refusal.kind, ASX_CAPABILITY_EXHAUSTED);
+    ASSERT_EQ(o.refusal.dimension, ASX_CAPABILITY_CPU_UNITS);
+    ASSERT_EQ(asx_runtime_region_count(&g_rt), regions);
+
+    /* The same call from a Cx that did not spend it is admitted. */
+    memset(&o, 0, sizeof(o));
+    o.region = root;
+    o.child = ASX_INVALID_ID;
+    o.use_cx = 1;
+    o.spec = asx_capability_budget_with_cpu_units(asx_capability_budget_unspecified(), 4096u);
+    o.requirements.cpu_units = 1u;
+    ASSERT_EQ(run_cap_opener(&o), ASX_OK);
+    ASSERT_EQ(o.status, ASX_OK);
+    ASSERT_EQ(asx_runtime_region_count(&g_rt), regions + 1u);
+}
+
 TEST(capability_budget_a_recycled_slot_starts_unspecified) {
     asx_region_id first;
     asx_region_id second;
@@ -2336,6 +2507,10 @@ int main(void) {
     RUN_TEST(capability_budget_refusal_is_planned_before_the_parents_admission_checks);
     RUN_TEST(capability_budget_open_child_rejects_bad_arguments_and_parents);
     RUN_TEST(capability_budget_cx_of_a_region_carries_its_envelope);
+    RUN_TEST(capability_budget_poll_open_admits_with_the_meet);
+    RUN_TEST(capability_budget_poll_open_refusal_is_failure_atomic);
+    RUN_TEST(capability_budget_cx_open_is_bounded_by_the_cxs_own_envelope);
+    RUN_TEST(capability_budget_cx_open_does_not_replenish_a_spent_cx);
     RUN_TEST(capability_budget_a_recycled_slot_starts_unspecified);
     RUN_TEST(capability_budget_runtime_reset_clears_every_envelope);
     RUN_TEST(reserve_ex_records_kind_and_holder);
