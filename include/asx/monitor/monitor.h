@@ -43,7 +43,7 @@ extern "C" {
  * server's system lane: a server holds at most this many monitors, each
  * fires once, so a lane at least this large never loses a DOWN. */
 #ifndef ASX_MONITOR_CAPACITY
-#define ASX_MONITOR_CAPACITY 16u
+#define ASX_MONITOR_CAPACITY 8u
 #endif
 #if (ASX_MONITOR_CAPACITY) < 1
 #error "ASX_MONITOR_CAPACITY must be at least 1"

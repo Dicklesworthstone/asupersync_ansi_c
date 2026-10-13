@@ -319,6 +319,9 @@ HEALTH_SRC := \
 MONITOR_SRC := \
 	src/monitor/monitor.c
 
+LINK_SRC := \
+	src/link/link.c
+
 OBSERVABILITY_SRC := \
 	src/observability/observability.c
 
@@ -371,7 +374,7 @@ CLI_SRC := src/cli/cli.c
 
 ABI_SRC := src/abi/wasm_abi.c
 
-LIB_SRC := $(CORE_SRC) $(RUNTIME_SRC) $(CHANNEL_SRC) $(SYNC_SRC) $(ACTOR_SRC) $(NET_SRC) $(BYTES_SRC) $(ENCODING_SRC) $(DECODING_SRC) $(RAPTORQ_SRC) $(MIGRATION_SRC) $(TIME_SRC) $(SECURITY_SRC) $(STREAM_SRC) $(FS_SRC) $(PROCESS_SRC) $(SIGNAL_SRC) $(PLAN_SRC) $(CX_SRC) $(SESSION_LINK_SRC) $(EVIDENCE_SRC) $(EVIDENCE_SINK_SRC) $(HEALTH_SRC) $(MONITOR_SRC) $(OBSERVABILITY_SRC) $(APP_SRC) $(CONSOLE_SRC) $(TRACING_COMPAT_SRC) $(SERVICE_SRC) $(TRANSPORT_SRC) $(REMOTE_SRC) $(SPORK_SRC) $(CONFORMANCE_SRC) $(ABI_SRC) $(CLI_SRC) $(PLATFORM_SRC)
+LIB_SRC := $(CORE_SRC) $(RUNTIME_SRC) $(CHANNEL_SRC) $(SYNC_SRC) $(ACTOR_SRC) $(NET_SRC) $(BYTES_SRC) $(ENCODING_SRC) $(DECODING_SRC) $(RAPTORQ_SRC) $(MIGRATION_SRC) $(TIME_SRC) $(SECURITY_SRC) $(STREAM_SRC) $(FS_SRC) $(PROCESS_SRC) $(SIGNAL_SRC) $(PLAN_SRC) $(CX_SRC) $(SESSION_LINK_SRC) $(EVIDENCE_SRC) $(EVIDENCE_SINK_SRC) $(HEALTH_SRC) $(MONITOR_SRC) $(LINK_SRC) $(OBSERVABILITY_SRC) $(APP_SRC) $(CONSOLE_SRC) $(TRACING_COMPAT_SRC) $(SERVICE_SRC) $(TRANSPORT_SRC) $(REMOTE_SRC) $(SPORK_SRC) $(CONFORMANCE_SRC) $(ABI_SRC) $(CLI_SRC) $(PLATFORM_SRC)
 
 # ---------------------------------------------------------------------------
 # Object files and output
@@ -428,6 +431,8 @@ UNIT_TEST_SRC := $(wildcard tests/unit/core/*_test.c) \
                  $(wildcard tests/unit/evidence/test_*.c) \
                  $(wildcard tests/unit/monitor/*_test.c) \
                  $(wildcard tests/unit/monitor/test_*.c) \
+                 $(wildcard tests/unit/link/*_test.c) \
+                 $(wildcard tests/unit/link/test_*.c) \
                  $(wildcard tests/unit/tracing_compat/*_test.c) \
                  $(wildcard tests/unit/tracing_compat/test_*.c) \
                  $(wildcard tests/unit/bytes/*_test.c) \
@@ -943,6 +948,7 @@ BROWSER_FOCUSED_TEST_BIN := \
 	$(TEST_DIR)/unit/console/test_console \
 	$(TEST_DIR)/unit/evidence/test_evidence \
 	$(TEST_DIR)/unit/fs/test_fs \
+	$(TEST_DIR)/unit/link/test_link \
 	$(TEST_DIR)/unit/monitor/test_monitor \
 	$(TEST_DIR)/unit/observability/test_health \
 	$(TEST_DIR)/unit/process/test_process \
@@ -2039,7 +2045,8 @@ CAPACITY_X4_CFLAGS := \
 	-DASX_GHOST_BORROW_TABLE_CAPACITY=512u -DASX_GHOST_DETERMINISM_CAPACITY=1024u \
 	-DASX_GHOST_LINEARITY_CAPACITY=1024u -DASX_GHOST_RING_CAPACITY=256u \
 	-DASX_HINDSIGHT_CAPACITY=1024u -DASX_IDEMPOTENCY_STORE_CAPACITY=64u \
-	-DASX_LANE_TASK_CAPACITY=256u -DASX_MAX_ACTORS=64u -DASX_MAX_BLOCKING_TASKS=64u \
+	-DASX_LANE_TASK_CAPACITY=256u -DASX_LINK_CAPACITY=32u -DASX_MAX_ACTORS=64u \
+	-DASX_MAX_BLOCKING_TASKS=64u \
 	-DASX_MAX_BROADCASTS=32u -DASX_MAX_CANCEL_WITNESSES=256u -DASX_MAX_CHANNELS=64u \
 	-DASX_MAX_DEADLINE_MONITORS=128u -DASX_MAX_EPOCH_OBSERVERS=32u -DASX_MAX_EPOCHS=64u \
 	-DASX_MAX_FS_ENTRIES=64u -DASX_MAX_IO_TOKENS=256u -DASX_MAX_MASK_DEPTH=256u \
@@ -2052,7 +2059,7 @@ CAPACITY_X4_CFLAGS := \
 	-DASX_MAX_TLS_STREAMS=32u -DASX_MAX_UDP_SOCKETS=64u -DASX_MAX_UNIX_DGRAM_SOCKETS=32u \
 	-DASX_MAX_UNIX_LISTENERS=16u -DASX_MAX_UNIX_STREAMS=64u -DASX_MAX_WAKERS=256u \
 	-DASX_MAX_WATCHES=64u -DASX_MAX_WORKERS=256u -DASX_MAX_WS_CONNECTIONS=32u \
-	-DASX_MONITOR_CAPACITY=64u -DASX_POSIX_BLOCKING_QUEUE_CAPACITY=32u \
+	-DASX_MONITOR_CAPACITY=32u -DASX_POSIX_BLOCKING_QUEUE_CAPACITY=32u \
 	-DASX_POSIX_BLOCKING_WORKERS=16u -DASX_RESOLVER_CACHE_CAPACITY=32u \
 	-DASX_RESOLVER_HOST_CAPACITY=1024u -DASX_SCHED_EVENT_LOG_CAPACITY=1024u \
 	-DASX_SERVICE_BUFFER_CAPACITY=32u -DASX_SESSION_MAX_CAPACITY=64u \

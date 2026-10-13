@@ -1006,6 +1006,9 @@ static void lab_cancel_region(asx_region_id region, const asx_cancel_reason *rea
 #define LAB_CMD_MONITOR_TASK 2u
 #define LAB_CMD_MONITOR_SERVER 3u
 #define LAB_CMD_DEMONITOR 4u
+#define LAB_CMD_LINK_TASK 5u   /* `budget.priority` is the holder's exit policy */
+#define LAB_CMD_LINK_SERVER 6u /* likewise; `principal_id`, `budget.poll_quota`: the server */
+#define LAB_CMD_UNLINK 7u
 
 /* TaskWatches::apply (monitor.rs:1323) for one Watch command. A removal
  * takes effect now. A request establishes only for an opener still waiting
@@ -1021,13 +1024,23 @@ static void lab_apply_watch(const lab_region_cmd *c, uint32_t *woken, uint32_t *
         asx_monitor_remove_internal(c->region);
         return;
     }
+    if (c->cancel == LAB_CMD_UNLINK) {
+        asx_link_remove_internal(c->region);
+        return;
+    }
     t = &g_tasks[c->opener];
     if (!t->alive || t->generation != c->opener_gen || t->region_wait != ASX_REGION_WAIT_WATCH) {
         return;
     }
-    st = asx_monitor_apply_internal(asx_task_handle_for_slot(c->opener), c->region,
-                                    c->cancel == LAB_CMD_MONITOR_SERVER, c->principal_id,
-                                    c->budget.poll_quota, &ref);
+    if (c->cancel >= LAB_CMD_LINK_TASK) {
+        st = asx_link_apply_internal(asx_task_handle_for_slot(c->opener), c->region,
+                                     c->cancel == LAB_CMD_LINK_SERVER, c->principal_id,
+                                     c->budget.poll_quota, c->budget.priority, &ref);
+    } else {
+        st = asx_monitor_apply_internal(asx_task_handle_for_slot(c->opener), c->region,
+                                        c->cancel == LAB_CMD_MONITOR_SERVER, c->principal_id,
+                                        c->budget.poll_quota, &ref);
+    }
     t->region_wait = ASX_REGION_WAIT_WATCHED;
     t->region_wait_status = st;
     t->region_wait_region = st == ASX_OK ? ref : ASX_INVALID_ID;
@@ -1637,4 +1650,38 @@ asx_status asx_lab_watch_demonitor_command(uint64_t ref) {
     c->opener = ASX_SLOT_NONE;
     c->region = ref;
     return ASX_OK;
+}
+
+/* WatchCommand::Link and Unlink (monitor.rs:1198), the same way. */
+asx_status asx_lab_watch_link_command(asx_task_slot *opener, asx_task_id peer, int to_server,
+                                      uint32_t server_slot, uint32_t server_gen, uint32_t policy) {
+    lab_region_cmd *c;
+    if (g_lab_rcmd_n >= LAB_REGION_CMD_CAP) return ASX_E_RESOURCE_EXHAUSTED;
+    c = &g_lab_rcmd[g_lab_rcmd_n++];
+    memset(c, 0, sizeof(*c));
+    c->cancel = to_server ? LAB_CMD_LINK_SERVER : LAB_CMD_LINK_TASK;
+    c->opener = (uint32_t)(opener - g_tasks);
+    c->opener_gen = opener->generation;
+    c->region = peer;
+    c->principal_id = server_slot;
+    c->budget.poll_quota = server_gen;
+    c->budget.priority = (uint8_t)policy;
+    return ASX_OK;
+}
+
+asx_status asx_lab_watch_unlink_command(uint64_t ref) {
+    lab_region_cmd *c;
+    if (g_lab_rcmd_n >= LAB_REGION_CMD_CAP) return ASX_E_RESOURCE_EXHAUSTED;
+    c = &g_lab_rcmd[g_lab_rcmd_n++];
+    memset(c, 0, sizeof(*c));
+    c->cancel = LAB_CMD_UNLINK;
+    c->opener = ASX_SLOT_NONE;
+    c->region = ref;
+    return ASX_OK;
+}
+
+uint64_t asx_lab_task_order_key_internal(asx_task_id task) {
+    asx_task_slot *t;
+    if (g_lab_active && asx_task_slot_lookup(task, &t) == ASX_OK) return lab_compact_task(t);
+    return (uint64_t)asx_handle_index(task);
 }

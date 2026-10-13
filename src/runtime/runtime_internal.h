@@ -681,6 +681,23 @@ asx_status asx_lab_watch_demonitor_command(uint64_t ref);
 asx_status asx_monitor_apply_internal(uint64_t watcher, uint64_t target, int to_server,
                                       uint32_t server_slot, uint32_t server_gen, uint64_t *out_ref);
 void asx_monitor_remove_internal(uint64_t ref);
+/* The same for links (link.c): `policy` is an asx_exit_policy. A link
+ * request is a Watch command of the lane, as a monitor request is; its
+ * unlink is the removal. */
+asx_status asx_link_apply_internal(uint64_t holder, uint64_t peer, int to_server,
+                                   uint32_t server_slot, uint32_t server_gen, uint32_t policy,
+                                   uint64_t *out_ref);
+void asx_link_remove_internal(uint64_t ref);
+asx_status asx_lab_watch_link_command(asx_task_slot *opener, asx_task_id peer, int to_server,
+                                      uint32_t server_slot, uint32_t server_gen, uint32_t policy);
+asx_status asx_lab_watch_unlink_command(uint64_t ref);
+/* Rust's TaskId ordering key for a task (arena index, then generation) under
+ * lab dispatch, its slot and generation otherwise: the order Rust sorts a
+ * batch of actions on tasks by. */
+uint64_t asx_lab_task_order_key_internal(asx_task_id task);
+/* A task completes: its monitors fire, then its links (Rust's
+ * TaskWatches::on_task_completed). */
+void asx_watches_task_finished(asx_task_id task, const asx_outcome *outcome, asx_time vt);
 int asx_lab_region_commands_pending(void);
 void asx_lab_drain_region_commands(void);
 /* drain_deferred_cancel_dispatches (LR:4219-4239): publish the cancel lane

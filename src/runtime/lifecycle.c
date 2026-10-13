@@ -755,7 +755,7 @@ void asx_task_on_complete_internal(asx_task_slot *task, asx_region_slot *region)
     }
     if (region != NULL && region->task_count > 0u) region->task_count--;
     /* Watch effects dispatch after the join waiters (lab/runtime.rs:5010). */
-    asx_monitor_task_finished(asx_task_handle_for_slot((uint32_t)(task - g_tasks)), &task->outcome,
+    asx_watches_task_finished(asx_task_handle_for_slot((uint32_t)(task - g_tasks)), &task->outcome,
                               obligation_clock());
     if (task->detached) { asx_task_slot_release((uint32_t)(task - g_tasks)); }
 }
