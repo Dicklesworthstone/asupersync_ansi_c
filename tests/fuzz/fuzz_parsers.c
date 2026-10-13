@@ -581,14 +581,21 @@ static void fuzz_one(const uint8_t *data, size_t size) {
 #include <asx/bytes/buf.h>
 #include <asx/bytes/codec.h>
 
-static asx_buf_mut g_buf;
+/* The buffer is a block of its own on the heap, on purpose. asx_buf_mut keeps
+ * its bytes in an inline array, so a decoder that reads the byte before
+ * data[0] (the planted off-by-one of ASX_MUTANT_FRAME_CODECS: an empty first
+ * line) reads whatever precedes the object. Behind a static object that is a
+ * neighbouring global or padding, which AddressSanitizer does not poison, and
+ * the read goes unseen (batch #19: the replay control found nothing with the
+ * seed that reaches it). A heap block has a redzone on its left. */
+static asx_buf_mut *g_buf;
 
 static void drain_frames(void *state,
                          asx_decode_result (*decode)(void *, asx_buf_mut *, asx_frame *)) {
     uint32_t guard = ASX_BUF_CAPACITY + 8u;
     for (;;) {
         asx_frame f;
-        asx_decode_result r = decode(state, &g_buf, &f);
+        asx_decode_result r = decode(state, g_buf, &f);
         if (guard-- == 0u) fuzz_fail("frame decoder makes no progress");
         if (r != ASX_DECODE_FRAME) return;
         if (f.len > ASX_BUF_CAPACITY) fuzz_fail("frame longer than the buffer");
@@ -612,23 +619,27 @@ static void fuzz_one(const uint8_t *data, size_t size) {
                                              (mode & 0x40u) ? 64u : 0u) != ASX_OK) {
         return;
     }
-    asx_buf_mut_init(&g_buf);
+    g_buf = (asx_buf_mut *)calloc(1u, sizeof(*g_buf));
+    if (g_buf == NULL) return;
+    asx_buf_mut_init(g_buf);
     while (pos < (uint32_t)size) {
         uint32_t n = next_chunk(mode, pos, (uint32_t)size - pos);
-        if (asx_buf_mut_put(&g_buf, data + pos, n) != ASX_OK) break;
+        if (asx_buf_mut_put(g_buf, data + pos, n) != ASX_OK) break;
         drain_frames(&ld, asx_length_delimited_decode);
         pos += n;
     }
 
     asx_lines_codec_init_with(&lines, (mode & 0x20u) ? 16u : 0u);
-    asx_buf_mut_init(&g_buf);
+    asx_buf_mut_init(g_buf);
     pos = 0;
     while (pos < (uint32_t)size) {
         uint32_t n = next_chunk(mode, pos, (uint32_t)size - pos);
-        if (asx_buf_mut_put(&g_buf, data + pos, n) != ASX_OK) break;
+        if (asx_buf_mut_put(g_buf, data + pos, n) != ASX_OK) break;
         drain_frames(&lines, asx_lines_decode);
         pos += n;
     }
+    free(g_buf);
+    g_buf = NULL;
 }
 
 #elif defined(ASX_FUZZ_RESOLVE_HOST)
