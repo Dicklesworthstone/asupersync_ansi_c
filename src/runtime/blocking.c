@@ -55,6 +55,7 @@ static void pool_lock(void) {
     uint32_t expected;
     for (;;) {
         ASX_CHECKPOINT_WAIVER("spinlock: critical sections are short and non-blocking");
+        /* ASX_ANALYZER_WAIVER("gcc: a single-thread CAS fails only if pool_lock re-entered") */
         expected = 0u;
         if (asx_atomic_u32_compare_exchange(&g_pool_lock, &expected, 1u)) return;
     }

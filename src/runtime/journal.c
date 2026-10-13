@@ -121,6 +121,7 @@ static void j_sink_locked(asx_journal *j) {
 }
 
 static void j_stage(asx_journal *j, const uint8_t *src, uint32_t n) {
+    /* ASX_ANALYZER_WAIVER("gcc: every caller's n bytes were written by put_* or put_bytes") */
     memcpy(j->cfg.buffer + j->used, src, (size_t)n);
     j->used += n;
     j->stats.bytes += n;

@@ -648,6 +648,7 @@ static int lab_pop(lab_lane *lane, uint64_t r, uint32_t *out_slot, uint16_t *out
          * tie-break mirrored. Never in a release build. */
         chosen = group[n - 1u - (uint32_t)(r % (uint64_t)n)];
 #else
+        /* ASX_ANALYZER_WAIVER("gcc: group[0..n) holds every top-priority entry, n >= 1") */
         chosen = group[(uint32_t)(r % (uint64_t)n)];
 #endif
         e = lane->e[chosen];
@@ -1153,10 +1154,12 @@ void asx_lab_drain_region_commands(void) {
     }
     for (i = 0; i < n_retained; i++) {
         ASX_CHECKPOINT_WAIVER("bounded: n_retained <= LAB_REGION_BATCH");
+        /* ASX_ANALYZER_WAIVER("gcc: retained[0..n_retained) is written by lab_apply_retain") */
         asx_task_wake_slot_internal(&g_tasks[retained[i]]);
     }
     for (i = 0; i < n_watched; i++) {
         ASX_CHECKPOINT_WAIVER("bounded: n_watched <= LAB_REGION_BATCH");
+        /* ASX_ANALYZER_WAIVER("gcc: watched[0..n_watched) is written by lab_apply_watch") */
         asx_task_wake_slot_internal(&g_tasks[watched[i]]);
     }
 }

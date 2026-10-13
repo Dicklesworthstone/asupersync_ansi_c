@@ -124,6 +124,7 @@ static asx_status sig_ensure_pipe(void) {
 #endif
     g_pipe_rd = fds[0];
     g_pipe_wr = fds[1];
+    /* ASX_ANALYZER_WAIVER("gcc: fds[1] is kept in g_pipe_wr for the signal handler") */
     return ASX_OK;
 }
 

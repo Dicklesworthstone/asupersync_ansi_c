@@ -1329,6 +1329,7 @@ static uint32_t name_cleanup(asx_name_registry *registry, int by_region, asx_reg
         }
     }
     for (i = 1; i < n; i++) { /* insertion sort by name */
+        /* ASX_ANALYZER_WAIVER("gcc: order[0..n) is written by the first loop, one slot per n++") */
         uint32_t key = order[i];
         for (j = i; j > 0u && strcmp(freed[order[j - 1u]], freed[key]) > 0; j--) {
             order[j] = order[j - 1u];
