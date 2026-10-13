@@ -108,8 +108,12 @@ ifeq ($(BUILD_TYPE),release)
   # Each function and datum in a section of its own, so a link told to drop
   # what nothing references (GC_LDFLAGS below) can: an archive member is
   # otherwise all or nothing, and the kernel-only quickstart linked 316 KB
-  # of .text it never calls (bd-dkfs).
-  OPT_FLAGS := -O2 -DNDEBUG -ffunction-sections -fdata-sections
+  # of .text it never calls (bd-dkfs). No unwind tables either: C code has no
+  # exception to unwind (nothing here uses _Unwind, setjmp or pthread_exit),
+  # and on an x86-64 or arm64 host they were 16 KB of the quickstart. A
+  # release crash backtrace then needs a -g build, as a debug build has.
+  OPT_FLAGS := -O2 -DNDEBUG -ffunction-sections -fdata-sections \
+               -fno-asynchronous-unwind-tables -fno-unwind-tables
 else
   OPT_FLAGS := -O0 -g -DASX_DEBUG=1
 endif
