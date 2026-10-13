@@ -303,6 +303,12 @@ static int proc_try_reap(native_proc *p) {
         if (exited) proc_replay_reaped(p, state, code, sig);
         return exited;
     }
+    if (p->jid != 0u) {
+        /* A replay's child, found after the replay ended: it owns no
+         * process, and its recorded pid is not ours to wait for. */
+        proc_replay_reaped(p, (uint32_t)ASX_PROCESS_EXITED, -1, 0);
+        return 1;
+    }
     g_real_calls++;
     do { r = waitpid(p->pid, &status, WNOHANG); } while (r < 0 && errno == EINTR);
     if (r == p->pid) {
@@ -336,6 +342,10 @@ static void proc_reap_blocking(native_proc *p) {
             (void)asx_replay_check_handle(1u, 0u,
                                           "child was not reaped where the recording reaped it");
         }
+        return;
+    }
+    if (p->jid != 0u) {
+        proc_replay_reaped(p, (uint32_t)ASX_PROCESS_EXITED, -1, 0); /* not our process */
         return;
     }
     g_real_calls++;
@@ -862,7 +872,7 @@ static asx_status proc_send(asx_process_handle h, int sig) {
     /* Until we reap it the pid cannot be recycled, so this never hits a
      * stranger; after reaping there is nothing left to signal. */
     if (p->reaped) return ASX_OK;
-    if (asx_replay_active()) return ASX_OK; /* no process to signal */
+    if (asx_replay_active() || p->jid != 0u) return ASX_OK; /* no process to signal */
     g_real_calls++;
     if (kill(p->pid, sig) != 0 && errno != ESRCH) return proc_errno_status(errno);
     return ASX_OK;
