@@ -43,6 +43,7 @@
 #include <asx/asx_config.h>
 #include <asx/core/budget.h>
 #include <asx/core/cancel.h>
+#include <asx/core/ghost.h>
 #include <asx/core/transition.h>
 #include <asx/runtime/lab.h>
 #include <asx/runtime/runtime.h>
@@ -100,6 +101,56 @@ static void show(const char *label, const char *bytes) {
     fprintf(stdout, "      %s %.*s%s\n", label, (int)(len > max ? max : len), bytes,
             len > max ? " ..." : "");
 }
+
+/* Ghost-monitor assertion (bd-9kll.2.21). Built with
+ * -DASX_CONFORMANCE_GHOST_CHECK (make conformance-ghost) against a library
+ * that has the ghost monitors compiled in, a scenario whose run recorded any
+ * ghost violation FAILs, naming the first. The plain runner does not look:
+ * the monitors judge the runtime's own protocol, which no Rust capture
+ * carries, so a clean corpus here shows legal lifecycle transitions and
+ * linear obligations in these scenarios and nothing about memory safety
+ * (the sanitizer lane, bd-9kll.2.22, covers that). The runtime of a run is
+ * still alive when asx_conformance_run returns and the next run's init
+ * resets the monitors, so the count read here is that run's own. */
+#ifdef ASX_CONFORMANCE_GHOST_CHECK
+#if !(defined(ASX_DEBUG_GHOST) && ASX_DEBUG_GHOST)
+#error "ASX_CONFORMANCE_GHOST_CHECK needs the ghost monitors: build with -DASX_DEBUG_GHOST=1"
+#endif
+
+static const char *ghost_state_name(asx_ghost_violation_kind kind, int state) {
+    if (kind == ASX_GHOST_PROTOCOL_REGION) return asx_region_state_str((asx_region_state)state);
+    if (kind == ASX_GHOST_PROTOCOL_TASK) return asx_task_state_str((asx_task_state)state);
+    if (kind == ASX_GHOST_PROTOCOL_OBLIGATION) {
+        return asx_obligation_state_str((asx_obligation_state)state);
+    }
+    return "-";
+}
+
+/* 1 when the monitors recorded nothing since the run began; otherwise print
+ * a FAIL line for scenario `id` (the first violation, oldest retained) to
+ * `out` and return 0. `where` names the run that was checked. */
+static int ghost_clean(FILE *out, const char *id, const char *where) {
+    asx_ghost_violation v;
+    uint32_t n = asx_ghost_violation_count();
+    if (n == 0u) return 1;
+    if (!asx_ghost_violation_get(0u, &v)) {
+        fprintf(out,
+                "FAIL %s: ghost monitor recorded %u violation(s) in %s, the first unreadable\n", id,
+                (unsigned)n, where);
+        return 0;
+    }
+    fprintf(out,
+            "FAIL %s: ghost monitor recorded %u violation(s) in %s%s; first: %s entity=0x%llx "
+            "%s -> %s (violation sequence %u)\n",
+            id, (unsigned)n, where, asx_ghost_ring_overflowed() ? " (ring overflowed)" : "",
+            asx_ghost_violation_kind_str(v.kind), (unsigned long long)v.entity_id,
+            ghost_state_name(v.kind, v.from_state), ghost_state_name(v.kind, v.to_state),
+            (unsigned)v.sequence);
+    return 0;
+}
+#else
+#define ghost_clean(out, id, where) ((void)(out), (void)(id), (void)(where), 1)
+#endif
 
 /* Compare the members of two objects; report the differing ones. */
 static int diff_members(const char *part, uint32_t want, uint32_t got) {
@@ -438,6 +489,7 @@ static int forced_replay(const char *id, uint32_t root, uint32_t scenario, uint3
                 g_error[0] != '\0' ? g_error : "?");
         return 0;
     }
+    if (!ghost_clean(stdout, id, "the replay of Rust's schedule")) return 0;
     got_sem = asx_json_get_string(&g_digest, run, "semantic_digest");
     if (got_sem == NULL || want_sem == NULL || strcmp(got_sem, want_sem) != 0) {
         fprintf(stdout, "FAIL %s: replaying Rust's schedule in C: semantic digest %s, Rust's %s\n",
@@ -502,6 +554,8 @@ static cmp_result compare_one(const char *path, int mutate) {
         fprintf(stdout, "ERROR %s: C run failed: %s\n", id, g_error[0] != '\0' ? g_error : "?");
         return CMP_ERROR;
     }
+    /* Not under the self-test: a corrupted expectation must be what fails. */
+    if (!mutate && !ghost_clean(stdout, id, "the C run")) ok = 0;
     if (!trace_binary_round_trip(id)) ok = 0;
 
     if (!same_part(want_trace, asx_json_get(&g_run, run, "trace"))) {
@@ -579,6 +633,7 @@ static int cmd_run(const char *path) {
         fprintf(stderr, "asx-conformance: C run failed: %s\n", g_error[0] != '\0' ? g_error : "?");
         return 1;
     }
+    if (!ghost_clean(stderr, path, "the C run")) return 1;
     if (!canonical(&g_run, run, g_a)) {
         fprintf(stderr, "asx-conformance: projection does not fit the output buffer\n");
         return 1;

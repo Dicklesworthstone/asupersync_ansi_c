@@ -11,6 +11,7 @@
  */
 
 #include <asx/asx_status.h>
+#include <asx/core/ghost.h>
 #include <asx/runtime/event.h>
 #include <string.h>
 
@@ -28,6 +29,18 @@
 static asx_event_record g_event_log[ASX_EVENT_LOG_CAPACITY];
 static uint32_t g_event_count;
 static uint64_t g_hash_chain;
+
+/* Planted memory bug (bd-9kll.2.22), compiled only in the gate build
+ * tests/gates/test_conformance_monitors.sh: every logged event reads one
+ * byte past the end of this table and drops the value. No result, trace or
+ * digest changes, so a parity compare passes; AddressSanitizer reports a
+ * global-buffer-overflow. The volatile index keeps the compiler from seeing
+ * it. */
+#ifdef ASX_MUTANT_SANITIZER_OOB_READ
+static uint8_t g_mutant_oob_table[4] = {1u, 2u, 3u, 4u};
+static volatile uint32_t g_mutant_oob_index = 4u;
+static volatile uint8_t g_mutant_oob_sink;
+#endif
 
 /* ------------------------------------------------------------------ */
 /* Internal: hash a single byte into the chain                         */
@@ -70,6 +83,20 @@ void asx_event_log_reset(void) {
 uint32_t asx_event_emit(asx_event_kind kind, uint64_t entity_id, uint64_t parent_id,
                         asx_status status) {
     uint32_t seq = g_event_count;
+
+#ifdef ASX_MUTANT_SANITIZER_OOB_READ
+    g_mutant_oob_sink = g_mutant_oob_table[g_mutant_oob_index];
+#endif
+#ifdef ASX_MUTANT_GHOST_ILLEGAL_TRANSITION
+    /* Planted ghost-monitor bug (bd-9kll.2.21): logging a spawn also tells
+     * the protocol monitor the task left Completed for Created, an illegal
+     * transition. Nothing the runtime does, traces or digests changes, so a
+     * parity compare passes; only a ghost-checked conformance run sees it. */
+    if (kind == ASX_EVENT_TASK_SPAWN) {
+        (void)asx_ghost_check_task_transition((asx_task_id)entity_id, ASX_TASK_COMPLETED,
+                                              ASX_TASK_CREATED);
+    }
+#endif
 
     if (g_event_count < ASX_EVENT_LOG_CAPACITY) {
         asx_event_record *e = &g_event_log[g_event_count];

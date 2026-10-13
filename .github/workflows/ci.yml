@@ -519,6 +519,15 @@ jobs:
         id: run_conformance
         run: make conformance
 
+      # The same corpus under the ghost monitors (bd-9kll.2.21): a scenario
+      # whose run records any protocol or linearity violation fails and the
+      # first is printed. The plain runner above is unchanged. Green says the
+      # scenarios made legal transitions, nothing about memory safety (the
+      # sanitizers job and the fuzz lane's ASan step cover that).
+      - name: "Ghost monitors: executed corpus records zero violations"
+        id: run_conformance_ghost
+        run: make conformance-ghost
+
       # Kernel constants and defaults no fixture observes (cancel-kind
       # tables, budgets, timer limits, supervision defaults, lab batch
       # sizes): the C values against schemas/rust_kernel_constants.json,
@@ -558,6 +567,9 @@ jobs:
           elif [ "${{ steps.run_conformance.outcome }}" = "failure" ]; then
             first_failure="conformance"
             rerun="make conformance"
+          elif [ "${{ steps.run_conformance_ghost.outcome }}" = "failure" ]; then
+            first_failure="conformance-ghost"
+            rerun="make conformance-ghost"
           elif [ "${{ steps.run_rust_constants.outcome }}" = "failure" ]; then
             first_failure="rust-constants"
             rerun="make check-rust-constants"
@@ -583,6 +595,7 @@ jobs:
             --arg ref "${{ github.ref }}" \
             --arg build_outcome "${{ steps.build.outcome }}" \
             --arg conformance_outcome "${{ steps.run_conformance.outcome }}" \
+            --arg ghost_outcome "${{ steps.run_conformance_ghost.outcome }}" \
             --arg codec_outcome "${{ steps.run_codec_equivalence.outcome }}" \
             --arg validate_outcome "${{ steps.validate_manifest.outcome }}" \
             --arg first_failure "$first_failure" \
@@ -597,6 +610,7 @@ jobs:
               steps: [
                 {id: "build", outcome: $build_outcome, rerun: "make build"},
                 {id: "conformance", outcome: $conformance_outcome, rerun: "make conformance"},
+                {id: "conformance-ghost", outcome: $ghost_outcome, rerun: "make conformance-ghost"},
                 {id: "codec-equivalence", outcome: $codec_outcome, rerun: "make codec-equivalence"},
                 {id: "validate-conformance-summaries", outcome: $validate_outcome, rerun: "find tools/ci/artifacts/conformance -name '*.summary.json'"}
               ],
@@ -908,7 +922,9 @@ jobs:
   # ---------------------------------------------------------------------------
   # sanitizers — the unit suite under ASan+UBSan (deterministic and live POSIX)
   # and TSan (live POSIX: blocking pool, cross-thread wakers). Any report
-  # fails the run (bd-9kll.15.5).
+  # fails the run (bd-9kll.15.5). conformance-asan runs every Rust-captured
+  # v2 fixture through an ASan+UBSan runner (bd-9kll.2.22); the generated
+  # scenarios run under it in fuzz-rust-differential, which has their captures.
   # ---------------------------------------------------------------------------
   sanitizers:
     name: "sanitizers (${{ matrix.target }})"
@@ -919,7 +935,7 @@ jobs:
       matrix:
         # test-stress: ASan+UBSan with room for 1024 tasks, so the crowd
         # tests run 1000 producers and ~1000 waiters (bd-9kll.5.10).
-        target: [test-asan, test-asan-live, test-tsan, test-stress]
+        target: [test-asan, test-asan-live, test-tsan, test-stress, conformance-asan]
     steps:
       - uses: actions/checkout@v4
 
@@ -928,7 +944,7 @@ jobs:
       - name: Lower mmap ASLR entropy for the sanitizer runtimes
         run: sudo sysctl -w vm.mmap_rnd_bits=28
 
-      - name: Unit suite (${{ matrix.target }})
+      - name: Sanitizer target (${{ matrix.target }})
         run: make ${{ matrix.target }}
 
   # ---------------------------------------------------------------------------
@@ -1037,6 +1053,21 @@ jobs:
             make fuzz-minimize FUZZ_V2_SEED=9 || true
             exit 1
           fi
+
+      # The scenarios the step above captured, compared by the ghost-checked
+      # runner (bd-9kll.2.21): a run that records a protocol or linearity
+      # violation fails and the first is printed. It reads that run's
+      # capture.log and fixtures, so it needs no second capture.
+      - name: Generated scenarios under the ghost monitors (seed 9, 200 scenarios)
+        run: make fuzz-ghost FUZZ_V2_SEED=9 FUZZ_V2_COUNT=200
+
+      # The same scenarios under an ASan+UBSan runner (bd-9kll.2.22): any
+      # sanitizer report fails the run.
+      - name: Lower mmap ASLR entropy for the sanitizer runtimes
+        run: sudo sysctl -w vm.mmap_rnd_bits=28
+
+      - name: Generated scenarios under ASan+UBSan (seed 9, 200 scenarios)
+        run: make fuzz-asan FUZZ_V2_SEED=9 FUZZ_V2_COUNT=200
 
       - name: Live differential oracle detects and minimizes a runtime mutation
         run: make test-fuzz-differential

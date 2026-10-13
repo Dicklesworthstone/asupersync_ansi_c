@@ -1754,6 +1754,27 @@ conformance: $(CONFORMANCE_RUNNER)
 	@$(TEST_EXEC) $(CONFORMANCE_RUNNER) compare-sweep --known $(CONFORMANCE_SWEEP_KNOWN) $(CONFORMANCE_V2_FIXTURES)
 
 # ---------------------------------------------------------------------------
+# conformance-ghost — the same corpus under the ghost monitors (bd-9kll.2.21).
+# The runner is built against a library with ASX_DEBUG_GHOST on and with
+# -DASX_CONFORMANCE_GHOST_CHECK, which FAILs a scenario whose run recorded any
+# protocol or linearity violation and prints the first. `conformance` and its
+# runner are unchanged. Own BUILD_DIR, so build/ is untouched. A clean run
+# shows legal task/region/obligation transitions and single resolution of every
+# obligation in these scenarios; it does not show the absence of memory
+# errors (conformance-asan) or that the monitors cover every transition.
+# tests/gates/test_conformance_monitors.sh plants a violation and expects this
+# lane to fail where `conformance` passes.
+# ---------------------------------------------------------------------------
+CONFORMANCE_GHOST_DIR ?= $(BUILD_DIR)/conformance-ghost
+
+.PHONY: conformance-ghost
+conformance-ghost:
+	@echo "[asx] conformance-ghost: fixture corpus under the ghost monitors..."
+	@$(MAKE) --no-print-directory conformance BUILD_DIR=$(CONFORMANCE_GHOST_DIR) \
+		CFLAGS='$(CFLAGS) -DASX_DEBUG_GHOST=1 -DASX_CONFORMANCE_GHOST_CHECK=1'
+	@echo "[asx] conformance-ghost: PASS"
+
+# ---------------------------------------------------------------------------
 # fuzz-differential — Rust-vs-C differential fuzzing over DSL v2 (bd-ij9w):
 # twin_run generates FUZZ_V2_COUNT scenarios for FUZZ_V2_SEED, runs them in
 # asupersync's LabRuntime, and the C runtime runs every scenario Rust could
@@ -1807,6 +1828,30 @@ fuzz-minimize: $(CONFORMANCE_RUNNER)
 		$(TWIN_RUN) minimize $(FUZZ_V2_DIR)/scenarios/$$id.json --runner $(CONFORMANCE_RUNNER) \
 			--out $(FUZZ_V2_DIR)/minimized || exit 1; \
 	done
+
+# ---------------------------------------------------------------------------
+# fuzz-ghost — the scenarios the last fuzz-differential run captured (same
+# FUZZ_V2_SEED/FUZZ_V2_COUNT), compared by the ghost-checked runner of
+# conformance-ghost (bd-9kll.2.21). It needs no Rust: it reads that run's
+# capture.log and fixtures. A scenario whose run records a ghost violation
+# FAILs and the first is printed; the generated corpus is where a protocol
+# or linearity break that leaves the projection unchanged is most likely to
+# show.
+# ---------------------------------------------------------------------------
+.PHONY: fuzz-ghost
+fuzz-ghost:
+	@test -f $(FUZZ_V2_DIR)/capture.log || \
+		{ echo "[asx] fuzz-ghost: run make fuzz-differential FUZZ_V2_SEED=$(FUZZ_V2_SEED) FUZZ_V2_COUNT=$(FUZZ_V2_COUNT) first"; exit 1; }
+	@$(MAKE) --no-print-directory $(CONFORMANCE_GHOST_DIR)/bin/asx-conformance \
+		BUILD_DIR=$(CONFORMANCE_GHOST_DIR) \
+		CFLAGS='$(CFLAGS) -DASX_DEBUG_GHOST=1 -DASX_CONFORMANCE_GHOST_CHECK=1'
+	@fixtures=$$(sed -n 's|^PASS \([^ ]*\) .*|$(FUZZ_V2_DIR)/fixtures/\1.json|p' $(FUZZ_V2_DIR)/capture.log); \
+		if [ -z "$$fixtures" ]; then \
+			echo "[asx] fuzz-ghost: FAIL (no captured scenarios in $(FUZZ_V2_DIR)/capture.log)"; exit 1; \
+		fi; \
+		echo "[asx] fuzz-ghost: $$(printf '%s\n' $$fixtures | wc -l | tr -d ' ') generated scenario(s) under the ghost monitors..."; \
+		$(TEST_EXEC) $(CONFORMANCE_GHOST_DIR)/bin/asx-conformance compare $$fixtures
+	@echo "[asx] fuzz-ghost: PASS"
 
 # Reproduce the live oracle's positive and planted-negative controls. The
 # mutation changes runtime budget priority; it is built in a separate tree.
@@ -2065,6 +2110,46 @@ test-tsan:
 		PROFILE=POSIX DETERMINISTIC=0 CFLAGS='$(SAN_TSAN_FLAGS)' \
 		LDFLAGS='$(SAN_TSAN_FLAGS) -lpthread -lrt'
 	@echo "[asx] test-tsan: PASS"
+
+# ---------------------------------------------------------------------------
+# conformance-asan / fuzz-asan — the executed corpus under ASan+UBSan
+# (bd-9kll.2.22), in its own BUILD_DIR:
+#   conformance-asan  every v2 fixture through a sanitized runner (the
+#                     `conformance` recipe: self-test, then compare);
+#   fuzz-asan         the scenarios the last `make fuzz-differential` run
+#                     captured (same FUZZ_V2_SEED/FUZZ_V2_COUNT), compared
+#                     by the same sanitized runner. It needs no Rust: it
+#                     reads that run's capture.log and fixtures.
+# Any sanitizer report fails the run (halt_on_error, no recovery), and so
+# does a FAIL or ERROR. A green run covers the paths these scenarios reach
+# in the R3-class CORE build; it is not a proof of memory safety, and the
+# unit suite's sanitizer lanes (test-asan*) remain the other half.
+# tests/gates/test_conformance_monitors.sh plants an out-of-bounds read
+# (ASX_MUTANT_SANITIZER_OOB_READ) and expects this lane to report it.
+# ---------------------------------------------------------------------------
+CONFORMANCE_ASAN_DIR ?= build/conformance-asan
+CONFORMANCE_ASAN_RUNNER := $(CONFORMANCE_ASAN_DIR)/bin/asx-conformance
+
+.PHONY: conformance-asan fuzz-asan
+conformance-asan:
+	@echo "[asx] conformance-asan: fixture corpus under ASan+UBSan..."
+	@$(SAN_ENV) $(MAKE) --no-print-directory conformance BUILD_DIR=$(CONFORMANCE_ASAN_DIR) \
+		CFLAGS='$(CFLAGS) $(SAN_ASAN_FLAGS)' LDFLAGS='$(LDFLAGS) $(SAN_ASAN_FLAGS)'
+	@echo "[asx] conformance-asan: PASS"
+
+fuzz-asan:
+	@test -f $(FUZZ_V2_DIR)/capture.log || \
+		{ echo "[asx] fuzz-asan: run make fuzz-differential FUZZ_V2_SEED=$(FUZZ_V2_SEED) FUZZ_V2_COUNT=$(FUZZ_V2_COUNT) first"; exit 1; }
+	@$(SAN_ENV) $(MAKE) --no-print-directory $(CONFORMANCE_ASAN_RUNNER) \
+		BUILD_DIR=$(CONFORMANCE_ASAN_DIR) \
+		CFLAGS='$(CFLAGS) $(SAN_ASAN_FLAGS)' LDFLAGS='$(LDFLAGS) $(SAN_ASAN_FLAGS)'
+	@fixtures=$$(sed -n 's|^PASS \([^ ]*\) .*|$(FUZZ_V2_DIR)/fixtures/\1.json|p' $(FUZZ_V2_DIR)/capture.log); \
+		if [ -z "$$fixtures" ]; then \
+			echo "[asx] fuzz-asan: FAIL (no captured scenarios in $(FUZZ_V2_DIR)/capture.log)"; exit 1; \
+		fi; \
+		echo "[asx] fuzz-asan: $$(printf '%s\n' $$fixtures | wc -l | tr -d ' ') generated scenario(s) under ASan+UBSan..."; \
+		$(SAN_ENV) $(TEST_EXEC) $(CONFORMANCE_ASAN_RUNNER) compare $$fixtures
+	@echo "[asx] fuzz-asan: PASS"
 
 # ---------------------------------------------------------------------------
 # Executed parity (bd-9kll.2.9): every Rust-captured v2 fixture runs through
