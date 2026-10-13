@@ -690,7 +690,7 @@ asx_status asx_doctor_probe(asx_runtime *rt, asx_doctor_report *report) {
     memset(&p, 0, sizeof(p));
     probe_clock(report);
     probe_entropy(report);
-    p.have_region = asx_region_open(&p.region) == ASX_OK;
+    p.have_region = asx_region_open(rt, &p.region) == ASX_OK;
     probe_socket_start(&p, report);
     probe_blocking_start(&p);
 

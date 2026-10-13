@@ -924,12 +924,12 @@ static asx_status region_open_with_parent(asx_kernel *k, asx_region_id parent,
     return ASX_OK;
 }
 
-asx_status asx_region_open(asx_region_id *out_id) {
-    return region_open_with_parent(g_kernels[0], ASX_INVALID_ID, out_id);
-}
-
-asx_status asx_region_open_kernel_internal(asx_kernel *k, asx_region_id *out_id) {
-    return region_open_with_parent(k, ASX_INVALID_ID, out_id);
+asx_status asx_region_open(const asx_runtime *rt, asx_region_id *out_id) {
+    /* The tag rt holds names the kernel: a zeroed object is tag 0, the
+     * library's static kernel, which needs no initialization. */
+    if (rt == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (asx_kernel_for_tag(rt->tag) == NULL) return ASX_E_INVALID_STATE;
+    return region_open_with_parent(asx_kernel_for_tag(rt->tag), ASX_INVALID_ID, out_id);
 }
 
 asx_status asx_region_open_child(asx_region_id parent, asx_region_id *out_child) {

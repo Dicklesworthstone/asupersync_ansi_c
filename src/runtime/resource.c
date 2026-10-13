@@ -83,9 +83,19 @@ void asx_kernel_bind_slot_internal(uint16_t tag, void *storage) {
  * storage block (which stays as the runtime left it) and clears the
  * library's. Init binds its own storage first and clears with
  * asx_runtime_clear_internal, which does not rebind. */
-void asx_runtime_reset(void) {
-    asx_kernel_bind_internal(NULL);
-    asx_runtime_clear_internal(g_kernels[0]);
+void asx_kernel_release_internal(uint16_t tag) {
+    if (tag == 0u) {
+        asx_kernel_bind_internal(NULL);
+        asx_runtime_clear_internal(g_kernels[0]);
+        return;
+    }
+    asx_runtime_clear_internal(g_kernels[tag]);
+    g_kernels[tag] = NULL;
+}
+
+void asx_runtime_reset(asx_runtime *rt) {
+    if (rt == NULL || asx_kernel_for_tag(rt->tag) == NULL) return;
+    asx_kernel_release_internal(rt->tag);
 }
 
 /* ------------------------------------------------------------------ */

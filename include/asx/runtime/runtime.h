@@ -96,12 +96,12 @@ typedef struct asx_co_state {
  * Region lifecycle
  * ------------------------------------------------------------------- */
 
-/* Open a new region.
+/* Open a new region in a runtime.
  *
- * Preconditions: out_id must not be NULL.
+ * Preconditions: rt (initialized, or zeroed for the static kernel, tag 0), out_id non-NULL.
  * Postconditions: on success, *out_id holds a valid region handle in OPEN state.
- * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if out_id is NULL,
- *   ASX_E_RESOURCE_EXHAUSTED if the region arena is full.
+ * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if rt or out_id is NULL,
+ *   ASX_E_INVALID_STATE if no runtime holds rt's tag (reset), ASX_E_RESOURCE_EXHAUSTED if full.
  * Slots: a CLOSED region's slot is reused (its handle then goes stale) once
  *   no task record of it remains: a completed task whose outcome has not been
  *   joined keeps the slot, so its join still works after the region closed.
@@ -109,7 +109,7 @@ typedef struct asx_co_state {
  *   or asx_region_drain.
  * Thread-safety: not thread-safe; single-threaded mode only.
  * See: API_MISUSE_CATALOG.md § Region Lifecycle. */
-ASX_API ASX_MUST_USE asx_status asx_region_open(asx_region_id *out_id);
+ASX_API ASX_MUST_USE asx_status asx_region_open(const asx_runtime *rt, asx_region_id *out_id);
 
 /* Open a child region under an existing OPEN parent region.
  *
@@ -1398,13 +1398,13 @@ ASX_API ASX_MUST_USE asx_status asx_region_drain_progress(asx_region_id id,
 ASX_API ASX_MUST_USE asx_status asx_quiescence_check_detailed(asx_region_id id,
                                                               asx_quiescence_report *out);
 
-/* Reset all runtime state (test support only).
- * Clears lifecycle arenas plus global scheduler/parallel/channel/timer/
- * trace/telemetry/adapter/fault-injection diagnostic state and the hooks.
- * The runtime object that was initialized is not any more, and
- * asx_runtime_init may start another.
+/* Reset a runtime's state (test support only).
+ * Clears the kernel `rt` names (a zeroed object is the static kernel, tag 0):
+ * arenas, scheduler, timers, trace; with no other runtime live, also the
+ * process-wide channel/adapter/diagnostic state and the hooks. The object is
+ * not initialized any more. NULL, or a tag no runtime holds, does nothing.
  * Not for production use. */
-ASX_API void asx_runtime_reset(void);
+ASX_API void asx_runtime_reset(asx_runtime *rt);
 
 /* The region a task belongs to. Returns ASX_OK, ASX_E_INVALID_ARGUMENT if
  * out is NULL, or a lookup error for a bad handle. */

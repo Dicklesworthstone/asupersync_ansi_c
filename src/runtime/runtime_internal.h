@@ -513,9 +513,9 @@ void asx_kernel_bind_internal(void *storage);
  * cleared by asx_runtime_clear_internal. */
 void asx_kernel_bind_slot_internal(uint16_t tag, void *storage);
 
-/* Open a root region in kernel `k` (the public asx_region_open is kernel
- * 0's until it takes the runtime). */
-asx_status asx_region_open_kernel_internal(asx_kernel *k, asx_region_id *out_id);
+/* End the runtime of `tag` (asx_runtime_reset, shutdown, a failed init): tag 0
+ * returns to the static block, cleared; another slot is cleared, unregistered. */
+void asx_kernel_release_internal(uint16_t tag);
 
 /* Second runtimes (K18): whether the still process-wide subsystem holds
  * state a second runtime would share. Each is defined with its subsystem;

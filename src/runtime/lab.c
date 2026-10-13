@@ -279,7 +279,7 @@ uint64_t asx_lab_random_u64(asx_lab *lab) {
 asx_status asx_lab_open_region(asx_lab *lab, asx_region_id *out_id) {
     if (lab == NULL || out_id == NULL) return ASX_E_INVALID_ARGUMENT;
     if (!lab->initialized) return ASX_E_INVALID_STATE;
-    return asx_region_open(out_id);
+    return asx_region_open(&lab->rt, out_id);
 }
 
 /* Oracle implementations are in replay.c alongside the existing

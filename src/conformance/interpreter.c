@@ -6237,7 +6237,7 @@ static asx_status conformance_run(const asx_json_doc *in, uint32_t scenario, asx
 
     /* Setup (DSL §2): root, regions, tasks in array order. */
     g_budget = &budget;
-    st = asx_region_open(&root);
+    st = asx_region_open(&g_rt, &root);
     g_root = root;
     if (st != ASX_OK || !add_region("root", NULL, root)) {
         it_fail("cannot open the root region", NULL);

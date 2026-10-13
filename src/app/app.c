@@ -171,7 +171,7 @@ asx_status asx_app_init_checked(asx_app *app, const asx_app_config *config,
     if (st != ASX_OK) return st;
 
     /* Open root region */
-    st = asx_region_open(&app->region);
+    st = asx_region_open(&app->runtime, &app->region);
     if (st != ASX_OK) {
         asx_runtime_shutdown(&app->runtime);
         return st;

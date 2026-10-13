@@ -354,18 +354,6 @@ static asx_status runtime_admit_second(const asx_runtime_config *config,
     return ASX_OK;
 }
 
-/* Unbind the runtime of `tag` after a failed init or at shutdown: kernel 0
- * goes back to the library's static block, any other slot is cleared and
- * left unregistered (its storage stays as the runtime left it). */
-static void runtime_unbind(uint16_t tag) {
-    if (tag == 0u) {
-        asx_runtime_reset();
-        return;
-    }
-    asx_runtime_clear_internal(g_kernels[tag]);
-    g_kernels[tag] = NULL;
-}
-
 asx_status asx_runtime_init_checked(asx_runtime *rt, const asx_runtime_config *config,
                                     const asx_runtime_hooks *hooks,
                                     uint64_t application_fingerprint) {
@@ -420,7 +408,7 @@ asx_status asx_runtime_init_checked(asx_runtime *rt, const asx_runtime_config *c
     if (!shared) {
         st = asx_runtime_set_hooks(hooks);
         if (st != ASX_OK) {
-            runtime_unbind(tag); /* a failed init leaves no binding */
+            asx_kernel_release_internal(tag); /* a failed init leaves no binding */
             return st;
         }
         g_active_io_backend = config->io_backend;
@@ -436,7 +424,7 @@ asx_status asx_runtime_init_checked(asx_runtime *rt, const asx_runtime_config *c
         st = asx_io_driver_init();
         if (st != ASX_OK && st != ASX_E_PERMISSION_DENIED) {
             g_active_io_backend = ASX_IO_BACKEND_GHOST;
-            runtime_unbind(tag);
+            asx_kernel_release_internal(tag);
             return st;
         }
     }
@@ -448,7 +436,7 @@ asx_status asx_runtime_init_checked(asx_runtime *rt, const asx_runtime_config *c
         if (st != ASX_OK && st != ASX_E_PERMISSION_DENIED) {
             asx_io_driver_shutdown();
             g_active_io_backend = ASX_IO_BACKEND_GHOST;
-            runtime_unbind(tag);
+            asx_kernel_release_internal(tag);
             return st;
         }
     }
@@ -558,7 +546,7 @@ void asx_runtime_shutdown(asx_runtime *rt) {
             asx_blocking_pool_shutdown();
 #endif
         }
-        runtime_unbind(rt->tag);
+        asx_kernel_release_internal(rt->tag);
     }
     memset(rt, 0, sizeof(*rt));
 }

@@ -595,7 +595,7 @@ ASX_API ASX_MUST_USE asx_status asx_actor_system_push(asx_actor_handle actor,
  * queued calls are aborted. */
 ASX_API void asx_actor_task_finished(asx_task_id task);
 
-/* Reset all actor state. Called by asx_runtime_reset(). */
+/* Reset all actor state. Called by asx_runtime_reset. */
 ASX_API void asx_actor_reset(void);
 
 #ifdef __cplusplus
