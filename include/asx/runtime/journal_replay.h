@@ -93,7 +93,8 @@ typedef enum {
     ASX_REPLAY_E_CORRUPT = 3,        /* header, seq, chain or END totals broken */
     ASX_REPLAY_E_UNSUPPORTED = 4,    /* a record the replay cannot serve */
     ASX_REPLAY_E_DIVERGED = 5,       /* a request differs from the next record */
-    ASX_REPLAY_E_EXHAUSTED = 6       /* a request after the last record */
+    ASX_REPLAY_E_EXHAUSTED = 6,      /* a request after the last record */
+    ASX_REPLAY_E_RUNTIME = 7         /* asx_journal_replay could not start the run */
 } asx_replay_error;
 
 /* The first failure of a replay. */
@@ -276,6 +277,31 @@ ASX_API int asx_replay_serve_process_read(uint64_t handle, uint8_t which, uint32
  * had: 1 when `recorded` equals `actual`, else the replay fails with
  * ASX_REPLAY_E_DIVERGED at the record last served, naming `what`, and 0. */
 ASX_API int asx_replay_check_handle(uint64_t recorded, uint64_t actual, const char *what);
+
+/* -------------------------------------------------------------------
+ * One call: replay a program against a stream
+ * ------------------------------------------------------------------- */
+
+/* The program a replay runs: the caller's own code, which must make the
+ * boundary calls the recording's did, in the same order, through the
+ * runtime asx_journal_replay starts for it. Its status is reported, not
+ * judged. */
+typedef asx_status (*asx_replay_program_fn)(void *user);
+
+/* Open `bytes` (identity, integrity and replayability as asx_replay_open),
+ * initialize a runtime with `config` (NULL: the defaults) over the replay's
+ * hooks, activate the adapters, run `program(user)`, shut the runtime down
+ * and finish. Returns ASX_REPLAY_OK when the stream was accepted, the
+ * program asked for exactly its records and no more, or the first error
+ * with *report filled (report may be NULL). ASX_REPLAY_E_RUNTIME with
+ * *program_status set when the runtime could not start; *program_status
+ * (may be NULL) is otherwise what `program` returned. Not usable while a
+ * runtime is initialized or a journal is active. */
+ASX_API asx_replay_error asx_journal_replay(const uint8_t *bytes, size_t len,
+                                            const asx_replay_identity *identity,
+                                            const asx_runtime_config *config,
+                                            asx_replay_program_fn program, void *user,
+                                            asx_status *program_status, asx_replay_report *report);
 
 #ifdef __cplusplus
 }

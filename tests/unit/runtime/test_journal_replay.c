@@ -1613,6 +1613,57 @@ TEST(a_blocking_job_is_run_again_where_its_completion_was_recorded) {
     ASSERT_EQ(got.digest, rec.digest);
 }
 
+/* A program that asks for entropy first, where the stream has a listen. */
+static asx_status entropy_first_program(void *obs) {
+    uint64_t v = 0u;
+    (void)obs;
+    (void)asx_runtime_random_u64(&v);
+    return ASX_OK;
+}
+
+TEST(asx_journal_replay_runs_a_program_against_a_stream_in_one_call) {
+    asx_replay_report rep;
+    asx_replay_identity id = ours();
+    asx_status ps = ASX_E_INVALID_STATE;
+    tcp_obs rec;
+    tcp_obs got;
+    tcp_obs other;
+
+    ASSERT_TRUE(record_program(tcp_program, &rec));
+    ASSERT_EQ(rec.run_st, ASX_OK);
+
+    /* The program, against its own stream: accepted, same results. */
+    memset(&rep, 0xA5, sizeof(rep));
+    ASSERT_EQ((int)asx_journal_replay(g_out, g_out_len, &id, NULL, tcp_program, &got, &ps, &rep),
+              (int)ASX_REPLAY_OK);
+    ASSERT_EQ(ps, ASX_OK);
+    ASSERT_EQ((int)rep.error, (int)ASX_REPLAY_OK);
+    ASSERT_EQ(got.port, rec.port);
+    ASSERT_EQ(got.reply_len, rec.reply_len);
+    ASSERT_EQ(memcmp(got.reply, rec.reply, rec.reply_len), 0);
+    ASSERT_EQ(got.digest, rec.digest);
+
+    /* Another program: refused at its first request, naming the kinds. */
+    ASSERT_EQ((int)asx_journal_replay(g_out, g_out_len, &id, NULL, entropy_first_program, &other,
+                                      &ps, &rep),
+              (int)ASX_REPLAY_E_DIVERGED);
+    ASSERT_EQ(rep.actual_kind, (uint8_t)ASX_JOURNAL_KIND_ENTROPY);
+    ASSERT_STR_EQ(rep.what, "kind");
+
+    /* A stream of another build is refused before any program runs. */
+    id.build_hash ^= 1u;
+    ps = ASX_E_INVALID_STATE;
+    ASSERT_EQ((int)asx_journal_replay(g_out, g_out_len, &id, NULL, tcp_program, &got, &ps, &rep),
+              (int)ASX_REPLAY_E_BUILD_MISMATCH);
+    ASSERT_EQ(ps, ASX_OK);
+    ASSERT_STR_EQ(rep.what, "build_hash");
+
+    /* No program is a run that could not start. */
+    ASSERT_EQ((int)asx_journal_replay(g_out, g_out_len, NULL, NULL, NULL, NULL, &ps, &rep),
+              (int)ASX_REPLAY_E_RUNTIME);
+    ASSERT_EQ(ps, ASX_E_INVALID_ARGUMENT);
+}
+
 TEST(a_blocking_result_that_differs_from_the_recorded_one_is_reported_at_its_seq) {
     asx_replay rp;
     asx_replay_report rep;
@@ -1670,6 +1721,7 @@ int main(void) {
     RUN_TEST(a_spawn_of_another_command_is_a_divergence_at_the_spawn_record);
     RUN_TEST(a_tcp_round_trip_replays_with_no_socket_opened);
     RUN_TEST(a_blocking_job_is_run_again_where_its_completion_was_recorded);
+    RUN_TEST(asx_journal_replay_runs_a_program_against_a_stream_in_one_call);
     RUN_TEST(a_blocking_result_that_differs_from_the_recorded_one_is_reported_at_its_seq);
 #endif
 

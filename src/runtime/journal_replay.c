@@ -15,6 +15,7 @@
 
 #include <asx/runtime/blocking.h>
 #include <asx/runtime/journal_replay.h>
+#include <asx/runtime/rt.h>
 #include <string.h>
 
 /* The native adapters exist, and a live build asks them, only here. */
@@ -948,4 +949,63 @@ int asx_replay_check_handle(uint64_t recorded, uint64_t actual, const char *what
     fail(r, ASX_REPLAY_E_DIVERGED, r->last_seq, r->last_trace_seq, r->last_kind, r->last_kind,
          what);
     return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* One call                                                            */
+/* ------------------------------------------------------------------ */
+
+/* The run could not be started: report it as such, with the status. */
+static asx_replay_error replay_run_failed(asx_replay_report *report, asx_status st,
+                                          asx_status *program_status, const char *what) {
+    if (program_status != NULL) *program_status = st;
+    if (report != NULL) {
+        memset(report, 0, sizeof(*report));
+        report_set(report, ASX_REPLAY_E_RUNTIME, 0u, 0u, 0u, 0u, 0u, what);
+    }
+    return ASX_REPLAY_E_RUNTIME;
+}
+
+asx_replay_error asx_journal_replay(const uint8_t *bytes, size_t len,
+                                    const asx_replay_identity *identity,
+                                    const asx_runtime_config *config, asx_replay_program_fn program,
+                                    void *user, asx_status *program_status,
+                                    asx_replay_report *report) {
+    asx_replay r;
+    asx_runtime rt;
+    asx_runtime_hooks hooks;
+    asx_runtime_config cfg;
+    asx_replay_error err;
+    asx_status st;
+
+    if (program_status != NULL) *program_status = ASX_OK;
+    if (program == NULL) {
+        return replay_run_failed(report, ASX_E_INVALID_ARGUMENT, program_status, "no program");
+    }
+    err = asx_replay_open(&r, bytes, len, identity, report);
+    if (err != ASX_REPLAY_OK) return err;
+
+    st = asx_runtime_hooks_init(&hooks);
+    if (st == ASX_OK) st = asx_replay_hooks(&r, &hooks);
+    if (st != ASX_OK) return replay_run_failed(report, st, program_status, "replay hooks");
+    if (config != NULL) {
+        cfg = *config;
+    } else {
+        st = asx_runtime_config_init(&cfg);
+        if (st != ASX_OK) return replay_run_failed(report, st, program_status, "runtime config");
+    }
+    st = asx_replay_activate(&r);
+    if (st != ASX_OK) return replay_run_failed(report, st, program_status, "replay activation");
+    st = asx_runtime_init(&rt, &cfg, &hooks);
+    if (st != ASX_OK) {
+        asx_replay_deactivate();
+        return replay_run_failed(report, st, program_status, "runtime initialization");
+    }
+
+    st = program(user);
+    /* Shutdown still makes boundary calls the recording made: serve them. */
+    asx_runtime_shutdown(&rt);
+    asx_replay_deactivate();
+    if (program_status != NULL) *program_status = st;
+    return asx_replay_finish(&r, report);
 }
