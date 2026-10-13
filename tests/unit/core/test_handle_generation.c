@@ -248,6 +248,10 @@ TEST(handle_of_another_runtime_is_not_found_through_a_coincident_slot) {
     drain_budget = asx_budget_infinite();
     ASSERT_EQ(asx_region_cancel(foreign_region, &req, NULL), ASX_E_NOT_FOUND);
     ASSERT_EQ(asx_region_drain(foreign_region, &drain_budget), ASX_E_NOT_FOUND);
+    /* A scheduler run of it is refused where its kernel is taken, before the
+     * lab or sweep walk reads one (the analyzer's NULL-kernel paths). */
+    ASSERT_EQ(asx_scheduler_run(foreign_region, &drain_budget), ASX_E_NOT_FOUND);
+    ASSERT_EQ(asx_scheduler_run_until_idle(foreign_region, &drain_budget), ASX_E_NOT_FOUND);
 
     /* The runtime's own handles are untouched by all of it. */
     ASSERT_EQ(asx_region_get_state(rid, &rstate), ASX_OK);

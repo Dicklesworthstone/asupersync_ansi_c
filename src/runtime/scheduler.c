@@ -1919,7 +1919,7 @@ static asx_status sched_run(asx_region_id region, asx_budget *budget, int advanc
 
     if (budget == NULL) return ASX_E_INVALID_ARGUMENT;
 
-    st = asx_region_slot_lookup(region, &root);
+    st = k != NULL ? asx_region_slot_lookup(region, &root) : ASX_E_NOT_FOUND;
     if (st != ASX_OK) return st;
 
     /* Reset event log for this scheduler invocation */
