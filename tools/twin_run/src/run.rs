@@ -33,6 +33,8 @@ use asupersync::supervision::{
     SupervisorBuilder,
 };
 use asupersync::sync as asx_sync;
+use asupersync::time::delay_queue::Key as DelayKey;
+use asupersync::time::{DelayQueue, Interval, MissedTickBehavior, interval, interval_at};
 use asupersync::trace::{CompactTaskId, TraceData, TraceEventKind};
 use asupersync::{Budget, CancelKind, CancelReason, Cx, RegionId, TaskId, Time};
 use serde_json::{Value, json};
@@ -517,6 +519,12 @@ struct Local {
     /// then by their `as` name (DSL §3.6). A clone drops with the task's
     /// other endpoints; the order between receivers is not observable.
     watch_clones: BTreeMap<String, BTreeMap<String, watch::Receiver<u64>>>,
+    /// Intervals and DelayQueues this task made, by name, and the keys the
+    /// queues' inserts returned, by (queue, key name) (DSL §3.9). A key's name
+    /// stays bound after its entry expired or was removed.
+    intervals: BTreeMap<String, Interval>,
+    delay_queues: BTreeMap<String, DelayQueue<u64>>,
+    delay_keys: BTreeMap<(String, String), DelayKey>,
     /// GenServers this task spawned, by name (DSL §3.8).
     servers: BTreeMap<String, Server>,
     /// Supervisors this task spawned, by name, joined or not (DSL §3.8):
@@ -983,6 +991,15 @@ impl Local {
         self.mpsc_rx
             .get_mut(channel)
             .ok_or_else(|| format!("this task does not own the receiver of {channel:?}"))
+    }
+
+    /// The key a DelayQueue step names (DSL §3.9): bound when its insert ran,
+    /// and still bound once its entry is dead.
+    fn delay_key(&self, queue: &str, key: &str) -> RunResult<DelayKey> {
+        self.delay_keys
+            .get(&(queue.to_string(), key.to_string()))
+            .copied()
+            .ok_or_else(|| format!("delay queue {queue:?} has no key {key:?}"))
     }
 
     /// The watch receiver a step selects (DSL §3.6): the clone its `receiver`
@@ -1789,6 +1806,145 @@ fn exec_sync(
                 .insert(alias, clone);
             observe(&ctx.shared, me, idx, label, "ASX_OK", Value::Null);
         }
+        // Interval and DelayQueue (DSL §3.9): held by the task under a name,
+        // none of them suspends or registers a timer.
+        "interval_new" => {
+            let name = str_field(step, "as")?.to_string();
+            let period_ns = u64_field(step, "period_ns")?;
+            if period_ns == 0 {
+                return Err("interval_new with a zero period (Rust panics)".to_string());
+            }
+            let period = Duration::from_nanos(period_ns);
+            let mut iv = match step.get("start_ns").and_then(Value::as_u64) {
+                Some(start) => interval_at(Time::from_nanos(start), period),
+                None => interval(cx.now(), period),
+            };
+            iv.set_missed_tick_behavior(match step.get("behavior").and_then(Value::as_str) {
+                None | Some("burst") => MissedTickBehavior::Burst,
+                Some("delay") => MissedTickBehavior::Delay,
+                Some("skip") => MissedTickBehavior::Skip,
+                Some(other) => return Err(format!("interval_new behavior {other:?}")),
+            });
+            if local.intervals.insert(name.clone(), iv).is_some() {
+                return Err(format!("interval {name:?} is named twice"));
+            }
+            observe(&ctx.shared, me, idx, label, "ASX_OK", Value::Null);
+        }
+        "interval_tick" => {
+            let name = str_field(step, "interval")?;
+            let iv = local
+                .intervals
+                .get_mut(name)
+                .ok_or_else(|| format!("this task holds no interval {name:?}"))?;
+            // `Some(t)` is a due tick at its own deadline; `None` leaves the
+            // deadline unmoved and is reported as `due: false`.
+            let (time, due) = match iv.poll_tick(cx.now()) {
+                Some(t) => (t, true),
+                None => (iv.deadline(), false),
+            };
+            let value = json!({"time_ns": time.as_nanos(), "due": due});
+            observe(&ctx.shared, me, idx, label, "ASX_OK", value);
+        }
+        "delay_queue_new" => {
+            let name = str_field(step, "as")?.to_string();
+            if local
+                .delay_queues
+                .insert(name.clone(), DelayQueue::new())
+                .is_some()
+            {
+                return Err(format!("delay queue {name:?} is named twice"));
+            }
+            observe(&ctx.shared, me, idx, label, "ASX_OK", Value::Null);
+        }
+        "delay_queue_insert" | "delay_queue_insert_at" => {
+            let queue = str_field(step, "queue")?.to_string();
+            let key_name = str_field(step, "as")?.to_string();
+            let value = u64_field(step, "value")?;
+            if local
+                .delay_keys
+                .contains_key(&(queue.clone(), key_name.clone()))
+            {
+                return Err(format!(
+                    "key {key_name:?} of queue {queue:?} is named twice"
+                ));
+            }
+            let q = local
+                .delay_queues
+                .get_mut(&queue)
+                .ok_or_else(|| format!("this task holds no delay queue {queue:?}"))?;
+            let key = if op == "delay_queue_insert" {
+                q.insert(value, Duration::from_nanos(u64_field(step, "timeout_ns")?))
+            } else {
+                q.insert_at(value, Time::from_nanos(u64_field(step, "deadline_ns")?))
+            };
+            local.delay_keys.insert((queue, key_name), key);
+            observe(&ctx.shared, me, idx, label, "ASX_OK", Value::Null);
+        }
+        "delay_queue_reset" | "delay_queue_reset_at" => {
+            let queue = str_field(step, "queue")?;
+            let key = local.delay_key(queue, str_field(step, "key")?)?;
+            let q = local
+                .delay_queues
+                .get_mut(queue)
+                .ok_or_else(|| format!("this task holds no delay queue {queue:?}"))?;
+            if !q.contains(&key) {
+                return Err("delay_queue_reset of a dead key (Rust panics)".to_string());
+            }
+            if op == "delay_queue_reset" {
+                q.reset(&key, Duration::from_nanos(u64_field(step, "timeout_ns")?));
+            } else {
+                q.reset_at(&key, Time::from_nanos(u64_field(step, "deadline_ns")?));
+            }
+            observe(&ctx.shared, me, idx, label, "ASX_OK", Value::Null);
+        }
+        "delay_queue_remove" => {
+            let queue = str_field(step, "queue")?;
+            let key = local.delay_key(queue, str_field(step, "key")?)?;
+            let q = local
+                .delay_queues
+                .get_mut(queue)
+                .ok_or_else(|| format!("this task holds no delay queue {queue:?}"))?;
+            match q.try_remove(&key) {
+                Some(expired) => {
+                    let value = json!({"value": *expired.get_ref(), "deadline_ns": expired.deadline().as_nanos()});
+                    observe(&ctx.shared, me, idx, label, "ASX_OK", value);
+                }
+                None => observe(&ctx.shared, me, idx, label, "ASX_E_NOT_FOUND", Value::Null),
+            }
+        }
+        "delay_queue_contains" | "delay_queue_deadline" | "delay_queue_len" => {
+            let queue = str_field(step, "queue")?;
+            let value = if op == "delay_queue_len" {
+                let q = local
+                    .delay_queues
+                    .get(queue)
+                    .ok_or_else(|| format!("this task holds no delay queue {queue:?}"))?;
+                json!(q.len() as u64)
+            } else {
+                let key = local.delay_key(queue, str_field(step, "key")?)?;
+                let q = local
+                    .delay_queues
+                    .get(queue)
+                    .ok_or_else(|| format!("this task holds no delay queue {queue:?}"))?;
+                if op == "delay_queue_contains" {
+                    json!(q.contains(&key))
+                } else if q.contains(&key) {
+                    json!(q.deadline(&key).as_nanos())
+                } else {
+                    return Err("delay_queue_deadline of a dead key (Rust panics)".to_string());
+                }
+            };
+            observe(&ctx.shared, me, idx, label, "ASX_OK", value);
+        }
+        "delay_queue_clear" => {
+            let queue = str_field(step, "queue")?;
+            local
+                .delay_queues
+                .get_mut(queue)
+                .ok_or_else(|| format!("this task holds no delay queue {queue:?}"))?
+                .clear();
+            observe(&ctx.shared, me, idx, label, "ASX_OK", Value::Null);
+        }
         // A masked step inside masked nests; each inner observation's op is
         // its path, e.g. masked/2/masked/1/checkpoint (DSL §3.2).
         "masked" => {
@@ -2027,6 +2183,38 @@ async fn exec_step(
             match accepted {
                 Ok(v) => observe(&ctx.shared, me, idx, op, "ASX_OK", json!(v)),
                 Err(e) => observe(&ctx.shared, me, idx, op, watch_recv_status(e), Value::Null),
+            }
+        }
+        // DelayQueue::poll_expired once (time/delay_queue.rs:260, DSL §3.9).
+        // It needs a task Context; the scenarios poll only after sleeping
+        // past an entry's deadline, so it never returns Pending (which would
+        // register the queue's own Sleep, a timer C does not create).
+        "delay_queue_poll" => {
+            let queue = str_field(step, "queue")?;
+            let q = local
+                .delay_queues
+                .get_mut(queue)
+                .ok_or_else(|| format!("this task holds no delay queue {queue:?}"))?;
+            let polled =
+                std::future::poll_fn(|task_cx| std::task::Poll::Ready(q.poll_expired(task_cx)))
+                    .await;
+            match polled {
+                std::task::Poll::Ready(Some(expired)) => {
+                    let value = json!({
+                        "value": *expired.get_ref(),
+                        "deadline_ns": expired.deadline().as_nanos(),
+                    });
+                    observe(&ctx.shared, me, idx, op, "ASX_OK", value);
+                }
+                std::task::Poll::Ready(None) => {
+                    observe(&ctx.shared, me, idx, op, "ASX_E_CHANNEL_EMPTY", Value::Null);
+                }
+                std::task::Poll::Pending => {
+                    return Err(
+                        "delay_queue_poll with nothing due: sleep until an entry is due first"
+                            .to_string(),
+                    );
+                }
             }
         }
         // Blocking sync steps (DSL §3.7).
