@@ -1481,8 +1481,8 @@ formal-cbmc: $(FORMAL_CBMC_BINS)
 FORMAL_ALG_DIR := tests/formal/algebraic
 FORMAL_ALG_SRCS := $(wildcard $(FORMAL_ALG_DIR)/test_*.c)
 
-$(TEST_DIR)/formal/test_outcome_lattice: $(FORMAL_ALG_DIR)/test_outcome_lattice.c src/core/outcome.c | $(TEST_DIR)/formal
-	$(CC) -std=c99 -Wall -Wextra -Wpedantic -Werror $(INC_FLAGS) $(PROFILE_DEF) $(CODEC_DEF) $(DET_DEF) -o $@ $< src/core/outcome.c
+$(TEST_DIR)/formal/test_outcome_lattice: $(FORMAL_ALG_DIR)/test_outcome_lattice.c $(LIB_A) | $(TEST_DIR)/formal
+	$(CC) -std=c99 -Wall -Wextra -Wpedantic -Werror $(INC_FLAGS) $(PROFILE_DEF) $(CODEC_DEF) $(DET_DEF) -o $@ $< $(LIB_A)
 
 $(TEST_DIR)/formal/test_cancel_monotone: $(FORMAL_ALG_DIR)/test_cancel_monotone.c $(LIB_A) | $(TEST_DIR)/formal
 	$(CC) -std=c99 -Wall -Wextra -Wpedantic -Werror $(INC_FLAGS) $(PROFILE_DEF) $(CODEC_DEF) $(DET_DEF) -o $@ $< $(LIB_A)
