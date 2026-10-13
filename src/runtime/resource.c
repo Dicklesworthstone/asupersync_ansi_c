@@ -89,13 +89,13 @@ void asx_kernel_release_internal(uint16_t tag) {
         asx_runtime_clear_internal(g_kernels[0]);
         return;
     }
+    if (tag >= ASX_MAX_RUNTIMES || g_kernels[tag] == NULL) return;
     asx_runtime_clear_internal(g_kernels[tag]);
     g_kernels[tag] = NULL;
 }
 
 void asx_runtime_reset(asx_runtime *rt) {
-    if (rt == NULL || asx_kernel_for_tag(rt->tag) == NULL) return;
-    asx_kernel_release_internal(rt->tag);
+    if (rt != NULL) asx_kernel_release_internal(rt->tag);
 }
 
 /* ------------------------------------------------------------------ */
