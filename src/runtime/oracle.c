@@ -634,6 +634,144 @@ static asx_oracle_result check_channel_atomicity(const asx_kernel *k) {
                           "every channel's permits, messages and senders are accounted for", 0u);
 }
 
+/* Rust's down_order: DOWN notifications are delivered in a deterministic
+ * order, by completion time, then by monitored task and reference
+ * (DownBatch::into_sorted). The monitor module keeps the order it fired in
+ * (asx_monitor_delivery_get_internal), and a delivery that fired right after
+ * another breaks it if its completion time is earlier, or if it is a monitor
+ * of the same exit with a reference not above the one before it
+ * (asx_monitor_task_finished fires the lowest reference left each time). */
+const char *asx_monitor_delivery_defect_internal(const asx_monitor_delivery *prev,
+                                                 const asx_monitor_delivery *next) {
+    if (next->vt < prev->vt) {
+        return "a DOWN was delivered with an earlier completion time than one before it";
+    }
+    if (asx_handle_same_entity(next->monitored, prev->monitored) && next->ref <= prev->ref) {
+        return "the monitors of one exit were not delivered by ascending reference";
+    }
+    return NULL;
+}
+
+/* The monitor table is the monitor module's and process-wide: the kernel is
+ * not read. */
+static asx_oracle_result check_down_order(const asx_kernel *k) {
+    asx_monitor_delivery prev;
+    uint32_t n = asx_monitor_delivery_count_internal();
+    uint32_t bad = 0;
+    uint32_t i;
+    const char *first = NULL;
+    (void)k;
+    if (n < 2u || !asx_monitor_delivery_get_internal(0u, &prev)) {
+        return oracle_verdict(ASX_ORACLE_PASS, "down_order", "DOWNs were delivered in order", 0u);
+    }
+    for (i = 1u; i < n; i++) {
+        asx_monitor_delivery next;
+        const char *why;
+        /* ASX_CHECKPOINT_WAIVER("bounded: n <= ASX_MONITOR_CAPACITY") */
+        if (!asx_monitor_delivery_get_internal(i, &next)) break;
+        why = asx_monitor_delivery_defect_internal(&prev, &next);
+        if (why != NULL) {
+            bad++;
+            if (first == NULL) first = why;
+        }
+        prev = next;
+    }
+    if (bad != 0u) return oracle_verdict(ASX_ORACLE_FAIL, "down_order", first, bad);
+    return oracle_verdict(ASX_ORACLE_PASS, "down_order", "DOWNs were delivered in order", 0u);
+}
+
+/* Rust's reply_linearity: a Spork reply is a permit that resolves exactly
+ * once. C has no reply-specific obligation: a call's reply is a SEND_PERMIT
+ * obligation, so the property is checked for every obligation, which is the
+ * superset. The trace ring has each reservation and each resolution (commit,
+ * abort, leak) with the obligation's handle: an obligation that resolved
+ * twice is a violation, and so is a resolution with no reservation before it
+ * (checked only while the ring dropped nothing). Obligation slots are few,
+ * so one pass keeps a state per slot, keyed by the handle's generation. */
+static asx_oracle_result check_reply_linearity(const asx_kernel *k) {
+    uint16_t gen[ASX_MAX_OBLIGATIONS];
+    uint8_t seen[ASX_MAX_OBLIGATIONS]; /* 0 none, 1 reserved, 2 resolved */
+    uint32_t events = asx_trace_event_count();
+    int ring_whole = asx_trace_dropped() == 0u;
+    uint32_t twice = 0;
+    uint32_t unreserved = 0;
+    uint32_t i;
+    (void)k;
+    memset(gen, 0, sizeof(gen));
+    memset(seen, 0, sizeof(seen));
+    for (i = 0; i < events; i++) {
+        asx_trace_event e;
+        uint32_t slot;
+        uint16_t g;
+        /* ASX_CHECKPOINT_WAIVER("bounded: events <= ASX_TRACE_CAPACITY") */
+        if (asx_trace_event_get(i, &e) == 0) break;
+        if (e.kind != ASX_TRACE_OBLIGATION_RESERVE && e.kind != ASX_TRACE_OBLIGATION_COMMIT &&
+            e.kind != ASX_TRACE_OBLIGATION_ABORT && e.kind != ASX_TRACE_OBLIGATION_LEAK) {
+            continue;
+        }
+        slot = (uint32_t)asx_handle_slot(e.entity_id);
+        g = asx_handle_generation(e.entity_id);
+        if (slot >= (uint32_t)ASX_MAX_OBLIGATIONS) continue;
+        if (e.kind == ASX_TRACE_OBLIGATION_RESERVE) {
+            gen[slot] = g;
+            seen[slot] = 1u;
+            continue;
+        }
+        if (gen[slot] == g && seen[slot] == 2u) {
+            twice++;
+        } else if ((gen[slot] != g || seen[slot] == 0u) && ring_whole) {
+            unreserved++;
+        }
+        gen[slot] = g;
+        seen[slot] = 2u;
+    }
+    if (twice != 0u) {
+        return oracle_verdict(ASX_ORACLE_FAIL, "reply_linearity",
+                              "an obligation was resolved more than once", twice + unreserved);
+    }
+    if (unreserved != 0u) {
+        return oracle_verdict(ASX_ORACLE_FAIL, "reply_linearity",
+                              "an obligation was resolved with no reservation before it",
+                              unreserved);
+    }
+    return oracle_verdict(ASX_ORACLE_PASS, "reply_linearity",
+                          "every obligation resolved at most once, after its reservation", 0u);
+}
+
+/* Rust's loser_drain: the losers of a race are cancelled and fully drained
+ * before the race completes. A task group is caller-owned and unregistered,
+ * but each of its members names the group's owner as its completion watcher
+ * while the owner collects them, and a loser carries the race-lost cancel
+ * (ASX_CANCEL_RACE_LOST) it was aborted with. So a live task whose cancel
+ * is race-lost, and whose watcher task is gone or completed, is a loser that
+ * outlived the race that cancelled it. The owner waits for its members in
+ * DRAINING before it completes, so this is a group abandoned, or a drain
+ * that returned early. */
+static asx_oracle_result check_loser_drain(const asx_kernel *k) {
+    uint32_t bad = 0;
+    uint32_t i;
+    for (i = 0; i < k->task_count; i++) {
+        const asx_task_slot *t = &k->tasks[i];
+        const asx_task_slot *owner;
+        /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
+        if (!t->alive || asx_task_is_terminal(t->state)) continue;
+        if (!t->cancel_pending || t->cancel_reason.kind != ASX_CANCEL_RACE_LOST) continue;
+        if (t->watcher == ASX_SLOT_NONE || t->watcher >= k->task_count) continue;
+        owner = &k->tasks[t->watcher];
+        if (!owner->alive || owner->generation != t->watcher_gen ||
+            asx_task_is_terminal(owner->state)) {
+            bad++;
+        }
+    }
+    if (bad != 0u) {
+        return oracle_verdict(ASX_ORACLE_FAIL, "loser_drain",
+                              "a race loser is still running after the task that raced it ended",
+                              bad);
+    }
+    return oracle_verdict(ASX_ORACLE_PASS, "loser_drain",
+                          "no race loser outlived the task that raced it", 0u);
+}
+
 typedef asx_oracle_result (*oracle_check_fn)(const asx_kernel *k);
 
 /* The lab contract the older oracles have: NULL fails, an uninitialized lab
@@ -711,6 +849,21 @@ asx_oracle_result asx_oracle_channel_atomicity(const asx_lab *lab, void *ctx) {
     return lab_oracle(lab, "channel_atomicity", check_channel_atomicity);
 }
 
+asx_oracle_result asx_oracle_down_order(const asx_lab *lab, void *ctx) {
+    (void)ctx;
+    return lab_oracle(lab, "down_order", check_down_order);
+}
+
+asx_oracle_result asx_oracle_reply_linearity(const asx_lab *lab, void *ctx) {
+    (void)ctx;
+    return lab_oracle(lab, "reply_linearity", check_reply_linearity);
+}
+
+asx_oracle_result asx_oracle_loser_drain(const asx_lab *lab, void *ctx) {
+    (void)ctx;
+    return lab_oracle(lab, "loser_drain", check_loser_drain);
+}
+
 asx_oracle_result asx_oracle_region_leak(const asx_lab *lab, void *ctx) {
     (void)ctx;
     return lab_oracle(lab, "region_leak", check_region_leak);
@@ -741,6 +894,9 @@ static const oracle_entry g_oracle_table[] = {
     {"region_leak", check_region_leak},
     {"cancel_signal_ordering", check_cancel_signal_ordering},
     {"channel_atomicity", check_channel_atomicity},
+    {"down_order", check_down_order},
+    {"reply_linearity", check_reply_linearity},
+    {"loser_drain", check_loser_drain},
 };
 
 #define ORACLE_TABLE_COUNT (sizeof(g_oracle_table) / sizeof(g_oracle_table[0]))

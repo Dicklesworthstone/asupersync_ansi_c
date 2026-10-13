@@ -78,8 +78,8 @@ Companion files:
     `obligation_leak`, `quiescence`, `finalizer`, `region_tree`,
     `deadline_monotone`, `cancellation_protocol`, `cancel_correctness`,
     `cancel_debt`, `region_leak`, `cancel_signal_ordering`,
-    `channel_atomicity`, and the C-only `task_counters` and `arena_counters`)
-    or `"all"`
+    `channel_atomicity`, `down_order`, `reply_linearity`, `loser_drain`, and
+    the C-only `task_counters` and `arena_counters`) or `"all"`
     (`docs/LAB_ORACLE_CATALOG.md`). A violation fails the run with the
     oracle's message. Rust ignores the field (its `LabRuntime` runs the oracles
     it feeds regardless). `ASX_ORACLES=all` in the runner's environment does

@@ -15,6 +15,7 @@
 #include <asx/asx.h>
 #include <asx/core/cleanup.h>
 #include <asx/core/ghost.h>
+#include <asx/monitor/monitor.h>
 #include <asx/runtime/replay.h>
 #include <asx/runtime/rt.h>
 #include <string.h>
@@ -66,12 +67,15 @@ TEST(kernel_oracles_carry_rusts_registry_names_and_unknown_names_fail) {
                                        "arena_counters",
                                        "region_leak",
                                        "cancel_signal_ordering",
-                                       "channel_atomicity"};
+                                       "channel_atomicity",
+                                       "down_order",
+                                       "reply_linearity",
+                                       "loser_drain"};
     uint32_t i;
     asx_oracle_result r;
-    ASSERT_EQ(asx_oracle_kernel_count(), 14u);
-    for (i = 0; i < 14u; i++) { ASSERT_STR_EQ(asx_oracle_kernel_name(i), want[i]); }
-    ASSERT_TRUE(asx_oracle_kernel_name(14u) == NULL);
+    ASSERT_EQ(asx_oracle_kernel_count(), 17u);
+    for (i = 0; i < 17u; i++) { ASSERT_STR_EQ(asx_oracle_kernel_name(i), want[i]); }
+    ASSERT_TRUE(asx_oracle_kernel_name(17u) == NULL);
     r = check("no_such_oracle");
     ASSERT_EQ((int)r.verdict, (int)ASX_ORACLE_FAIL);
     ASSERT_STR_EQ(r.oracle_name, "unknown");
@@ -701,6 +705,154 @@ TEST(channel_atomicity_names_counters_that_disagree_with_a_channels_permits_and_
     ASSERT_EQ((int)check("channel_atomicity").verdict, (int)ASX_ORACLE_PASS);
 }
 
+/* Reserves an obligation in its region and commits it, inside its poll (a
+ * host holds no authority over a task's obligation). */
+static asx_status poll_reserve_commit(void *data, asx_task_id self) {
+    const asx_region_id *region = (const asx_region_id *)data;
+    asx_obligation_id ob;
+    asx_status st;
+    (void)self;
+    st = asx_obligation_reserve(*region, &ob);
+    if (st != ASX_OK) return st;
+    return asx_obligation_commit(ob);
+}
+
+TEST(down_order_names_monitors_fired_out_of_order) {
+    asx_region_id rid;
+    asx_task_id watcher;
+    asx_task_id target;
+    asx_monitor_ref r1;
+    asx_monitor_ref r2;
+    asx_budget budget;
+    asx_monitor_delivery a;
+    asx_monitor_delivery b;
+    asx_status st;
+
+    /* Two monitors of one exit fire by ascending reference. */
+    fresh();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &watcher), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &target), ASX_OK);
+    ASSERT_EQ(asx_monitor_establish(watcher, target, &r1), ASX_OK);
+    ASSERT_EQ(asx_monitor_establish(watcher, target, &r2), ASX_OK);
+    budget = asx_budget_from_polls(4u);
+    st = asx_scheduler_run(rid, &budget); /* the watcher yields on: the budget ends it */
+    (void)st;
+    ASSERT_EQ(asx_monitor_delivery_count_internal(), 2u);
+    ASSERT_EQ(asx_monitor_delivery_get_internal(0u, &a), 1);
+    ASSERT_EQ(asx_monitor_delivery_get_internal(1u, &b), 1);
+    ASSERT_EQ(a.ref, (uint64_t)r1);
+    ASSERT_EQ(b.ref, (uint64_t)r2);
+    ASSERT_TRUE(asx_monitor_delivery_defect_internal(&a, &b) == NULL);
+    ASSERT_EQ((int)check("down_order").verdict, (int)ASX_ORACLE_PASS);
+
+    /* The same pair the other way round, and an exit stamped earlier than
+     * the one before it (the log is the module's, so the violation is
+     * planted in the values the check is a function of). */
+    ASSERT_STR_EQ(asx_monitor_delivery_defect_internal(&b, &a),
+                  "the monitors of one exit were not delivered by ascending reference");
+    {
+        asx_monitor_delivery late = a;
+        asx_monitor_delivery early = b;
+        late.vt = 10u;
+        early.vt = 9u;
+        early.monitored = 12345u; /* another exit, so only time can fault it */
+        ASSERT_STR_EQ(asx_monitor_delivery_defect_internal(&late, &early),
+                      "a DOWN was delivered with an earlier completion time than one before it");
+        early.vt = 10u;
+        ASSERT_TRUE(asx_monitor_delivery_defect_internal(&late, &early) == NULL);
+    }
+}
+
+TEST(reply_linearity_names_an_obligation_resolved_twice_or_never_reserved) {
+    asx_region_id rid;
+    asx_task_id t;
+    asx_budget budget;
+    asx_trace_event e;
+    asx_obligation_id oid = ASX_INVALID_ID;
+    asx_oracle_result r;
+    uint32_t i;
+
+    /* The kernel's own reserve and commit leave one of each in the ring. */
+    fresh();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_reserve_commit, &rid, &t), ASX_OK);
+    budget = asx_budget_from_polls(8u);
+    ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
+    for (i = 0; i < asx_trace_event_count(); i++) {
+        if (asx_trace_event_get(i, &e) != 0 && e.kind == ASX_TRACE_OBLIGATION_COMMIT) {
+            oid = e.entity_id;
+        }
+    }
+    ASSERT_TRUE(oid != ASX_INVALID_ID);
+    ASSERT_TRUE(all_pass());
+
+    /* A second resolution of it: the API answers ALREADY_RESOLVED and
+     * records nothing, so an event of one is the violation. */
+    asx_trace_emit(ASX_TRACE_OBLIGATION_ABORT, (uint64_t)oid, 0u);
+    r = check("reply_linearity");
+    ASSERT_EQ((int)r.verdict, (int)ASX_ORACLE_FAIL);
+    ASSERT_EQ(r.detail_count, 1u);
+    ASSERT_STR_EQ(r.message, "an obligation was resolved more than once");
+
+    /* A resolution with no reservation before it. */
+    fresh();
+    asx_trace_emit(ASX_TRACE_OBLIGATION_COMMIT,
+                   asx_handle_pack(ASX_TYPE_OBLIGATION, 0u, asx_handle_pack_index(1u, 3u)), 0u);
+    r = check("reply_linearity");
+    ASSERT_EQ((int)r.verdict, (int)ASX_ORACLE_FAIL);
+    ASSERT_STR_EQ(r.message, "an obligation was resolved with no reservation before it");
+}
+
+TEST(loser_drain_names_a_race_loser_that_outlived_the_task_that_raced_it) {
+    asx_region_id rid;
+    asx_task_id owner;
+    asx_task_id loser;
+    asx_task_slot *os = NULL;
+    asx_task_slot *ls = NULL;
+    asx_task_state was;
+    asx_oracle_result r;
+
+    fresh();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &owner), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &loser), ASX_OK);
+    ASSERT_EQ(asx_task_slot_lookup(owner, &os), ASX_OK);
+    ASSERT_EQ(asx_task_slot_lookup(loser, &ls), ASX_OK);
+
+    /* The owner is collecting its members: it is the loser's watcher, and
+     * the loser has been aborted with the race-lost reason. */
+    ls->watcher = (uint32_t)asx_handle_slot(owner);
+    ls->watcher_gen = os->generation;
+    ls->cancel_pending = 1;
+    ls->cancel_reason.kind = ASX_CANCEL_RACE_LOST;
+    ASSERT_EQ((int)check("loser_drain").verdict, (int)ASX_ORACLE_PASS);
+
+    /* The owner completed with the loser still running. */
+    was = os->state;
+    os->state = ASX_TASK_COMPLETED;
+    r = check("loser_drain");
+    ASSERT_EQ((int)r.verdict, (int)ASX_ORACLE_FAIL);
+    ASSERT_EQ(r.detail_count, 1u);
+    ASSERT_STR_EQ(r.message, "a race loser is still running after the task that raced it ended");
+    os->state = was;
+
+    /* Its slot gone, or reused by another task. */
+    os->generation = (uint16_t)(os->generation + 1u);
+    ASSERT_EQ((int)check("loser_drain").verdict, (int)ASX_ORACLE_FAIL);
+    os->generation = ls->watcher_gen;
+    ASSERT_EQ((int)check("loser_drain").verdict, (int)ASX_ORACLE_PASS);
+
+    /* A loser that completed is drained; a task cancelled for another
+     * reason is not a loser. */
+    ls->cancel_reason.kind = ASX_CANCEL_USER;
+    os->state = ASX_TASK_COMPLETED;
+    ASSERT_EQ((int)check("loser_drain").verdict, (int)ASX_ORACLE_PASS);
+    ls->cancel_reason.kind = ASX_CANCEL_RACE_LOST;
+    ls->state = ASX_TASK_COMPLETED;
+    ASSERT_EQ((int)check("loser_drain").verdict, (int)ASX_ORACLE_PASS);
+}
+
 int main(void) {
     fprintf(stderr, "=== test_oracle ===\n");
     RUN_TEST(kernel_oracles_carry_rusts_registry_names_and_unknown_names_fail);
@@ -721,6 +873,9 @@ int main(void) {
     RUN_TEST(region_leak_names_a_closing_region_with_nothing_left_to_wait_for);
     RUN_TEST(cancel_signal_ordering_names_a_child_cancelled_by_a_parent_that_was_not);
     RUN_TEST(channel_atomicity_names_counters_that_disagree_with_a_channels_permits_and_senders);
+    RUN_TEST(down_order_names_monitors_fired_out_of_order);
+    RUN_TEST(reply_linearity_names_an_obligation_resolved_twice_or_never_reserved);
+    RUN_TEST(loser_drain_names_a_race_loser_that_outlived_the_task_that_raced_it);
     TEST_REPORT();
     return test_failures;
 }

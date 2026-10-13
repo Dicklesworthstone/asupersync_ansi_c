@@ -37,6 +37,13 @@ typedef struct {
 static mon_entry g_mon[ASX_MONITOR_CAPACITY];
 static asx_monitor_ref g_next_ref = 1u;
 
+/* The last ASX_MONITOR_CAPACITY deliveries, in the order the monitors
+ * fired, oldest overwritten first: which monitor, for which exit, at what
+ * completion time. The down_order oracle (oracle.c, bd-9kll.9.2) reads it;
+ * nothing else does. */
+static asx_monitor_delivery g_deliveries[ASX_MONITOR_CAPACITY];
+static uint64_t g_delivery_total;
+
 /* A task handle carries the task's state in its tag, so the handle the
  * runtime holds at completion is not bit-equal to the one a monitor was made
  * with: tasks are the same when runtime, slot and generation are. */
@@ -241,6 +248,13 @@ void asx_monitor_task_finished(asx_task_id task, const asx_outcome *outcome, asx
         down.reason = outcome != NULL ? *outcome : asx_outcome_make(ASX_OUTCOME_ERR);
         down.vt = vt;
         down.ref = e->ref;
+        {
+            asx_monitor_delivery *d = &g_deliveries[g_delivery_total % ASX_MONITOR_CAPACITY];
+            d->ref = (uint64_t)e->ref;
+            d->monitored = (uint64_t)task;
+            d->vt = (uint64_t)vt;
+            g_delivery_total++;
+        }
         if (e->to_server) {
             /* Delivery (WatchEffects::dispatch, :1523): the server's lane
              * takes a DOWN message; a stopped server drops it, as Rust's
@@ -302,5 +316,22 @@ uint32_t asx_monitor_count(void) {
 
 void asx_monitor_reset(void) {
     memset(g_mon, 0, sizeof(g_mon));
+    memset(g_deliveries, 0, sizeof(g_deliveries));
+    g_delivery_total = 0u;
     g_next_ref = 1u;
+}
+
+uint32_t asx_monitor_delivery_count_internal(void) {
+    return g_delivery_total < (uint64_t)ASX_MONITOR_CAPACITY ? (uint32_t)g_delivery_total
+                                                             : (uint32_t)ASX_MONITOR_CAPACITY;
+}
+
+/* Index 0 is the oldest retained delivery. */
+int asx_monitor_delivery_get_internal(uint32_t index, asx_monitor_delivery *out) {
+    uint32_t n = asx_monitor_delivery_count_internal();
+    uint64_t first;
+    if (out == NULL || index >= n) return 0;
+    first = g_delivery_total - (uint64_t)n;
+    *out = g_deliveries[(first + (uint64_t)index) % (uint64_t)ASX_MONITOR_CAPACITY];
+    return 1;
 }

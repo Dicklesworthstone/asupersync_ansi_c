@@ -159,6 +159,23 @@ ASX_API asx_oracle_result asx_oracle_arena_counters(const asx_lab *lab, void *ct
  * also its capacity accounting. */
 ASX_API asx_oracle_result asx_oracle_channel_atomicity(const asx_lab *lab, void *ctx);
 
+/* down_order: monitors fired in order: no DOWN delivered with an earlier
+ * completion time than the one before it, and the monitors of one exit by
+ * ascending reference (the monitor module keeps the last
+ * ASX_MONITOR_CAPACITY deliveries). */
+ASX_API asx_oracle_result asx_oracle_down_order(const asx_lab *lab, void *ctx);
+
+/* reply_linearity: every obligation (a call's reply is a SEND_PERMIT
+ * obligation) resolved at most once, after its reservation, by the trace
+ * ring's record (the reservation is checked while the ring dropped
+ * nothing). */
+ASX_API asx_oracle_result asx_oracle_reply_linearity(const asx_lab *lab, void *ctx);
+
+/* loser_drain: no race loser (a live task cancelled with RACE_LOST) is
+ * still running after the task that was collecting it, its completion
+ * watcher, has ended. */
+ASX_API asx_oracle_result asx_oracle_loser_drain(const asx_lab *lab, void *ctx);
+
 /* region_leak: no region is stuck closing: one in CLOSING, DRAINING or
  * FINALIZING with no live task, no child not closed, no cleanup pending or
  * running and no reserved obligation would never close. (Rust's version is
@@ -183,8 +200,9 @@ ASX_API const char *asx_oracle_kernel_name(uint32_t index);
 /* Run the named kernel-state oracle (task_leak, obligation_leak, quiescence,
  * finalizer, region_tree, deadline_monotone, cancellation_protocol,
  * cancel_correctness, cancel_debt, task_counters, arena_counters,
- * region_leak, cancel_signal_ordering, channel_atomicity). An unknown or
- * NULL name fails with the oracle name "unknown". */
+ * region_leak, cancel_signal_ordering, channel_atomicity, down_order,
+ * reply_linearity, loser_drain). An unknown or NULL name fails with the
+ * oracle name "unknown". */
 ASX_API asx_oracle_result asx_oracle_check_named(const char *name);
 
 /* Render a replay result as JSON for retained diagnostics/artifacts. */

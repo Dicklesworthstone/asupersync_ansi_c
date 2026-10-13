@@ -1042,6 +1042,26 @@ ASX_MUST_USE asx_status asx_task_spawn_finalizer_internal(asx_region_id region,
  * next round with ASX_E_REPLAY_MISMATCH. 0 with no replay active. */
 int asx_replay_stop_run_internal(void);
 
+/* One DOWN delivery of the monitor module (src/monitor/monitor.c): the
+ * monitor that fired, the monitored task's handle as the completion gave it
+ * and the completion time. The module keeps the last ASX_MONITOR_CAPACITY
+ * in firing order for the down_order oracle (oracle.c, bd-9kll.9.2). */
+typedef struct {
+    uint64_t ref;
+    uint64_t monitored;
+    uint64_t vt;
+} asx_monitor_delivery;
+
+/* How many deliveries are retained (at most ASX_MONITOR_CAPACITY). */
+uint32_t asx_monitor_delivery_count_internal(void);
+/* Retained delivery `index`, 0 the oldest: 1 and *out filled, or 0 past the
+ * end. */
+int asx_monitor_delivery_get_internal(uint32_t index, asx_monitor_delivery *out);
+/* The way delivery `next`, which fired right after `prev`, breaks the
+ * order, as a static message, or NULL (oracle.c; pure). */
+const char *asx_monitor_delivery_defect_internal(const asx_monitor_delivery *prev,
+                                                 const asx_monitor_delivery *next);
+
 /* What one live channel's counters say (src/channel/mpsc.c), read-only, so
  * the channel_atomicity oracle (oracle.c, bd-9kll.9.2) is a pure function of
  * a value a test can make. `queued` is the committed messages whichever
