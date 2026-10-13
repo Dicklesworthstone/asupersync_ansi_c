@@ -1088,6 +1088,7 @@ static void test_a_childs_shutdown_budget_bounds_its_drained_generation(void) {
     behaviour capped;
     behaviour free_run;
     behaviour raised;
+    NEEDS_CHILD_REGIONS(3);
     setup();
     memset(&capped, 0, sizeof(capped));
     memset(&free_run, 0, sizeof(free_run));
