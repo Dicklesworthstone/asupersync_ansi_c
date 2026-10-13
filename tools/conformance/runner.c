@@ -41,6 +41,9 @@
 #include <asx/actor/actor.h>
 #include <asx/actor/supervisor.h>
 #include <asx/asx_config.h>
+#include <asx/codec/codec.h>
+#include <asx/codec/equivalence.h>
+#include <asx/codec/schema.h>
 #include <asx/core/budget.h>
 #include <asx/core/cancel.h>
 #include <asx/core/ghost.h>
@@ -415,6 +418,206 @@ static int trace_binary_round_trip(const char *id) {
 }
 
 /* ------------------------------------------------------------------ */
+/* JSON vs BIN codec over the canonical fixture schema (bd-vhrp)       */
+/* ------------------------------------------------------------------ */
+
+#define CODEC_TEXT_CAP (1024u * 1024u)
+#define CODEC_META_CAP 256u
+enum {
+    CODEC_TEXT_SCENARIO,
+    CODEC_TEXT_TRACE,
+    CODEC_TEXT_SNAPSHOT,
+    CODEC_TEXT_OBSERVATIONS,
+    CODEC_TEXT_COUNT
+};
+enum {
+    CODEC_META_ID,
+    CODEC_META_PROFILE,
+    CODEC_META_DIGEST,
+    CODEC_META_BASELINE,
+    CODEC_META_TOOLCHAIN_HASH,
+    CODEC_META_TOOLCHAIN_RELEASE,
+    CODEC_META_TOOLCHAIN_HOST,
+    CODEC_META_CARGO_LOCK,
+    CODEC_META_RUN_ID,
+    CODEC_META_COUNT
+};
+
+static char g_codec_text[CODEC_TEXT_COUNT][CODEC_TEXT_CAP];
+static char g_codec_meta[CODEC_META_COUNT][CODEC_META_CAP];
+static char g_codec_schema_version[] = "fixture-v1";
+static char g_codec_dsl_version[] = "asx.scenario.v2";
+static asx_json_doc g_codec_doc;
+static unsigned g_codec_verified;
+
+/* RFC 8785 bytes of `node` into `buf`; 0 when absent or too large. */
+static int codec_canonical_text(const asx_json_doc *doc, uint32_t node, char *buf) {
+    asx_json_out out;
+    if (node == ASX_JSON_NONE) return 0;
+    asx_json_out_init(&out, buf, CODEC_TEXT_CAP);
+    if (asx_json_write_canonical(doc, node, &out) != ASX_OK) return 0;
+    return asx_json_out_finish(&out) == ASX_OK;
+}
+
+/* `text` into the slot `slot`; 0 when absent or too long. */
+static int codec_meta(unsigned slot, const char *text) {
+    size_t n;
+    if (text == NULL) return 0;
+    n = strlen(text);
+    if (n == 0u || n >= CODEC_META_CAP) return 0;
+    memcpy(g_codec_meta[slot], text, n + 1u);
+    return 1;
+}
+
+/* The semantic digest of fixture parts given as JSON text, recomputed the
+ * way the interpreter computes a run's (observations, snapshot, trace and
+ * vocabulary). Returns 0 when a part does not parse or the digest fails. */
+static int codec_recompute_digest(const asx_canonical_fixture *fx, char *out) {
+    uint32_t trace = ASX_JSON_NONE;
+    uint32_t snapshot = ASX_JSON_NONE;
+    uint32_t observations = ASX_JSON_NONE;
+    uint32_t semantic;
+    asx_json_doc_init(&g_codec_doc);
+    if (asx_json_parse(&g_codec_doc, fx->expected_events_json, strlen(fx->expected_events_json),
+                       &trace) != ASX_OK ||
+        asx_json_parse(&g_codec_doc, fx->expected_final_snapshot_json,
+                       strlen(fx->expected_final_snapshot_json), &snapshot) != ASX_OK ||
+        asx_json_parse(&g_codec_doc, fx->expected_error_codes_json,
+                       strlen(fx->expected_error_codes_json), &observations) != ASX_OK) {
+        return 0;
+    }
+    semantic = asx_json_new_object(&g_codec_doc);
+    asx_json_set(&g_codec_doc, semantic, "observations", observations);
+    asx_json_set(&g_codec_doc, semantic, "snapshot", snapshot);
+    asx_json_set(&g_codec_doc, semantic, "trace", trace);
+    asx_json_set(&g_codec_doc, semantic, "vocabulary",
+                 asx_json_new_string(&g_codec_doc, "asx.vocab.v2"));
+    return asx_json_doc_ok(&g_codec_doc) && asx_canon_digest(&g_codec_doc, semantic, out) == ASX_OK;
+}
+
+/* The run just executed, in the canonical fixture schema, through both
+ * codecs (bd-vhrp): the scenario and the run's trace, snapshot and
+ * observations (in expected_error_codes_json, the schema's per-step outcome
+ * array) with the run's semantic digest and the capture's provenance.
+ * - JSON and BIN must each round-trip it to the same fixture
+ *   (asx_codec_cross_codec_verify);
+ * - the semantic digest recomputed from the BIN-decoded parts must be the
+ *   run's: the same scenario has one canonical digest whichever codec
+ *   carried it;
+ * - the BIN payload with one byte flipped must be refused.
+ * Returns 0 and prints why on failure. */
+static int codec_round_trip(const char *id, uint32_t root, uint32_t scenario, uint32_t run) {
+    asx_canonical_fixture fx;
+    asx_canonical_fixture back;
+    asx_codec_equiv_report report;
+    asx_codec_buffer bin;
+    uint32_t prov = asx_json_get(&g_fixture, root, "provenance");
+    uint64_t seed = 0;
+    char got[ASX_CANON_DIGEST_LEN];
+    asx_status st;
+    int ok = 0;
+
+    if (!codec_canonical_text(&g_fixture, scenario, g_codec_text[CODEC_TEXT_SCENARIO]) ||
+        !codec_canonical_text(&g_run, asx_json_get(&g_run, run, "trace"),
+                              g_codec_text[CODEC_TEXT_TRACE]) ||
+        !codec_canonical_text(&g_run, asx_json_get(&g_run, run, "snapshot"),
+                              g_codec_text[CODEC_TEXT_SNAPSHOT]) ||
+        !codec_canonical_text(&g_run, asx_json_get(&g_run, run, "observations"),
+                              g_codec_text[CODEC_TEXT_OBSERVATIONS])) {
+        fprintf(stdout, "FAIL %s: codec: the run does not serialize canonically\n", id);
+        return 0;
+    }
+    if (prov == ASX_JSON_NONE || !codec_meta(CODEC_META_ID, id) ||
+        !codec_meta(CODEC_META_PROFILE, asx_profile_name(asx_profile_active())) ||
+        !codec_meta(CODEC_META_DIGEST, asx_json_get_string(&g_run, run, "semantic_digest")) ||
+        !codec_meta(CODEC_META_BASELINE,
+                    asx_json_get_string(&g_fixture, prov, "rust_baseline_commit")) ||
+        !codec_meta(CODEC_META_TOOLCHAIN_HASH,
+                    asx_json_get_string(&g_fixture, prov, "rust_toolchain_commit_hash")) ||
+        !codec_meta(CODEC_META_TOOLCHAIN_RELEASE,
+                    asx_json_get_string(&g_fixture, prov, "rust_toolchain_release")) ||
+        !codec_meta(CODEC_META_TOOLCHAIN_HOST,
+                    asx_json_get_string(&g_fixture, prov, "rust_toolchain_host")) ||
+        !codec_meta(CODEC_META_CARGO_LOCK,
+                    asx_json_get_string(&g_fixture, prov, "cargo_lock_sha256")) ||
+        !codec_meta(CODEC_META_RUN_ID, asx_json_get_string(&g_fixture, prov, "capture_run_id")) ||
+        !asx_json_u64(&g_fixture, asx_json_get(&g_fixture, scenario, "seed"), &seed)) {
+        fprintf(stdout, "FAIL %s: codec: the fixture or run lacks a canonical schema field\n", id);
+        return 0;
+    }
+
+    asx_canonical_fixture_init(&fx);
+    fx.scenario_id = g_codec_meta[CODEC_META_ID];
+    fx.fixture_schema_version = g_codec_schema_version;
+    fx.scenario_dsl_version = g_codec_dsl_version;
+    fx.profile = g_codec_meta[CODEC_META_PROFILE];
+    fx.codec = ASX_CODEC_KIND_JSON;
+    fx.seed = seed;
+    fx.input_json = g_codec_text[CODEC_TEXT_SCENARIO];
+    fx.expected_events_json = g_codec_text[CODEC_TEXT_TRACE];
+    fx.expected_final_snapshot_json = g_codec_text[CODEC_TEXT_SNAPSHOT];
+    fx.expected_error_codes_json = g_codec_text[CODEC_TEXT_OBSERVATIONS];
+    fx.semantic_digest = g_codec_meta[CODEC_META_DIGEST];
+    fx.provenance.rust_baseline_commit = g_codec_meta[CODEC_META_BASELINE];
+    fx.provenance.rust_toolchain_commit_hash = g_codec_meta[CODEC_META_TOOLCHAIN_HASH];
+    fx.provenance.rust_toolchain_release = g_codec_meta[CODEC_META_TOOLCHAIN_RELEASE];
+    fx.provenance.rust_toolchain_host = g_codec_meta[CODEC_META_TOOLCHAIN_HOST];
+    fx.provenance.cargo_lock_sha256 = g_codec_meta[CODEC_META_CARGO_LOCK];
+    fx.provenance.capture_run_id = g_codec_meta[CODEC_META_RUN_ID];
+
+    st = asx_canonical_fixture_validate(&fx);
+    if (st != ASX_OK) {
+        fprintf(stdout, "FAIL %s: codec: the run is not a valid canonical fixture: %s\n", id,
+                asx_status_name(st));
+        return 0;
+    }
+    asx_codec_buffer_init(&bin);
+    asx_canonical_fixture_init(&back);
+    st = asx_codec_encode_fixture(ASX_CODEC_KIND_JSON, &fx, &bin);
+    if (st == ASX_OK) st = asx_codec_decode_fixture(ASX_CODEC_KIND_JSON, bin.data, bin.len, &back);
+    asx_canonical_fixture_reset(&back);
+    asx_codec_buffer_reset(&bin);
+    if (st != ASX_OK) {
+        fprintf(stdout, "FAIL %s: codec: JSON round trip: %s\n", id, asx_status_name(st));
+        return 0;
+    }
+    st = asx_codec_cross_codec_verify(&fx, &report);
+    if (st != ASX_OK) {
+        fprintf(stdout, "FAIL %s: codec: JSON and BIN round trips differ: %s", id,
+                asx_status_name(st));
+        if (report.count > 0u) fprintf(stdout, " (first field %s)", report.diffs[0].field_name);
+        fprintf(stdout, "\n");
+        return 0;
+    }
+
+    asx_codec_buffer_init(&bin);
+    asx_canonical_fixture_init(&back);
+    st = asx_codec_encode_fixture(ASX_CODEC_KIND_BIN, &fx, &bin);
+    if (st == ASX_OK) st = asx_codec_decode_fixture(ASX_CODEC_KIND_BIN, bin.data, bin.len, &back);
+    if (st != ASX_OK) {
+        fprintf(stdout, "FAIL %s: codec: BIN round trip: %s\n", id, asx_status_name(st));
+    } else if (!codec_recompute_digest(&back, got)) {
+        fprintf(stdout, "FAIL %s: codec: the BIN-decoded parts do not digest\n", id);
+    } else if (strcmp(got, fx.semantic_digest) != 0) {
+        fprintf(stdout, "FAIL %s: codec: the BIN-decoded parts digest to %s, the run to %s\n", id,
+                got, fx.semantic_digest);
+    } else {
+        asx_canonical_fixture_reset(&back);
+        bin.data[bin.len / 2u] = (char)(bin.data[bin.len / 2u] ^ 0x5A);
+        st = asx_codec_decode_fixture(ASX_CODEC_KIND_BIN, bin.data, bin.len, &back);
+        if (st == ASX_OK) {
+            fprintf(stdout, "FAIL %s: codec: a BIN payload with a flipped byte was accepted\n", id);
+        } else {
+            ok = 1;
+            g_codec_verified++;
+        }
+    }
+    asx_canonical_fixture_reset(&back);
+    asx_codec_buffer_reset(&bin);
+    return ok;
+}
+
+/* ------------------------------------------------------------------ */
 /* Replaying Rust's schedule in C (bd-9kll.9.3, bd-9kll.4.8)           */
 /* ------------------------------------------------------------------ */
 
@@ -665,6 +868,7 @@ static cmp_result compare_one(const char *path, int mutate) {
     /* Not under the self-test: a corrupted expectation must be what fails. */
     if (!mutate && !ghost_clean(stdout, id, "the C run", want_trace)) ok = 0;
     if (!trace_binary_round_trip(id)) ok = 0;
+    if (!codec_round_trip(id, root, scenario, run)) ok = 0;
 
     if (!same_part(want_trace, asx_json_get(&g_run, run, "trace"))) {
         ok = 0;
@@ -1642,8 +1846,8 @@ int main(int argc, char **argv) {
     }
     fprintf(stdout,
             "asx-conformance: compared=%u pass=%u fail=%u error=%u forced_replayed=%u "
-            "forced_unavailable=%u skipped_forbidden=%u\n",
+            "forced_unavailable=%u skipped_forbidden=%u codec_verified=%u\n",
             (unsigned)(argc - 2), pass, fail, error, g_forced_replayed, g_forced_unavailable,
-            g_skipped_forbidden);
+            g_skipped_forbidden, g_codec_verified);
     return (fail == 0u && error == 0u) ? 0 : 1;
 }

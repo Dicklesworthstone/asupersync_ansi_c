@@ -518,7 +518,15 @@ ABI reports and in the build-identity fingerprint, and both read JSON scenarios,
 so this lane shows that the build modes agree; it does not test a binary
 scenario transport. Both must match the Rust captures, and every
 run's own trace must survive the binary trace format (export, import and
-verify against itself; a copy with one byte flipped must be refused). Then compare
+verify against itself; a copy with one byte flipped must be refused). Every
+run also goes through the canonical fixture codec: the scenario and the run's
+trace, snapshot and observations, with its semantic digest and the capture's
+provenance, must round-trip through JSON and through BIN to the same fixture,
+the semantic digest recomputed from the BIN-decoded parts must be the run's,
+and a BIN frame with one byte flipped must be refused. The summary line counts
+these runs as `codec_verified=N`, and a planted BIN encoder that drops a byte
+(`ASX_MUTANT_CODEC_BIN_SNAPSHOT_TRUNCATED`, in `make test-gates`) must fail
+the corpus. Then compare
 the semantic digests recorded in the JSON and BIN files of each fixture in
 `fixtures/rust_reference/`; the C codec round trip is also checked by `make
 fixture-integrity` and by `make test-conformance-c`.
