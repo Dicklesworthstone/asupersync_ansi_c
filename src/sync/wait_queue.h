@@ -107,13 +107,16 @@ typedef struct asx_wait_queue asx_wait_queue;
  * semantics. Called when the pool needs nodes back. */
 typedef void (*asx_wait_reap_fn)(asx_wait_queue *q);
 
-/* A FIFO of wait nodes. Storage is owned by the primitive. */
+/* A FIFO of wait nodes. Storage is owned by the primitive. A node index is
+ * an id: the index in its pool in the low 24 bits, the tag of the runtime
+ * whose pool it is above them (tag 0: the index alone). */
 struct asx_wait_queue {
     uint32_t head;         /* oldest node, ASX_WAIT_NIL if empty */
     uint32_t tail;         /* newest node, ASX_WAIT_NIL if empty */
     uint32_t len;          /* linked nodes */
     uint32_t epoch;        /* pool epoch the links belong to */
     asx_wait_reap_fn reap; /* record queues; NULL for plain queues */
+    uint16_t tag;          /* the runtime whose pool holds its nodes (zeroed: tag 0) */
 };
 
 /* One waiter. `flags` and `value` belong to the owning primitive. */
@@ -128,6 +131,18 @@ typedef struct {
     uint8_t flags;
 } asx_wait_node;
 
+/* The node pool of one runtime (asx_kernel.waits). A zeroed pool is empty:
+ * the free list holds the index + 1 of the node released last, and the
+ * effective epoch is epoch + 1, so a zero-initialized queue (epoch 0) is
+ * never current. */
+typedef struct {
+    asx_wait_node nodes[ASX_WAIT_NODE_CAPACITY];
+    uint32_t free_head; /* index + 1 of the most recently released node, 0 if none */
+    uint32_t high;      /* nodes [high, capacity) were never handed out */
+    uint32_t in_use;
+    uint32_t epoch;
+} asx_wait_pool;
+
 /* Liveness classes reported by asx_wait_task_liveness(). */
 typedef enum {
     ASX_WAIT_TASK_DEAD = 0,  /* completed, reclaimed, or invalid handle */
@@ -139,11 +154,8 @@ typedef enum {
 /* Pool                                                                */
 /* ------------------------------------------------------------------ */
 
-/* Release every node and empty every queue (runtime reset). */
-void asx_wait_pool_reset(void);
-
-/* Nodes currently held by queues (tests and diagnostics). */
-uint32_t asx_wait_nodes_in_use(void);
+/* The pool of a runtime is reset with its kernel (asx_wait_pool_reset_internal,
+ * runtime_internal.h): every node released, every queue of it empty. */
 
 /* `task` finished. As Rust drops a finished task's wait futures, each
  * queue still holding one of its entries is reaped (record queues retire
@@ -160,8 +172,9 @@ void asx_wait_task_finished(asx_task_id task);
  * none) drops the queue's dead entries and re-settles the primitive, so a
  * wake a dead entry held passes on; it runs when a task holding an entry
  * finishes (asx_wait_task_finished) and when the pool needs nodes back.
- * Primitives that hand out units with settle register one. */
-void asx_wait_queue_init(asx_wait_queue *q, asx_wait_reap_fn reap);
+ * Primitives that hand out units with settle register one. `tag` is the
+ * runtime whose pool holds the queue's nodes (the primitive's owner). */
+void asx_wait_queue_init(asx_wait_queue *q, asx_wait_reap_fn reap, uint16_t tag);
 
 /* Drop every entry whose task is gone (for reap functions). */
 void asx_wait_queue_drop_dead(asx_wait_queue *q);
@@ -205,8 +218,8 @@ uint32_t asx_wait_queue_wake_all(asx_wait_queue *q);
 /* ------------------------------------------------------------------ */
 
 /* Empty a record queue (releasing the nodes it still holds) and register
- * its reap function. */
-void asx_wait_records_init(asx_wait_queue *q, asx_wait_reap_fn reap);
+ * its reap function; `tag` as for asx_wait_queue_init. */
+void asx_wait_records_init(asx_wait_queue *q, asx_wait_reap_fn reap, uint16_t tag);
 
 /* Append a new record (task ASX_INVALID_ID, flags and value 0). Returns
  * its index, or ASX_WAIT_NIL if the pool is exhausted even after

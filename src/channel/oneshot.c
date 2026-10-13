@@ -88,9 +88,9 @@ static void oneshot_slot_init(asx_oneshot_slot *s) {
     s->reserved = 0;
     s->discard_fn = NULL;
     s->discard_ctx = NULL;
-    asx_wait_queue_init(&s->waiters, NULL);
-    asx_wait_queue_init(&s->tx_closed, NULL);
-    asx_wait_queue_init(&s->rx_closed, NULL);
+    asx_wait_queue_init(&s->waiters, NULL, 0u);
+    asx_wait_queue_init(&s->tx_closed, NULL, 0u);
+    asx_wait_queue_init(&s->rx_closed, NULL, 0u);
 }
 
 void asx_oneshot_reset(void) {

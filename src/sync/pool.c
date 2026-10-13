@@ -132,7 +132,7 @@ asx_status asx_pool_create(const asx_pool_config *config, asx_pool_handle *out) 
                 ps->resources[j].resource = NULL;
                 ps->resources[j].state = RESOURCE_EMPTY;
             }
-            asx_wait_queue_init(&ps->waiters, pool_reap_queue);
+            asx_wait_queue_init(&ps->waiters, pool_reap_queue, 0u);
             out->slot = i;
             out->generation = ps->generation;
             if (i >= g_slot_count) g_slot_count = i + 1;
@@ -334,7 +334,7 @@ void asx_pool_reset(void) {
         g_slots[i].alive = 0;
         g_slots[i].closed = 0;
         g_slots[i].resource_count = 0;
-        asx_wait_queue_init(&g_slots[i].waiters, pool_reap_queue);
+        asx_wait_queue_init(&g_slots[i].waiters, pool_reap_queue, 0u);
     }
     g_slot_count = 0;
 }

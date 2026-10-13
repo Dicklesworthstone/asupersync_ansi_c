@@ -10,6 +10,7 @@
 #ifndef ASX_RUNTIME_INTERNAL_H
 #define ASX_RUNTIME_INTERNAL_H
 
+#include "../sync/wait_queue.h"
 #include "fnv_fold.h"
 #include <asx/asx_config.h>
 #include <asx/asx_ids.h>
@@ -454,6 +455,9 @@ typedef struct asx_kernel {
     /* The wake registrations (waker.c): a waker names this kernel by the
      * tag in its slot. */
     asx_waker_state wakers;
+    /* The wait-node pool (sync/wait_queue.c): a queue names this kernel's
+     * pool by tag, a node id carries it. */
+    asx_wait_pool waits;
     /* The runtime's trace: ring, digest, counters, observer. */
     asx_trace_state trace;
     uint32_t rt_generation; /* nonzero while an initialized runtime holds it */
@@ -611,6 +615,10 @@ void asx_scheduler_reset_internal(asx_kernel *k);
 /* Reset kernel `k`'s application timer wheel when it was set up (a clear).
  * Defined in timer_wheel.c. */
 void asx_timer_wheel_reset_app_internal(asx_kernel *k);
+
+/* Release every node of kernel `k`'s wait pool and empty every queue that
+ * names it (a clear). Defined in sync/wait_queue.c. */
+void asx_wait_pool_reset_internal(asx_kernel *k);
 
 /* Initialize the scheduling fields of a freshly allocated task slot. */
 void asx_task_sched_init_internal(asx_task_slot *task);

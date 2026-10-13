@@ -392,9 +392,9 @@ static void channel_reap_queue(asx_wait_queue *q);
 
 /* Empty every queue, returning their nodes to the pool. */
 static void channel_waiters_init(asx_channel_slot *s) {
-    asx_wait_queue_init(&s->recv_waiters, channel_reap_queue);
-    asx_wait_queue_init(&s->reserve_waiters, channel_reap_queue);
-    asx_wait_queue_init(&s->closed_waiters, channel_reap_queue);
+    asx_wait_queue_init(&s->recv_waiters, channel_reap_queue, 0u);
+    asx_wait_queue_init(&s->reserve_waiters, channel_reap_queue, 0u);
+    asx_wait_queue_init(&s->closed_waiters, channel_reap_queue, 0u);
 }
 
 /* Committed messages ready for try_recv. */

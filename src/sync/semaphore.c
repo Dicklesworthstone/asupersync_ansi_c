@@ -262,7 +262,7 @@ static asx_status sem_create(uint32_t initial_permits, int is_mutex, asx_semapho
             g_slots[i].is_mutex = is_mutex;
             g_slots[i].poisoned = 0;
             g_slots[i].holder_serial = 0u;
-            asx_wait_records_init(&g_slots[i].waiters, sem_reap_queue);
+            asx_wait_records_init(&g_slots[i].waiters, sem_reap_queue, 0u);
             out->slot = i;
             out->generation = g_slots[i].generation;
             if (i >= g_slot_count) g_slot_count = i + 1;
@@ -757,7 +757,7 @@ void asx_semaphore_reset(void) {
         g_slots[i].alive = 0;
         g_slots[i].permits = 0;
         g_slots[i].outstanding = 0;
-        asx_wait_records_init(&g_slots[i].waiters, sem_reap_queue);
+        asx_wait_records_init(&g_slots[i].waiters, sem_reap_queue, 0u);
     }
     g_slot_count = 0;
 }

@@ -148,7 +148,7 @@ asx_status asx_notify_create(asx_notify_handle *out) {
             g_slots[i].alive = 1;
             g_slots[i].generation = next_gen(g_slots[i].generation);
             g_slots[i].stored = 0;
-            asx_wait_records_init(&g_slots[i].waiters, notify_reap_queue);
+            asx_wait_records_init(&g_slots[i].waiters, notify_reap_queue, 0u);
             out->slot = i;
             out->generation = g_slots[i].generation;
             if (i >= g_slot_count) g_slot_count = i + 1;
@@ -323,7 +323,7 @@ void asx_notify_reset(void) {
         g_slots[i].generation = next_gen(g_slots[i].generation);
         g_slots[i].alive = 0;
         g_slots[i].stored = 0;
-        asx_wait_records_init(&g_slots[i].waiters, notify_reap_queue);
+        asx_wait_records_init(&g_slots[i].waiters, notify_reap_queue, 0u);
     }
     g_slot_count = 0;
 }

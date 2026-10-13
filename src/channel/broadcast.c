@@ -105,7 +105,7 @@ static uint16_t next_gen(uint16_t g) {
 static void broadcast_reap(asx_wait_queue *q);
 
 static void broadcast_waiters_init(asx_broadcast_slot *s) {
-    asx_wait_queue_init(&s->waiters, broadcast_reap);
+    asx_wait_queue_init(&s->waiters, broadcast_reap, 0u);
     s->wakers_len = 0;
     s->wakers_live = 0;
     s->wakers_free = BC_NIL;

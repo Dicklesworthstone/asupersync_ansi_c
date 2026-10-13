@@ -87,7 +87,7 @@ static void session_waiters_init(asx_session_slot *s) {
     uint32_t i;
     for (i = 0; i < SESSION_WQ_COUNT; i++) {
         ASX_CHECKPOINT_WAIVER("bounded: SESSION_WQ_COUNT constant");
-        asx_wait_queue_init(&s->waiters[i], session_reap_queue);
+        asx_wait_queue_init(&s->waiters[i], session_reap_queue, 0u);
     }
 }
 

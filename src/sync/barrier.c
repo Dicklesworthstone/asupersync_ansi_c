@@ -103,7 +103,7 @@ asx_status asx_barrier_create(uint32_t count, asx_barrier_handle *out) {
             g_slots[i].threshold = count;
             g_slots[i].arrived = 0;
             g_slots[i].tripped = 0;
-            asx_wait_records_init(&g_slots[i].waiters, barrier_reap_queue);
+            asx_wait_records_init(&g_slots[i].waiters, barrier_reap_queue, 0u);
             out->slot = i;
             out->generation = g_slots[i].generation;
             if (i >= g_slot_count) g_slot_count = i + 1;
@@ -263,7 +263,7 @@ void asx_barrier_reset(void) {
         g_slots[i].alive = 0;
         g_slots[i].arrived = 0;
         g_slots[i].tripped = 0;
-        asx_wait_records_init(&g_slots[i].waiters, barrier_reap_queue);
+        asx_wait_records_init(&g_slots[i].waiters, barrier_reap_queue, 0u);
     }
     g_slot_count = 0;
 }

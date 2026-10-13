@@ -140,6 +140,8 @@ void asx_runtime_clear_internal(asx_kernel *k) {
     asx_region_finalizers_reset_internal(k);
     asx_waker_reset_internal(k);
     asx_timer_wheel_reset_app_internal(k);
+    /* Before the primitives: every wait queue of k is empty afterwards. */
+    asx_wait_pool_reset_internal(k);
     if (asx_kernel_other_held(k)) { /* the subsystems below are process-wide */
         asx_trace_reset_internal(k);
         return;
@@ -148,8 +150,6 @@ void asx_runtime_clear_internal(asx_kernel *k) {
     asx_ghost_reset_run(); /* the sealed determinism reference survives the reset */
     asx_scheduler_event_reset();
     asx_lab_dispatch_reset_internal();
-    /* Before the primitives: every wait queue is empty afterwards. */
-    asx_wait_pool_reset();
     asx_parallel_reset();
     asx_channel_reset();
     asx_oneshot_reset();

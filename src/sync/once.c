@@ -53,7 +53,7 @@ static void once_slot_clear(once_slot *s) {
     s->initialized = 0;
     s->value = 0;
     s->initializer = ASX_INVALID_ID;
-    asx_wait_queue_init(&s->waiters, once_reap_queue);
+    asx_wait_queue_init(&s->waiters, once_reap_queue, 0u);
 }
 
 /* The initialization in progress was abandoned or failed: the cell stays

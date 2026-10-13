@@ -230,7 +230,6 @@ int asx_runtime_shared_state_refused_internal(const char *subsystem) {
     return 1;
 }
 
-static int runtime_p_wait_queues(void) { return asx_wait_nodes_in_use() != 0u; }
 static int runtime_p_links(void) { return asx_link_count() != 0u; }
 static int runtime_p_monitors(void) { return asx_monitor_count() != 0u; }
 static int runtime_p_lab_dispatch(void) { return asx_lab_dispatch_active() != 0; }
@@ -275,7 +274,6 @@ typedef struct {
 /* The still process-wide subsystems, as a second initialization names
  * them. Each moves out of the table as it becomes per runtime. */
 static const runtime_shared_subsystem g_shared_subsystems[] = {
-    {"wait queues", runtime_p_wait_queues},
     {"semaphores", asx_semaphore_in_use_internal},
     {"rwlocks", asx_rwlock_in_use_internal},
     {"barriers", asx_barrier_in_use_internal},

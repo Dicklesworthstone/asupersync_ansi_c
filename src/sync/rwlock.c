@@ -274,7 +274,7 @@ static void rw_slot_init(rw_slot *s) {
     s->writers_waiting = 0;
     s->writer_streak = 0;
     s->poisoned = 0;
-    asx_wait_records_init(&s->waiters, rw_reap_queue);
+    asx_wait_records_init(&s->waiters, rw_reap_queue, 0u);
 }
 
 /* Whether any rwlock was created since the last reset. */
