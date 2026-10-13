@@ -190,7 +190,7 @@
       "construct": "INV-LEDGER-EMPTY-ON-CLOSE; §3.4.5 ledger view",
       "kind": "invariant",
       "index_line": 47,
-      "scenario_tag": null
+      "scenario_tag": "inv.obligation.ledger_empty_on_close"
     },
     {
       "name": "prog.obligation.resolves",
@@ -235,7 +235,7 @@
       "construct": "CLOSE-RUN-FINALIZER",
       "kind": "rule",
       "index_line": 52,
-      "scenario_tag": null
+      "scenario_tag": "rule.region.close_run_finalizer"
     },
     {
       "name": "rule.region.close_complete",
