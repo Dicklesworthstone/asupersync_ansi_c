@@ -319,6 +319,11 @@ asx_status asx_watch_borrow(const asx_watch_receiver *receiver, uint64_t *out_va
     if (st != ASX_OK) return st;
 
     *out_value = s->value;
+#ifdef ASX_MUTANT_WATCH_BORROW_MARKS_SEEN
+    /* Planted bug, compiled only by tests/gates/test_oracle_mutants.sh: a
+     * borrow marks the version seen, as borrow_and_update does. */
+    ((asx_watch_receiver *)receiver)->last_seen_version = s->version;
+#endif
     return ASX_OK;
 }
 

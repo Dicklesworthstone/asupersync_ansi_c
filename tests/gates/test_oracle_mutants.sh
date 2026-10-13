@@ -24,6 +24,12 @@
 #   - CODEC_BIN_SNAPSHOT_TRUNCATED the BIN codec frame drops the snapshot's
 #                              last byte, so every run's JSON and BIN round
 #                              trips differ (bd-vhrp)         -> any fixture
+#   - WATCH_BORROW_MARKS_SEEN  a watch borrow marks the version seen, as
+#                              borrow_and_update does (bd-9kll.5.11); both
+#                              fixtures that read has_changed after a borrow
+#                              must fail, each on its own
+#                              -> watch-borrow-vs-borrow-and-update-*,
+#                                 watch-receiver-clone-continues-*
 # A mutant the corpus does not catch means the fixtures stopped exercising
 # that rule: the gate fails.
 # The raw-ID authorization bypass is tested through actual polling tasks:
@@ -119,6 +125,13 @@ run_mutant SWEEP_PARKED_DEADLINE_NO_TIMER 'budget-deadline-parked-' compare-swee
 # The runner puts every run through the JSON and the BIN codec (bd-vhrp): a
 # BIN encoder that loses a byte must fail the corpus.
 run_mutant CODEC_BIN_SNAPSHOT_TRUNCATED '.'
+
+# A watch borrow reads without marking the value seen (Rust's watch.rs:904).
+# Two captures observe it, and the mutant must fail each by itself, so a
+# corpus that dropped one of them is noticed: has_changed after a borrow, and
+# a clone that continues from the same version.
+run_mutant WATCH_BORROW_MARKS_SEEN 'watch-borrow-vs-borrow-and-update-'
+run_mutant WATCH_BORROW_MARKS_SEEN 'watch-receiver-clone-continues-'
 
 # The scenario parser cannot reach depth 64; the actual public boundary
 # test must catch acceptance of depth 65, without a compile/empty-run pass.
