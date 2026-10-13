@@ -341,7 +341,7 @@ static int certificate_matches(const char *id, uint32_t want_schedule, uint32_t 
     return 0;
 }
 
-typedef enum { CMP_PASS, CMP_FAIL, CMP_ERROR } cmp_result;
+typedef enum { CMP_PASS, CMP_FAIL, CMP_ERROR, CMP_SKIPPED } cmp_result;
 
 /* Only a Rust capture is evidence (oracle self-test, bd-9kll.2.7): the
  * fixture must name twin_run as its producer, and its semantic digest must
@@ -575,6 +575,34 @@ static int forced_replay(const char *id, uint32_t root, uint32_t scenario, uint3
     return 1;
 }
 
+/* Scenarios skipped because they declare a requirement this build's profile
+ * forbids (DEC-008), and the summary says so. */
+static unsigned g_skipped_forbidden;
+
+/* The scenario's "requires" against this build's profile. Returns 1 when
+ * the profile forbids what the scenario declares: the run has nothing to
+ * prove (the channel is refused by design), so it is skipped and counted,
+ * never passed. Returns -1, printing ERROR, for a declaration the
+ * interpreter does not know; 0 to run. A skip needs both halves: a
+ * scenario that does not declare a requirement is never skipped, whatever
+ * the profile refuses, and a profile that allows it runs the scenario. */
+static int requirement_skip(const char *id, uint32_t scenario) {
+    const char *name = NULL;
+    asx_profile_id profile = asx_profile_active();
+    int forbidden = asx_conformance_requirement_forbidden(&g_fixture, scenario, profile, &name);
+    if (forbidden < 0) {
+        fprintf(stdout,
+                "ERROR %s: the scenario's \"requires\" is not a list of known requirements\n", id);
+        return -1;
+    }
+    if (forbidden > 0) {
+        fprintf(stdout, "SKIP %s: the %s profile forbids %s (DEC-008)\n", id,
+                asx_profile_name(profile), name);
+        g_skipped_forbidden++;
+    }
+    return forbidden;
+}
+
 /* Run one fixture's scenario through C and compare. `mutate` corrupts the
  * expected trace first (the self-test). */
 static cmp_result compare_one(const char *path, int mutate) {
@@ -613,6 +641,11 @@ static cmp_result compare_one(const char *path, int mutate) {
         return CMP_ERROR;
     }
     if (!fixture_authentic(root, id)) return CMP_ERROR;
+    switch (requirement_skip(id, scenario)) {
+    case -1: return CMP_ERROR;
+    case 1: return CMP_SKIPPED;
+    default: break;
+    }
     if (mutate) {
         /* Rename the kind of the first event of the first layer. */
         uint32_t first = asx_json_item(&g_fixture, asx_json_item(&g_fixture, want_trace, 0), 0);
@@ -1392,7 +1425,14 @@ static known_divergence *find_known(const char *id) {
     return NULL;
 }
 
-typedef enum { SWEEP_PASS, SWEEP_KNOWN, SWEEP_FAIL, SWEEP_STALE, SWEEP_ERROR } sweep_result;
+typedef enum {
+    SWEEP_PASS,
+    SWEEP_KNOWN,
+    SWEEP_FAIL,
+    SWEEP_STALE,
+    SWEEP_ERROR,
+    SWEEP_SKIPPED
+} sweep_result;
 
 /* The first differing member of each snapshot part and of the observations,
  * printed for a divergence nobody has explained. */
@@ -1474,6 +1514,11 @@ static sweep_result sweep_one(const char *path) {
         return SWEEP_ERROR;
     }
     if (!fixture_authentic(root, id)) return SWEEP_ERROR;
+    switch (requirement_skip(id, scenario)) {
+    case -1: return SWEEP_ERROR;
+    case 1: return SWEEP_SKIPPED;
+    default: break;
+    }
     known = find_known(id);
 
     why[0] = '\0';
@@ -1527,7 +1572,7 @@ static sweep_result sweep_one(const char *path) {
 
 /* compare-sweep [--trace] [--known FILE] fixture.json... */
 static int cmd_compare_sweep(int argc, char **argv) {
-    unsigned counts[5] = {0u, 0u, 0u, 0u, 0u};
+    unsigned counts[6] = {0u, 0u, 0u, 0u, 0u, 0u};
     unsigned unmatched = 0u;
     int i = 2;
     uint32_t k;
@@ -1552,9 +1597,10 @@ static int cmd_compare_sweep(int argc, char **argv) {
         }
     }
     fprintf(stdout,
-            "asx-conformance sweep: pass=%u known=%u fail=%u stale=%u error=%u unmatched=%u\n",
+            "asx-conformance sweep: pass=%u known=%u fail=%u stale=%u error=%u unmatched=%u "
+            "skipped_forbidden=%u\n",
             counts[SWEEP_PASS], counts[SWEEP_KNOWN], counts[SWEEP_FAIL], counts[SWEEP_STALE],
-            counts[SWEEP_ERROR], unmatched);
+            counts[SWEEP_ERROR], unmatched, counts[SWEEP_SKIPPED]);
     return (counts[SWEEP_FAIL] == 0u && counts[SWEEP_STALE] == 0u && counts[SWEEP_ERROR] == 0u &&
             unmatched == 0u)
                ? 0
@@ -1587,11 +1633,13 @@ int main(int argc, char **argv) {
         case CMP_PASS: pass++; break;
         case CMP_FAIL: fail++; break;
         case CMP_ERROR: error++; break;
+        case CMP_SKIPPED: break; /* counted by requirement_skip */
         }
     }
     fprintf(stdout,
             "asx-conformance: compared=%u pass=%u fail=%u error=%u forced_replayed=%u "
-            "forced_unavailable=%u\n",
-            (unsigned)(argc - 2), pass, fail, error, g_forced_replayed, g_forced_unavailable);
+            "forced_unavailable=%u skipped_forbidden=%u\n",
+            (unsigned)(argc - 2), pass, fail, error, g_forced_replayed, g_forced_unavailable,
+            g_skipped_forbidden);
     return (fail == 0u && error == 0u) ? 0 : 1;
 }
