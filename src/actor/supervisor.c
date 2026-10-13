@@ -930,6 +930,9 @@ enum { ST_BEGIN = 0, ST_OPEN, ST_RETAIN, ST_SPAWN, ST_CLOSE_CANCELLED, ST_WAIT, 
  * The finalizer holds nothing: the generation's name is given up by
  * gen_release when it has drained, and only an abandoned controller would
  * leave it to the region's finalization (Rust drops the Arc there).
+ * Rust runs it as a cleanup task of the region when it finalizes
+ * (state.rs:8612), so the lane registers it as an async finalizer and the
+ * lab spawns, dispatches and completes that task too (lab_apply_retain).
  * Under lab dispatch the acknowledgement takes the drain of the next step,
  * so a named generation costs the controller one more park than an unnamed
  * one. Without the lab there is no lane and the finalizer is not

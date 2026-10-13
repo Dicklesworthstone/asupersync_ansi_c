@@ -5525,6 +5525,54 @@ static int observation_less(uint32_t a, uint32_t b) {
     return strcmp(asx_json_get_string(g_out, a, "op"), asx_json_get_string(g_out, b, "op")) < 0;
 }
 
+/* The cleanup task a registered generation's region spawns when it
+ * finalizes. Rust promotes the sync finalizer that retains the name to a
+ * masked task (state.rs:8612) and the lab runs it as one, so it has spawn
+ * and completion events and a dispatch but no declaration. It is named
+ * "<region>/reg" after the supervisor's child region it finalizes (twin_run
+ * names it the same, DSL 3.8) and, like the generation's own task, is left
+ * out of the snapshot. A scenario that already holds that name is refused. */
+static void name_retention_tasks(void) {
+    uint32_t i;
+    for (i = 0; i < g_n_events && !g_failed; i++) {
+        const it_event *e = &g_events[i];
+        const it_region *r;
+        const it_region *parent;
+        char buf[200];
+        uint32_t off;
+        it_task *t;
+        int len;
+        if (e->kind != ASX_TRACE_TASK_SPAWN || task_by_id((asx_task_id)e->entity) != NULL) continue;
+        r = region_by_id((asx_region_id)e->aux);
+        parent = r != NULL ? region_by_name(r->parent) : NULL;
+        if (parent == NULL || !parent->supervisor_region) continue;
+        len = snprintf(buf, sizeof(buf), "%s/reg", r->name);
+        if (len < 0 || (size_t)len >= sizeof(buf) || task_by_name(buf) != NULL ||
+            region_by_name(buf) != NULL) {
+            it_fail("a generation's retention task has no free name", r->name);
+            return;
+        }
+        if (g_n_tasks >= IT_MAX_TASKS) {
+            it_fail("too many tasks", r->name);
+            return;
+        }
+        off = text_store(buf, (size_t)len);
+        if (off == IT_NO_TEXT) return;
+        t = &g_tasks[g_n_tasks++];
+        memset(t, 0, sizeof(*t));
+        t->name = &g_text[off];
+        t->region_name = r->name;
+        t->region = (asx_region_id)e->aux;
+        t->program = ASX_JSON_NONE;
+        t->end = ASX_OK;
+        t->spawn_obs = ASX_JSON_NONE;
+        t->id = (asx_task_id)e->entity;
+        t->spawned = 1;
+        t->finalizer = 1;
+        t->supervised = 1;
+    }
+}
+
 static uint32_t g_sort[4096];
 
 static uint32_t sorted_observations(void) {
@@ -5920,6 +5968,7 @@ static asx_status conformance_run(const asx_json_doc *in, uint32_t scenario, asx
     /* Supervisor regions no generation named. */
     name_generationless_regions();
     name_unstarted_regions();
+    name_retention_tasks();
 
     /* Project (DSL §2). */
     obligations = asx_json_new_object(out);

@@ -605,7 +605,17 @@ generation costs the controller one lab step: it registers a finalizer on
 the generation's region through the region-command lane and waits for the
 acknowledgement (`ChildRegion::retain_until_finalized`,
 `child_region.rs:342`; `RegionCommand::RegisterFinalizer`,
-`lab/runtime.rs:4173`), which the numbering of later dispatches shows. The
+`lab/runtime.rs:4173`), which the numbering of later dispatches shows.
+Rust promotes that finalizer, a sync one, to a masked cleanup task like any
+other (`drain_ready_async_finalizers` wraps it in `async move {
+finalizer() }`, `state.rs:8612`): when the generation's region finalizes the
+lab spawns it at a later step, dispatches it once and completes it, and the
+region closes after it. That task is named `<generation>/reg` (a generation's
+region, or `<supervisor>/unstarted<k>`'s when it never started); it has
+`task.spawned` and `task.completed` events and a dispatch, and like the
+generation's own task it is left out of the snapshot. A registered child's
+program may therefore not create the name `reg`. C registers the finalizer
+as an async one (`lab_apply_retain`) so that it is a task too. The
 registry's third policy, `wait`, has no DSL form: a waiting generation
 sleeps 1 ms between looks for its grant with Sleeps made inside the
 library, whose Timer events twin_run cannot attribute to a task, so a

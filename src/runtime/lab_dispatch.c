@@ -1028,18 +1028,31 @@ static void lab_cancel_region(asx_region_id region, const asx_cancel_reason *rea
  * acknowledgement as for a Watch (retain_until_finalized, child_region.rs:342). */
 #define LAB_CMD_RETAIN 8u
 
-/* The finalizer a retained value leaves: Rust's closure drops the value, and
- * a C holder resolves its own, so this has nothing to do. */
-static void lab_retained_noop(void *unused) { (void)unused; }
+/* The poll of the cleanup task a retained value leaves: Rust's closure drops
+ * the value and a C holder resolves its own, so there is nothing to do, and
+ * the task completes at its first poll as Rust's one-poll wrapper does. */
+static asx_status lab_retained_poll(void *unused, asx_task_id self) {
+    (void)unused;
+    (void)self;
+    return ASX_OK;
+}
 
 /* RegisterRegionFinalizer::apply (:1640): the finalizer is registered while
  * the region is open (a closing, closed or unknown region refuses it), and
  * the acknowledgement is left on the opener, recorded in `woken`, which wakes
  * once the batch is applied (finalizer_publications, LR:4210). The
- * registration happens whether or not the opener still waits. */
+ * registration happens whether or not the opener still waits.
+ *
+ * Rust promotes every finalizer, a sync one included, to a masked cleanup
+ * task when its region finalizes (drain_ready_async_finalizers wraps it in
+ * `async move { finalizer() }`, state.rs:8612), spawned at a later lab step.
+ * The task is as visible as a declared finalizer's: its spawn and completion
+ * events, its dispatch and the step the region waits for it. A C sync
+ * finalizer runs inline in the drain, so this one is registered as an async
+ * finalizer, whose poll completes at once. */
 static void lab_apply_retain(const lab_region_cmd *c, uint32_t *woken, uint32_t *n_woken) {
     asx_task_slot *t;
-    asx_status st = asx_region_defer_sync(c->region, lab_retained_noop, NULL);
+    asx_status st = asx_region_defer_async(c->region, lab_retained_poll, NULL);
 
     t = &lab_kernel()->tasks[c->opener];
     if (!t->alive || t->generation != c->opener_gen || t->region_wait != ASX_REGION_WAIT_WATCH) {

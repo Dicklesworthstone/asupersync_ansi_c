@@ -3092,6 +3092,16 @@ async fn exec_step(
                         collision,
                     });
                     registered = true;
+                    // Each generation's region also runs a cleanup task that
+                    // retains the name, "<generation>/reg" (name_supervision).
+                    let mut created = HashSet::new();
+                    collect_created(&program, &mut created);
+                    if created.contains("reg") {
+                        return Err(format!(
+                            "supervise {name:?}: child {child_name:?} registers a name, so \
+                             its program cannot create `reg`, its retention task's name"
+                        ));
+                    }
                 }
                 builder = builder.child(spec);
                 bindings.push(generation_binding(
@@ -4321,6 +4331,9 @@ struct IdsSeen {
     created: Vec<RegionId>,
     tasks: HashMap<String, TaskId>,
     first_in: HashMap<RegionId, Vec<TaskId>>,
+    /// The canonical id of every task a region spawned (a direct spawn or
+    /// an admission, not a provisional mailbox id), in trace order.
+    canonical_in: HashMap<RegionId, Vec<TaskId>>,
 }
 
 impl IdsSeen {
@@ -4343,6 +4356,12 @@ impl IdsSeen {
                     TraceData::Task { task, region },
                 ) => {
                     ids.tasks.insert(format!("{task:?}"), *task);
+                    if matches!(event.kind, K::Spawn | K::TaskAdmitted) {
+                        let all = ids.canonical_in.entry(*region).or_default();
+                        if !all.contains(task) {
+                            all.push(*task);
+                        }
+                    }
                     let first = ids.first_in.entry(*region).or_default();
                     // The first enqueue (its provisional id) and the first
                     // admission (its canonical id).
@@ -4532,6 +4551,52 @@ fn name_supervision(lab: &LabRuntime, shared: &SharedRef) -> RunResult<()> {
         let name = format!("{supervisor}/unstarted{k}");
         name_region(&mut s, *region, &name)?;
         s.region_parents.insert(name, Some(supervisor.clone()));
+    }
+    // The cleanup task of a registered generation's region (DSL §3.8): Rust
+    // promotes the sync finalizer that retains the name to a masked task,
+    // spawned when the region finalizes (state.rs:8612), which no spawn
+    // names. It is "<region>/reg" for each region a supervisor opened, the
+    // one task created there that is still unnamed, and like the
+    // generation's own task it is left out of the snapshot.
+    for region in &ids.created {
+        let Some(parent) = ids.parents.get(region).copied().flatten() else {
+            continue;
+        };
+        if !supervisor_regions.contains_key(&parent) {
+            continue;
+        }
+        let Some(generation) = s.region_names.get(region).cloned() else {
+            continue;
+        };
+        let unnamed: Vec<TaskId> = ids
+            .canonical_in
+            .get(region)
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(|task| !s.task_names.contains_key(task))
+            .collect();
+        let name = format!("{generation}/reg");
+        match unnamed.as_slice() {
+            [] => {}
+            [task] => {
+                if s.task_ids.contains_key(&name) || s.region_ids.contains_key(&name) {
+                    return Err(format!(
+                        "{name:?} is the retention task of {generation:?}, but the \
+                         scenario created that name"
+                    ));
+                }
+                name_task(&mut s, *task, &name)?;
+                s.task_regions.insert(name.clone(), generation);
+                s.supervised.insert(name);
+            }
+            _ => {
+                return Err(format!(
+                    "generation region {generation:?} spawned {} unnamed tasks",
+                    unnamed.len()
+                ));
+            }
+        }
     }
     Ok(())
 }
