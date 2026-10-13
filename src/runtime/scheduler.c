@@ -111,8 +111,8 @@ static asx_task_id g_current_task = ASX_INVALID_ID;
 #define TIMER_KIND_DEADLINE 1u
 
 static asx_time sched_now(void);
-
 static void *timer_token(uint32_t slot, uint32_t kind) {
+    /* ASX_ANALYZER_WAIVER("opaque token: slot and kind packed into the timer's user pointer") */
     return (void *)(uintptr_t)(((uintptr_t)slot << 1) | (uintptr_t)kind);
 }
 
