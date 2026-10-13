@@ -67,12 +67,32 @@
  * 1/alpha alert only at a batch whose intensity check has fired, at that
  * batch or before.
  *
- * Not in the C model: name registration (registries), shared restart
- * domains (dynamic supervisors), per-child shutdown budgets (a drained
- * generation's cleanup budget is its cancel kind's, Rust's default
- * Budget::INFINITE ceiling), and region cleanup outcomes (C regions have no
- * finalizers whose cleanup can fail), so the Registration,
- * SharedRestartLimit, Cleanup and SupervisorCleanup errors never occur.
+ * Not in the C model, with the reason for each:
+ *   - name registration (Rust bind_managed_with_registry, :2117): the
+ *     Registration error never occurs;
+ *   - shared restart domains: Rust attaches one only from its dynamic
+ *     supervisor (cx/dynamic_supervisor.rs; set_shared_restarts is
+ *     pub(crate)), a separate module this port does not have, so the
+ *     SharedRestartLimit error is unreachable through the managed
+ *     supervisor;
+ *   - per-child shutdown budgets (ChildSpec::shutdown_budget): Rust applies
+ *     one as a region-level shutdown ceiling that propagates to descendants
+ *     and finalizers (RuntimeState::cancel_request_with_shutdown_budget),
+ *     which needs the region close and finalizer work of bd-9kll.3.4 and
+ *     bd-9kll.3.5; a drained generation's cleanup budget is its cancel
+ *     kind's, Rust's default Budget::INFINITE ceiling;
+ *   - region cleanup outcomes (ManagedSupervisorError::Cleanup and
+ *     SupervisorCleanup): Rust's region close returns the finalizers'
+ *     outcome (close_with_outcome), which C regions do not record until
+ *     bd-9kll.3.4 does, so neither error occurs;
+ *   - the legacy CompiledSupervisor::spawn / ChildStart boot path (:1639),
+ *     EXCLUDED: it threads Rust's RuntimeState through a synchronous start
+ *     closure, boots the children in compiled order and restarts nothing
+ *     (its own documentation says a crash is not restarted), so
+ *     asx_supervisor_spawn, which boots in the same order and also
+ *     supervises, subsumes it; Rust itself calls the managed entry point
+ *     additive (:1784). Its pure restart planners (restart_plan_for,
+ *     compile_restart_ops) are not used by the managed controller.
  *
  * SPDX-License-Identifier: MIT
  */
