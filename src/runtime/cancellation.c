@@ -34,15 +34,15 @@ asx_time asx_cancel_now_internal(const asx_kernel *k) {
     return asx_kernel_now_or_virtual_internal(k != NULL ? k : g_kernels[0]);
 }
 
-asx_cancel_reason asx_cancel_reason_default(asx_cancel_kind kind, const char *message) {
+asx_cancel_reason asx_cancel_reason_default_internal(const asx_kernel *k, asx_cancel_kind kind,
+                                                     const char *message) {
     asx_cancel_reason r;
+    memset(&r, 0, sizeof(r)); /* no cause, not truncated */
     r.kind = kind;
-    r.origin_region = asx_region_handle_for_slot(g_kernels[0], 0u);
+    r.origin_region = k != NULL ? asx_region_handle_for_slot(k, 0u) : ASX_INVALID_ID;
     r.origin_task = ASX_INVALID_ID;
     r.timestamp = (asx_time)1000000000u;
     r.message = message;
-    r.cause = NULL;
-    r.truncated = 0;
     return r;
 }
 
@@ -55,9 +55,9 @@ void asx_region_trace_cancel_of_gone_internal(asx_region_id region,
                                     (uint64_t)reason->kind, &payload);
 }
 
-asx_cancel_reason asx_region_close_reason_internal(void) {
+asx_cancel_reason asx_region_close_reason_internal(const asx_kernel *k) {
     static const char message[] = "owned child region body finished";
-    return asx_cancel_reason_default(ASX_CANCEL_USER, message);
+    return asx_cancel_reason_default_internal(k, ASX_CANCEL_USER, message);
 }
 
 static int reason_same(const asx_cancel_reason *a, const asx_cancel_reason *b) {

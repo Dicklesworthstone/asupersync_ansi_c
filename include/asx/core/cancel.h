@@ -10,6 +10,7 @@
 #ifndef ASX_CORE_CANCEL_H
 #define ASX_CORE_CANCEL_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_ids.h>
 #include <asx/core/budget.h>
@@ -43,11 +44,13 @@ ASX_API asx_cancel_reason asx_cancel_strengthen(const asx_cancel_reason *a,
 /* A reason of `kind` with Rust's default attribution, as its Cx-free
  * constructors make one (CancelReason::new / ::user / ::timeout /
  * ::race_loser / ::poll_quota, types/cancel.rs:596-631): origin the region
- * at arena index 0 (which the lab's root region also is), no task, stamped
- * 1 s, with `message` (may be NULL). Rust's lab stamps a pre-poll quota
- * cancel (lab/runtime.rs:4667), a ChildRegion close, a refused spawn's join
- * and Scope::timeout's abort with it. */
-ASX_API asx_cancel_reason asx_cancel_reason_default(asx_cancel_kind kind, const char *message);
+ * at arena index 0 of rt's kernel (the lab's root region also is), no task,
+ * stamped 1 s, with `message` (may be NULL; origin none for a NULL rt or a
+ * tag no runtime holds). Rust's lab stamps a pre-poll quota cancel
+ * (lab/runtime.rs:4667), a ChildRegion close, a refused spawn's join and
+ * Scope::timeout's abort with it. */
+ASX_API asx_cancel_reason asx_cancel_reason_default(const asx_runtime *rt, asx_cancel_kind kind,
+                                                    const char *message);
 
 /* -------------------------------------------------------------------
  * Cause-chain bound

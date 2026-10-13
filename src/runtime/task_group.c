@@ -57,7 +57,7 @@ static void group_refuse_member(asx_task_group *g, uint32_t i, uint32_t ticket) 
     g->members[i] = ASX_INVALID_ID;
     g->refused[i] = 1u;
     g->refusal[i] = ticket;
-    g->refused_reason[i] = asx_cancel_reason_default(ASX_CANCEL_PARENT, NULL);
+    g->refused_reason[i] = asx_cancel_reason_default_ctx_internal(ASX_CANCEL_PARENT, NULL);
 }
 
 /* An abort of member i (Rust abort_with_reason): a live member takes it as
@@ -163,13 +163,14 @@ static void group_send_cancels(asx_task_group *g) {
              * drains its unfinished losers with the default race-loser
              * reason through those same handles (race_all, :1429-1433),
              * not a direct cancellation stamped at the current poll. */
-            asx_cancel_reason r = g->owner_cancelled
-                                      ? g->owner_reason
-                                      : asx_cancel_reason_default(ASX_CANCEL_RACE_LOST, NULL);
+            asx_cancel_reason r =
+                g->owner_cancelled
+                    ? g->owner_reason
+                    : asx_cancel_reason_default_ctx_internal(ASX_CANCEL_RACE_LOST, NULL);
             st = group_abort_member(g, i, &r);
         } else if (g->refused[i]) {
             /* No task to cancel: the drain's kind is what its join reports. */
-            asx_cancel_reason r = asx_cancel_reason_default(g->drain_kind, NULL);
+            asx_cancel_reason r = asx_cancel_reason_default_ctx_internal(g->drain_kind, NULL);
             st = group_abort_member(g, i, &r);
         } else {
             st = asx_task_cancel(g->members[i], g->drain_kind);
@@ -595,8 +596,9 @@ asx_outcome asx_task_group_outcome(const asx_task_group *g) {
          * cancel did, else the kind it drained its members with (the
          * deadline's TIMEOUT, or the one asx_task_group_cancel was given).
          * A member's stronger reason still wins the join. */
-        asx_cancel_reason why =
-            g->owner_cancelled ? g->owner_reason : asx_cancel_reason_default(g->drain_kind, NULL);
+        asx_cancel_reason why = g->owner_cancelled
+                                    ? g->owner_reason
+                                    : asx_cancel_reason_default_ctx_internal(g->drain_kind, NULL);
         asx_outcome cancelled = asx_outcome_cancelled(&why);
         acc = asx_outcome_join(&acc, &cancelled);
     }

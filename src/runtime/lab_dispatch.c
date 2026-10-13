@@ -1200,7 +1200,7 @@ void asx_lab_drain_region_commands(void) {
         t = &lab_kernel()->tasks[c->opener];
         if (!t->alive || t->generation != c->opener_gen || t->region_wait != ASX_REGION_WAIT_OPEN) {
             if (st == ASX_OK) {
-                asx_cancel_reason close = asx_region_close_reason_internal();
+                asx_cancel_reason close = asx_region_close_reason_internal(lab_kernel());
                 lab_cancel_region(id, &close);
             }
             continue;

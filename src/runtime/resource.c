@@ -112,46 +112,63 @@ uint32_t asx_resource_capacity(asx_resource_kind kind) {
     return 0;
 }
 
-uint32_t asx_resource_used(asx_resource_kind kind) {
-    /* handle-less: kernel 0 until the query takes its runtime */
+/* What a runtime holds of a kind: nothing for a NULL rt or a tag no runtime holds. */
+uint32_t asx_resource_used(const asx_runtime *rt, asx_resource_kind kind) {
+    const asx_kernel *k = asx_kernel_of_runtime(rt);
+    if (k == NULL) return 0;
     switch (kind) {
-    case ASX_RESOURCE_REGION: return g_kernels[0]->region_live;
-    case ASX_RESOURCE_TASK: return g_kernels[0]->task_live;
-    case ASX_RESOURCE_OBLIGATION: return g_kernels[0]->obligation_live;
+    case ASX_RESOURCE_REGION: return k->region_live;
+    case ASX_RESOURCE_TASK: return k->task_live;
+    case ASX_RESOURCE_OBLIGATION: return k->obligation_live;
     case ASX_RESOURCE_KIND_COUNT: return 0;
     }
     return 0;
 }
 
-uint32_t asx_resource_remaining(asx_resource_kind kind) {
+uint32_t asx_resource_remaining(const asx_runtime *rt, asx_resource_kind kind) {
     uint32_t cap = asx_resource_capacity(kind);
-    uint32_t used = asx_resource_used(kind);
+    uint32_t used = asx_resource_used(rt, kind);
     if (used >= cap) return 0;
     return cap - used;
 }
 
-asx_status asx_resource_snapshot_get(asx_resource_kind kind, asx_resource_snapshot *out) {
-    if (out == NULL) return ASX_E_INVALID_ARGUMENT;
+asx_status asx_resource_snapshot_get(const asx_runtime *rt, asx_resource_kind kind,
+                                     asx_resource_snapshot *out) {
+    if (rt == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
     if (kind >= ASX_RESOURCE_KIND_COUNT) return ASX_E_INVALID_ARGUMENT;
+    if (asx_kernel_of_runtime(rt) == NULL) return ASX_E_INVALID_STATE;
 
     out->kind = kind;
     out->capacity = asx_resource_capacity(kind);
-    out->used = asx_resource_used(kind);
+    out->used = asx_resource_used(rt, kind);
     out->remaining = (out->used >= out->capacity) ? 0 : out->capacity - out->used;
     return ASX_OK;
+}
+
+/* Cumulative number of obligations the runtime recorded as leaked since its reset. */
+uint64_t asx_obligation_leak_count(const asx_runtime *rt) {
+    const asx_kernel *k = asx_kernel_of_runtime(rt);
+    return k != NULL ? k->leak_count : 0u;
+}
+
+/* The default cancel reason of rt's kernel (cancel.h); cancellation.c builds it. */
+asx_cancel_reason asx_cancel_reason_default(const asx_runtime *rt, asx_cancel_kind kind,
+                                            const char *message) {
+    return asx_cancel_reason_default_internal(asx_kernel_of_runtime(rt), kind, message);
 }
 
 /* ------------------------------------------------------------------ */
 /* Admission gate                                                      */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_resource_admit(asx_resource_kind kind, uint32_t count) {
+asx_status asx_resource_admit(const asx_runtime *rt, asx_resource_kind kind, uint32_t count) {
     uint32_t remaining;
 
-    if (count == 0) return ASX_E_INVALID_ARGUMENT;
+    if (rt == NULL || count == 0) return ASX_E_INVALID_ARGUMENT;
     if (kind >= ASX_RESOURCE_KIND_COUNT) return ASX_E_INVALID_ARGUMENT;
+    if (asx_kernel_of_runtime(rt) == NULL) return ASX_E_INVALID_STATE;
 
-    remaining = asx_resource_remaining(kind);
+    remaining = asx_resource_remaining(rt, kind);
     if (count > remaining) return ASX_E_RESOURCE_EXHAUSTED;
 
     return ASX_OK;

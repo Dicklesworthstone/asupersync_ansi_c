@@ -911,12 +911,14 @@ const char *asx_oracle_kernel_name(uint32_t index) {
     return index < ORACLE_TABLE_COUNT ? g_oracle_table[index].name : NULL;
 }
 
-asx_oracle_result asx_oracle_check_named(const char *name) {
+asx_oracle_result asx_oracle_check_named(const asx_runtime *rt, const char *name) {
+    const asx_kernel *k = asx_kernel_of_runtime(rt);
     uint32_t i;
     if (name == NULL) return oracle_verdict(ASX_ORACLE_FAIL, "unknown", "null oracle name", 0u);
+    if (k == NULL) return oracle_verdict(ASX_ORACLE_FAIL, "unknown", "no runtime", 0u);
     for (i = 0; i < ORACLE_TABLE_COUNT; i++) {
         /* ASX_CHECKPOINT_WAIVER("bounded: a constant-size table") */
-        if (strcmp(g_oracle_table[i].name, name) == 0) return g_oracle_table[i].check(g_kernels[0]);
+        if (strcmp(g_oracle_table[i].name, name) == 0) return g_oracle_table[i].check(k);
     }
     return oracle_verdict(ASX_ORACLE_FAIL, "unknown", "unknown oracle", 0u);
 }

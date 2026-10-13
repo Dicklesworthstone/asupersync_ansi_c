@@ -325,7 +325,7 @@ static void record_cancel(sup_slot *s) {
     asx_cancel_reason r;
     if (s->report.outcome == ASX_OUTCOME_PANICKED) return;
     if (asx_task_get_cancel_reason(s->task, &r) != ASX_OK) {
-        r = asx_cancel_reason_default(ASX_CANCEL_USER, "managed supervisor cancelled");
+        r = asx_cancel_reason_default_ctx_internal(ASX_CANCEL_USER, "managed supervisor cancelled");
     }
     s->report.outcome = ASX_OUTCOME_CANCELLED;
     s->report.error = ASX_SUPERVISOR_ERR_NONE;
@@ -340,7 +340,8 @@ static int deadline_passed(const sup_slot *s) {
 static void record_deadline(sup_slot *s) {
     asx_cancel_reason r;
     if (s->report.outcome != ASX_OUTCOME_OK) return;
-    r = asx_cancel_reason_default(ASX_CANCEL_DEADLINE, "managed supervisor budget deadline passed");
+    r = asx_cancel_reason_default_ctx_internal(ASX_CANCEL_DEADLINE,
+                                               "managed supervisor budget deadline passed");
     r.origin_region = s->report.region != ASX_INVALID_ID ? s->report.region : s->owner_region;
     r.timestamp = sup_now();
     s->report.outcome = ASX_OUTCOME_CANCELLED;
@@ -527,7 +528,8 @@ static sup_acq gen_acquire_failed(sup_gen *g, const asx_cancel_reason *reason) {
 static sup_acq gen_acquire_cancelled(sup_gen *g, asx_task_id self) {
     asx_cancel_reason reason;
     if (asx_task_get_cx_cancel_reason_internal(self, &reason) != ASX_OK) {
-        reason = asx_cancel_reason_default(ASX_CANCEL_USER, "named child cancelled before start");
+        reason = asx_cancel_reason_default_ctx_internal(ASX_CANCEL_USER,
+                                                        "named child cancelled before start");
     }
     return gen_acquire_failed(g, &reason);
 }
@@ -536,7 +538,8 @@ static sup_acq gen_acquire_cancelled(sup_gen *g, asx_task_id self) {
  * it (Registration), and the terminal is a User cancellation. */
 static sup_acq gen_acquire_refused(sup_gen *g, asx_status why) {
     asx_cancel_reason reason =
-        asx_cancel_reason_default(ASX_CANCEL_USER, "managed child registration failed");
+        asx_cancel_reason_default_ctx_internal(ASX_CANCEL_USER,
+                                               "managed child registration failed");
     g->reg_err_set = 1;
     g->reg_err = why;
     return gen_acquire_failed(g, &reason);
@@ -589,7 +592,8 @@ static sup_acq gen_acquire(sup_slot *s, uint32_t pos, asx_task_id self) {
                  * unlocked (:116-131): the displaced task is cancelled as a
                  * handle's cancel is, and may already be gone. */
                 asx_cancel_reason why =
-                    asx_cancel_reason_default(ASX_CANCEL_USER, "managed supervisor name replaced");
+                    asx_cancel_reason_default_ctx_internal(ASX_CANCEL_USER,
+                                                           "managed supervisor name replaced");
                 st = asx_task_abort_request(got.displaced_holder, &why);
                 (void)st;
             }
@@ -714,7 +718,7 @@ static asx_status gen_poll(void *user_data, asx_task_id self) {
          * `return cancelled`, vocabulary 3.8). */
         asx_cancel_reason reason;
         if (asx_task_get_cx_cancel_reason_internal(self, &reason) != ASX_OK) {
-            reason = asx_cancel_reason_default(ASX_CANCEL_USER, NULL);
+            reason = asx_cancel_reason_default_ctx_internal(ASX_CANCEL_USER, NULL);
             if (asx_task_slot_lookup(self, &t) == ASX_OK) reason.origin_region = t->region;
             reason.origin_task = self;
             reason.timestamp = sup_now();
@@ -750,7 +754,7 @@ static int gen_poll_join(sup_slot *s, uint32_t pos, asx_task_id self, sup_join *
     if (asx_task_slot_lookup(g->task, &t) != ASX_OK) {
         /* Gone without a join: nothing the controller started does that. */
         out->outcome = ASX_OUTCOME_CANCELLED;
-        out->reason = asx_cancel_reason_default(ASX_CANCEL_USER, NULL);
+        out->reason = asx_cancel_reason_default_ctx_internal(ASX_CANCEL_USER, NULL);
         out->panic_message = NULL;
         out->task_key = (uint64_t)g->task;
         return 1;
@@ -853,7 +857,8 @@ static asx_status gen_cancel(sup_slot *s, uint32_t pos) {
     g->cancellation_sent = 1;
     g->shutdown_requested = 1;
     if (!g->region_held) return ASX_OK;
-    r = asx_cancel_reason_default(ASX_CANCEL_USER, "managed supervisor generation drain");
+    r = asx_cancel_reason_default_ctx_internal(ASX_CANCEL_USER,
+                                               "managed supervisor generation drain");
     r.origin_region = g->region;
     r.timestamp = sup_now();
     r.origin_task = g->handle_held ? g->task : ASX_INVALID_ID;
@@ -887,8 +892,8 @@ static void escalate(sup_slot *s, uint32_t failed) {
     asx_status st;
     if (s->report.escalations != 0u) return;
     s->escalate_reason =
-        asx_cancel_reason_default(ASX_CANCEL_FAIL_FAST,
-                                  "managed supervisor restart intensity exhausted");
+        asx_cancel_reason_default_ctx_internal(ASX_CANCEL_FAIL_FAST,
+                                               "managed supervisor restart intensity exhausted");
     s->escalate_reason.origin_region = id.region;
     s->escalate_reason.origin_task = id.task;
     s->escalate_reason.timestamp = sup_now();
@@ -1889,7 +1894,7 @@ asx_status asx_supervisor_abort(asx_supervisor_handle sup) {
     if (s == NULL) return ASX_E_INVALID_ARGUMENT;
     /* A refused controller's handle only caches the abort. */
     if (s->task == ASX_INVALID_ID) return ASX_OK;
-    s->abort_reason = asx_cancel_reason_default(ASX_CANCEL_USER, "abort");
+    s->abort_reason = asx_cancel_reason_default_ctx_internal(ASX_CANCEL_USER, "abort");
     st = asx_task_abort_request(s->task, &s->abort_reason);
     /* A joined controller has nothing left to abort. */
     if (st == ASX_E_NOT_FOUND || st == ASX_E_STALE_HANDLE) return ASX_OK;

@@ -201,9 +201,9 @@ ASX_API const char *asx_oracle_kernel_name(uint32_t index);
  * finalizer, region_tree, deadline_monotone, cancellation_protocol,
  * cancel_correctness, cancel_debt, task_counters, arena_counters,
  * region_leak, cancel_signal_ordering, channel_atomicity, down_order,
- * reply_linearity, loser_drain). An unknown or NULL name fails with the
- * oracle name "unknown". */
-ASX_API asx_oracle_result asx_oracle_check_named(const char *name);
+ * reply_linearity, loser_drain) against rt's kernel. An unknown or NULL name,
+ * a NULL rt or a tag no runtime holds fails with the oracle name "unknown". */
+ASX_API asx_oracle_result asx_oracle_check_named(const asx_runtime *rt, const char *name);
 
 /* Render a replay result as JSON for retained diagnostics/artifacts. */
 ASX_API ASX_MUST_USE asx_status asx_replay_render_result_json(const asx_replay_result *result,

@@ -461,8 +461,8 @@ void asx_runtime_set_leak_policy_internal(asx_kernel *k, asx_leak_response respo
     }
 }
 
-/* handle-less: kernel 0 until the query takes its runtime */
-uint64_t asx_obligation_leak_count(void) { return g_kernels[0]->leak_count; }
+/* asx_obligation_leak_count (the runtime's cumulative leak count) is defined with
+ * the other per-runtime counts, in resource.c. */
 
 void asx_runtime_set_cleanup_hard_bound_internal(asx_kernel *k, int on) {
     k->cleanup_hard_bound = on ? 1 : 0;
@@ -1039,7 +1039,7 @@ asx_status asx_region_cancel_request(asx_region_id region, const asx_cancel_reas
 }
 
 asx_status asx_region_close_request(asx_region_id region) {
-    asx_cancel_reason close = asx_region_close_reason_internal();
+    asx_cancel_reason close = asx_region_close_reason_internal(asx_kernel_of(region));
     return asx_region_cancel_request(region, &close);
 }
 
@@ -1159,7 +1159,7 @@ asx_status asx_region_close_with_outcome(asx_region_id id, const asx_outcome *bo
     switch (body->severity) {
     case ASX_OUTCOME_OK:
 #ifdef ASX_MUTANT_OK_BODY_CANCELS
-        failure = asx_cancel_reason_default(ASX_CANCEL_FAIL_FAST, NULL);
+        failure = asx_cancel_reason_default_internal(asx_kernel_of(id), ASX_CANCEL_FAIL_FAST, NULL);
         failure.origin_region = id;
         return asx_region_cancel(id, &failure, NULL);
 #else
@@ -1182,7 +1182,7 @@ asx_status asx_region_close_with_outcome(asx_region_id id, const asx_outcome *bo
 #else
         /* Rust CancelReason::fail_fast().with_region(id), including its
          * Cx-free constructor's default attribution and testing timestamp. */
-        failure = asx_cancel_reason_default(ASX_CANCEL_FAIL_FAST, NULL);
+        failure = asx_cancel_reason_default_internal(asx_kernel_of(id), ASX_CANCEL_FAIL_FAST, NULL);
         failure.origin_region = id;
         return asx_region_cancel(id, &failure, NULL);
 #endif
@@ -1457,9 +1457,9 @@ asx_status asx_task_refuse_admission_internal(asx_task_slot *t, asx_region_slot 
     t->outcome = asx_outcome_make(ASX_OUTCOME_CANCELLED);
     t->cancel_reason =
         why == ASX_E_REGION_CLOSED
-            ? asx_cancel_reason_default(ASX_CANCEL_PARENT, NULL)
-            : asx_cancel_reason_default(ASX_CANCEL_USER,
-                                        "[ASUP-E006] region admission limit reached");
+            ? asx_cancel_reason_default_internal(k, ASX_CANCEL_PARENT, NULL)
+            : asx_cancel_reason_default_internal(k, ASX_CANCEL_USER,
+                                                 "[ASUP-E006] region admission limit reached");
     t->cancel_pending = 1; /* its reason reads as any cancelled task's */
     t->lab_admission_refusal = why;
     asx_task_on_complete_internal(t, r);

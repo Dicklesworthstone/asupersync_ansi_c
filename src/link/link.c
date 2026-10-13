@@ -297,7 +297,8 @@ static void deliver_exit(lk_entry *e, asx_task_id from, const asx_outcome *reaso
 /* linked_exit_cancel_reason (link.rs:610): CancelReason::new(LinkedExit)
  * with the message "link exit"; a cancelled exit is its cause. */
 static void linked_exit_reason(asx_cancel_reason *out, const asx_outcome *exit, asx_task_id peer) {
-    *out = asx_cancel_reason_default(ASX_CANCEL_LINKED_EXIT, "link exit");
+    *out = asx_cancel_reason_default_internal(asx_kernel_of(peer), ASX_CANCEL_LINKED_EXIT,
+                                              "link exit");
     if (exit->severity == ASX_OUTCOME_CANCELLED) {
         uint32_t slot = (uint32_t)asx_handle_slot(peer);
         if (slot < ASX_MAX_TASKS) {

@@ -14,6 +14,7 @@
 #ifndef ASX_CORE_RESOURCE_H
 #define ASX_CORE_RESOURCE_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_ids.h>
 #include <asx/asx_status.h>
@@ -52,28 +53,32 @@ typedef struct {
 /* Hard ceiling for a resource kind. Returns 0 for unknown kinds. */
 ASX_API ASX_MUST_USE uint32_t asx_resource_capacity(asx_resource_kind kind);
 
-/* Current allocation count for a resource kind. */
-ASX_API ASX_MUST_USE uint32_t asx_resource_used(asx_resource_kind kind);
+/* Current allocation count of a resource kind in rt (0 for a NULL or unheld rt). */
+ASX_API ASX_MUST_USE uint32_t asx_resource_used(const asx_runtime *rt, asx_resource_kind kind);
 
-/* Remaining allocation headroom for a resource kind. */
-ASX_API ASX_MUST_USE uint32_t asx_resource_remaining(asx_resource_kind kind);
+/* Remaining allocation headroom for a resource kind in rt (0 for a NULL or unheld rt). */
+ASX_API ASX_MUST_USE uint32_t asx_resource_remaining(const asx_runtime *rt, asx_resource_kind kind);
 
-/* Take a point-in-time snapshot of a resource kind.
- * Returns ASX_E_INVALID_ARGUMENT for NULL output or unknown kind. */
-ASX_API ASX_MUST_USE asx_status asx_resource_snapshot_get(asx_resource_kind kind,
+/* Take a point-in-time snapshot of a resource kind in rt. Returns
+ * ASX_E_INVALID_ARGUMENT for NULL rt, NULL output or unknown kind, and
+ * ASX_E_INVALID_STATE if no runtime holds rt's tag. */
+ASX_API ASX_MUST_USE asx_status asx_resource_snapshot_get(const asx_runtime *rt,
+                                                          asx_resource_kind kind,
                                                           asx_resource_snapshot *out);
 
 /* ------------------------------------------------------------------ */
 /* Admission gate                                                      */
 /* ------------------------------------------------------------------ */
 
-/* Pre-check whether `count` more of `kind` can be allocated.
+/* Pre-check whether `count` more of `kind` can be allocated in rt.
  * Returns ASX_OK if admission is possible.
  * Returns ASX_E_RESOURCE_EXHAUSTED if insufficient headroom.
- * Returns ASX_E_INVALID_ARGUMENT for count==0 or unknown kind.
+ * Returns ASX_E_INVALID_ARGUMENT for NULL rt, count==0 or unknown kind.
+ * Returns ASX_E_INVALID_STATE if no runtime holds rt's tag.
  *
  * This is a pure query — no side effects, no reservation. */
-ASX_API ASX_MUST_USE asx_status asx_resource_admit(asx_resource_kind kind, uint32_t count);
+ASX_API ASX_MUST_USE asx_status asx_resource_admit(const asx_runtime *rt, asx_resource_kind kind,
+                                                   uint32_t count);
 
 /* ------------------------------------------------------------------ */
 /* Per-region resource queries                                         */

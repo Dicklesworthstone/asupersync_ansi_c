@@ -761,8 +761,8 @@ ASX_API ASX_MUST_USE asx_status asx_obligation_register(asx_region_id region,
 ASX_API ASX_MUST_USE asx_status asx_obligation_get_info(asx_obligation_id id,
                                                         asx_obligation_info *out);
 
-/* Cumulative number of obligations recorded as leaked since reset. */
-ASX_API uint64_t asx_obligation_leak_count(void);
+/* Cumulative obligations rt recorded as leaked since its reset (0 for a NULL or unheld rt). */
+ASX_API uint64_t asx_obligation_leak_count(const asx_runtime *rt);
 
 /* Reserve an obligation within a region. The obligation starts in
  * the RESERVED state and must eventually be committed or aborted.

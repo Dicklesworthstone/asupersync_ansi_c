@@ -2716,7 +2716,7 @@ static void exec_race_deadline(it_task *t, asx_task_id self, uint32_t step, uint
                 (void)st;
                 t->race_timer_armed = 0;
             }
-            r = asx_cancel_reason_default(ASX_CANCEL_TIMEOUT, NULL);
+            r = asx_cancel_reason_default(&g_rt, ASX_CANCEL_TIMEOUT, NULL);
         } else {
             st = asx_task_wait_until(self, t->race_deadline);
             (void)st;
@@ -2798,7 +2798,7 @@ static void race_refused_wrapper(it_task *t, asx_task_id self, uint32_t idx, it_
         }
         *out = STEP_NEXT;
         if (t->phase == 1u) {
-            asx_cancel_reason r = asx_cancel_reason_default(ASX_CANCEL_PARENT, NULL);
+            asx_cancel_reason r = asx_cancel_reason_default(&g_rt, ASX_CANCEL_PARENT, NULL);
             it_reason captured;
             uint32_t outcome = asx_json_new_object(g_out);
             uint32_t value = asx_json_new_object(g_out);
@@ -6150,7 +6150,7 @@ static const char *g_default_oracles;
 void asx_conformance_set_oracles(const char *csv) { g_default_oracles = csv; }
 
 static void run_named_oracle(const char *name) {
-    asx_oracle_result r = asx_oracle_check_named(name);
+    asx_oracle_result r = asx_oracle_check_named(&g_rt, name);
     char buf[192];
     if (r.verdict == ASX_ORACLE_PASS) return;
     (void)snprintf(buf, sizeof(buf), "%s, %u violation(s): %s", name, (unsigned)r.detail_count,

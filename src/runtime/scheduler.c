@@ -816,7 +816,8 @@ static void sched_enforce_budget(const asx_task_slot *t, asx_task_id tid, asx_ti
          * (budget-quota-cx-reason-*, bd-9kll.4.13). A pending cancel is
          * strengthened in the Cx only until a checkpoint acknowledges it
          * (fuzz gen-113-192). */
-        asx_cancel_reason r = asx_cancel_reason_default(ASX_CANCEL_POLL_QUOTA, NULL);
+        asx_cancel_reason r =
+            asx_cancel_reason_default_internal(asx_kernel_of(tid), ASX_CANCEL_POLL_QUOTA, NULL);
         st = asx_task_cancel_reason_internal(tid, &r, ASX_CANCEL_SRC_BUDGET);
         (void)st;
     }

@@ -638,7 +638,8 @@ static void probe_cleanup(doctor_probe_ctx *p) {
     if (p->have_region) {
         /* ASX_ANALYZER_WAIVER("config-dependent: nothing pends without IO driver or blocking") */
         if (probe_tasks_pending(p)) {
-            reason = asx_cancel_reason_default(ASX_CANCEL_SHUTDOWN, "asx doctor probe timed out");
+            reason =
+                asx_cancel_reason_default(p->rt, ASX_CANCEL_SHUTDOWN, "asx doctor probe timed out");
             st = asx_region_cancel(p->region, &reason, NULL);
             (void)st;
         }

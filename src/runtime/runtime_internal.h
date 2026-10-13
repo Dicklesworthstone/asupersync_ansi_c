@@ -986,7 +986,7 @@ void asx_region_wake_close_waiters_internal(asx_region_id id);
 /* The reason Rust's Close command cancels a child region with:
  * CancelReason::user("owned child region body finished") and its testing
  * default attribution (lab/runtime.rs:4193-4196). */
-asx_cancel_reason asx_region_close_reason_internal(void);
+asx_cancel_reason asx_region_close_reason_internal(const asx_kernel *k);
 /* A region command reaching a region that closed and whose slot was
  * reused: Rust's cancel_request still records region.cancelled for the
  * region, whose record is gone (state.rs:7756-7758), and does nothing
@@ -1272,6 +1272,17 @@ static inline asx_kernel *asx_kernel_of_or_scope(uint64_t handle) {
 
 static inline asx_kernel *asx_kernel_context(void) {
     return asx_kernel_of_or_scope(asx_task_current());
+}
+
+/* asx_cancel_reason_default for the kernel `k` (origin: its arena slot 0;
+ * none for NULL), and for asx_kernel_context() (the runtime of the task being
+ * polled, else the live one) where a module has no kernel at hand. Defined
+ * in cancellation.c. */
+asx_cancel_reason asx_cancel_reason_default_internal(const asx_kernel *k, asx_cancel_kind kind,
+                                                     const char *message);
+static inline asx_cancel_reason asx_cancel_reason_default_ctx_internal(asx_cancel_kind kind,
+                                                                       const char *message) {
+    return asx_cancel_reason_default_internal(asx_kernel_context(), kind, message);
 }
 
 /* Record an event in the trace of asx_kernel_context(): what the still
