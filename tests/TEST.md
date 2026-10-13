@@ -223,6 +223,7 @@ CLI/operator slice also adds:
 
 The observability/evidence slice adds:
 - `tests/unit/evidence/test_evidence.c`
+- `tests/unit/monitor/test_monitor.c`
 - `tests/unit/observability/test_health.c`
 - `tests/vignettes/vignette_observability.c`
 

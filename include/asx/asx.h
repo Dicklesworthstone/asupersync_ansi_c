@@ -145,9 +145,10 @@
 #include <asx/session/session.h>
 #include <asx/session/session_link.h>
 
-/* Observability, evidence, and health families */
+/* Observability, evidence, health, and monitor families */
 #include <asx/evidence/evidence.h>
 #include <asx/evidence_sink/evidence_sink.h>
+#include <asx/monitor/monitor.h>
 #include <asx/observability/health.h>
 #include <asx/observability/observability.h>
 
