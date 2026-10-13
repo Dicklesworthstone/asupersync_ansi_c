@@ -24,6 +24,7 @@
 #include <asx/runtime/rt.h>
 #include <asx/runtime/runtime.h>
 #include <asx/security/crypto.h>
+#include <stdlib.h>
 #include <string.h>
 
 static asx_runtime g_rt;
@@ -151,6 +152,70 @@ TEST(rng_replicates_rust_det_rng_for_every_seed_and_value_of_the_derived_documen
     ASSERT_TRUE(saw_zero);
     ASSERT_TRUE(saw_max);
     ASSERT_TRUE(compared >= 9u);
+}
+
+/* No heap allocation on the dispatch hot path (bd-9kll.4.2): the lab's lanes,
+ * tie groups, retired-id table and certificate are static arrays. The test
+ * installs an allocator that counts its calls, runs 16 tasks of 10 polls each
+ * under lab dispatch (some 190 steps, every one a pick, a poll and a wake)
+ * and requires the count not to move across the run. */
+typedef struct {
+    uint32_t calls;
+} alloc_counter;
+
+static void *counting_malloc(void *ctx, size_t n) {
+    ((alloc_counter *)ctx)->calls++;
+    return malloc(n);
+}
+
+static void *counting_realloc(void *ctx, void *p, size_t n) {
+    ((alloc_counter *)ctx)->calls++;
+    return realloc(p, n);
+}
+
+static void counting_free(void *ctx, void *p) {
+    (void)ctx;
+    free(p);
+}
+
+TEST(a_lab_dispatch_run_allocates_nothing) {
+    enum { TASKS = 16 };
+    asx_runtime_config cfg;
+    asx_runtime_hooks hooks;
+    alloc_counter ctr;
+    probe probes[TASKS];
+    asx_region_id r;
+    asx_budget budget;
+    uint32_t i;
+    uint32_t before;
+
+    memset(&ctr, 0, sizeof(ctr));
+    if (asx_runtime_is_initialized(&g_rt)) asx_runtime_shutdown(&g_rt);
+    asx_runtime_config_init(&cfg);
+    cfg.leak_response = ASX_LEAK_LOG;
+    ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
+    hooks.allocator.ctx = &ctr;
+    hooks.allocator.malloc_fn = counting_malloc;
+    hooks.allocator.realloc_fn = counting_realloc;
+    hooks.allocator.free_fn = counting_free;
+    ASSERT_EQ(asx_runtime_init(&g_rt, &cfg, &hooks), ASX_OK);
+    ASSERT_EQ(asx_scheduler_use_lab_dispatch(42u), ASX_OK);
+    ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
+    order_reset();
+    for (i = 0; i < (uint32_t)TASKS; i++) {
+        asx_task_id t;
+        probes[i].name = (char)('a' + i);
+        probes[i].yields = 9u;
+        probes[i].checkpoint = 0;
+        ASSERT_EQ(asx_task_spawn(r, poll_probe, &probes[i], &t), ASX_OK);
+    }
+
+    before = ctr.calls;
+    budget = asx_budget_from_polls(16u * 12u);
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
+    ASSERT_EQ(ctr.calls, before);
+    /* The run really dispatched (the order log keeps the first 31 polls). */
+    ASSERT_EQ(g_order_n, 31u);
 }
 
 /* Seed 42, three host-spawned tasks at priority 0 (generations 0, 1, 2).
@@ -3366,6 +3431,7 @@ int main(void) {
     RUN_TEST(rng_replicates_rust_xorshift64);
     RUN_TEST(rng_remaps_degenerate_seeds);
     RUN_TEST(rng_replicates_rust_det_rng_for_every_seed_and_value_of_the_derived_document);
+    RUN_TEST(a_lab_dispatch_run_allocates_nothing);
     RUN_TEST(ties_are_broken_by_the_step_value_in_generation_order);
     RUN_TEST(host_tasks_draw_from_rust_detentropy_streams);
     RUN_TEST(completed_tasks_free_their_arena_index_for_the_next_task);

@@ -420,6 +420,54 @@ static bench_stats bench_scheduler_multi_round(void) {
 }
 
 /* -------------------------------------------------------------------
+ * BENCH 3b: Scheduler — multi-round under lab dispatch (bd-9kll.4.2)
+ *
+ * Measures: the same 16 tasks that need 10 polls each as scheduler_multi_round,
+ * dispatched one task per step by Rust's lab model (seeded xorshift64 pick,
+ * cancel and ready lanes, wake order): the per-step overhead of the dispatch
+ * model against the sweep's. The two benchmarks' p50 are the pair to compare.
+ * No benchmark has a baseline for this entry; it is reported, not gated.
+ * ------------------------------------------------------------------- */
+
+static bench_stats bench_scheduler_lab_multi_round(void) {
+    bench_samples s;
+    uint32_t iter;
+
+    bench_samples_init(&s);
+
+    for (iter = 0; iter < 1000; iter++) {
+        asx_region_id rid;
+        asx_task_id tid;
+        asx_budget budget;
+        uint64_t t0, t1;
+        uint32_t t_i;
+        countdown_ctx ctxs[16];
+
+        asx_runtime_reset(test_runtime());
+        (void)asx_scheduler_use_lab_dispatch(42u);
+        (void)asx_region_open(test_runtime(), &rid);
+
+        for (t_i = 0; t_i < 16; t_i++) {
+            ctxs[t_i].remaining = 10;
+            (void)asx_task_spawn(rid, countdown_poll, &ctxs[t_i], &tid);
+        }
+
+        budget = asx_budget_from_polls(16u * 12u);
+
+        t0 = bench_now_ns();
+        (void)asx_scheduler_run(rid, &budget);
+        t1 = bench_now_ns();
+
+        bench_samples_add(&s, t1 - t0);
+    }
+
+    /* A reset turns lab dispatch off: the benchmarks that follow run the
+     * default sweep, as they did before this one existed. */
+    asx_runtime_reset(test_runtime());
+    return bench_compute_stats(&s);
+}
+
+/* -------------------------------------------------------------------
  * BENCH 4: Timer wheel — register throughput
  *
  * Measures: time to register N timers sequentially.
@@ -1658,6 +1706,11 @@ int main(int argc, char **argv) {
     st = bench_scheduler_multi_round();
     if (!json_only) fprintf(stderr, "done (p50=%" PRIu64 "ns)\n", st.p50);
     bench_print_stats_json("scheduler_multi_round", &st, 0);
+
+    if (!json_only) fprintf(stderr, "  scheduler_lab_multi_round... ");
+    st = bench_scheduler_lab_multi_round();
+    if (!json_only) fprintf(stderr, "done (p50=%" PRIu64 "ns)\n", st.p50);
+    bench_print_stats_json("scheduler_lab_multi_round", &st, 0);
 
     /* Timer benchmarks */
     if (!json_only) fprintf(stderr, "  timer_register... ");
