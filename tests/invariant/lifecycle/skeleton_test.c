@@ -16,6 +16,7 @@
 
 #include "runtime/runtime_internal.h"
 #include "test_harness.h"
+#include "test_runtime.h"
 #include "test_task.h"
 #include <asx/asx.h>
 
@@ -61,7 +62,7 @@ TEST(region_open_close) {
     asx_region_state state;
     asx_status st;
 
-    st = asx_region_open(&rid);
+    st = asx_region_open(test_runtime(), &rid);
     ASSERT_EQ(st, ASX_OK);
     ASSERT_TRUE(asx_handle_is_valid(rid));
     ASSERT_EQ(asx_handle_type_tag(rid), ASX_TYPE_REGION);
@@ -84,7 +85,7 @@ TEST(task_spawn_in_open_region) {
     asx_task_state tstate;
     asx_status st;
 
-    st = asx_region_open(&rid);
+    st = asx_region_open(test_runtime(), &rid);
     ASSERT_EQ(st, ASX_OK);
 
     st = asx_task_spawn(rid, noop_poll, NULL, &tid);
@@ -105,7 +106,7 @@ TEST(noop_task_scheduler_run) {
     asx_budget budget;
     asx_status st;
 
-    st = asx_region_open(&rid);
+    st = asx_region_open(test_runtime(), &rid);
     ASSERT_EQ(st, ASX_OK);
 
     st = asx_task_spawn(rid, noop_poll, NULL, &tid);
@@ -136,7 +137,7 @@ TEST(countdown_task_multiple_polls) {
 
     ctx.remaining = 3; /* needs 4 polls total (3 pending + 1 ok) */
 
-    st = asx_region_open(&rid);
+    st = asx_region_open(test_runtime(), &rid);
     ASSERT_EQ(st, ASX_OK);
 
     st = asx_task_spawn(rid, countdown_poll, &ctx, &tid);
@@ -161,7 +162,7 @@ TEST(failing_task_outcome_err) {
     asx_status st;
     asx_containment_policy policy;
 
-    st = asx_region_open(&rid);
+    st = asx_region_open(test_runtime(), &rid);
     ASSERT_EQ(st, ASX_OK);
 
     st = asx_task_spawn(rid, failing_poll, NULL, &tid);
@@ -191,7 +192,7 @@ TEST(budget_exhaustion_stops_scheduler) {
 
     ctx.remaining = 100;
 
-    st = asx_region_open(&rid);
+    st = asx_region_open(test_runtime(), &rid);
     ASSERT_EQ(st, ASX_OK);
 
     st = asx_task_spawn(rid, countdown_poll, &ctx, &tid);
@@ -221,7 +222,7 @@ TEST(region_drain_full_lifecycle) {
 
     ctx.remaining = 2;
 
-    st = asx_region_open(&rid);
+    st = asx_region_open(test_runtime(), &rid);
     ASSERT_EQ(st, ASX_OK);
 
     st = asx_task_spawn(rid, countdown_poll, &ctx, &tid);
@@ -252,7 +253,7 @@ TEST(region_drain_propagates_budget_exhaustion) {
 
     ctx.remaining = 100;
 
-    st = asx_region_open(&rid);
+    st = asx_region_open(test_runtime(), &rid);
     ASSERT_EQ(st, ASX_OK);
 
     st = asx_task_spawn(rid, countdown_poll, &ctx, &tid);
@@ -295,7 +296,7 @@ TEST(region_drain_leak_audits_unresolved_obligations) {
     asx_runtime_set_leak_policy_internal(g_kernels[0], ASX_LEAK_LOG, NULL);
     leaks_before = asx_obligation_leak_count();
 
-    st = asx_region_open(&rid);
+    st = asx_region_open(test_runtime(), &rid);
     ASSERT_EQ(st, ASX_OK);
     ctx.region = rid;
     ctx.oid = ASX_INVALID_ID;
@@ -327,7 +328,7 @@ TEST(quiescence_after_drain) {
     asx_budget budget;
     asx_status st;
 
-    st = asx_region_open(&rid);
+    st = asx_region_open(test_runtime(), &rid);
     ASSERT_EQ(st, ASX_OK);
 
     st = asx_task_spawn(rid, noop_poll, NULL, &tid);
@@ -346,7 +347,7 @@ TEST(quiescence_fails_before_close) {
     asx_region_id rid;
     asx_status st;
 
-    st = asx_region_open(&rid);
+    st = asx_region_open(test_runtime(), &rid);
     ASSERT_EQ(st, ASX_OK);
 
     /* Region is OPEN — quiescence should fail */
@@ -360,7 +361,7 @@ TEST(spawn_rejected_after_close) {
     asx_budget budget;
     asx_status st;
 
-    st = asx_region_open(&rid);
+    st = asx_region_open(test_runtime(), &rid);
     ASSERT_EQ(st, ASX_OK);
 
     budget = asx_budget_infinite();
@@ -384,7 +385,7 @@ TEST(multiple_tasks_in_region) {
     ctx1.remaining = 1;
     ctx2.remaining = 2;
 
-    st = asx_region_open(&rid);
+    st = asx_region_open(test_runtime(), &rid);
     ASSERT_EQ(st, ASX_OK);
 
     st = asx_task_spawn(rid, noop_poll, NULL, &tid1);
@@ -450,7 +451,7 @@ TEST(region_drain_calls_cleanup) {
 
     g_cleanup_called = 0;
 
-    st = asx_region_open(&rid);
+    st = asx_region_open(test_runtime(), &rid);
     ASSERT_EQ(st, ASX_OK);
 
     /* Access internal slot to push cleanup */
@@ -475,7 +476,7 @@ TEST(region_drain_cleanup_lifo_order) {
 
     g_cleanup_idx = 0;
 
-    st = asx_region_open(&rid);
+    st = asx_region_open(test_runtime(), &rid);
     ASSERT_EQ(st, ASX_OK);
 
     st = asx_region_slot_lookup(rid, &r);
@@ -503,35 +504,35 @@ TEST(region_drain_cleanup_lifo_order) {
 int main(void) {
     fprintf(stderr, "=== skeleton_test (walking skeleton e2e lifecycle) ===\n");
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(region_open_close);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(task_spawn_in_open_region);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(noop_task_scheduler_run);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(countdown_task_multiple_polls);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(failing_task_outcome_err);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(budget_exhaustion_stops_scheduler);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(region_drain_full_lifecycle);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(region_drain_propagates_budget_exhaustion);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(region_drain_leak_audits_unresolved_obligations);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(quiescence_after_drain);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(quiescence_fails_before_close);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(spawn_rejected_after_close);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(multiple_tasks_in_region);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(region_drain_calls_cleanup);
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     RUN_TEST(region_drain_cleanup_lifo_order);
 
     TEST_REPORT();

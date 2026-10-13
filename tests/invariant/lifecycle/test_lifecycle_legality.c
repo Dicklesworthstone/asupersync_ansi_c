@@ -15,6 +15,7 @@
 
 #include "test_harness.h"
 #include "test_log.h"
+#include "test_runtime.h"
 #include "test_task.h"
 #include <asx/asx.h>
 #include <asx/core/transition.h>
@@ -25,7 +26,7 @@
  * ------------------------------------------------------------------- */
 
 static void reset_all(void) {
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
 }
 
@@ -49,7 +50,7 @@ TEST(region_double_close_rejected) {
     asx_region_id rid;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_region_close(rid), ASX_OK);
 
     /* Second close on a CLOSING region must fail with the transition taxonomy. */
@@ -68,7 +69,7 @@ TEST(region_spawn_after_close_rejected) {
     asx_task_id tid;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_region_close(rid), ASX_OK);
 
     /* Spawn in a CLOSING region should fail */
@@ -98,7 +99,7 @@ TEST(region_obligation_after_close_rejected) {
     asx_obligation_id oid;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_region_close(rid), ASX_OK);
 
     /* Obligation reserve in CLOSING region should fail */
@@ -110,7 +111,7 @@ TEST(region_spawn_after_poison_rejected) {
     asx_task_id tid;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_region_poison(rid), ASX_OK);
 
     /* Spawn in poisoned region should fail */
@@ -121,7 +122,7 @@ TEST(region_close_after_poison_rejected) {
     asx_region_id rid;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_region_poison(rid), ASX_OK);
 
     /* Close on poisoned region should fail */
@@ -137,7 +138,7 @@ TEST(task_spawn_null_poll_rejected) {
     asx_task_id tid;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     /* NULL poll function should fail */
     ASSERT_EQ(asx_task_spawn(rid, NULL, NULL, &tid), ASX_E_INVALID_ARGUMENT);
@@ -147,7 +148,7 @@ TEST(task_spawn_null_out_id_rejected) {
     asx_region_id rid;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     /* NULL out_id should fail */
     ASSERT_EQ(asx_task_spawn(rid, poll_ok, NULL, NULL), ASX_E_INVALID_ARGUMENT);
@@ -159,7 +160,7 @@ TEST(task_get_outcome_before_complete_rejected) {
     asx_outcome out;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
 
     /* Outcome query on non-terminal task should fail */
@@ -172,7 +173,7 @@ TEST(task_state_after_completion_is_completed) {
     asx_task_state state;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_ok, NULL, &tid), ASX_OK);
 
     {
@@ -244,7 +245,7 @@ TEST(obligation_double_commit_rejected) {
     asx_region_id rid;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(test_run_in_task(rid, body_double_commit, &rid), ASX_OK);
 }
 
@@ -252,7 +253,7 @@ TEST(obligation_commit_then_abort_rejected) {
     asx_region_id rid;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(test_run_in_task(rid, body_commit_then_abort, &rid), ASX_OK);
 }
 
@@ -260,7 +261,7 @@ TEST(obligation_abort_then_commit_rejected) {
     asx_region_id rid;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(test_run_in_task(rid, body_abort_then_commit, &rid), ASX_OK);
 }
 
@@ -268,7 +269,7 @@ TEST(obligation_double_abort_rejected) {
     asx_region_id rid;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(test_run_in_task(rid, body_double_abort, &rid), ASX_OK);
 }
 
@@ -300,7 +301,7 @@ TEST(obligation_settled_only_from_holder_poll) {
     holder_commit hc;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     /* The host holds no task, so it cannot reserve: nothing is created. */
     ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_E_PERMISSION_DENIED);
