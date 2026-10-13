@@ -36,6 +36,10 @@ typedef struct {
 } lk_entry;
 
 static lk_entry g_link[ASX_LINK_CAPACITY];
+/* One past the highest entry used since the last reset: an entry at or above
+ * it is zero, so a scan stops there (bd-bzt3; the completion path scans at
+ * every task completion, and with no link registered it is empty). */
+static uint32_t g_link_hwm;
 static asx_link_ref g_next_ref = 1u;
 
 /* The reason a linked peer is cancelled with when the exiting task had been
@@ -43,6 +47,7 @@ static asx_link_ref g_next_ref = 1u;
  * because the exiting task's own slot may be released before the peer
  * applies the cancel. */
 static asx_cancel_reason g_cause[ASX_MAX_TASKS];
+static uint32_t g_cause_hwm; /* one past the highest slot written since the last reset */
 
 /* A task handle carries the task's state in its tag: tasks are the same
  * when runtime, slot and generation are (as asx/monitor/monitor.c). */
@@ -58,7 +63,7 @@ static int task_is_live(asx_task_id task) {
 static lk_entry *find_ref(asx_link_ref ref) {
     uint32_t i;
     if (ref == 0u) return NULL;
-    for (i = 0; i < ASX_LINK_CAPACITY; i++) {
+    for (i = 0; i < g_link_hwm; i++) {
         if (g_link[i].state != LK_FREE && g_link[i].ref == ref) return &g_link[i];
     }
     return NULL;
@@ -78,6 +83,7 @@ static asx_status add_link(asx_task_id holder, asx_task_id peer, asx_exit_policy
         lk_entry *e = &g_link[i];
         if (e->state != LK_FREE) continue;
         memset(e, 0, sizeof(*e));
+        if (i >= g_link_hwm) g_link_hwm = i + 1u;
         e->state = LK_ACTIVE;
         e->ref = g_next_ref++;
         e->task_a = holder;
@@ -237,7 +243,7 @@ static lk_entry *next_link(asx_task_id task, int by_peer, int started, uint64_t 
     lk_entry *best = NULL;
     uint64_t best_key = 0;
     uint32_t i;
-    for (i = 0; i < ASX_LINK_CAPACITY; i++) {
+    for (i = 0; i < g_link_hwm; i++) {
         lk_entry *e = &g_link[i];
         uint64_t key;
         if (!involves(e, task)) continue;
@@ -288,6 +294,7 @@ static void linked_exit_reason(asx_cancel_reason *out, const asx_outcome *exit, 
     if (exit->severity == ASX_OUTCOME_CANCELLED) {
         uint32_t slot = (uint32_t)asx_handle_slot(peer);
         if (slot < ASX_MAX_TASKS) {
+            if (slot >= g_cause_hwm) g_cause_hwm = slot + 1u;
             g_cause[slot] = exit->cancel_reason;
             asx_cancel_reason_with_cause_limited(out, &g_cause[slot]);
         }
@@ -295,13 +302,17 @@ static void linked_exit_reason(asx_cancel_reason *out, const asx_outcome *exit, 
 }
 
 void asx_link_task_finished(asx_task_id task, const asx_outcome *outcome, asx_time vt) {
-    asx_outcome reason = outcome != NULL ? *outcome : asx_outcome_make(ASX_OUTCOME_ERR);
-    int normal = reason.severity == ASX_OUTCOME_OK;
+    asx_outcome reason;
+    int normal;
     lk_entry *e;
     uint64_t last_key = 0;
     asx_link_ref last_ref = 0;
     int started = 0;
     uint32_t i;
+
+    if (g_link_hwm == 0u) return; /* no link since the last reset: nothing ends with this task */
+    reason = outcome != NULL ? *outcome : asx_outcome_make(ASX_OUTCOME_ERR);
+    normal = reason.severity == ASX_OUTCOME_OK;
 
     /* The exit's signals: a normal exit tells the trapping holders among
      * the peers (peers_of order, by reference); an abnormal one resolves
@@ -342,7 +353,7 @@ void asx_link_task_finished(asx_task_id task, const asx_outcome *outcome, asx_ti
      * handle it holds; one that is the exiting task itself (a self-link), or
      * that exits later, drops the handle with the task, so a stored signal
      * goes with its holder. */
-    for (i = 0; i < ASX_LINK_CAPACITY; i++) {
+    for (i = 0; i < g_link_hwm; i++) {
         lk_entry *l = &g_link[i];
         if (l->state == LK_SIGNALLED && same_task(l->task_a, task)) {
             memset(l, 0, sizeof(*l));
@@ -366,14 +377,16 @@ void asx_watches_task_finished(asx_task_id task, const asx_outcome *outcome, asx
 uint32_t asx_link_count(void) {
     uint32_t n = 0;
     uint32_t i;
-    for (i = 0; i < ASX_LINK_CAPACITY; i++) {
+    for (i = 0; i < g_link_hwm; i++) {
         if (g_link[i].state != LK_FREE) n++;
     }
     return n;
 }
 
 void asx_link_reset(void) {
-    memset(g_link, 0, sizeof(g_link));
-    memset(g_cause, 0, sizeof(g_cause));
+    memset(g_link, 0, (size_t)g_link_hwm * sizeof(g_link[0]));
+    g_link_hwm = 0u;
+    memset(g_cause, 0, (size_t)g_cause_hwm * sizeof(g_cause[0]));
+    g_cause_hwm = 0u;
     g_next_ref = 1u;
 }

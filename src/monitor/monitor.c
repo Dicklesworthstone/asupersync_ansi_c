@@ -35,6 +35,10 @@ typedef struct {
 } mon_entry;
 
 static mon_entry g_mon[ASX_MONITOR_CAPACITY];
+/* One past the highest entry used since the last reset: an entry at or above
+ * it is zero, so a scan stops there. The completion path scans at every task
+ * completion, and with no monitor ever registered it is empty (bd-bzt3). */
+static uint32_t g_mon_hwm;
 static asx_monitor_ref g_next_ref = 1u;
 
 /* The last ASX_MONITOR_CAPACITY deliveries, in the order the monitors
@@ -61,7 +65,7 @@ static int task_is_live(asx_task_id task) {
 static mon_entry *find_ref(asx_monitor_ref ref) {
     uint32_t i;
     if (ref == 0u) return NULL;
-    for (i = 0; i < ASX_MONITOR_CAPACITY; i++) {
+    for (i = 0; i < g_mon_hwm; i++) {
         if (g_mon[i].state != MON_FREE && g_mon[i].ref == ref) return &g_mon[i];
     }
     return NULL;
@@ -79,6 +83,7 @@ static asx_status add_monitor(asx_task_id watcher, asx_task_id target,
         mon_entry *e = &g_mon[i];
         if (e->state != MON_FREE) continue;
         memset(e, 0, sizeof(*e));
+        if (i >= g_mon_hwm) g_mon_hwm = i + 1u;
         e->state = MON_ACTIVE;
         e->ref = g_next_ref++;
         e->watcher = watcher;
@@ -228,7 +233,7 @@ asx_status asx_monitor_down_poll(asx_task_id self, asx_cx *cx, asx_monitor_ref r
 static mon_entry *next_firing(asx_task_id task) {
     mon_entry *next = NULL;
     uint32_t i;
-    for (i = 0; i < ASX_MONITOR_CAPACITY; i++) {
+    for (i = 0; i < g_mon_hwm; i++) {
         mon_entry *e = &g_mon[i];
         if (e->state != MON_ACTIVE || !same_task(e->monitored, task)) continue;
         if (next == NULL || e->ref < next->ref) next = e;
@@ -239,6 +244,8 @@ static mon_entry *next_firing(asx_task_id task) {
 void asx_monitor_task_finished(asx_task_id task, const asx_outcome *outcome, asx_time vt) {
     mon_entry *e;
     uint32_t i;
+
+    if (g_mon_hwm == 0u) return; /* no monitor since the last reset: none watches this task */
 
     /* Each monitor on the task leaves the set as it fires (remove_monitored
      * removes them all first, :1404; nothing delivered here can add or
@@ -295,7 +302,7 @@ void asx_monitor_task_finished(asx_task_id task, const asx_outcome *outcome, asx
      * (Monitor::drop, :1133): a no-op when it is applied, but a command of
      * the lane, and a step that drains it is one of the lab's steps. A
      * server's monitors have no handle to drop. */
-    for (i = 0; i < ASX_MONITOR_CAPACITY; i++) {
+    for (i = 0; i < g_mon_hwm; i++) {
         if (g_mon[i].state != MON_FREE && same_task(g_mon[i].watcher, task)) {
             if (g_mon[i].state == MON_ACTIVE && !g_mon[i].to_server && !g_mon[i].released &&
                 asx_lab_dispatch_active()) {
@@ -309,14 +316,15 @@ void asx_monitor_task_finished(asx_task_id task, const asx_outcome *outcome, asx
 uint32_t asx_monitor_count(void) {
     uint32_t n = 0;
     uint32_t i;
-    for (i = 0; i < ASX_MONITOR_CAPACITY; i++) {
+    for (i = 0; i < g_mon_hwm; i++) {
         if (g_mon[i].state != MON_FREE) n++;
     }
     return n;
 }
 
 void asx_monitor_reset(void) {
-    memset(g_mon, 0, sizeof(g_mon));
+    memset(g_mon, 0, (size_t)g_mon_hwm * sizeof(g_mon[0]));
+    g_mon_hwm = 0u;
     memset(g_deliveries, 0, sizeof(g_deliveries));
     g_delivery_total = 0u;
     g_next_ref = 1u;
