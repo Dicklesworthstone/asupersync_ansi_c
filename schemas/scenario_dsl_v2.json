@@ -137,6 +137,7 @@
       {"$ref": "#/$defs/s_delay_queue_reset"}, {"$ref": "#/$defs/s_delay_queue_reset_at"},
       {"$ref": "#/$defs/s_delay_queue_key"}, {"$ref": "#/$defs/s_delay_queue_ref"},
       {"$ref": "#/$defs/s_demonitor"}, {"$ref": "#/$defs/s_server_demonitor"},
+      {"$ref": "#/$defs/s_unlink"}, {"$ref": "#/$defs/s_server_unlink"},
       {"$ref": "#/$defs/s_masked"}
     ]},
     "step": {"oneOf": [
@@ -151,7 +152,8 @@
       {"$ref": "#/$defs/s_sem_acquire"},
       {"$ref": "#/$defs/s_server_spawn"}, {"$ref": "#/$defs/s_cast"}, {"$ref": "#/$defs/s_call"},
       {"$ref": "#/$defs/s_server_ref"}, {"$ref": "#/$defs/s_supervise"}, {"$ref": "#/$defs/s_supervisor_join"},
-      {"$ref": "#/$defs/s_monitor"}, {"$ref": "#/$defs/s_await_down"}, {"$ref": "#/$defs/s_server_monitor"}
+      {"$ref": "#/$defs/s_monitor"}, {"$ref": "#/$defs/s_await_down"}, {"$ref": "#/$defs/s_server_monitor"},
+      {"$ref": "#/$defs/s_link"}, {"$ref": "#/$defs/s_await_exit"}, {"$ref": "#/$defs/s_server_link"}
     ]},
     "s_bare": {"type": "object", "required": ["op"], "additionalProperties": false, "properties": {"op": {"const": "yield"}}},
     "s_checkpoint": {"type": "object", "required": ["op"], "additionalProperties": false,
@@ -309,6 +311,18 @@
                      "task": {"$ref": "#/$defs/task_name"}, "as": {"$ref": "#/$defs/name"}}},
     "s_server_demonitor": {"type": "object", "required": ["op", "server", "monitor"], "additionalProperties": false,
       "properties": {"op": {"const": "server_demonitor"}, "server": {"$ref": "#/$defs/name"}, "monitor": {"$ref": "#/$defs/name"}}},
+    "s_link": {"type": "object", "required": ["op", "task", "as"], "additionalProperties": false,
+      "properties": {"op": {"enum": ["link", "link_trapping"]}, "task": {"$ref": "#/$defs/task_name"},
+                     "as": {"$ref": "#/$defs/name"}}},
+    "s_await_exit": {"type": "object", "required": ["op", "link"], "additionalProperties": false,
+      "properties": {"op": {"const": "await_exit"}, "link": {"$ref": "#/$defs/name"}}},
+    "s_unlink": {"type": "object", "required": ["op", "link"], "additionalProperties": false,
+      "properties": {"op": {"const": "unlink"}, "link": {"$ref": "#/$defs/name"}}},
+    "s_server_link": {"type": "object", "required": ["op", "server", "task", "as"], "additionalProperties": false,
+      "properties": {"op": {"enum": ["server_link", "server_link_trapping"]}, "server": {"$ref": "#/$defs/name"},
+                     "task": {"$ref": "#/$defs/task_name"}, "as": {"$ref": "#/$defs/name"}}},
+    "s_server_unlink": {"type": "object", "required": ["op", "server", "link"], "additionalProperties": false,
+      "properties": {"op": {"const": "server_unlink"}, "server": {"$ref": "#/$defs/name"}, "link": {"$ref": "#/$defs/name"}}},
     "s_supervise": {"type": "object", "required": ["op", "as", "policy", "max_restarts", "window_ns", "children"], "additionalProperties": false,
       "properties": {"op": {"const": "supervise"}, "as": {"$ref": "#/$defs/name"},
                      "policy": {"enum": ["one_for_one", "one_for_all", "rest_for_one"]},
