@@ -57,6 +57,7 @@ gets a canonical name instead:
 | a supervisor's controller task (`supervise`) | the step's `as`; its backoff sleeps are its timers |
 | a supervisor's region | the step's `as` (the parent of its generations' regions) |
 | a supervised child's generation: its task and its region | `"<supervisor>/<child>#<n>"`, n = the generation number (1-based) |
+| a name a generation's program creates (the `as` of `spawn`, `open_region`, `server_spawn` or `supervise`) | `"<generation>/<as>"`, `<generation>` as in the row above; every generation reruns the program, so each gets its own names. A nested supervisor so named names its own generations by the row above, so the names nest: `"sup/c#1/inner/c2#1"`. A name the program does not create (a scenario-level region or task) is left alone |
 | a region a controller opened for a generation it then did not start (cancelled first) | `"<supervisor region>/unstarted<k>"`, k in creation order |
 | the regions of several supervisors that started no generation, under one region | `"<region>/supervisor<k>"`, k in creation order (the trace cannot tell whose is whose) |
 
