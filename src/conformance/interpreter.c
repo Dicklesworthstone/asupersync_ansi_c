@@ -2492,8 +2492,6 @@ static void race_refused_wrapper(it_task *t, asx_task_id self, uint32_t idx, it_
     (void)st;
 }
 
-/* watch_send_modify's closure: `*value += add`, wrapping (Rust's
- * wrapping_add on u64). */
 /* Interval and DelayQueue objects (DSL §3.9), held by the task that made
  * them under a name. They live in global pools so a task's frame stays
  * small; a key name stays bound after its entry expired (the key is then
@@ -2776,6 +2774,8 @@ static int exec_time_op(it_task *t, uint32_t step, uint32_t idx, const char *lab
     return 1;
 }
 
+/* watch_send_modify's closure: `*value += add`, wrapping (Rust's
+ * wrapping_add on u64). */
 static void watch_add_fn(void *ctx, uint64_t *value) { *value += *(const uint64_t *)ctx; }
 
 /* The watch steps that never suspend (DSL §3.6). Returns 1 when `op` is one
@@ -3239,14 +3239,14 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
         step_result res;
         if (exec_watch_op(t, step, idx, label, op, &res)) return res;
     }
-    /* Non-blocking oneshot, broadcast and watch sends (DSL §3.6). */
-    if (strcmp(op, "oneshot_send") == 0 || strcmp(op, "broadcast_send") == 0 ||
-        strcmp(op, "watch_send") == 0) {
     /* Interval and DelayQueue steps (DSL §3.9). */
     {
         step_result res;
         if (exec_time_op(t, step, idx, label, op, &res)) return res;
     }
+    /* Non-blocking oneshot, broadcast and watch sends (DSL §3.6). */
+    if (strcmp(op, "oneshot_send") == 0 || strcmp(op, "broadcast_send") == 0 ||
+        strcmp(op, "watch_send") == 0) {
         it_ch_type type = op[0] == 'o'   ? IT_CH_ONESHOT
                           : op[0] == 'b' ? IT_CH_BROADCAST
                                          : IT_CH_WATCH;
@@ -5197,13 +5197,13 @@ static asx_status conformance_run(const asx_json_doc *in, uint32_t scenario, asx
     g_error_cap = error_cap;
     g_failed = 0;
     g_n_tasks = 0;
+    g_n_intervals = 0;
+    g_n_delay_queues = 0;
+    g_n_delay_keys = 0;
     g_n_servers = 0;
     g_n_sups = 0;
     g_n_regions = 0;
     g_n_events = 0;
-    g_n_intervals = 0;
-    g_n_delay_queues = 0;
-    g_n_delay_keys = 0;
     g_text_used = 0;
     g_n_obl_names = 0;
     if (error != NULL && error_cap > 0u) error[0] = '\0';
