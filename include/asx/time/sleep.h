@@ -82,6 +82,12 @@ ASX_API asx_status asx_sleep_poll(void *user_data, asx_task_id self);
  * the deadline wins, and it times out at the deadline only if that work
  * is still pending. A poll after it completed returns ASX_E_TIMED_OUT
  * (Rust's fail-closed repoll).
+ *
+ * The deadline's Sleep is traced like Rust's: its timer is registered on
+ * the first poll that finds the inner function pending (timer.scheduled),
+ * recorded as fired when the timeout ends at the deadline (timer.fired)
+ * and cancelled when the inner function completes first (timer.cancelled).
+ * It never parks the task; a pending inner function does that.
  * ------------------------------------------------------------------- */
 
 typedef struct {

@@ -2576,21 +2576,9 @@ async fn exec_step(
                 }
             }
         }
-        // Blocking sync steps (DSL §3.7).
-        "mutex_lock" => {
-            let name = str_field(step, "mutex")?.to_string();
-            let SyncObj::Mutex(m) = sync_obj(&ctx.shared, step, "mutex")? else {
-                return Err(format!("{name:?} is not a mutex"));
-            };
-            let status = match asx_sync::OwnedMutexGuard::lock(m, cx).await {
-                Ok(guard) => {
-                    local.guards.insert(name, guard);
-                    "ASX_OK"
-                }
-                Err(e) => lock_error_status(e),
-            };
-            observe(&ctx.shared, me, idx, op, status, Value::Null);
-        }
+        // Blocking sync steps (DSL §3.7): `timeout` wraps the same function.
+        "mutex_lock" | "rwlock_read" | "rwlock_write" | "sem_acquire" | "barrier_wait"
+        | "notify_wait" => exec_sync_wait(cx, ctx, local, idx, step).await?,
         "mutex_lock_until" => {
             let name = str_field(step, "mutex")?.to_string();
             let SyncObj::Mutex(m) = sync_obj(&ctx.shared, step, "mutex")? else {
@@ -2618,63 +2606,38 @@ async fn exec_step(
             };
             observe(&ctx.shared, me, idx, op, status, Value::Null);
         }
-        "rwlock_read" | "rwlock_write" => {
-            let name = str_field(step, "rwlock")?.to_string();
-            let SyncObj::RwLock(l) = sync_obj(&ctx.shared, step, "rwlock")? else {
-                return Err(format!("{name:?} is not an rwlock"));
-            };
-            let acquired = if op == "rwlock_read" {
-                asx_sync::OwnedRwLockReadGuard::read(l, cx)
-                    .await
-                    .map(RwGuard::Read)
-            } else {
-                asx_sync::OwnedRwLockWriteGuard::write(l, cx)
-                    .await
-                    .map(RwGuard::Write)
-            };
-            let status = match acquired {
-                Ok(guard) => {
-                    local.rw_guards.entry(name).or_default().push(guard);
-                    "ASX_OK"
+        // A standalone `time::timeout` around one blocking sync wait (DSL
+        // §3.9). The inner step observes its own outcome; an Elapsed drops
+        // it (its waiter leaves the line) and is this step's observation.
+        // The deadline Sleep's Timer events are named as a sleep's. The
+        // inner step holds `local`, so the timer counter is carried out and
+        // back; a wrapped wait takes no timer number of its own.
+        "timeout" => {
+            let inner = step.get("inner").ok_or("timeout without inner")?;
+            let duration = Duration::from_nanos(u64_field(step, "ns")?);
+            let mut timers = local.timers;
+            let timed = NamedSleep {
+                sleep: Some(Box::pin(asupersync::time::timeout(
+                    cx.now(),
+                    duration,
+                    exec_sync_wait(cx, ctx, local, idx, inner),
+                ))),
+                buffer: cx.trace_buffer(),
+                shared: ctx.shared.clone(),
+                owner: me,
+                counter: &mut timers,
+                name: None,
+            }
+            .await;
+            local.timers = timers;
+            match timed {
+                Ok(done) => {
+                    done?;
                 }
-                Err(e) => rwlock_error_status(e),
-            };
-            observe(&ctx.shared, me, idx, op, status, Value::Null);
-        }
-        "sem_acquire" => {
-            let name = str_field(step, "semaphore")?.to_string();
-            let SyncObj::Semaphore(s) = sync_obj(&ctx.shared, step, "semaphore")? else {
-                return Err(format!("{name:?} is not a semaphore"));
-            };
-            let count =
-                usize::try_from(u64_field(step, "count")?).map_err(|_| "count out of range")?;
-            let status = match s.acquire(cx, count).await {
-                Ok(permit) => {
-                    local.permits.entry(name).or_default().push(permit);
-                    "ASX_OK"
+                Err(_elapsed) => {
+                    observe(&ctx.shared, me, idx, op, "ASX_E_TIMED_OUT", Value::Null);
                 }
-                Err(e) => acquire_error_status(e),
-            };
-            observe(&ctx.shared, me, idx, op, status, Value::Null);
-        }
-        "barrier_wait" => {
-            let SyncObj::Barrier(b) = sync_obj(&ctx.shared, step, "barrier")? else {
-                return Err("barrier_wait on a non-barrier".to_string());
-            };
-            let status = match b.wait(cx).await {
-                Ok(_) => "ASX_OK",
-                Err(e) => barrier_error_status(e),
-            };
-            observe(&ctx.shared, me, idx, op, status, Value::Null);
-        }
-        "notify_wait" => {
-            let SyncObj::Notify(n) = sync_obj(&ctx.shared, step, "notify")? else {
-                return Err("notify_wait on a non-notify".to_string());
-            };
-            // Not cancel-aware (DSL §3.7): a cancelled waiter stays parked
-            // until notified.
-            n.notified().await;
-            observe(&ctx.shared, me, idx, op, "ASX_OK", Value::Null);
+            }
         }
         "yield" => {
             asupersync::runtime::yield_now().await;
@@ -3378,6 +3341,97 @@ async fn exec_step(
         _ => return exec_sync(cx, ctx, local, idx, op, step),
     }
     Ok(Flow::Continue)
+}
+
+/// One blocking sync wait (DSL §3.7), observed under its own op: the steps
+/// the task body runs directly and the one a `timeout` wraps. Its own
+/// function, not `exec_step` again: a recursive `exec_step` is an async
+/// recursion whose `Send` check overflows.
+async fn exec_sync_wait(
+    cx: &Cx,
+    ctx: &Arc<TaskCtx>,
+    local: &mut Local,
+    idx: usize,
+    step: &Value,
+) -> RunResult<()> {
+    let op = str_field(step, "op")?;
+    let me = ctx.me.as_str();
+    match op {
+        "mutex_lock" => {
+            let name = str_field(step, "mutex")?.to_string();
+            let SyncObj::Mutex(m) = sync_obj(&ctx.shared, step, "mutex")? else {
+                return Err(format!("{name:?} is not a mutex"));
+            };
+            let status = match asx_sync::OwnedMutexGuard::lock(m, cx).await {
+                Ok(guard) => {
+                    local.guards.insert(name, guard);
+                    "ASX_OK"
+                }
+                Err(e) => lock_error_status(e),
+            };
+            observe(&ctx.shared, me, idx, op, status, Value::Null);
+        }
+        "rwlock_read" | "rwlock_write" => {
+            let name = str_field(step, "rwlock")?.to_string();
+            let SyncObj::RwLock(l) = sync_obj(&ctx.shared, step, "rwlock")? else {
+                return Err(format!("{name:?} is not an rwlock"));
+            };
+            let acquired = if op == "rwlock_read" {
+                asx_sync::OwnedRwLockReadGuard::read(l, cx)
+                    .await
+                    .map(RwGuard::Read)
+            } else {
+                asx_sync::OwnedRwLockWriteGuard::write(l, cx)
+                    .await
+                    .map(RwGuard::Write)
+            };
+            let status = match acquired {
+                Ok(guard) => {
+                    local.rw_guards.entry(name).or_default().push(guard);
+                    "ASX_OK"
+                }
+                Err(e) => rwlock_error_status(e),
+            };
+            observe(&ctx.shared, me, idx, op, status, Value::Null);
+        }
+        "sem_acquire" => {
+            let name = str_field(step, "semaphore")?.to_string();
+            let SyncObj::Semaphore(s) = sync_obj(&ctx.shared, step, "semaphore")? else {
+                return Err(format!("{name:?} is not a semaphore"));
+            };
+            let count =
+                usize::try_from(u64_field(step, "count")?).map_err(|_| "count out of range")?;
+            let status = match s.acquire(cx, count).await {
+                Ok(permit) => {
+                    local.permits.entry(name).or_default().push(permit);
+                    "ASX_OK"
+                }
+                Err(e) => acquire_error_status(e),
+            };
+            observe(&ctx.shared, me, idx, op, status, Value::Null);
+        }
+        "barrier_wait" => {
+            let SyncObj::Barrier(b) = sync_obj(&ctx.shared, step, "barrier")? else {
+                return Err("barrier_wait on a non-barrier".to_string());
+            };
+            let status = match b.wait(cx).await {
+                Ok(_) => "ASX_OK",
+                Err(e) => barrier_error_status(e),
+            };
+            observe(&ctx.shared, me, idx, op, status, Value::Null);
+        }
+        "notify_wait" => {
+            let SyncObj::Notify(n) = sync_obj(&ctx.shared, step, "notify")? else {
+                return Err("notify_wait on a non-notify".to_string());
+            };
+            // Not cancel-aware (DSL §3.7): a cancelled waiter stays parked
+            // until notified.
+            n.notified().await;
+            observe(&ctx.shared, me, idx, op, "ASX_OK", Value::Null);
+        }
+        other => return Err(format!("{other:?} is not a blocking sync step")),
+    }
+    Ok(())
 }
 
 /// Name of member `i` (0-based) of the group step at 1-based index `step`

@@ -530,6 +530,7 @@ Sync objects are declared at the top level:
 | `notify_wait` | `notify` | `n.notified().await` (`sync/notify.rs:347`) | `asx_notify_wait_begin` + `asx_notify_poll_wait` | until notified | **Ignored**: a cancelled waiter stays parked until notified. Avoid pairing it with cancellation unless that is the point. |
 | `notify_one` | `notify` | `n.notify_one()` (`:436`); stores a permit if nobody waits | `asx_notify_one` | no | ignored |
 | `notify_all` | `notify` | `n.notify_waiters()` (`:471`) | `asx_notify_all` | no | ignored |
+| `timeout` | `ns`, `inner` (a `mutex_lock`, `rwlock_read`, `rwlock_write`, `sem_acquire`, `barrier_wait` or `notify_wait` step) | `time::timeout(cx.now(), Duration::from_nanos(ns), <inner>).await` (`time/timeout_future.rs:286`) | `asx_timeout_init` + `asx_timeout_poll` around the inner step's `*_begin` / `*_poll_*` | as the inner step, until `now + ns` | see §3.9, Timeout |
 
 ### 3.8 Actors and supervision
 
@@ -699,9 +700,29 @@ dead, not unknown), and a name is bound once per task. Scenarios:
 `interval-missed-tick-burst-001`, `interval-missed-tick-delay-001`,
 `interval-missed-tick-skip-001`, `interval-start-at-001`,
 `delay-queue-order-reset-remove-001`, `delay-queue-reset-ties-saturate-001`.
-A standalone `time::timeout` is not a step yet: its inner future and its own
-`Sleep` register two timers that twin_run names as one, and C waits for both
-on the task's one sleep timer slot.
+**Timeout.** The `timeout` step (§3.7) wraps one blocking sync wait in
+`time::timeout(cx.now(), d, inner)` and awaits it. The deadline is the
+clock at the step's first poll plus `ns`, saturating. Each poll follows
+`TimeoutFuture::poll` (`time/timeout_future.rs:286-315`): past the deadline
+(`now > deadline`) it is Elapsed and the inner future is not polled; otherwise
+the inner future is polled first, so a wait that completes exactly at the
+deadline wins, and then the deadline's `Sleep` is polled. That `Sleep`
+registers its timer (`timer.scheduled`) on the first poll that finds the
+inner future pending, records `timer.fired` when the step ends at the
+deadline, and records `timer.cancelled` when the inner future completes
+first (dropping the `TimeoutFuture` cancels it). An Elapsed drops the inner
+future, so a waiter queued on the mutex, rwlock, semaphore, barrier or
+notify leaves the line. The inner step observes its own outcome as it does
+outside a timeout (a cancel of the task observes the inner op's
+`ASX_E_CANCELLED`); an Elapsed is the single observation of op `timeout`,
+`ASX_E_TIMED_OUT` (`time::Elapsed`). Only waits that own no timer of their
+own are wrapped (not `mutex_lock_until` or `sleep`), so the task has one
+registered timer at a time: the one twin_run names after the task, and the
+one slot C keeps. Scenarios: `timeout-sem-fires-001` (the deadline passes
+with the semaphore still held), `timeout-sem-completes-001` (a release
+before the deadline completes the wait and cancels the timer),
+`timeout-sem-zero-duration-001` (`ns` 0: the wait is polled once, then
+Elapsed at the same instant).
 
 ### 3.10 Monitors
 

@@ -141,32 +141,32 @@ asx_status asx_timeout_poll(void *user_data, asx_task_id self) {
     st = asx_runtime_now_ns(&now);
     if (st != ASX_OK) return st;
 
-    /* Past the deadline: timed out without polling the inner function. */
+    /* Past the deadline: its Sleep is ready; the inner is not polled. */
     if (now > asx_deadline_target(&s->deadline)) {
         (void)asx_deadline_is_expired_at(&s->deadline, now); /* latches expired */
+        st = asx_task_complete_timer(self);                  /* records a registered fire */
+        (void)st;
         s->completed = 1;
         return ASX_E_TIMED_OUT;
     }
 
-    /* Completed work wins at the deadline exactly: poll it first. */
+    /* Completed work wins at the deadline exactly: poll it first. The
+     * TimeoutFuture is dropped with it, which cancels its Sleep. */
     inner_st = s->inner_poll(s->inner_data, self);
     if (inner_st != ASX_E_PENDING) {
         s->completed = 1;
         if (inner_st == ASX_OK) s->inner_done = 1;
+        st = asx_task_cancel_timer(self);
+        (void)st;
         return inner_st;
     }
 
-    /* Still pending at the deadline: timed out. */
-    if (asx_deadline_is_expired_at(&s->deadline, now)) {
+    /* Pending: poll the deadline's Sleep (poll_deadline): due ends the
+     * timeout, else it registers its timer and arms the wake, no park. */
+    if (asx_task_poll_deadline_sleep_internal(self, asx_deadline_target(&s->deadline))) {
+        (void)asx_deadline_is_expired_at(&s->deadline, asx_deadline_target(&s->deadline));
         s->completed = 1;
         return ASX_E_TIMED_OUT;
-    }
-
-    /* Inner is pending: guarantee a wake at the deadline without parking
-     * (whether to park is the inner poll's decision). */
-    {
-        asx_status a_st_ = asx_task_arm_timer(self, asx_deadline_target(&s->deadline));
-        (void)a_st_;
     }
     return ASX_E_PENDING;
 }

@@ -159,6 +159,14 @@ typedef struct {
     int race_wrapper;
     uint32_t race_owner;
     uint32_t race_result; /* ASX_JSON_NONE until the race resolves */
+    /* A standalone `timeout` step (DSL §3.9): the library's TimeoutFuture
+     * once begun, the wrapped step, and its result when it completed. */
+    asx_timeout_state timeout;
+    int timeout_armed;
+    uint32_t timeout_step;
+    uint32_t timeout_idx;
+    const char *timeout_op;
+    int timeout_result;
     /* The current cast, call or server_stop step's progress (DSL §3.8). */
     asx_actor_op actor_op;
     int server; /* the task of a server (no program) */
@@ -2362,6 +2370,109 @@ static int exec_sync_wait(it_task *t, asx_task_id self, uint32_t step, uint32_t 
     return 0;
 }
 
+/* The wrapped step of a timeout, polled as the TimeoutFuture's inner
+ * future. The sync step observes its own outcome as it does outside a
+ * timeout; anything but a wait that still pends completes the inner. */
+static asx_status timeout_inner_poll(void *data, asx_task_id self) {
+    it_task *t = (it_task *)data;
+    step_result r = STEP_NEXT;
+    if (!exec_sync_wait(t, self, t->timeout_step, t->timeout_idx, t->timeout_op, &r)) {
+        it_fail_task(t, t->timeout_idx, "timeout wraps a blocking sync step");
+        r = STEP_END;
+    }
+    t->timeout_result = (int)r;
+    return r == STEP_PENDING ? ASX_E_PENDING : ASX_OK;
+}
+
+/* A standalone `time::timeout(now, d, inner)` around one blocking sync
+ * wait (DSL §3.9), run as Rust's TimeoutFuture::poll (time/timeout_future.
+ * rs:286-315) runs it, by the library's asx_timeout_poll: past the
+ * deadline (now > deadline) it is Elapsed without polling the inner
+ * future; otherwise the inner future is polled first, so work that
+ * completes exactly at the deadline wins, and the deadline's Sleep is
+ * polled after it. That Sleep registers its timer on the first poll that
+ * finds the inner future pending (timer.scheduled), fires when the wait
+ * ends at the deadline (timer.fired) and is cancelled when the inner
+ * future completes first (timer.cancelled). An Elapsed drops the inner
+ * future: its waiter leaves the line. An Elapsed is the one observation of
+ * op `timeout`, ASX_E_TIMED_OUT (time::Elapsed). */
+static int exec_timeout(it_task *t, asx_task_id self, uint32_t step, uint32_t idx, const char *op,
+                        step_result *out) {
+    uint32_t inner;
+    const char *inner_op;
+    asx_status (*cancel_fn)(void *) = NULL;
+    void *waiter = NULL;
+    uint64_t ns = 0;
+    asx_status st;
+
+    if (strcmp(op, "timeout") != 0) return 0;
+    inner = asx_json_get(g_in, step, "inner");
+    inner_op = it_str(inner, "op");
+    if (inner_op == NULL || !asx_json_u64(g_in, asx_json_get(g_in, step, "ns"), &ns)) {
+        it_fail_task(t, idx, "timeout needs ns and an inner step");
+        *out = STEP_END;
+        return 1;
+    }
+    if (strcmp(inner_op, "mutex_lock") == 0) {
+        cancel_fn = cancel_mutex_wait;
+        waiter = &t->wait.mutex;
+    } else if (strcmp(inner_op, "rwlock_read") == 0 || strcmp(inner_op, "rwlock_write") == 0) {
+        cancel_fn = cancel_rwlock_wait;
+        waiter = &t->wait.rwlock;
+    } else if (strcmp(inner_op, "sem_acquire") == 0) {
+        cancel_fn = cancel_sem_wait;
+        waiter = &t->wait.sem;
+    } else if (strcmp(inner_op, "barrier_wait") == 0) {
+        cancel_fn = cancel_barrier_wait;
+        waiter = &t->wait.barrier;
+    } else if (strcmp(inner_op, "notify_wait") == 0) {
+        cancel_fn = cancel_notify_wait;
+        waiter = &t->wait.notify;
+    } else {
+        it_fail_task(t, idx, "timeout wraps a blocking sync step");
+        *out = STEP_END;
+        return 1;
+    }
+    if (!t->timeout_armed) {
+        /* time::timeout(cx.now(), d, ..): the deadline is fixed by this
+         * first poll, which follows the construction at once. */
+        if (asx_timeout_init(&t->timeout, ns, timeout_inner_poll, t) != ASX_OK) {
+            it_fail_task(t, idx, "asx_timeout_init failed");
+            *out = STEP_END;
+            return 1;
+        }
+        t->timeout_step = inner;
+        t->timeout_idx = idx;
+        t->timeout_op = inner_op;
+        t->timeout_armed = 1;
+    }
+    st = asx_timeout_poll(&t->timeout, self);
+    if (st == ASX_E_PENDING) {
+        *out = STEP_PENDING;
+        return 1;
+    }
+    t->timeout_armed = 0;
+    if (st == ASX_E_TIMED_OUT) {
+        /* Elapsed: the inner future, polled and still waiting, is dropped
+         * and its waiter leaves the line. */
+        if (t->phase != 0u) {
+            st = cancel_fn(waiter);
+            (void)st;
+        }
+        t->phase = 0u;
+        observe_status(t, idx, op, ASX_E_TIMED_OUT);
+        *out = STEP_NEXT;
+        return 1;
+    }
+    if (st != ASX_OK) {
+        it_fail_task(t, idx, "asx_timeout_poll failed");
+        *out = STEP_END;
+        return 1;
+    }
+    *out = (step_result)t->timeout_result;
+    return 1;
+}
+
 /* A reason attributed as DSL §4 "Reason attribution" prescribes, stamped
  * now, with the step's optional message (scenario text, which outlives
  * the run). */
@@ -4525,6 +4636,7 @@ static step_result exec_step(it_task *t, asx_task_id self, uint32_t step, uint32
     {
         step_result r;
         if (exec_sync_wait(t, self, step, idx, op, &r)) return r;
+        if (exec_timeout(t, self, step, idx, op, &r)) return r;
         if (exec_channel_wait(t, step, idx, op, &r)) return r;
         if (exec_group(t, self, step, idx, op, &r)) return r;
         if (exec_server(t, step, idx, op, &r)) return r;

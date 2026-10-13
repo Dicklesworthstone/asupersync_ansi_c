@@ -535,6 +535,190 @@ TEST(the_close_outcome_of_a_region_is_observed_under_the_driver) {
                   "cancelled");
 }
 
+/* ---- A standalone timeout (DSL 3.9, bd-9kll.7.7) ---- */
+
+/* How many of `task`'s observations have op `op`, the first of them in
+ * *first (ASX_JSON_NONE when there is none). */
+static uint32_t count_observed(uint32_t root, const char *task, const char *op, uint32_t *first) {
+    uint32_t obs = asx_json_get(&g_out, root, "observations");
+    uint32_t n = 0;
+    uint32_t i;
+    *first = ASX_JSON_NONE;
+    for (i = 0; i < asx_json_count(&g_out, obs); i++) {
+        uint32_t o = asx_json_item(&g_out, obs, i);
+        const char *t = asx_json_get_string(&g_out, o, "task");
+        const char *p = asx_json_get_string(&g_out, o, "op");
+        if (t != NULL && p != NULL && strcmp(t, task) == 0 && strcmp(p, op) == 0) {
+            if (n == 0u) *first = o;
+            n++;
+        }
+    }
+    return n;
+}
+
+/* How many events of kind `kind` the run's trace holds; when `timer` is not
+ * NULL, only those of the timer it names, the first of them in *first. */
+static uint32_t count_events(uint32_t root, const char *kind, const char *timer, uint32_t *first) {
+    uint32_t trace = asx_json_get(&g_out, root, "trace");
+    uint32_t n = 0;
+    uint32_t l;
+    uint32_t e;
+    *first = ASX_JSON_NONE;
+    for (l = 0; l < asx_json_count(&g_out, trace); l++) {
+        uint32_t layer = asx_json_item(&g_out, trace, l);
+        for (e = 0; e < asx_json_count(&g_out, layer); e++) {
+            uint32_t ev = asx_json_item(&g_out, layer, e);
+            const char *k = asx_json_get_string(&g_out, ev, "k");
+            const char *name = asx_json_get_string(&g_out, ev, "timer");
+            if (k == NULL || strcmp(k, kind) != 0) continue;
+            if (timer != NULL && (name == NULL || strcmp(name, timer) != 0)) continue;
+            if (n == 0u) *first = ev;
+            n++;
+        }
+    }
+    return n;
+}
+
+#define TIMEOUT_SEM_TASKS_A                                                                        \
+    "\"tasks\":[{\"name\":\"t.a\",\"region\":\"r.main\",\"budget\":null,\"program\":["             \
+    "{\"op\":\"sem_acquire\",\"semaphore\":\"s\",\"count\":1},"
+
+#define TIMEOUT_SEM_SYNC                                                                           \
+    "\"channels\":[],\"sync\":[{\"name\":\"s\",\"type\":\"semaphore\",\"permits\":1}],"
+
+/* The deadline passes while the semaphore is held: the step is Elapsed (op
+ * `timeout`, ASX_E_TIMED_OUT), the inner acquire is not observed, its
+ * timer registered on the first pending poll and fired at the deadline,
+ * and the dropped waiter leaves the line, so t.b's later acquire is the
+ * one t.a's release at 300 grants. */
+TEST(a_timeout_that_elapses_fires_its_timer_and_drops_its_wait) {
+    static const char text[] = SCENARIO_HEAD TIMEOUT_SEM_SYNC TIMEOUT_SEM_TASKS_A
+        "{\"op\":\"sleep\",\"ns\":300},"
+        "{\"op\":\"sem_release\",\"semaphore\":\"s\"}]},"
+        "{\"name\":\"t.b\",\"region\":\"r.main\",\"budget\":null,\"program\":["
+        "{\"op\":\"sleep\",\"ns\":10},"
+        "{\"op\":\"timeout\",\"ns\":100,\"inner\":{\"op\":\"sem_acquire\",\"semaphore\":\"s\","
+        "\"count\":1}},"
+        "{\"op\":\"sem_acquire\",\"semaphore\":\"s\",\"count\":1}]}],"
+        "\"script\":[],\"expect\":{\"kind\":\"ok\"}}";
+    uint32_t root = 0;
+    uint32_t o;
+    uint64_t at = 0;
+    ASSERT_EQ(run_text(text, &root), ASX_OK);
+    ASSERT_EQ(count_observed(root, "t.b", "timeout", &o), 1u);
+    ASSERT_STR_EQ(asx_json_get_string(&g_out, o, "status"), "ASX_E_TIMED_OUT");
+    /* Only the later acquire is observed, and it succeeds. */
+    ASSERT_EQ(count_observed(root, "t.b", "sem_acquire", &o), 1u);
+    ASSERT_STR_EQ(asx_json_get_string(&g_out, o, "status"), "ASX_OK");
+    /* t.a's sleep, t.b's sleep and the timeout's Sleep: scheduled and
+     * fired once each, none cancelled. */
+    ASSERT_EQ(count_events(root, "timer.scheduled", NULL, &o), 3u);
+    ASSERT_EQ(count_events(root, "timer.fired", NULL, &o), 3u);
+    ASSERT_EQ(count_events(root, "timer.cancelled", NULL, &o), 0u);
+    /* The timeout's Sleep is t.b's second timer, due 100 after the step. */
+    ASSERT_EQ(count_events(root, "timer.scheduled", "t.b/tm2", &o), 1u);
+    ASSERT_TRUE(asx_json_u64(&g_out, asx_json_get(&g_out, o, "deadline_ns"), &at));
+    ASSERT_EQ(at, (uint64_t)110u);
+    ASSERT_EQ(count_events(root, "timer.fired", "t.b/tm2", &o), 1u);
+}
+
+/* The wait completes first: the inner step observes its own outcome, the
+ * timeout adds no observation, and dropping it cancels the registered timer,
+ * which never fires at 110. */
+TEST(a_wait_that_completes_first_cancels_the_timeout_timer) {
+    static const char text[] = SCENARIO_HEAD TIMEOUT_SEM_SYNC TIMEOUT_SEM_TASKS_A
+        "{\"op\":\"sleep\",\"ns\":50},"
+        "{\"op\":\"sem_release\",\"semaphore\":\"s\"}]},"
+        "{\"name\":\"t.b\",\"region\":\"r.main\",\"budget\":null,\"program\":["
+        "{\"op\":\"sleep\",\"ns\":10},"
+        "{\"op\":\"timeout\",\"ns\":100,\"inner\":{\"op\":\"sem_acquire\",\"semaphore\":\"s\","
+        "\"count\":1}},"
+        "{\"op\":\"sleep\",\"ns\":200}]}],"
+        "\"script\":[],\"expect\":{\"kind\":\"ok\"}}";
+    uint32_t root = 0;
+    uint32_t o;
+    ASSERT_EQ(run_text(text, &root), ASX_OK);
+    ASSERT_EQ(count_observed(root, "t.b", "timeout", &o), 0u);
+    ASSERT_EQ(count_observed(root, "t.b", "sem_acquire", &o), 1u);
+    ASSERT_STR_EQ(asx_json_get_string(&g_out, o, "status"), "ASX_OK");
+    /* Scheduled: t.a's sleep, t.b's sleep (10), the timeout's, t.b's sleep
+     * (200). The timeout's is cancelled, the other three fire. */
+    ASSERT_EQ(count_events(root, "timer.scheduled", NULL, &o), 4u);
+    ASSERT_EQ(count_events(root, "timer.fired", NULL, &o), 3u);
+    ASSERT_EQ(count_events(root, "timer.cancelled", NULL, &o), 1u);
+    ASSERT_EQ(count_events(root, "timer.cancelled", "t.b/tm2", &o), 1u);
+    ASSERT_EQ(count_events(root, "timer.fired", "t.b/tm2", &o), 0u);
+}
+
+/* A zero-length timeout polls its inner first and its Sleep after, at one
+ * instant: a held semaphore is Elapsed at once with no timer registered, a
+ * free one is granted (completed work wins at the deadline exactly). */
+TEST(a_zero_length_timeout_polls_the_inner_first) {
+    static const char text[] = SCENARIO_HEAD
+        "\"channels\":[],\"sync\":[{\"name\":\"held\",\"type\":\"semaphore\",\"permits\":1},"
+        "{\"name\":\"free\",\"type\":\"semaphore\",\"permits\":1}],"
+        "\"tasks\":[{\"name\":\"t.a\",\"region\":\"r.main\",\"budget\":null,\"program\":["
+        "{\"op\":\"sem_acquire\",\"semaphore\":\"held\",\"count\":1},"
+        "{\"op\":\"sleep\",\"ns\":100},"
+        "{\"op\":\"sem_release\",\"semaphore\":\"held\"}]},"
+        "{\"name\":\"t.b\",\"region\":\"r.main\",\"budget\":null,\"program\":["
+        "{\"op\":\"yield\"},"
+        "{\"op\":\"timeout\",\"ns\":0,\"inner\":{\"op\":\"sem_acquire\",\"semaphore\":\"held\","
+        "\"count\":1}}]},"
+        "{\"name\":\"t.c\",\"region\":\"r.main\",\"budget\":null,\"program\":["
+        "{\"op\":\"yield\"},"
+        "{\"op\":\"timeout\",\"ns\":0,\"inner\":{\"op\":\"sem_acquire\",\"semaphore\":\"free\","
+        "\"count\":1}}]}],"
+        "\"script\":[],\"expect\":{\"kind\":\"ok\"}}";
+    uint32_t root = 0;
+    uint32_t o;
+    ASSERT_EQ(run_text(text, &root), ASX_OK);
+    ASSERT_EQ(count_observed(root, "t.b", "timeout", &o), 1u);
+    ASSERT_STR_EQ(asx_json_get_string(&g_out, o, "status"), "ASX_E_TIMED_OUT");
+    ASSERT_EQ(count_observed(root, "t.b", "sem_acquire", &o), 0u);
+    ASSERT_EQ(count_observed(root, "t.c", "timeout", &o), 0u);
+    ASSERT_EQ(count_observed(root, "t.c", "sem_acquire", &o), 1u);
+    ASSERT_STR_EQ(asx_json_get_string(&g_out, o, "status"), "ASX_OK");
+    /* Only t.a's sleep registers a timer. */
+    ASSERT_EQ(count_events(root, "timer.scheduled", NULL, &o), 1u);
+    ASSERT_EQ(count_events(root, "timer.cancelled", NULL, &o), 0u);
+}
+
+/* A cancel reaches the wrapped wait: it observes ASX_E_CANCELLED, the
+ * timeout adds nothing, and the Sleep's timer is cancelled (not fired). */
+TEST(a_cancel_ends_the_wait_inside_a_timeout_and_cancels_its_timer) {
+    static const char text[] = SCENARIO_HEAD TIMEOUT_SEM_SYNC TIMEOUT_SEM_TASKS_A
+        "{\"op\":\"sleep\",\"ns\":1000},"
+        "{\"op\":\"sem_release\",\"semaphore\":\"s\"}]},"
+        "{\"name\":\"t.b\",\"region\":\"r.main\",\"budget\":null,\"program\":["
+        "{\"op\":\"timeout\",\"ns\":500,\"inner\":{\"op\":\"sem_acquire\",\"semaphore\":\"s\","
+        "\"count\":1}}]}],"
+        "\"script\":[{\"at_ns\":50,\"op\":{\"op\":\"close_region\",\"region\":\"r.main\","
+        "\"kind\":\"User\"}}],\"expect\":{\"kind\":\"ok\"}}";
+    uint32_t root = 0;
+    uint32_t o;
+    ASSERT_EQ(run_text(text, &root), ASX_OK);
+    ASSERT_EQ(count_observed(root, "t.b", "timeout", &o), 0u);
+    ASSERT_EQ(count_observed(root, "t.b", "sem_acquire", &o), 1u);
+    ASSERT_STR_EQ(asx_json_get_string(&g_out, o, "status"), "ASX_E_CANCELLED");
+    ASSERT_EQ(count_events(root, "timer.fired", "t.b/tm1", &o), 0u);
+    ASSERT_EQ(count_events(root, "timer.scheduled", "t.b/tm1", &o), 1u);
+    ASSERT_EQ(count_events(root, "timer.cancelled", "t.b/tm1", &o), 1u);
+}
+
+/* Only a blocking sync wait that owns no timer is wrapped: a timeout around
+ * anything else fails the run closed. */
+TEST(a_timeout_around_another_step_fails_the_run_closed) {
+    static const char text[] = SCENARIO_HEAD
+        "\"channels\":[],\"sync\":[],"
+        "\"tasks\":[{\"name\":\"t.a\",\"region\":\"r.main\",\"budget\":null,\"program\":["
+        "{\"op\":\"timeout\",\"ns\":10,\"inner\":{\"op\":\"sleep\",\"ns\":5}}]}],"
+        "\"script\":[],\"expect\":{\"kind\":\"ok\"}}";
+    uint32_t root = 0;
+    ASSERT_TRUE(run_text(text, &root) != ASX_OK);
+    ASSERT_TRUE(g_error[0] != '\0');
+}
+
 int main(void) {
     fprintf(stderr, "=== test_interpreter_ops ===\n");
     RUN_TEST(a_sender_closed_with_a_permit_held_is_dropped_after_the_permit);
@@ -545,6 +729,11 @@ int main(void) {
     RUN_TEST(a_skip_needs_a_declared_requirement_the_profile_forbids);
     RUN_TEST(an_err_return_is_a_normal_exit_for_monitors_and_links);
     RUN_TEST(an_unknown_step_fails_the_run_closed);
+    RUN_TEST(a_timeout_that_elapses_fires_its_timer_and_drops_its_wait);
+    RUN_TEST(a_wait_that_completes_first_cancels_the_timeout_timer);
+    RUN_TEST(a_zero_length_timeout_polls_the_inner_first);
+    RUN_TEST(a_cancel_ends_the_wait_inside_a_timeout_and_cancels_its_timer);
+    RUN_TEST(a_timeout_around_another_step_fails_the_run_closed);
     RUN_TEST(a_holder_idle_past_the_threshold_is_reported_at_every_step);
     RUN_TEST(a_polled_holder_and_an_idle_task_without_an_obligation_are_not_reported);
     RUN_TEST(a_futurelock_expectation_is_checked_both_ways);
