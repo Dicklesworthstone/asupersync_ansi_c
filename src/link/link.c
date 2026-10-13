@@ -338,15 +338,21 @@ void asx_link_task_finished(asx_task_id task, const asx_outcome *outcome, asx_ti
         }
     }
 
-    /* Every link the task had ends (remove_task); a trapping polled holder
-     * keeps its stored signal. */
+    /* Every link the task had ends (remove_task). A trapping polled holder
+     * that is still running keeps the signal this exit stored, for the Link
+     * handle it holds; one that is the exiting task itself (a self-link), or
+     * that exits later, drops the handle with the task, so a stored signal
+     * goes with its holder. */
     for (i = 0; i < ASX_LINK_CAPACITY; i++) {
         lk_entry *l = &g_link[i];
-        if (!involves(l, task)) continue;
-        if (l->has_signal && !l->released) {
-            l->state = LK_SIGNALLED;
-        } else {
+        if (l->state == LK_SIGNALLED && same_task(l->task_a, task)) {
             memset(l, 0, sizeof(*l));
+        } else if (involves(l, task)) {
+            if (l->has_signal && !l->released && !same_task(l->task_a, task)) {
+                l->state = LK_SIGNALLED;
+            } else {
+                memset(l, 0, sizeof(*l));
+            }
         }
     }
 }

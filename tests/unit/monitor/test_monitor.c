@@ -409,6 +409,25 @@ static void test_a_watchers_monitors_end_with_it(void) {
     ASSERT(asx_monitor_down(theirs, &d) == ASX_OK, "the other watcher's did");
 }
 
+static void test_a_stored_notice_goes_with_its_watcher(void) {
+    asx_task_id watcher;
+    asx_task_id target;
+    asx_monitor_ref ref = 0;
+    asx_down d;
+    asx_outcome out = ok_outcome();
+    setup();
+    watcher = spawn_task();
+    target = spawn_task();
+    MUST_OK(asx_monitor_establish(watcher, target, &ref));
+    asx_monitor_task_finished(target, &out, 1u);
+    ASSERT(asx_monitor_down(ref, &d) == ASX_OK && asx_monitor_count() == 1u,
+           "the DOWN is stored for the handle");
+    asx_monitor_task_finished(watcher, &out, 2u);
+    ASSERT(asx_monitor_count() == 0u,
+           "the handle is dropped with its task: nothing is left holding capacity");
+    ASSERT(asx_monitor_down(ref, &d) == ASX_E_NOT_FOUND, "and nothing can read it");
+}
+
 /* ------------------------------------------------------------------ */
 /* What the notification says                                          */
 /* ------------------------------------------------------------------ */
@@ -727,6 +746,7 @@ int main(void) {
     RUN(test_releasing_a_waiting_monitor_removes_it);
     RUN(test_a_server_monitor_is_not_readable_as_a_polled_one);
     RUN(test_a_watchers_monitors_end_with_it);
+    RUN(test_a_stored_notice_goes_with_its_watcher);
     RUN(test_the_outcome_is_carried);
     RUN(test_no_outcome_is_an_error_exit);
     RUN(test_reset_forgets_monitors_and_restarts_references);

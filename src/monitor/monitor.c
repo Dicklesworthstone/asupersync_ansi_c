@@ -275,9 +275,11 @@ void asx_monitor_task_finished(asx_task_id task, const asx_outcome *outcome, asx
         }
     }
 
-    /* The task's own monitors end with it, silently (:1425). */
+    /* The task's own monitors end with it, silently (:1425), and so do the
+     * notices they stored: the Monitor handles that would read them are
+     * dropped with the task, and nothing else can release them. */
     for (i = 0; i < ASX_MONITOR_CAPACITY; i++) {
-        if (g_mon[i].state == MON_ACTIVE && same_task(g_mon[i].watcher, task)) {
+        if (g_mon[i].state != MON_FREE && same_task(g_mon[i].watcher, task)) {
             memset(&g_mon[i], 0, sizeof(g_mon[i]));
         }
     }

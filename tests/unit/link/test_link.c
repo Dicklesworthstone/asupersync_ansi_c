@@ -396,6 +396,23 @@ static void test_a_polled_trapping_link_stores_its_signal(void) {
     ASSERT(asx_link_count() == 0u, "until released");
 }
 
+static void test_a_stored_signal_goes_with_its_holder(void) {
+    asx_task_id a;
+    asx_task_id b;
+    asx_link_ref ref = 0;
+    asx_exit_signal sig;
+    asx_outcome out = err_exit();
+    setup();
+    a = spawn_task();
+    b = spawn_task();
+    MUST_OK(asx_link_establish(a, b, ASX_EXIT_TRAP, &ref));
+    asx_link_task_finished(b, &out, 1u);
+    ASSERT(asx_link_count() == 1u, "the signal is stored for the holder's handle");
+    asx_link_task_finished(a, &out, 2u);
+    ASSERT(asx_link_count() == 0u, "the handle is dropped with the holder, nothing is left");
+    ASSERT(asx_link_exit_poll(a, NULL, ref, &sig) == ASX_E_NOT_FOUND, "and nothing can read it");
+}
+
 static void test_a_propagating_link_has_no_exit_to_poll(void) {
     asx_task_id a;
     asx_task_id b;
@@ -522,6 +539,7 @@ int main(void) {
     RUN(test_a_tasks_links_end_with_it);
     RUN(test_a_self_link_is_one_edge);
     RUN(test_a_polled_trapping_link_stores_its_signal);
+    RUN(test_a_stored_signal_goes_with_its_holder);
     RUN(test_a_propagating_link_has_no_exit_to_poll);
     RUN(test_the_runtime_cancels_a_peer_when_a_task_fails);
     RUN(test_a_runtime_reset_forgets_links);
