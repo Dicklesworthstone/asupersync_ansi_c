@@ -944,7 +944,7 @@ asx_status asx_send_permit_send(asx_send_permit *permit, uint64_t value) {
     s->queue[write_pos] = value;
     s->queue_len++;
 #endif
-    asx_trace_emit(ASX_TRACE_CHANNEL_SEND, (uint64_t)permit->channel_id, value);
+    asx_trace_emit_ctx_internal(ASX_TRACE_CHANNEL_SEND, (uint64_t)permit->channel_id, value);
     channel_permit_resolve(permit, 1, ASX_OBLIGATION_ABORT_NONE);
     channel_settle(s); /* one more message for a parked receiver */
 
@@ -1165,7 +1165,7 @@ asx_status asx_channel_send_evict_oldest_where(asx_channel_id id, uint64_t value
     s->queue[write_pos] = value;
     s->queue_len++;
 #endif
-    asx_trace_emit(ASX_TRACE_CHANNEL_SEND, (uint64_t)id, value);
+    asx_trace_emit_ctx_internal(ASX_TRACE_CHANNEL_SEND, (uint64_t)id, value);
     channel_settle(s); /* one more message for a parked receiver */
 
     *out_evicted = evicted;
@@ -1204,7 +1204,7 @@ static asx_status channel_recv_impl(asx_channel_id id, uint64_t *out_value, int 
     if (st != ASX_OK) { return st; }
 
     if (channel_take_oldest(s, out_value)) {
-        asx_trace_emit(ASX_TRACE_CHANNEL_RECV, (uint64_t)id, *out_value);
+        asx_trace_emit_ctx_internal(ASX_TRACE_CHANNEL_RECV, (uint64_t)id, *out_value);
         channel_recv_done(s);
         return ASX_OK;
     }
@@ -1330,7 +1330,7 @@ asx_status asx_channel_recv_many(asx_channel_id id, asx_cx *cx, uint64_t *out_va
 
     while (n < limit && channel_take_oldest(s, &out_values[n])) {
         ASX_CHECKPOINT_WAIVER("bounded: at most the channel capacity is queued");
-        asx_trace_emit(ASX_TRACE_CHANNEL_RECV, (uint64_t)id, out_values[n]);
+        asx_trace_emit_ctx_internal(ASX_TRACE_CHANNEL_RECV, (uint64_t)id, out_values[n]);
         n++;
     }
     if (n > 0u) {

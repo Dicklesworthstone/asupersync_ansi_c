@@ -113,13 +113,14 @@ typedef struct {
 /* API                                                                 */
 /* ------------------------------------------------------------------ */
 
-/* Build a performance snapshot from the current trace ring.
+/* Build a performance snapshot from rt's current trace ring (an empty one
+ * for a NULL rt or a tag no runtime holds).
  * Classifies each retained event by subsystem and accumulates counters.
  * The per-subsystem counters cover the retained window only
  * (window_events == min(total_events, ASX_TRACE_CAPACITY)); total_events
  * and trace_digest cover every emitted event, so a divergence outside
  * the window still shows as a digest change without a blame split. */
-ASX_API void asx_perf_snapshot_build(asx_perf_snapshot *snap);
+ASX_API void asx_perf_snapshot_build(const asx_runtime *rt, asx_perf_snapshot *snap);
 
 /* Compare two snapshots and produce a regression report.
  * baseline = known-good snapshot, current = potentially regressed.

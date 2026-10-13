@@ -35,8 +35,9 @@ ASX_API ASX_MUST_USE asx_status asx_tracing_compat_emit_event(const asx_trace_ev
                                                               asx_tracing_compat_sink_fn sink,
                                                               void *user_data);
 
-/* Emit a tracing-compatible span event. */
-ASX_API ASX_MUST_USE asx_status asx_tracing_compat_export_current(asx_tracing_compat_sink_fn sink,
+/* Emit rt's retained trace as tracing-compatible events. */
+ASX_API ASX_MUST_USE asx_status asx_tracing_compat_export_current(const asx_runtime *rt,
+                                                                  asx_tracing_compat_sink_fn sink,
                                                                   void *user_data,
                                                                   uint32_t *out_count);
 

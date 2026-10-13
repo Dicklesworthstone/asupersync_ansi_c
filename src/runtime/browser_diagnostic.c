@@ -210,11 +210,11 @@ asx_status asx_browser_evidence_to_sink(const asx_browser_evidence_report *repor
  * Flake governance
  * ------------------------------------------------------------------- */
 
-void asx_browser_flake_capture(asx_browser_flake_snapshot *snapshot,
+void asx_browser_flake_capture(const asx_runtime *rt, asx_browser_flake_snapshot *snapshot,
                                const asx_evidence_sink *sink) {
     if (!snapshot) return;
 
-    snapshot->trace_digest = asx_trace_digest();
+    snapshot->trace_digest = asx_trace_digest(rt);
     snapshot->profile = asx_profile_active();
     snapshot->ghost_violations = asx_ghost_violation_count();
     snapshot->surfaces_blocked = asx_surface_blocked_count(snapshot->profile);

@@ -35,8 +35,9 @@ static inline void asx_record_snapshot_init(asx_record_snapshot *snapshot) {
     asx_runtime_snapshot_init(snapshot);
 }
 
-static inline ASX_MUST_USE asx_status asx_record_snapshot_capture(asx_record_snapshot *snapshot) {
-    return asx_runtime_snapshot_capture(snapshot);
+static inline ASX_MUST_USE asx_status asx_record_snapshot_capture(const asx_runtime *rt,
+                                                                  asx_record_snapshot *snapshot) {
+    return asx_runtime_snapshot_capture(rt, snapshot);
 }
 
 static inline ASX_MUST_USE asx_status asx_record_snapshot_json(const asx_record_snapshot *snapshot,
@@ -54,13 +55,14 @@ static inline ASX_MUST_USE asx_status asx_record_event_log_json(asx_codec_buffer
     return asx_event_log_to_json(out_json);
 }
 
-static inline ASX_MUST_USE asx_status asx_record_summary_capture(asx_record_summary *out_summary) {
+static inline ASX_MUST_USE asx_status asx_record_summary_capture(const asx_runtime *rt,
+                                                                 asx_record_summary *out_summary) {
     asx_record_snapshot snapshot;
     asx_status st;
 
     if (out_summary == NULL) return ASX_E_INVALID_ARGUMENT;
     asx_record_snapshot_init(&snapshot);
-    st = asx_record_snapshot_capture(&snapshot);
+    st = asx_record_snapshot_capture(rt, &snapshot);
     if (st != ASX_OK) return st;
 
     out_summary->event_count = asx_record_event_count();

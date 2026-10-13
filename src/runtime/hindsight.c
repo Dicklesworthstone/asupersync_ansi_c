@@ -13,6 +13,7 @@
  */
 
 #include "fnv_fold.h"
+#include "runtime_internal.h"
 #include <asx/core/ghost.h>
 #include <asx/runtime/hindsight.h>
 #define ASX_INTERNAL_TRACE_FAMILY_ACCESS 1
@@ -132,7 +133,7 @@ void asx_hindsight_log(asx_nd_event_kind kind, uint64_t entity_id, uint64_t obse
     e->observed_value = observed_value;
     /* Sequence of the next trace event (low 32 bits, matching the trace
      * event sequence field), so the link survives ring wrap-around. */
-    e->trace_seq = (uint32_t)(asx_trace_emitted_total() & 0xFFFFFFFFu);
+    e->trace_seq = (uint32_t)(asx_trace_emitted_total_internal(asx_kernel_context()) & 0xFFFFFFFFu);
 
     g_write_index++;
     if (g_total_count < UINT32_MAX) g_total_count++;

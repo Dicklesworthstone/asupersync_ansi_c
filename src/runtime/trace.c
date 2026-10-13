@@ -171,9 +171,9 @@ static uint64_t trace_digest_of(const asx_trace_event *events, uint32_t count) {
  *
  * The state is the runtime kernel's (asx_trace_state, runtime_internal.h):
  * every function below works on one runtime's trace, and the public
- * handle-less API is kernel 0's. */
+ * API names the runtime. */
 
-/* Kernel 0's trace: what the handle-less public API reads and writes. */
+/* Kernel 0's trace: where an event about a handle no runtime holds goes. */
 static asx_trace_state *trace_bridge(void) { return &g_kernels[0]->trace; }
 
 /* A zeroed trace is a reset one: the digest is seeded on first use. */
@@ -261,10 +261,11 @@ void asx_trace_emit_payload_internal(asx_kernel *k, asx_trace_event_kind kind, u
     trace_record(k != NULL ? &k->trace : trace_bridge(), kind, entity_id, aux, payload);
 }
 
-void asx_trace_set_observer(asx_trace_observer_fn fn, void *ctx) {
-    asx_trace_state *t = trace_bridge();
-    t->observer = fn;
-    t->observer_ctx = ctx;
+void asx_trace_set_observer(const asx_runtime *rt, asx_trace_observer_fn fn, void *ctx) {
+    asx_kernel *k = asx_kernel_of_runtime(rt);
+    if (k == NULL) return;
+    k->trace.observer = fn;
+    k->trace.observer_ctx = ctx;
 }
 
 /* A user trace line belongs to the runtime of the task it names (kernel 0
@@ -291,8 +292,10 @@ static uint32_t trace_seq_to_u32(uint64_t seq) {
     return seq > (uint64_t)UINT32_MAX ? UINT32_MAX : (uint32_t)seq;
 }
 
-void asx_trace_emit(asx_trace_event_kind kind, uint64_t entity_id, uint64_t aux) {
-    trace_record(trace_bridge(), kind, entity_id, aux, NULL);
+void asx_trace_emit(const asx_runtime *rt, asx_trace_event_kind kind, uint64_t entity_id,
+                    uint64_t aux) {
+    asx_kernel *k = asx_kernel_of_runtime(rt);
+    if (k != NULL) trace_record(&k->trace, kind, entity_id, aux, NULL);
 }
 
 uint32_t asx_trace_event_count_internal(const asx_kernel *k) { return trace_retained(&k->trace); }
@@ -324,22 +327,34 @@ int asx_trace_event_get_seq_internal(const asx_kernel *k, uint64_t seq, asx_trac
     return 1;
 }
 
-uint32_t asx_trace_event_count(void) { return asx_trace_event_count_internal(g_kernels[0]); }
-
-uint64_t asx_trace_emitted_total(void) { return asx_trace_emitted_total_internal(g_kernels[0]); }
-
-uint64_t asx_trace_dropped(void) { return asx_trace_dropped_internal(g_kernels[0]); }
-
-uint64_t asx_trace_kind_total(asx_trace_event_kind kind) {
-    return asx_trace_kind_total_internal(g_kernels[0], kind);
+uint32_t asx_trace_event_count(const asx_runtime *rt) {
+    const asx_kernel *k = asx_kernel_of_runtime(rt);
+    return k != NULL ? asx_trace_event_count_internal(k) : 0u;
 }
 
-int asx_trace_event_get(uint32_t index, asx_trace_event *out) {
-    return asx_trace_event_get_internal(g_kernels[0], index, out);
+uint64_t asx_trace_emitted_total(const asx_runtime *rt) {
+    const asx_kernel *k = asx_kernel_of_runtime(rt);
+    return k != NULL ? asx_trace_emitted_total_internal(k) : 0u;
 }
 
-int asx_trace_event_get_seq(uint64_t seq, asx_trace_event *out) {
-    return asx_trace_event_get_seq_internal(g_kernels[0], seq, out);
+uint64_t asx_trace_dropped(const asx_runtime *rt) {
+    const asx_kernel *k = asx_kernel_of_runtime(rt);
+    return k != NULL ? asx_trace_dropped_internal(k) : 0u;
+}
+
+uint64_t asx_trace_kind_total(const asx_runtime *rt, asx_trace_event_kind kind) {
+    const asx_kernel *k = asx_kernel_of_runtime(rt);
+    return k != NULL ? asx_trace_kind_total_internal(k, kind) : 0u;
+}
+
+int asx_trace_event_get(const asx_runtime *rt, uint32_t index, asx_trace_event *out) {
+    const asx_kernel *k = asx_kernel_of_runtime(rt);
+    return k != NULL ? asx_trace_event_get_internal(k, index, out) : 0;
+}
+
+int asx_trace_event_get_seq(const asx_runtime *rt, uint64_t seq, asx_trace_event *out) {
+    const asx_kernel *k = asx_kernel_of_runtime(rt);
+    return k != NULL ? asx_trace_event_get_seq_internal(k, seq, out) : 0;
 }
 
 void asx_trace_reset_internal(asx_kernel *k) {
@@ -351,7 +366,10 @@ void asx_trace_reset_internal(asx_kernel *k) {
     memset(t->kind_totals, 0, sizeof(t->kind_totals));
 }
 
-void asx_trace_reset(void) { asx_trace_reset_internal(g_kernels[0]); }
+void asx_trace_reset(const asx_runtime *rt) {
+    asx_kernel *k = asx_kernel_of_runtime(rt);
+    if (k != NULL) asx_trace_reset_internal(k);
+}
 
 /* Fold the events the ring still holds unfolded, oldest first, and return
  * the digest over every emitted event. Called with the writer lock held
@@ -379,7 +397,10 @@ static uint64_t trace_digest_now(asx_trace_state *t) {
 
 uint64_t asx_trace_digest_internal(asx_kernel *k) { return trace_digest_now(&k->trace); }
 
-uint64_t asx_trace_digest(void) { return trace_digest_now(trace_bridge()); }
+uint64_t asx_trace_digest(const asx_runtime *rt) {
+    asx_kernel *k = asx_kernel_of_runtime(rt);
+    return k != NULL ? asx_trace_digest_internal(k) : 0u;
+}
 
 /* -------------------------------------------------------------------
  * Replay verification
@@ -417,8 +438,9 @@ void asx_replay_clear_reference(void) {
     g_replay_loaded = 0;
 }
 
-asx_replay_result asx_replay_verify(void) {
-    asx_trace_state *t = trace_bridge();
+asx_replay_result asx_replay_verify(const asx_runtime *rt) {
+    asx_kernel *k = asx_kernel_of_runtime(rt);
+    asx_trace_state *t;
     asx_replay_result result;
     uint64_t seq;
     uint64_t start;
@@ -429,6 +451,12 @@ asx_replay_result asx_replay_verify(void) {
         result.result = ASX_REPLAY_MATCH;
         return result;
     }
+    if (k == NULL) {
+        /* No runtime, no trace: nothing it emitted can equal a reference. */
+        result.result = ASX_REPLAY_LENGTH_MISMATCH;
+        return result;
+    }
+    t = &k->trace;
 
     /* Both traces must have emitted the same number of events. */
     if (t->emitted != g_replay_ref_total) {
@@ -543,7 +571,7 @@ static void snap_u32(asx_snapshot_buffer *buf, uint32_t val) {
     snap_append(buf, tmp, (uint32_t)n);
 }
 
-asx_status asx_snapshot_capture(asx_snapshot_buffer *out) {
+asx_status asx_snapshot_capture(const asx_runtime *rt, asx_snapshot_buffer *out) {
     asx_runtime_snapshot snap;
     asx_status status;
     uint32_t i;
@@ -551,7 +579,7 @@ asx_status asx_snapshot_capture(asx_snapshot_buffer *out) {
 
     if (out == NULL) return ASX_E_INVALID_ARGUMENT;
 
-    status = asx_runtime_snapshot_capture(&snap);
+    status = asx_runtime_snapshot_capture(rt, &snap);
     if (status != ASX_OK) return status;
 
     out->len = 0;
@@ -613,10 +641,10 @@ asx_status asx_snapshot_capture(asx_snapshot_buffer *out) {
     }
 
     snap_str(out, "],\"trace_count\":");
-    snap_u32(out, trace_seq_to_u32(trace_bridge()->emitted));
+    snap_u32(out, trace_seq_to_u32(asx_trace_emitted_total(rt)));
     snap_str(out, ",\"trace_digest\":");
     {
-        uint64_t d = asx_trace_digest();
+        uint64_t d = asx_trace_digest(rt);
         char hex[20];
         int h;
         static const char hextab[] = "0123456789abcdef";
@@ -709,15 +737,19 @@ static uint64_t read_le64(const uint8_t *p) {
     return (uint64_t)read_le32(p) | ((uint64_t)read_le32(p + 4) << 32);
 }
 
-asx_status asx_trace_export_binary(uint8_t *buf, uint32_t capacity, uint32_t *out_len) {
-    asx_trace_state *t = trace_bridge();
+asx_status asx_trace_export_binary(const asx_runtime *rt, uint8_t *buf, uint32_t capacity,
+                                   uint32_t *out_len) {
+    asx_kernel *k = asx_kernel_of_runtime(rt);
+    asx_trace_state *t;
     uint32_t count;
     uint32_t needed;
     uint64_t first_seq;
     uint32_t i;
     uint8_t *p;
 
-    if (buf == NULL || out_len == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (rt == NULL || buf == NULL || out_len == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (k == NULL) return ASX_E_INVALID_STATE;
+    t = &k->trace;
 
     count = trace_retained(t);
     first_seq = trace_first_retained_seq(t);
@@ -820,7 +852,7 @@ asx_status asx_trace_import_binary(const uint8_t *buf, uint32_t len) {
     return ASX_OK;
 }
 
-asx_status asx_trace_continuity_check(const uint8_t *buf, uint32_t len) {
+asx_status asx_trace_continuity_check(const asx_runtime *rt, const uint8_t *buf, uint32_t len) {
     asx_status st;
     asx_replay_result result;
 
@@ -829,7 +861,7 @@ asx_status asx_trace_continuity_check(const uint8_t *buf, uint32_t len) {
     st = asx_trace_import_binary(buf, len);
     if (st != ASX_OK) { return st; }
 
-    result = asx_replay_verify();
+    result = asx_replay_verify(rt);
 
     /* Clean up reference */
     asx_replay_clear_reference();

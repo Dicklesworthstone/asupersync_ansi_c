@@ -282,7 +282,7 @@ asx_status asx_session_send(asx_session_endpoint *ep, uint64_t value) {
     /* Initiator sends are requests: increment obligations */
     if (ep->is_initiator) { s->obligations++; }
 
-    asx_trace_emit(ASX_TRACE_CHANNEL_SEND, (uint64_t)ep->slot, value);
+    asx_trace_emit_ctx_internal(ASX_TRACE_CHANNEL_SEND, (uint64_t)ep->slot, value);
     asx_wait_queue_leave_current(wq);
     session_settle(s, ep->is_initiator);
 
@@ -311,7 +311,7 @@ asx_status asx_session_try_recv(asx_session_endpoint *ep, uint64_t *out_value) {
         if (ep->is_initiator) {
             if (s->obligations > 0) s->obligations--;
         }
-        asx_trace_emit(ASX_TRACE_CHANNEL_RECV, (uint64_t)ep->slot, *out_value);
+        asx_trace_emit_ctx_internal(ASX_TRACE_CHANNEL_RECV, (uint64_t)ep->slot, *out_value);
         asx_wait_queue_leave_current(wq);
         session_settle(s, !ep->is_initiator); /* a slot freed for the peer */
         return ASX_OK;

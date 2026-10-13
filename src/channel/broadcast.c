@@ -566,7 +566,7 @@ asx_status asx_broadcast_permit_send(asx_broadcast_permit *permit, uint64_t valu
     s->buffer[ring_idx] = value;
     s->write_seq++;
 
-    asx_trace_emit(ASX_TRACE_CHANNEL_SEND, (uint64_t)permit->slot, value);
+    asx_trace_emit_ctx_internal(ASX_TRACE_CHANNEL_SEND, (uint64_t)permit->slot, value);
     broadcast_wake_waiters(s);
 
     if (out_receivers != NULL) *out_receivers = s->receiver_count;
@@ -662,7 +662,7 @@ static asx_status broadcast_recv_impl(asx_broadcast_receiver *receiver, uint64_t
     *out_value = s->buffer[ring_idx];
     receiver->cursor++;
 
-    asx_trace_emit(ASX_TRACE_CHANNEL_RECV, (uint64_t)receiver->slot, *out_value);
+    asx_trace_emit_ctx_internal(ASX_TRACE_CHANNEL_RECV, (uint64_t)receiver->slot, *out_value);
 
     return ASX_OK;
 }

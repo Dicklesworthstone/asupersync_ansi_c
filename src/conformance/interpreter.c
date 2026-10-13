@@ -6346,7 +6346,7 @@ static asx_status conformance_run(const asx_json_doc *in, uint32_t scenario, asx
         }
         g_forced_on = 1;
     }
-    asx_trace_set_observer(it_observe, NULL);
+    asx_trace_set_observer(&g_rt, it_observe, NULL);
     g_observations = asx_json_new_array(out);
 
     /* Sync objects (DSL §3.7); their arenas are not part of the runtime
@@ -6473,7 +6473,7 @@ static asx_status conformance_run(const asx_json_doc *in, uint32_t scenario, asx
         if (asx_lab_forced_schedule_end(&frep, &ferr) != ASX_OK) forced_report(&ferr);
     }
     if (!g_failed) check_oracles(scenario);
-    asx_trace_set_observer(NULL, NULL);
+    asx_trace_set_observer(&g_rt, NULL, NULL);
     if (g_failed) return ASX_E_INVALID_STATE;
 
     /* Supervisor regions no generation named. */

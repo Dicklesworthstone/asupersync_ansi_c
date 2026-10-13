@@ -226,7 +226,7 @@ asx_status asx_replay_render_result_json(const asx_replay_result *result, asx_re
     return ASX_OK;
 }
 
-asx_status asx_replay_render_current_diff_json(asx_report_buf *out) {
+asx_status asx_replay_render_current_diff_json(const asx_runtime *rt, asx_report_buf *out) {
     asx_replay_result result;
     uint32_t current_count;
     uint32_t reference_count;
@@ -237,12 +237,12 @@ asx_status asx_replay_render_current_diff_json(asx_report_buf *out) {
 
     if (out == NULL) return ASX_E_INVALID_ARGUMENT;
 
-    result = asx_replay_verify();
-    current_count = asx_trace_event_count();
+    result = asx_replay_verify(rt);
+    current_count = asx_trace_event_count(rt);
     reference_count = asx_replay_reference_event_count();
     /* divergence_index is an absolute event sequence on both sides. */
     have_expected = asx_replay_reference_event_get_seq(result.divergence_index, &expected_event);
-    have_actual = asx_trace_event_get_seq(result.divergence_index, &actual_event);
+    have_actual = asx_trace_event_get_seq(rt, result.divergence_index, &actual_event);
 
     asx_report_buf_init(out);
     asx_report_buf_append(out, "{\"reference_loaded\":");

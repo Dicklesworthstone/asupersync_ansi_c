@@ -1274,6 +1274,14 @@ static inline asx_kernel *asx_kernel_context(void) {
     return asx_kernel_of_or_scope(asx_task_current());
 }
 
+/* Record an event in the trace of asx_kernel_context(): what the still
+ * process-wide subsystems (channels, the application timer wheel, parallel,
+ * telemetry) have for a runtime, having no runtime object. */
+static inline void asx_trace_emit_ctx_internal(asx_trace_event_kind kind, uint64_t entity_id,
+                                               uint64_t aux) {
+    asx_trace_emit_internal(asx_kernel_context(), kind, entity_id, aux);
+}
+
 /* asx_runtime_random_secure_u64 as runtime `k` sees it. Defined in hooks.c. */
 asx_status asx_kernel_random_secure_u64(asx_kernel *k, uint64_t *out_value);
 

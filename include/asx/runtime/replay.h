@@ -210,8 +210,10 @@ ASX_API ASX_MUST_USE asx_status asx_replay_render_result_json(const asx_replay_r
                                                               asx_report_buf *out);
 
 /* Render the current replay verification state as JSON, including
- * expected/actual divergent events when a reference is loaded. */
-ASX_API ASX_MUST_USE asx_status asx_replay_render_current_diff_json(asx_report_buf *out);
+ * expected/actual divergent events when a reference is loaded (rt's trace
+ * against the reference). */
+ASX_API ASX_MUST_USE asx_status asx_replay_render_current_diff_json(const asx_runtime *rt,
+                                                                    asx_report_buf *out);
 
 /* -------------------------------------------------------------------
  * Oracle suite — run multiple oracles and collect results

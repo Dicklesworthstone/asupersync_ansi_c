@@ -256,7 +256,7 @@ asx_status asx_watch_send(asx_watch_sender *sender, uint64_t value) {
     s->value = value;
     s->version++;
 
-    asx_trace_emit(ASX_TRACE_CHANNEL_SEND, (uint64_t)sender->slot, value);
+    asx_trace_emit_ctx_internal(ASX_TRACE_CHANNEL_SEND, (uint64_t)sender->slot, value);
     watch_wake_waiters(s);
     /* The value this one replaced is dropped (watch.rs:497-503); a token
      * sent again is the same value, not a replacement. */
@@ -285,7 +285,7 @@ asx_status asx_watch_send_modify(asx_watch_sender *sender, asx_watch_modify_fn m
     s->value = value;
     s->version++;
 
-    asx_trace_emit(ASX_TRACE_CHANNEL_SEND, (uint64_t)sender->slot, value);
+    asx_trace_emit_ctx_internal(ASX_TRACE_CHANNEL_SEND, (uint64_t)sender->slot, value);
     watch_wake_waiters(s);
     /* The written-back value replaces the old one (watch.rs:567); a closure
      * that left the token as it was replaced nothing. */

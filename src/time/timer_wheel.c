@@ -30,6 +30,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../runtime/runtime_internal.h"
 #include <asx/asx_config.h>
 #include <asx/runtime/runtime.h>
 #define ASX_INTERNAL_TRACE_FAMILY_ACCESS 1
@@ -644,7 +645,7 @@ static void tw_arm(asx_timer_wheel *w, uint32_t idx, asx_time deadline, void *wa
     tw_insert_entry_at(w, idx, current);
 
     if (w->traced) {
-        asx_trace_emit(ASX_TRACE_TIMER_SET, tw_trace_entity_id(out_handle), deadline);
+        asx_trace_emit_ctx_internal(ASX_TRACE_TIMER_SET, tw_trace_entity_id(out_handle), deadline);
     }
 }
 
@@ -691,7 +692,8 @@ int asx_timer_cancel(asx_timer_wheel *wheel, const asx_timer_handle *handle) {
 
     e = &wheel->entries[handle->slot];
     if (wheel->traced) {
-        asx_trace_emit(ASX_TRACE_TIMER_CANCEL, tw_trace_entity_id(handle), e->deadline);
+        asx_trace_emit_ctx_internal(ASX_TRACE_TIMER_CANCEL, tw_trace_entity_id(handle),
+                                    e->deadline);
     }
     tw_unlink(wheel, handle->slot);
     tw_release(wheel, handle->slot);
@@ -733,7 +735,8 @@ static uint32_t tw_drain_ready(asx_timer_wheel *w, asx_time now, void **out_wake
             fired.generation = e->generation;
             out_wakers[count++] = e->waker_data;
             if (w->traced) {
-                asx_trace_emit(ASX_TRACE_TIMER_FIRE, tw_trace_entity_id(&fired), e->deadline);
+                asx_trace_emit_ctx_internal(ASX_TRACE_TIMER_FIRE, tw_trace_entity_id(&fired),
+                                            e->deadline);
             }
             tw_release(w, i);
             if (w->active_count > 0u) w->active_count--;

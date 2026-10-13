@@ -251,7 +251,7 @@ static asx_status oneshot_deliver(const asx_oneshot_sender *sender, asx_oneshot_
     s->sender_alive = 0;
     oneshot_sender_consumed(s);
 
-    asx_trace_emit(ASX_TRACE_CHANNEL_SEND, (uint64_t)sender->slot, value);
+    asx_trace_emit_ctx_internal(ASX_TRACE_CHANNEL_SEND, (uint64_t)sender->slot, value);
     /* The receiver's recv waiter wakes; its poll_closed waiter stays
      * registered (a value is not a close; oneshot.rs:731-760). */
     oneshot_wake_waiters(s);
@@ -300,7 +300,7 @@ static asx_status oneshot_recv_impl(asx_oneshot_receiver *receiver, uint64_t *ou
         *out_value = s->value;
         s->state = ASX_ONESHOT_CONSUMED;
         s->receiver_alive = 0;
-        asx_trace_emit(ASX_TRACE_CHANNEL_RECV, (uint64_t)receiver->slot, s->value);
+        asx_trace_emit_ctx_internal(ASX_TRACE_CHANNEL_RECV, (uint64_t)receiver->slot, s->value);
         asx_wait_queue_leave_current(&s->waiters);
         /* The receiver is spent: any other task parked on it must see that. */
         oneshot_wake_waiters(s);

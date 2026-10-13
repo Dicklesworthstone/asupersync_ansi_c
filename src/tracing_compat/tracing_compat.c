@@ -40,18 +40,18 @@ asx_status asx_tracing_compat_emit_event(const asx_trace_event *event,
     return ASX_OK;
 }
 
-asx_status asx_tracing_compat_export_current(asx_tracing_compat_sink_fn sink, void *user_data,
-                                             uint32_t *out_count) {
+asx_status asx_tracing_compat_export_current(const asx_runtime *rt, asx_tracing_compat_sink_fn sink,
+                                             void *user_data, uint32_t *out_count) {
     uint32_t i;
     uint32_t count;
     asx_trace_event event;
     asx_status st;
 
-    if (sink == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (rt == NULL || sink == NULL) return ASX_E_INVALID_ARGUMENT;
 
-    count = asx_trace_event_count();
+    count = asx_trace_event_count(rt);
     for (i = 0; i < count; i++) {
-        if (!asx_trace_event_get(i, &event)) return ASX_E_INVALID_STATE;
+        if (!asx_trace_event_get(rt, i, &event)) return ASX_E_INVALID_STATE;
         st = asx_tracing_compat_emit_event(&event, sink, user_data);
         if (st != ASX_OK) return st;
     }

@@ -143,8 +143,8 @@ static void j_chain_locked(asx_journal *j, int sampled) {
     uint64_t digest = 0u;
     uint8_t flags = 0u;
     if (sampled) {
-        events = asx_trace_emitted_total();
-        digest = asx_trace_digest();
+        events = asx_trace_emitted_total_internal(asx_kernel_process_scope());
+        digest = asx_trace_digest_internal(asx_kernel_process_scope());
         flags = (uint8_t)ASX_JOURNAL_REC_TRACE_CHECKPOINT;
     }
     (void)put_u64(put_u64(trace, events), digest);
@@ -249,7 +249,8 @@ static uint8_t *j_begin(asx_journal *j, uint8_t kind, uint8_t flags, int sample_
     p = put_u8(p, flags);
     p = put_u16(p, 0u);
     p = put_u64(p, j->seq);
-    p = put_u64(p, sample_trace ? asx_trace_emitted_total() : 0u);
+    p = put_u64(p,
+                sample_trace ? asx_trace_emitted_total_internal(asx_kernel_process_scope()) : 0u);
     j_stage(j, rec, (uint32_t)(p - rec));
     dst = j->cfg.buffer + j->used;
     j->used += payload;

@@ -298,7 +298,8 @@ static void check_checkpoint(asx_replay *r) {
     trace = head + ASX_JOURNAL_RECORD_HEAD_BYTES + ASX_JOURNAL_CHAIN_TRACE_OFFSET;
     events = asx_journal_get_u64(trace);
     digest = asx_journal_get_u64(trace + 8);
-    if (asx_trace_emitted_total() != events || asx_trace_digest() != digest) {
+    if (asx_trace_emitted_total_internal(asx_kernel_process_scope()) != events ||
+        asx_trace_digest_internal(asx_kernel_process_scope()) != digest) {
         fail(r, ASX_REPLAY_E_DIVERGED, r->cur.seq, r->cur.trace_seq, r->cur.kind, r->cur.kind,
              "trace checkpoint");
         return;

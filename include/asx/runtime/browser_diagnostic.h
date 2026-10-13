@@ -132,9 +132,9 @@ typedef struct {
 } asx_browser_flake_snapshot;
 
 /* Capture a flake-governance snapshot for failure forensics.
- * Reads from trace, ghost, and browser boundary subsystems.
+ * Reads from rt's trace, and the ghost and browser boundary subsystems.
  * sink may be NULL (in which case evidence counts are zero). */
-ASX_API void asx_browser_flake_capture(asx_browser_flake_snapshot *snapshot,
+ASX_API void asx_browser_flake_capture(const asx_runtime *rt, asx_browser_flake_snapshot *snapshot,
                                        const asx_evidence_sink *sink);
 
 /* Check if two flake snapshots represent the same failure.

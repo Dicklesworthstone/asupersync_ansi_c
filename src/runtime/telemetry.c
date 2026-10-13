@@ -12,6 +12,7 @@
  */
 
 #include "fnv_fold.h"
+#include "runtime_internal.h"
 #define ASX_INTERNAL_TRACE_FAMILY_ACCESS 1
 #include <asx/runtime/telemetry.h>
 #include <asx/runtime/trace.h>
@@ -116,7 +117,7 @@ void asx_telemetry_emit(asx_trace_event_kind kind, uint64_t entity_id, uint64_t 
 
     /* Record in trace ring only if tier retains this event kind */
     if (asx_telemetry_retains(g_tier, kind)) {
-        asx_trace_emit(kind, entity_id, aux);
+        asx_trace_emit_ctx_internal(kind, entity_id, aux);
     } else {
         if (g_filtered_count < UINT32_MAX) g_filtered_count++;
     }

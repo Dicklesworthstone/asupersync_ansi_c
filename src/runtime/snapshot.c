@@ -31,16 +31,17 @@ void asx_runtime_snapshot_init(asx_runtime_snapshot *snap) {
 /* Capture                                                             */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_runtime_snapshot_capture(asx_runtime_snapshot *snap) {
-    const asx_kernel *k = g_kernels[0]; /* handle-less: kernel 0 until capture takes its runtime */
+asx_status asx_runtime_snapshot_capture(const asx_runtime *rt, asx_runtime_snapshot *snap) {
+    asx_kernel *k = asx_kernel_of_runtime(rt);
     uint32_t i;
     uint32_t ri = 0;
     uint32_t ti = 0;
     uint32_t oi = 0;
 
-    if (snap == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (rt == NULL || snap == NULL) return ASX_E_INVALID_ARGUMENT;
 
     asx_runtime_snapshot_init(snap);
+    if (k == NULL) return ASX_E_INVALID_STATE;
 
 #if ASX_HAS_NATIVE_IO_DRIVER
     snap->io_driver_initialized = asx_io_driver_is_initialized();
@@ -98,7 +99,7 @@ asx_status asx_runtime_snapshot_capture(asx_runtime_snapshot *snap) {
     snap->obligation_count = oi;
 
     /* Capture trace hash chain */
-    snap->event_hash = asx_trace_digest();
+    snap->event_hash = asx_trace_digest_internal(k);
 
     return ASX_OK;
 }

@@ -165,19 +165,21 @@ ASX_API const char *asx_trace_schema_compat_str(asx_trace_schema_compat compat);
 /* -------------------------------------------------------------------
  * Trace emission API
  *
- * Events are recorded into a global ring buffer that keeps the most
- * recent ASX_TRACE_CAPACITY events. Scheduler and parallel-run
- * invocations append to the current trace until the caller explicitly
- * resets it with asx_trace_reset().
+ * Events are recorded into the runtime's ring buffer (each runtime has
+ * its own) that keeps the most recent ASX_TRACE_CAPACITY events.
+ * Scheduler and parallel-run invocations append to the runtime's trace
+ * until the caller explicitly resets it with asx_trace_reset(rt).
  * ------------------------------------------------------------------- */
 
-/* Emit a trace event: it takes the next sequence, is folded into the
- * rolling digest and the per-kind totals, and overwrites the oldest
+/* Emit a trace event into rt's trace: it takes the next sequence, is folded
+ * into the rolling digest and the per-kind totals, and overwrites the oldest
  * ring slot once the ring is full. Live builds serialise emitters with a
  * lock (channel producers and the blocking pool emit too); a
  * single-thread build has a single writer and no lock. The readers below
- * take no lock: use them once emitting threads are quiet. */
-ASX_API void asx_trace_emit(asx_trace_event_kind kind, uint64_t entity_id, uint64_t aux);
+ * take no lock: use them once emitting threads are quiet. NULL, or a tag
+ * no runtime holds, emits nothing. */
+ASX_API void asx_trace_emit(const asx_runtime *rt, asx_trace_event_kind kind, uint64_t entity_id,
+                            uint64_t aux);
 
 /* Emit an ASX_TRACE_USER event for `task` carrying `message` (Rust
  * Cx::trace). The ring and the digest store the message's FNV-1a 64 hash;
@@ -211,34 +213,37 @@ typedef struct {
  * recorded, so a consumer sees the whole trace whatever the ring retains.
  * `payload` is never NULL. The observer must not emit events (such
  * emissions are recorded but not re-observed). One observer at a time;
- * NULL removes it. asx_trace_reset() leaves it installed.
+ * NULL removes it. asx_trace_reset(rt) leaves it installed. One observer
+ * per runtime; none for a NULL rt or a tag no runtime holds.
  * Thread-safety: none (single-threaded runtime). */
 typedef void (*asx_trace_observer_fn)(void *ctx, const asx_trace_event *event,
                                       const asx_trace_payload *payload);
-ASX_API void asx_trace_set_observer(asx_trace_observer_fn fn, void *ctx);
+ASX_API void asx_trace_set_observer(const asx_runtime *rt, asx_trace_observer_fn fn, void *ctx);
 
-/* Number of events currently retained in the ring (<= ASX_TRACE_CAPACITY). */
-ASX_API uint32_t asx_trace_event_count(void);
+/* The readers below answer 0 (or return 0) for a NULL rt or a tag no
+ * runtime holds. Number of events currently retained in rt's ring
+ * (<= ASX_TRACE_CAPACITY). */
+ASX_API uint32_t asx_trace_event_count(const asx_runtime *rt);
 
-/* Total events emitted since the last reset, retained or not. */
-ASX_API uint64_t asx_trace_emitted_total(void);
+/* Total events rt emitted since its last reset, retained or not. */
+ASX_API uint64_t asx_trace_emitted_total(const asx_runtime *rt);
 
 /* Events emitted since the last reset that the ring no longer retains. */
-ASX_API uint64_t asx_trace_dropped(void);
+ASX_API uint64_t asx_trace_dropped(const asx_runtime *rt);
 
 /* Events of one kind emitted since the last reset (exact, never dropped). */
-ASX_API uint64_t asx_trace_kind_total(asx_trace_event_kind kind);
+ASX_API uint64_t asx_trace_kind_total(const asx_runtime *rt, asx_trace_event_kind kind);
 
 /* Read the retained event at index (0 = oldest retained). Returns 1 on
- * success, 0 when index >= asx_trace_event_count(). */
-ASX_API int asx_trace_event_get(uint32_t index, asx_trace_event *out);
+ * success, 0 when index >= asx_trace_event_count(rt). */
+ASX_API int asx_trace_event_get(const asx_runtime *rt, uint32_t index, asx_trace_event *out);
 
 /* Read the event with absolute sequence number seq (0 = first event since
  * reset). Returns 0 if seq was not emitted yet or is no longer retained. */
-ASX_API int asx_trace_event_get_seq(uint64_t seq, asx_trace_event *out);
+ASX_API int asx_trace_event_get_seq(const asx_runtime *rt, uint64_t seq, asx_trace_event *out);
 
-/* Reset trace state before starting a fresh scenario or replay window. */
-ASX_API void asx_trace_reset(void);
+/* Reset rt's trace state before a fresh scenario or replay window. */
+ASX_API void asx_trace_reset(const asx_runtime *rt);
 
 /* -------------------------------------------------------------------
  * Rolling digest
@@ -256,8 +261,9 @@ ASX_API void asx_trace_reset(void);
  * The value is exactly the one an eager fold at emit time gives.
  * ------------------------------------------------------------------- */
 
-/* Current rolling digest over every event emitted since the last reset. */
-ASX_API uint64_t asx_trace_digest(void);
+/* Current rolling digest over every event rt emitted since its last reset
+ * (0 for a NULL rt or a tag no runtime holds). */
+ASX_API uint64_t asx_trace_digest(const asx_runtime *rt);
 
 /* -------------------------------------------------------------------
  * Replay verification mode
@@ -290,11 +296,11 @@ ASX_API asx_status asx_replay_load_reference(const asx_trace_event *events, uint
 /* Clear reference events. */
 ASX_API void asx_replay_clear_reference(void);
 
-/* Compare the current trace against the loaded reference: equal emitted
- * totals, equal events wherever both sides retain them (aligned by
- * sequence), and equal rolling digests. divergence_index is the sequence
- * of the first mismatching event. */
-ASX_API asx_replay_result asx_replay_verify(void);
+/* Compare rt's current trace against the loaded reference (one, process-
+ * wide): equal emitted totals, equal events wherever both sides retain them
+ * (aligned by sequence), and equal rolling digests. divergence_index is the
+ * sequence of the first mismatching event. */
+ASX_API asx_replay_result asx_replay_verify(const asx_runtime *rt);
 
 /* Number of reference events held (the reference window). */
 ASX_API uint32_t asx_replay_reference_event_count(void);
@@ -320,10 +326,10 @@ typedef struct {
     uint32_t len;
 } asx_snapshot_buffer;
 
-/* Capture a snapshot of the current runtime state.
+/* Capture a snapshot of rt's current state.
  * Writes a JSON object with subsystem state plus regions, tasks, and
  * obligations. */
-ASX_API asx_status asx_snapshot_capture(asx_snapshot_buffer *out);
+ASX_API asx_status asx_snapshot_capture(const asx_runtime *rt, asx_snapshot_buffer *out);
 
 /* Compute digest of a snapshot buffer (FNV-1a). */
 ASX_API uint64_t asx_snapshot_digest(const asx_snapshot_buffer *snap);
@@ -365,11 +371,13 @@ ASX_API const char *asx_replay_result_kind_str(asx_replay_result_kind kind);
 #define ASX_TRACE_BINARY_EVENT 24u
 #define ASX_TRACE_BINARY_FLAG_TRUNCATED 0x1u
 
-/* Export the current trace to a binary buffer.
- * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if buf/out_len
- * is NULL, ASX_E_BUFFER_TOO_SMALL if capacity insufficient.
+/* Export rt's current trace to a binary buffer.
+ * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if rt/buf/out_len
+ * is NULL, ASX_E_INVALID_STATE if no runtime holds rt's tag,
+ * ASX_E_BUFFER_TOO_SMALL if capacity insufficient.
  * On success, *out_len receives the number of bytes written. */
-ASX_API asx_status asx_trace_export_binary(uint8_t *buf, uint32_t capacity, uint32_t *out_len);
+ASX_API asx_status asx_trace_export_binary(const asx_runtime *rt, uint8_t *buf, uint32_t capacity,
+                                           uint32_t *out_len);
 
 /* Import a binary trace buffer as the replay reference.
  * Validates header magic, version, and digest. On success, the
@@ -377,10 +385,11 @@ ASX_API asx_status asx_trace_export_binary(uint8_t *buf, uint32_t capacity, uint
  * asx_replay_load_reference). Returns ASX_OK on success. */
 ASX_API asx_status asx_trace_import_binary(const uint8_t *buf, uint32_t len);
 
-/* Check whether the current trace matches a persisted binary buffer.
+/* Check whether rt's current trace matches a persisted binary buffer.
  * Combines import + verify in one call. Returns ASX_OK if the
  * current trace matches the persisted events. */
-ASX_API asx_status asx_trace_continuity_check(const uint8_t *buf, uint32_t len);
+ASX_API asx_status asx_trace_continuity_check(const asx_runtime *rt, const uint8_t *buf,
+                                              uint32_t len);
 
 #ifdef __cplusplus
 }
