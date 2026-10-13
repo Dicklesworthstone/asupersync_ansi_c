@@ -26,7 +26,11 @@
  *      completion or a resolution. Supported kinds: CLOCK, ENTROPY,
  *      REACTOR_WAIT, REACTOR_POLL, RESOLVE, SIGNAL everywhere, and, in a
  *      live POSIX build, NET_*, UDP_*, PROCESS_*, FS and BLOCKING_DONE (the
- *      native adapters serve them while a replay is active).
+ *      native adapters serve them while a replay is active). A
+ *      deterministic build records no BLOCKING_DONE: it runs every blocking
+ *      job inline, at its submission, in the same place on every run, so its
+ *      streams replay with the jobs run inline again; a live stream's
+ *      completions, whose order was a recorded input, are refused there.
  *   4. Fidelity. Each request must match the next record: its kind, and
  *      its shape (a wait's timeout or logical step, a poll's timeout and
  *      room for its events, a resolve's host, a socket call's handle and

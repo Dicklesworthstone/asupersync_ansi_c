@@ -256,10 +256,17 @@ static void blocking_job_run(void *job_ctx) {
     pool_unlock();
 
     result = fn(user_data);
+#if !ASX_DETERMINISTIC
     /* The completion order of the pool is a boundary input (RP1). Noted
      * before the slot reads COMPLETED, so whoever sees it done finds the
-     * record already in the journal. */
+     * record already in the journal. A deterministic build has no such
+     * input: hooks_use_blocking_submit is constant 0, so every job runs
+     * here, inline, at its submission, and a replay runs it inline again
+     * whatever its hooks say. Its completion would be a record that the
+     * replay has nothing to do with and (kind_served) refuses, which made
+     * every journal of a run with a blocking job unreplayable (bd-lnrc). */
     asx_journal_note_blocking_done(idx, generation, result);
+#endif
 
     pool_lock();
     if (idx < g_slot_count && g_slots[idx].generation == generation &&

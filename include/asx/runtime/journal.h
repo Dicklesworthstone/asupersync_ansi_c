@@ -109,7 +109,9 @@
  *   SIGNAL       u8 n | n x (u8 kind, u32 count). One per drain, n == 0
  *                for a drain that found nothing: a replay serves drains in
  *                order, so the empty ones are part of the stream.
- *   BLOCKING_DONE u32 slot | u16 generation | u64 result
+ *   BLOCKING_DONE u32 slot | u16 generation | u64 result. Recorded by a
+ *                build with a blocking pool (not ASX_DETERMINISTIC): a
+ *                deterministic build runs the job inline and notes nothing.
  *   addr         u8 family | 16 bytes | u16 port        (19 bytes)
  *   A boundary call made by a blocking job (a name resolution on the pool)
  *   carries record flag ASX_JOURNAL_REC_OFFTHREAD and no trace position: a

@@ -112,6 +112,10 @@ static int kind_served(uint8_t kind) {
         kind == (uint8_t)ASX_JOURNAL_KIND_PROCESS_READ || kind == (uint8_t)ASX_JOURNAL_KIND_FS) {
         return 1;
     }
+    /* A pool's completions, which only a live build has: a deterministic
+     * build runs every job inline and records none (blocking.c), so a
+     * stream it records has no DONE to serve, and the completion order of a
+     * live stream is not one it can reproduce. */
 #if ASX_HAS_BLOCKING_SURFACE
     if (kind == (uint8_t)ASX_JOURNAL_KIND_BLOCKING_DONE) return 1;
 #endif

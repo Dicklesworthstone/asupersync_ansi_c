@@ -1051,6 +1051,138 @@ TEST(a_recovery_replay_checks_identity_and_only_the_prefix_s_records) {
 }
 
 /* ------------------------------------------------------------------ */
+/* A blocking job in a deterministic build (bd-lnrc)                   */
+/* ------------------------------------------------------------------ */
+
+#if ASX_HAS_BLOCKING_SURFACE && ASX_DETERMINISTIC
+
+/* A deterministic build runs a blocking job inline, at its submission, and a
+ * replay runs it inline again, so the stream has no completion record for
+ * it. One was recorded until bd-lnrc, and the replay refused its own
+ * stream (UNSUPPORTED at that record): the CLI's `asx doctor --journal`
+ * output was not accepted by `asx replay`. */
+
+typedef struct {
+    asx_status spawn_st;
+    asx_status get_st;
+    uint64_t value;
+} inline_job_obs;
+
+static uint64_t inline_job_body(void *user_data) {
+    (void)user_data;
+    return UINT64_C(0xB10C0DE);
+}
+
+static asx_status inline_job_poll(void *ud, asx_task_id self) {
+    inline_job_obs *o = (inline_job_obs *)ud;
+    asx_blocking_handle job;
+    (void)self;
+    o->spawn_st = asx_spawn_blocking(inline_job_body, NULL, NULL, &job);
+    if (o->spawn_st == ASX_OK) o->get_st = asx_blocking_get_result(&job, &o->value);
+    return ASX_OK;
+}
+
+static asx_status inline_job_program(void *obs) {
+    inline_job_obs *o = (inline_job_obs *)obs;
+    asx_region_id region;
+    asx_task_id task;
+    asx_budget budget;
+    asx_status st;
+
+    memset(o, 0, sizeof(*o));
+    o->spawn_st = ASX_E_PENDING;
+    o->get_st = ASX_E_PENDING;
+    st = asx_region_open(test_runtime(), &region);
+    if (st != ASX_OK) return st;
+    st = asx_task_spawn(region, inline_job_poll, o, &task);
+    if (st != ASX_OK) return st;
+    budget = asx_budget_from_polls(100u);
+    return asx_scheduler_run(region, &budget);
+}
+
+static asx_runtime g_core_rt;
+
+/* Record inline_job_program over the default hooks, wrapped by a journal, as
+ * the CLI's doctor does; leaves the stream in g_out. */
+static int record_inline_job(inline_job_obs *rec) {
+    asx_runtime_config cfg;
+    asx_runtime_hooks hooks;
+    asx_journal j;
+    int ok;
+
+    if (asx_runtime_hooks_init(&hooks) != ASX_OK) return 0;
+    if (open_journal(&j, 0u) != ASX_OK) return 0;
+    if (asx_journal_wrap_hooks(&j, &hooks) != ASX_OK) return 0;
+    if (asx_runtime_config_init(&cfg) != ASX_OK) {
+        asx_journal_uninstall();
+        return 0;
+    }
+    if (asx_runtime_init(&g_core_rt, &cfg, &hooks) != ASX_OK) {
+        asx_journal_uninstall();
+        return 0;
+    }
+    ok = inline_job_program(rec) == ASX_OK;
+    asx_runtime_shutdown(&g_core_rt);
+    asx_journal_uninstall();
+    return asx_journal_finish(&j) == ASX_OK && ok;
+}
+
+TEST(a_deterministic_run_with_a_blocking_job_records_no_completion_and_replays) {
+    inline_job_obs rec;
+    inline_job_obs got;
+    asx_replay rp;
+    asx_replay_report rep;
+    asx_replay_identity id = ours();
+    asx_status ps = ASX_E_INVALID_STATE;
+    uint64_t seq = 0u;
+    size_t off = 0u;
+
+    ASSERT_TRUE(record_inline_job(&rec));
+    ASSERT_EQ(rec.spawn_st, ASX_OK);
+    ASSERT_EQ(rec.get_st, ASX_OK);
+    ASSERT_EQ(rec.value, UINT64_C(0xB10C0DE)); /* the job ran, inline */
+
+    /* The pool's completion is a live build's record; this stream has none. */
+    ASSERT_TRUE(!locate(g_out, g_out_len, (uint8_t)ASX_JOURNAL_KIND_BLOCKING_DONE, 0u, &seq, &off));
+
+    /* So the stream opens (it was UNSUPPORTED at the completion), and the
+     * program replays with the job run inline again, as `asx replay`
+     * accepts the CLI's doctor journal. */
+    memset(&rep, 0xA5, sizeof(rep));
+    ASSERT_EQ((int)asx_replay_open(&rp, g_out, g_out_len, &id, &rep), (int)ASX_REPLAY_OK);
+    memset(&rep, 0xA5, sizeof(rep));
+    ASSERT_EQ((int)asx_journal_replay(g_out, g_out_len, &id, NULL, inline_job_program, &got, &ps,
+                                      &rep),
+              (int)ASX_REPLAY_OK);
+    ASSERT_EQ(ps, ASX_OK);
+    ASSERT_EQ(got.spawn_st, ASX_OK);
+    ASSERT_EQ(got.get_st, ASX_OK);
+    ASSERT_EQ(got.value, rec.value);
+}
+
+/* A completion a live build recorded stays refused here: its order was an
+ * input that an inline run cannot reproduce. */
+TEST(a_deterministic_build_refuses_a_pool_completion_a_live_build_recorded) {
+    asx_journal j;
+    asx_replay rp;
+    asx_replay_report rep;
+    asx_replay_identity id = ours();
+
+    ASSERT_EQ(open_journal(&j, 0u), ASX_OK);
+    ASSERT_EQ(asx_journal_install(&j), ASX_OK);
+    asx_journal_note_blocking_done(0u, 1u, UINT64_C(0xB10C0DE));
+    asx_journal_uninstall();
+    ASSERT_EQ(asx_journal_finish(&j), ASX_OK);
+    ASSERT_EQ((int)asx_replay_open(&rp, g_out, g_out_len, &id, &rep),
+              (int)ASX_REPLAY_E_UNSUPPORTED);
+    ASSERT_EQ(rep.seq, (uint64_t)0u);
+    ASSERT_EQ(rep.expected_kind, (uint8_t)ASX_JOURNAL_KIND_BLOCKING_DONE);
+    ASSERT_STR_EQ(rep.what, "kind is not served by the replay");
+}
+
+#endif /* ASX_HAS_BLOCKING_SURFACE && ASX_DETERMINISTIC */
+
+/* ------------------------------------------------------------------ */
 /* A real run, recorded and replayed (live POSIX)                      */
 /* ------------------------------------------------------------------ */
 
@@ -2544,6 +2676,10 @@ int main(void) {
     RUN_TEST(a_damaged_window_ends_the_prefix_before_it);
     RUN_TEST(a_stream_cut_before_its_first_chain_has_an_empty_prefix);
     RUN_TEST(a_recovery_replay_checks_identity_and_only_the_prefix_s_records);
+#if ASX_HAS_BLOCKING_SURFACE && ASX_DETERMINISTIC
+    RUN_TEST(a_deterministic_run_with_a_blocking_job_records_no_completion_and_replays);
+    RUN_TEST(a_deterministic_build_refuses_a_pool_completion_a_live_build_recorded);
+#endif
 #if defined(ASX_PROFILE_POSIX) && !ASX_DETERMINISTIC
     RUN_TEST(a_live_run_replays_with_identical_results_and_digest);
     RUN_TEST(a_live_stream_refuses_a_tampered_byte_and_a_reordered_call);
