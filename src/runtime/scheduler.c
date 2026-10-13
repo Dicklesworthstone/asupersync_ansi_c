@@ -758,18 +758,18 @@ static void sched_enforce_budget(const asx_task_slot *t, asx_task_id tid, asx_ti
     asx_status st;
     /* Under lab dispatch the budget-deadline timer cancels the task (lab_deadline_fire),
      * and a cleanup task has none in Rust (state.rs:4401): no deadline check here. */
-    if (!asx_lab_dispatch_active() && !t->cleanup_only && t->budget.deadline != ASX_TIME_INFINITE) {
+    if (!asx_lab_dispatch_active() && !t->cancel_pending && !t->cleanup_only &&
+        t->budget.deadline != ASX_TIME_INFINITE) {
         if (!*have_now) {
             *now = sched_now();
             *have_now = 1;
         }
         if (*now >= t->budget.deadline) {
-            int fresh = !t->cancel_pending;
-            /* Stamped with the deadline, as Rust's deadline timer stamps it (cx.rs:357); a
-             * cancel already pending is strengthened, as the timer did at the deadline. */
+            /* Stamped with the deadline itself, as Rust's deadline timer
+             * stamps it (cx.rs:357). */
             st = asx_task_cancel_budget_internal(tid, ASX_CANCEL_DEADLINE, t->budget.deadline);
             (void)st;
-            if (fresh) return;
+            return;
         }
     }
     if (t->budget.poll_quota == 0u) {
@@ -1497,7 +1497,7 @@ static int sweep_walk_next(sweep_walk *w, uint32_t *out_slot, int *out_cancel_la
 }
 
 static asx_status sched_run(asx_region_id region, asx_budget *budget, int advance_clock);
-
+static void sched_fire_budget_deadlines(asx_time now);
 asx_status asx_scheduler_run(asx_region_id region, asx_budget *budget) {
     return sched_run(region, budget, 1);
 }
@@ -1555,10 +1555,11 @@ static asx_status sched_run(asx_region_id region, asx_budget *budget, int advanc
         sched_compute_scope(region);
         sched_poll_io_nonblocking();
         (void)sched_drain_wakers();
-        /* Due timers fire at the start of a round, as a lab step processes them
-         * before polling; run-until-idle starts none when nothing is runnable. */
-        if (sched_timers_pending() && (advance_clock || sched_any_runnable())) {
-            (void)timers_fire(sched_now());
+        /* Due timers and budget deadlines fire at the start of a round, before any
+         * task polls, as in a lab step; run-until-idle fires none with nothing runnable. */
+        if (advance_clock || sched_any_runnable()) {
+            if (sched_timers_pending()) (void)timers_fire(sched_now());
+            sched_fire_budget_deadlines(sched_now());
         }
 
         sweep_build();
@@ -1592,12 +1593,11 @@ static asx_status sched_run(asx_region_id region, asx_budget *budget, int advanc
                 continue;
             }
 
-            /* Opt-in hard bound only (asx_runtime_config.cleanup_hard_bound):
-             * cleanup polls exhausted, force-complete with CANCELLED. The task
-             * either never called checkpoint (CANCEL_REQUESTED) or ran out of
-             * cleanup polls (CANCELLING). A masked task is inside a critical
-             * section and is never interrupted. Rust never force-completes: its
-             * cleanup budget only strengthens the reason once spent (record/task.rs:1340,
+            /* Opt-in hard bound only (asx_runtime_config.cleanup_hard_bound): cleanup polls
+             * exhausted, force-complete with CANCELLED. The task either never called checkpoint
+             * (CANCEL_REQUESTED) or ran out of cleanup polls (CANCELLING). A masked task is
+             * inside a critical section and is never interrupted. Rust never force-completes:
+             * its cleanup budget only strengthens the reason once spent (record/task.rs:1340,
              * lab/runtime.rs:4663; three_lane.rs:1268-1279 keeps it advisory). */
             if (asx_cleanup_hard_bound_internal() && t->cancel_pending && t->mask_depth == 0u &&
                 (t->state == ASX_TASK_CANCELLING || t->state == ASX_TASK_CANCEL_REQUESTED ||
@@ -1662,6 +1662,30 @@ static asx_status sched_run(asx_region_id region, asx_budget *budget, int advanc
         if (progress == 0u) {
             st = sched_idle(&last_idle_now, &idle_stall, budget->deadline, advance_clock);
             if (st != ASX_OK) return st;
+        }
+    }
+}
+
+/* Rust's budget-deadline timers fire at the start of a step, for every task
+ * whose deadline is due and before any task polls (BudgetDeadlineWake,
+ * cx/cx.rs:313-367; lab_deadline_fire above): a DEADLINE cancel stamped with
+ * the deadline, its waker at once, unless the task is already cancel-requested.
+ * A cleanup task has no such timer (state.rs:4401). The sweep used to enforce a
+ * deadline when it polled the task, so a cancel another task raised earlier in
+ * the round (a supervisor aborting a member with the reason of its own
+ * Deadline) reached the task first and its origin outranked the task's own
+ * (race-deadline-wrapper-cx-reason-001, bd-9kll.4.16). */
+static void sched_fire_budget_deadlines(asx_time now) {
+    uint32_t i;
+    for (i = 0; i < g_task_count; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= ASX_MAX_TASKS");
+        asx_task_slot *t = &g_tasks[i];
+        if (!t->alive || asx_task_is_terminal(t->state) || t->cancel_pending) continue;
+        if (t->cleanup_only || t->budget.deadline == ASX_TIME_INFINITE) continue;
+        if (now < t->budget.deadline || sched_scope_region(t) == NULL) continue;
+        if (asx_task_cancel_budget_internal(asx_task_handle_for_slot(i), ASX_CANCEL_DEADLINE,
+                                            t->budget.deadline) == ASX_OK) {
+            asx_task_wake_slot_internal(t);
         }
     }
 }

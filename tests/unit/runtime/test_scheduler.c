@@ -775,10 +775,10 @@ static asx_status poll_sleep_150(void *data, asx_task_id self) {
 
 /* The victim's budget deadline (100) passes at the instant a task cancels it
  * with User. Rust's deadline timer fires at the deadline in the same step,
- * so the task holds the stronger Deadline and its sleep, which a Deadline
- * cancel does not end, runs to 150. The sweep checked the deadline only for
- * a task with no cancel pending, so the User cancel ended the sleep at 100
- * (fixture cancel-region-request-lane-priority-001). */
+ * before either task polls, so the victim holds the stronger Deadline and its
+ * sleep, which a Deadline cancel does not end, runs to 150. The sweep checked
+ * the deadline only when it polled the victim, after the User cancel, so the
+ * cancel ended the sleep at 100 (fixture cancel-region-request-lane-priority-001). */
 TEST(scheduler_a_passed_deadline_strengthens_a_user_cancel_that_arrived_first) {
     asx_region_id rid;
     asx_task_id canceller;
@@ -807,6 +807,74 @@ TEST(scheduler_a_passed_deadline_strengthens_a_user_cancel_that_arrived_first) {
     ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)150u);
     ASSERT_EQ(asx_task_get_cancel_reason(victim, &reason), ASX_OK);
     ASSERT_EQ((int)reason.kind, (int)ASX_CANCEL_DEADLINE);
+    asx_runtime_shutdown(&g_rt);
+}
+
+/* ---- Budget deadlines fire before any task polls (bd-9kll.4.16) ---- */
+
+typedef struct {
+    asx_sleep_state sleep;
+    int started;
+    asx_task_id victim;
+} aborter_state;
+
+/* Sleeps to its own deadline (100), then aborts its victim with the reason its
+ * own deadline cancelled it with, as a race's owner aborts its timeout wrapper
+ * with its own cancel reason. */
+static asx_status poll_abort_with_own_reason(void *data, asx_task_id self) {
+    aborter_state *a = (aborter_state *)data;
+    asx_checkpoint_result cr;
+    asx_cancel_reason reason;
+    asx_status st;
+    if (!a->started) {
+        a->started = 1;
+        st = asx_sleep_init(&a->sleep, 100u);
+        if (st != ASX_OK) return st;
+    }
+    st = asx_sleep_poll(&a->sleep, self);
+    if (st != ASX_OK) return st;
+    st = asx_checkpoint(self, &cr);
+    if (st != ASX_OK) return st;
+    if (!cr.cancelled) return ASX_E_INVALID_STATE;
+    st = asx_task_get_cancel_reason(self, &reason);
+    if (st != ASX_OK) return st;
+    return asx_task_abort_request(a->victim, &reason);
+}
+
+/* Rust's budget-deadline timers all fire at the start of a step, before any
+ * task polls, each cancelling its own task with its own origin. The sweep
+ * enforced a deadline when it polled the task, so the task polled first
+ * aborted the second with its reason, which was then the second's first
+ * cancel and its origin: the tie of the two Deadlines at 100 kept it
+ * (fixture race-deadline-wrapper-cx-reason-001). */
+TEST(scheduler_budget_deadlines_fire_before_any_task_polls_in_the_round) {
+    asx_region_id rid;
+    asx_task_id aborter;
+    asx_task_id victim;
+    asx_budget budget;
+    asx_budget tb;
+    asx_cancel_reason reason;
+    aborter_state a;
+    sleeper_state s;
+
+    ASSERT_EQ(setup_with_clock(), ASX_OK);
+    asx_ghost_reset();
+    memset(&a, 0, sizeof(a));
+    memset(&s, 0, sizeof(s));
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    tb = asx_budget_infinite();
+    tb.deadline = 100u;
+    ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_abort_with_own_reason, &a, &tb, &aborter),
+              ASX_OK);
+    ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_sleep_150, &s, &tb, &victim), ASX_OK);
+    a.victim = victim;
+
+    budget = asx_budget_from_polls(1000);
+    ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
+    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)150u);
+    ASSERT_EQ(asx_task_get_cancel_reason(victim, &reason), ASX_OK);
+    ASSERT_EQ((int)reason.kind, (int)ASX_CANCEL_DEADLINE);
+    ASSERT_TRUE(asx_handle_index(reason.origin_task) == asx_handle_index(victim));
     asx_runtime_shutdown(&g_rt);
 }
 
@@ -917,6 +985,7 @@ int main(void) {
     RUN_TEST(scheduler_polls_a_task_in_a_region_opened_in_the_round_before_its_opener_resumes);
     RUN_TEST(scheduler_does_not_cancel_a_cleanup_task_at_its_budget_deadline_before_it_polls);
     RUN_TEST(scheduler_a_passed_deadline_strengthens_a_user_cancel_that_arrived_first);
+    RUN_TEST(scheduler_budget_deadlines_fire_before_any_task_polls_in_the_round);
 
     /* Budget enforcement before a poll */
     RUN_TEST(scheduler_stamps_an_exhausted_poll_quota_with_the_poll_quota_defaults);
