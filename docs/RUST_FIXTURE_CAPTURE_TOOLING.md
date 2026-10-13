@@ -62,6 +62,16 @@ Consumers:
   (`.github/workflows/nightly.yml:66-72`).
 - `make fuzz-minimize` (`Makefile:1617-1623`) runs `twin_run minimize` on each
   scenario the last `fuzz-differential` run reported as FAIL.
+- `make fuzz-timers` (`FUZZ_TIMERS_SEED`, default 7100, and
+  `FUZZ_TIMERS_COUNT`, default 1000) is `fuzz-differential` over
+  `twin_run generate --shape timers` (bd-9kll.7.1): every scenario holds
+  groups of timers whose deadlines share one 1 ms wheel tick, at levels from
+  under 256 ms to the overflow heap, registered early and late, with
+  timeouts, lock deadlines, cancels, waker moves and clock advances. Its
+  directory is `build/fuzz_v2/seed-<seed>-timers`, so `fuzz-minimize`,
+  `fuzz-ghost` and `fuzz-promote` take the same `FUZZ_V2_SHAPE=timers`. The
+  shape draws from a stream of its own: the default `generate` output is
+  unchanged.
 
 ## 3. `tools/fixture_capture` (deprecated): what exists
 

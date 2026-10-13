@@ -27,7 +27,7 @@ fn usage() -> ExitCode {
     eprintln!(
         "usage: twin_run capture <scenario.json>... --out <dir>\n       \
          twin_run forced-replay --schedules <dir> --out <dir> <scenario.json>...\n       \
-         twin_run generate --seed <u64> --count <n> --out <dir>\n       \
+         twin_run generate --seed <u64> --count <n> [--shape mixed|timers] --out <dir>\n       \
          twin_run canon-fuzz --seed <u64> --count <n> --out <file.jsonl>\n       \
          twin_run minimize <scenario.json> --runner <asx-conformance> --out <dir>\n       \
          twin_run trace <scenario.json>   (raw lab trace, for diagnosis)\n       \
@@ -39,14 +39,20 @@ fn usage() -> ExitCode {
     ExitCode::from(2)
 }
 
-/// Write `count` generated scenarios (gen.rs) for batch `seed` to `out`.
-fn generate(seed: u64, count: u64, out: &PathBuf) -> ExitCode {
+/// Write `count` generated scenarios (gen.rs) for batch `seed` to `out`:
+/// the default mix, or with `timers` (`--shape timers`, bd-9kll.7.1) the
+/// timer-heavy shape of the same-tick ordering differential.
+fn generate(seed: u64, count: u64, out: &PathBuf, timers: bool) -> ExitCode {
     if let Err(err) = std::fs::create_dir_all(out) {
         eprintln!("twin_run: cannot create {}: {err}", out.display());
         return ExitCode::from(1);
     }
     for index in 0..count {
-        let scenario = scenario_gen::scenario(seed, index);
+        let scenario = if timers {
+            scenario_gen::timer_scenario(seed, index)
+        } else {
+            scenario_gen::scenario(seed, index)
+        };
         let Some(id) = scenario["id"].as_str() else {
             eprintln!("twin_run: generated scenario {index} lacks a string ID");
             return ExitCode::from(1);
@@ -432,6 +438,7 @@ fn main() -> ExitCode {
             let mut seed = None;
             let mut count = None;
             let mut out = None;
+            let mut timers = false;
             let mut rest = args[1..].iter();
             while let Some(arg) = rest.next() {
                 let value = rest.next();
@@ -439,12 +446,19 @@ fn main() -> ExitCode {
                     "--seed" => seed = value.and_then(|v| v.parse::<u64>().ok()),
                     "--count" => count = value.and_then(|v| v.parse::<u64>().ok()),
                     "--out" => out = value.map(PathBuf::from),
+                    // `generate` only: the default mix, or every scenario
+                    // timer-heavy.
+                    "--shape" if cmd == "generate" => match value.map(String::as_str) {
+                        Some("mixed") => timers = false,
+                        Some("timers") => timers = true,
+                        _ => return usage(),
+                    },
                     _ => return usage(),
                 }
             }
             match (seed, count, out) {
                 (Some(seed), Some(count), Some(out)) if cmd == "generate" => {
-                    generate(seed, count, &out)
+                    generate(seed, count, &out, timers)
                 }
                 (Some(seed), Some(count), Some(out)) => canon_fuzz(seed, count, &out),
                 _ => usage(),

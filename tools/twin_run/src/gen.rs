@@ -66,6 +66,12 @@
 //! never empty, so the streak limit yields to it (LabRuntime's
 //! cancel_streak_limit) and the priority groups of the lanes are exercised.
 //! No scenario above reached more than 10 cancel dispatches in a row.
+//!
+//! Timers (bd-9kll.7.1): `twin_run generate --shape timers` draws every
+//! scenario of a batch from a stream of its own, [`timer_scenario`]: groups
+//! of timers whose deadlines share one 1 ms wheel tick at a drawn level,
+//! registered at different times, cancelled, moved to a new waker and
+//! advanced past in one collect. The default shape never draws from it.
 
 use serde_json::{Value, json};
 
@@ -862,6 +868,232 @@ fn storm_scenario(seed: u64, index: u64) -> Value {
     })
 }
 
+/// Salt of the timer-heavy shape's stream. Only a batch generated with
+/// `--shape timers` draws from it, so the default stream is untouched.
+const TIMERS_SALT: u64 = 0x7131_7100_0000_0007;
+
+const MS: u64 = 1_000_000;
+
+/// The millisecond tick of a timer group, by wheel level: 45% under the
+/// first level's 256 ms, 20% in level 1 (under 65.5 s), 15% in level 2
+/// (under 4.66 h), 20% beyond, where level 3 ends and the overflow heap
+/// holds what is more than a day ahead (the wheel's configured maximum).
+fn timers_tick_ms(rng: &mut Rng) -> u64 {
+    match rng.below(100) {
+        0..=44 => 1 + rng.below(255),
+        45..=64 => 256 + rng.below(65_536 - 256),
+        65..=79 => 65_536 + rng.below(16_777_216 - 65_536),
+        _ => 16_777_216 + rng.below(1_000_000_000 - 16_777_216),
+    }
+}
+
+/// One task of a timer-heavy scenario, as drawn.
+struct TimerTask {
+    deadline: u64,
+    /// 0 sleep_until, 1 prelude sleep then sleep_until, 2 relative sleep,
+    /// 3 timeout around a semaphore acquire, 4 mutex_lock_until.
+    kind: u64,
+    prelude: u64,
+    /// A short sleep after the wake, 20% of the tasks.
+    second: Option<u64>,
+    /// Index in the task's region list (r.main, r.a, r.b).
+    region: u64,
+    priority: Option<u64>,
+}
+
+/// Draw `members` timers whose deadlines fall in one tick of a drawn level.
+fn timers_group(rng: &mut Rng, members: u64, out: &mut Vec<TimerTask>) {
+    let tick = timers_tick_ms(rng);
+    for _ in 0..members {
+        let deadline = tick * MS + rng.below(MS);
+        let kind = match rng.below(100) {
+            0..=39 => 0,
+            40..=54 => 1,
+            55..=69 => 2,
+            70..=84 => 3,
+            _ => 4,
+        };
+        let prelude = if kind == 1 {
+            deadline / 4 * (1 + rng.below(3))
+        } else {
+            0
+        };
+        let second = rng.chance(20).then(|| 1 + rng.below(2 * MS));
+        let region = match rng.below(100) {
+            0..=59 => 0,
+            60..=79 => 1,
+            _ => 2,
+        };
+        let priority = rng.chance(15).then(|| *rng.pick(&STORM_PRIORITIES));
+        out.push(TimerTask {
+            deadline,
+            kind,
+            prelude,
+            second,
+            region,
+            priority,
+        });
+    }
+}
+
+/// A timer-heavy scenario (bd-9kll.7.1, the 1000-random-timers differential
+/// of the same-tick ordering port): 1 to 4 groups of 2 to 8 timers whose
+/// deadlines fall in one 1 ms tick of the wheel at a drawn level, in an
+/// order that is not their deadline order, plus 0 to 6 timers of their own.
+/// A timer is a sleep, a sleep registered late (a prelude sleep first, so
+/// the same deadline is filed at another level and reached by a cascade), a
+/// `timeout` around a semaphore nobody releases before the deadline, or a
+/// `mutex_lock_until` on a mutex a holder keeps. Tasks sit in `r.main`,
+/// `r.a` or `r.b`; the script cancels a region or a task (User and Shutdown
+/// end the sleeps, Timeout and Deadline leave them asleep and move their
+/// timers to the new waker) and advances the clock past several deadlines at
+/// once, so they come due in one collect and the wheel's order, not the
+/// deadlines', is what both runtimes must agree on. Cancels and advances
+/// land on a tick, sometimes on a member's exact deadline.
+pub fn timer_scenario(seed: u64, index: u64) -> Value {
+    let mut rng = Rng::new(seed ^ index.wrapping_mul(0xA24B_AED4_963E_E407) ^ TIMERS_SALT);
+    let mut timers: Vec<TimerTask> = Vec::new();
+    for _ in 0..1 + rng.below(4) {
+        let members = 2 + rng.below(7);
+        timers_group(&mut rng, members, &mut timers);
+    }
+    for _ in 0..rng.below(7) {
+        timers_group(&mut rng, 1, &mut timers);
+    }
+    let deadlines: Vec<u64> = timers.iter().map(|t| t.deadline).collect();
+    // Fisher-Yates: registration order is not group order.
+    for i in (1..timers.len()).rev() {
+        let j = usize::try_from(rng.below(i as u64 + 1)).unwrap_or(0);
+        timers.swap(i, j);
+    }
+    let regions = ["r.main", "r.a", "r.b"];
+    let mut tasks = Vec::new();
+    let (mut uses_sem, mut uses_mutex) = (false, false);
+    for (i, timer) in timers.iter().enumerate() {
+        let TimerTask {
+            deadline,
+            kind,
+            prelude,
+            second,
+            region,
+            priority,
+        } = timer;
+        let name = format!("t.{i}");
+        let mut program = Vec::new();
+        match *kind {
+            0 => program.push(json!({"op": "sleep_until", "at_ns": deadline})),
+            1 => {
+                program.push(json!({"op": "sleep", "ns": prelude}));
+                program.push(json!({"op": "sleep_until", "at_ns": deadline}));
+            }
+            2 => program.push(json!({"op": "sleep", "ns": deadline})),
+            3 => {
+                uses_sem = true;
+                program.push(json!({"op": "timeout", "ns": deadline,
+                    "inner": {"op": "sem_acquire", "semaphore": "s", "count": 1}}));
+            }
+            _ => {
+                uses_mutex = true;
+                program
+                    .push(json!({"op": "mutex_lock_until", "mutex": "m", "deadline_ns": deadline}));
+            }
+        }
+        program.push(json!({"op": "trace", "message": name}));
+        if let Some(ns) = second {
+            program.push(json!({"op": "sleep", "ns": ns}));
+            program.push(json!({"op": "trace", "message": format!("{name}/again")}));
+        }
+        let budget = match priority {
+            Some(p) => json!({"priority": p}),
+            None => Value::Null,
+        };
+        tasks.push(json!({
+            "name": name,
+            "region": regions[usize::try_from(*region).unwrap_or(0)],
+            "budget": budget,
+            "program": program,
+        }));
+    }
+    // What the waits wait for: a semaphore with no permits that a releaser
+    // tops up at an instant of the drawn deadlines (waiters whose deadline
+    // is later get it, the others have timed out), and a mutex a holder
+    // keeps until then.
+    let mut sync = Vec::new();
+    if uses_sem {
+        sync.push(json!({"name": "s", "type": "semaphore", "permits": 0}));
+        let at = *rng.pick(&deadlines) + rng.below(3) * (MS / 3);
+        tasks.push(json!({
+            "name": "t.rel", "region": "r.main", "budget": null,
+            "program": [
+                {"op": "sleep_until", "at_ns": at},
+                {"op": "sem_add_permits", "semaphore": "s", "count": 1 + rng.below(2)},
+            ],
+        }));
+    }
+    if uses_mutex {
+        sync.push(json!({"name": "m", "type": "mutex"}));
+        let at = *rng.pick(&deadlines) + rng.below(3) * (MS / 3);
+        tasks.push(json!({
+            "name": "t.hold", "region": "r.main", "budget": null,
+            "program": [
+                {"op": "mutex_lock", "mutex": "m"},
+                {"op": "sleep_until", "at_ns": at},
+                {"op": "mutex_unlock", "mutex": "m"},
+            ],
+        }));
+    }
+    let mut script = Vec::new();
+    for _ in 0..rng.below(4) {
+        let base = *rng.pick(&deadlines);
+        let at = if rng.chance(40) {
+            base
+        } else {
+            base - base % MS + rng.below(MS)
+        };
+        let op = match rng.below(4) {
+            0 => {
+                json!({"op": "cancel_region", "region": "r.a", "kind": *rng.pick(&CANCEL_KINDS)})
+            }
+            1 => {
+                json!({"op": "cancel_region", "region": "r.b", "kind": *rng.pick(&CANCEL_KINDS)})
+            }
+            2 => {
+                let victim = format!("t.{}", rng.below(timers.len() as u64));
+                json!({"op": "cancel_task", "task": victim, "kind": *rng.pick(&CANCEL_KINDS)})
+            }
+            _ => {
+                let ns = match rng.below(3) {
+                    0 => 1,
+                    1 => 1 + rng.below(MS),
+                    _ => MS * (1 + rng.below(300)),
+                };
+                json!({"op": "advance", "ns": ns})
+            }
+        };
+        script.push(json!({"at_ns": at, "op": op}));
+    }
+    script.sort_by_key(|entry| entry["at_ns"].as_u64());
+    json!({
+        "schema": "asx.scenario.v2",
+        "id": format!("gen-tm{seed}-{index}-001"),
+        "description": "generated timer-heavy scenario (twin_run generate --shape timers, bd-9kll.7.1)",
+        "unit": "timers",
+        "rules": ["inv.determinism.replayable"],
+        "seed": rng.next_u64() % 1_000_000,
+        "lab": {"max_steps": 4000},
+        "regions": [
+            {"name": "r.main", "parent": "root", "budget": null},
+            {"name": "r.a", "parent": "r.main", "budget": null},
+            {"name": "r.b", "parent": "r.main", "budget": null},
+        ],
+        "channels": [],
+        "sync": sync,
+        "tasks": tasks,
+        "script": script,
+        "expect": {"kind": "ok"},
+    })
+}
+
 /// Scenario `index` of the batch seeded `seed`.
 pub fn scenario(seed: u64, index: u64) -> Value {
     if is_storm(seed, index) {
@@ -1288,5 +1520,125 @@ mod tests {
             first["description"],
             "generated cancel storm (twin_run generate, bd-9kll.4.10)"
         );
+    }
+
+    /// The tasks of a timer-heavy scenario that wait on a deadline (not the
+    /// releaser or the holder), each with the deadline in ns: the last wait
+    /// before its first trace marker (a prelude sleep comes before it).
+    fn timer_deadlines(scenario_value: &Value) -> Vec<u64> {
+        scenario_value["tasks"]
+            .as_array()
+            .expect("tasks")
+            .iter()
+            .filter(|t| !matches!(t["name"].as_str(), Some("t.rel" | "t.hold")))
+            .map(|t| {
+                let program = t["program"].as_array().expect("a program");
+                let wait = program
+                    .iter()
+                    .take_while(|s| s["op"] != "trace")
+                    .last()
+                    .expect("a wait before the trace marker");
+                let op = wait["op"].as_str().unwrap_or("");
+                assert!(
+                    matches!(op, "sleep_until" | "sleep" | "timeout" | "mutex_lock_until"),
+                    "unexpected wait {op}"
+                );
+                let field = match op {
+                    "sleep_until" => "at_ns",
+                    "mutex_lock_until" => "deadline_ns",
+                    _ => "ns",
+                };
+                wait[field].as_u64().expect("a deadline")
+            })
+            .collect()
+    }
+
+    /// bd-9kll.7.1: the timer-heavy shape is a pure function of its seed and
+    /// index, has an id of its own, and is what `--shape timers` writes.
+    #[test]
+    fn a_timer_scenario_is_a_pure_function_of_its_seed_and_index() {
+        let first = timer_scenario(7100, 5);
+        assert_eq!(first, timer_scenario(7100, 5));
+        assert_ne!(first, timer_scenario(7100, 6));
+        assert_ne!(first, scenario(7100, 5));
+        assert_eq!(first["id"], "gen-tm7100-5-001");
+        assert_eq!(first["unit"], "timers");
+    }
+
+    /// Every scenario of the fixed lane batch (seed 7100, 1000 scenarios)
+    /// holds at least two timers in one 1 ms tick, stays within 40 tasks,
+    /// and the batch reaches every level of the wheel and the overflow heap
+    /// (more than a day ahead), uses every kind of wait, and has cancels of a
+    /// region and of a task and advances past several deadlines.
+    #[test]
+    fn the_timer_lane_batch_shares_ticks_across_every_level() {
+        const BATCH: u64 = 1000;
+        let mut levels = [0_u32; 4];
+        let (mut timeouts, mut lock_untils, mut preludes) = (0_u32, 0_u32, 0_u32);
+        let (mut region_cancels, mut task_cancels, mut advances) = (0_u32, 0_u32, 0_u32);
+        let mut other_ops = 0_u32;
+        let mut timers = 0_usize;
+        for index in 0..BATCH {
+            let value = timer_scenario(7100, index);
+            let tasks = value["tasks"].as_array().expect("tasks");
+            assert!(tasks.len() <= 40, "scenario {index}: {} tasks", tasks.len());
+            let deadlines = timer_deadlines(&value);
+            timers += deadlines.len();
+            let mut ticks: Vec<u64> = deadlines.iter().map(|d| d / MS).collect();
+            ticks.sort_unstable();
+            assert!(
+                ticks.windows(2).any(|w| w[0] == w[1]),
+                "scenario {index}: no two timers share a tick"
+            );
+            let latest = ticks.last().copied().unwrap_or(0);
+            let level = match latest {
+                0..=255 => 0,
+                256..=65_535 => 1,
+                65_536..=16_777_215 => 2,
+                _ => 3,
+            };
+            levels[level] += 1;
+            let text = value.to_string();
+            timeouts += u32::from(text.contains("\"timeout\""));
+            lock_untils += u32::from(text.contains("\"mutex_lock_until\""));
+            preludes += u32::from(tasks.iter().any(|t| {
+                t["program"][0]["op"] == "sleep" && t["program"][1]["op"] == "sleep_until"
+            }));
+            let script = value["script"].as_array().expect("script");
+            let at: Vec<u64> = script
+                .iter()
+                .map(|e| e["at_ns"].as_u64().unwrap_or(0))
+                .collect();
+            assert!(
+                at.windows(2).all(|w| w[0] <= w[1]),
+                "scenario {index}: script order"
+            );
+            for entry in script {
+                match entry["op"]["op"].as_str() {
+                    Some("cancel_region") => region_cancels += 1,
+                    Some("cancel_task") => task_cancels += 1,
+                    Some("advance") => advances += 1,
+                    _ => other_ops += 1,
+                }
+            }
+        }
+        assert_eq!(other_ops, 0, "script ops the shape does not draw");
+        assert!(timers >= 10_000, "{timers} timers in {BATCH} scenarios");
+        for (level, scenarios) in levels.iter().enumerate() {
+            assert!(
+                *scenarios >= 50,
+                "level {level}: only {scenarios} scenarios end there"
+            );
+        }
+        for (what, n) in [
+            ("timeout", timeouts),
+            ("mutex_lock_until", lock_untils),
+            ("prelude sleep", preludes),
+            ("cancel_region", region_cancels),
+            ("cancel_task", task_cancels),
+            ("advance", advances),
+        ] {
+            assert!(n >= 100, "{what}: {n} in {BATCH} scenarios");
+        }
     }
 }

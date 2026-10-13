@@ -1966,17 +1966,22 @@ twin-run-check: twin-run-fmt twin-run-clippy twin-run-test twin-run-build
 # ---------------------------------------------------------------------------
 FUZZ_V2_SEED ?= 1
 FUZZ_V2_COUNT ?= 100
-FUZZ_V2_DIR := $(BUILD_DIR)/fuzz_v2/seed-$(FUZZ_V2_SEED)
+# FUZZ_V2_SHAPE=timers draws every scenario from the timer-heavy shape of
+# gen.rs (see fuzz-timers); empty is the default mix. The shape is part of the
+# directory name, so the lanes that read $(FUZZ_V2_DIR) (fuzz-minimize,
+# fuzz-ghost, fuzz-asan, fuzz-promote) take the same FUZZ_V2_SHAPE.
+FUZZ_V2_SHAPE ?=
+FUZZ_V2_DIR := $(BUILD_DIR)/fuzz_v2/seed-$(FUZZ_V2_SEED)$(if $(FUZZ_V2_SHAPE),-$(FUZZ_V2_SHAPE))
 TWIN_RUN := $(if $(ASX_TWIN_BIN),$(ASX_TWIN_BIN),cargo run --release --locked --quiet --manifest-path tools/twin_run/Cargo.toml --)
 
 .PHONY: fuzz-differential
 fuzz-differential: $(CONFORMANCE_RUNNER)
-	@echo "[asx] fuzz-differential: seed=$(FUZZ_V2_SEED) count=$(FUZZ_V2_COUNT)"
+	@echo "[asx] fuzz-differential: seed=$(FUZZ_V2_SEED) count=$(FUZZ_V2_COUNT)$(if $(FUZZ_V2_SHAPE), shape=$(FUZZ_V2_SHAPE))"
 	@if [ -z "$(CHECK_JSONSCHEMA)" ]; then \
 		echo "[asx] fuzz-differential: FAIL (check-jsonschema $(CHECK_JSONSCHEMA_VERSION) not found and no uvx)"; exit 1; \
 	fi
 	@mkdir -p $(FUZZ_V2_DIR)
-	@$(TWIN_RUN) generate --seed $(FUZZ_V2_SEED) --count $(FUZZ_V2_COUNT) --out $(FUZZ_V2_DIR)/scenarios
+	@$(TWIN_RUN) generate --seed $(FUZZ_V2_SEED) --count $(FUZZ_V2_COUNT) $(if $(FUZZ_V2_SHAPE),--shape $(FUZZ_V2_SHAPE)) --out $(FUZZ_V2_DIR)/scenarios
 	@$(CHECK_JSONSCHEMA) --schemafile schemas/scenario_dsl_v2.json $(FUZZ_V2_DIR)/scenarios/*.json
 	@$(TWIN_RUN) capture $(FUZZ_V2_DIR)/scenarios/*.json --out $(FUZZ_V2_DIR)/fixtures > $(FUZZ_V2_DIR)/capture.log || true
 	@tail -1 $(FUZZ_V2_DIR)/capture.log
@@ -1989,8 +1994,30 @@ fuzz-differential: $(CONFORMANCE_RUNNER)
 	@$(CONFORMANCE_RUNNER) compare $$(sed -n 's|^PASS \([^ ]*\) .*|$(FUZZ_V2_DIR)/fixtures/\1.json|p' $(FUZZ_V2_DIR)/capture.log) \
 		> $(FUZZ_V2_DIR)/compare.log; rc=$$?; cat $(FUZZ_V2_DIR)/compare.log; \
 		if [ $$rc -ne 0 ]; then \
-			echo "[asx] fuzz-differential: reduce with make fuzz-minimize FUZZ_V2_SEED=$(FUZZ_V2_SEED)"; \
+			echo "[asx] fuzz-differential: reduce with make fuzz-minimize FUZZ_V2_SEED=$(FUZZ_V2_SEED)$(if $(FUZZ_V2_SHAPE), FUZZ_V2_SHAPE=$(FUZZ_V2_SHAPE))"; \
 		fi; exit $$rc
+
+# ---------------------------------------------------------------------------
+# fuzz-timers — the 1000-random-timers differential of the same-tick ordering
+# port (bd-9kll.7.1): fuzz-differential over the timer-heavy shape of gen.rs
+# at a fixed seed and count. A scenario holds 2 to 8 timers in one 1 ms tick
+# of the wheel at a drawn level (under 256 ms up to more than a day, the
+# overflow heap), registered in an order that is not deadline order, some of
+# them late (a prelude sleep) so their deadline is reached by a cascade, with
+# timeouts and lock deadlines among the sleeps, cancels and waker moves of
+# regions and tasks, and advances past several deadlines at once. Every FAIL
+# is a candidate drift in timer ordering; reduce it with
+#   make fuzz-minimize FUZZ_V2_SEED=$(FUZZ_TIMERS_SEED) FUZZ_V2_SHAPE=timers
+# The shape draws from a stream of its own: the default mix of
+# fuzz-differential is byte-identical to what it was.
+# ---------------------------------------------------------------------------
+FUZZ_TIMERS_SEED ?= 7100
+FUZZ_TIMERS_COUNT ?= 1000
+
+.PHONY: fuzz-timers
+fuzz-timers:
+	@$(MAKE) --no-print-directory fuzz-differential FUZZ_V2_SHAPE=timers \
+		FUZZ_V2_SEED=$(FUZZ_TIMERS_SEED) FUZZ_V2_COUNT=$(FUZZ_TIMERS_COUNT)
 
 # ---------------------------------------------------------------------------
 # scheduler-certificate-parity — Rust's and C's scheduler agree on every
@@ -3146,6 +3173,7 @@ help:
 	@echo "  crate-acceptance-gate Aggregate final crate-level parity evidence"
 	@echo "  fuzz-smoke         C determinism and mutation smoke test"
 	@echo "  fuzz-differential  Live Rust/C scenario comparison"
+	@echo "  fuzz-timers        1000 timer-heavy scenarios (seed 7100) Rust vs C"
 	@echo "  test-fuzz-differential Detect and minimize a runtime mutation"
 	@echo "  fuzz-counterexample-replay Replay C determinism/crash counterexamples"
 	@echo "  minimize-selftest  Counterexample minimizer self-test"
