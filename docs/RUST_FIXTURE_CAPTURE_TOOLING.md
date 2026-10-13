@@ -29,9 +29,12 @@ Subcommands (`tools/twin_run/src/main.rs:23-29`, dispatch at `main.rs:155-249`):
 
 Generated scenarios (`gen.rs`). The main stream draws the program steps and
 the world (sync objects, channels, regions, budgets, a script of cancels and
-clock jumps); other shapes (cancel storms, `--shape timers`) and derived
-streams (rich supervised children, `return cancelled`) add to it without
-consuming it. The **extension stream** (`EXT_SALT`, `gen::extend`, bd-9kll.2.10)
+clock jumps); other shapes (cancel storms, futurelock probes: one scenario in
+24 is one or two holders that reserve and wait while a driver that first
+sleeps keeps the lab stepping past `lab.futurelock_max_idle_steps`, expecting
+`futurelock`, or a lone polled holder expecting `ok`; `--shape timers`) and
+derived streams (rich supervised children, `return cancelled`) add to it
+without consuming it. The **extension stream** (`EXT_SALT`, `gen::extend`, bd-9kll.2.10)
 inserts the op families the main stream never draws, into scenarios that are
 otherwise what they were: intervals and delay queues, the watch receiver and
 sender steps, monitors and links (the peer opens with a sleep, so it is live
@@ -51,7 +54,12 @@ or `sync` (non-blocking steps only), on regions (not on one a driver
 `depth`, the obligation kinds `IoOp`, `SemaphorePermit` and `Transaction`, the
 server behaviors `latest`, `budgets` and `budgets_stop`, and a supervisor's
 `storm_threshold_milli`, explicit `stop`, `depends_on`, `required` and
-`registration`. `the_generator_draws_every_op_of_the_dsl` and
+`registration`, and a task group (`join_all`, `first_ok`, `race`) in a
+supervised child's program, whose members the interpreter scopes by the child's
+generation, and some mpsc channels made unbounded (`"unbounded": true` with
+`requires: ["unbounded_queue"]`; a channel `send_evict_oldest` or `closed` names
+stays bounded, Rust's `UnboundedSender` has neither).
+`the_generator_draws_every_op_of_the_dsl` and
 `the_generator_sets_every_property_of_the_dsl` read the op and property names
 of `schemas/scenario_dsl_v2.json` and require 1200 default-shape scenarios to
 contain each (an exemption list gives the reason of each one that cannot), so

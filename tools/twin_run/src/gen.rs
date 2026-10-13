@@ -853,6 +853,111 @@ fn storm_scenario(seed: u64, index: u64) -> Value {
     })
 }
 
+/// Salt of the futurelock probes' stream (bd-9kll.2.10): like the storms,
+/// their own stream that nothing else draws from, so every other scenario
+/// stays byte-identical.
+const FUTURELOCK_SALT: u64 = 0x5F10_C100_0000_0014;
+
+/// One scenario in this many is a futurelock probe.
+const FUTURELOCK_ONE_IN: u64 = 24;
+
+/// The obligation kinds a futurelock probe's holders reserve.
+const FUTURELOCK_KINDS: [&str; 6] = [
+    "SendPermit",
+    "Ack",
+    "Lease",
+    "IoOp",
+    "SemaphorePermit",
+    "Transaction",
+];
+
+/// Whether scenario `index` of batch `seed` is a futurelock probe.
+fn is_futurelock(seed: u64, index: u64) -> bool {
+    Rng::new(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ index ^ FUTURELOCK_SALT)
+        .below(FUTURELOCK_ONE_IN)
+        == 0
+}
+
+/// A futurelock probe (DSL §5, "Futurelock scenarios"): one or two holders
+/// reserve an obligation and wait, on a notify or on a sleep, while a driver
+/// (which first sleeps a quantum, so each holder has reserved) keeps the lab
+/// stepping for more steps than `futurelock_max_idle_steps`;
+/// the holders then dispose of it and complete. Rust reports each idle
+/// holder at every step it stays violating, so the scenario expects
+/// `futurelock`. About one probe in seven is the negative: a lone holder
+/// that is polled at every step (it yields) and expects `ok`, the knob set
+/// to any threshold, which asserts that no report is made.
+fn futurelock_scenario(seed: u64, index: u64) -> Value {
+    let mut rng = Rng::new(seed ^ index.wrapping_mul(0xA24B_AED4_963E_E407) ^ FUTURELOCK_SALT);
+    rng.quantum = time_quantum(seed, index);
+    let q = rng.quantum;
+    let max_idle = 1 + rng.below(4);
+    let polled = rng.chance(15);
+    let by_notify = rng.chance(50);
+    let holders = if polled { 1 } else { 1 + rng.below(2) };
+    let spins = max_idle + 2 + rng.below(5);
+    let mut sync = Vec::new();
+    let mut tasks = Vec::new();
+    let mut wake = Vec::new();
+    for h in 0..holders {
+        let kind = *rng.pick(&FUTURELOCK_KINDS);
+        let mut program = vec![json!({"op": "reserve", "kind": kind, "as": "o.1"})];
+        if polled {
+            for _ in 0..spins {
+                program.push(json!({"op": "yield"}));
+            }
+        } else if by_notify {
+            let notify = format!("n.{h}");
+            sync.push(json!({"name": notify, "type": "notify"}));
+            program.push(json!({"op": "notify_wait", "notify": notify}));
+            wake.push(json!({"op": "notify_one", "notify": notify}));
+        } else {
+            program.push(json!({"op": "sleep", "ns": q * (10 + rng.below(10))}));
+        }
+        program.push(if rng.chance(70) {
+            json!({"op": "commit", "obligation": "o.1"})
+        } else {
+            json!({"op": "abort", "obligation": "o.1", "reason": *rng.pick(&ABORT_REASONS)})
+        });
+        tasks.push(json!({
+            "name": format!("t.holder{h}"),
+            "region": "r.main",
+            "budget": null,
+            "program": program,
+        }));
+    }
+    if !polled {
+        // The driver opens with a sleep: the lab's seeded pick may run it
+        // before a holder's first poll, and a holder that has not reserved
+        // yet holds nothing to report. Asleep, it lets every holder run
+        // first (the clock only advances once nothing is runnable).
+        let mut program = vec![json!({"op": "sleep", "ns": q})];
+        program.extend((0..spins).map(|_| json!({"op": "yield"})));
+        program.extend(wake);
+        tasks.push(json!({
+            "name": "t.driver",
+            "region": "r.main",
+            "budget": null,
+            "program": program,
+        }));
+    }
+    json!({
+        "schema": "asx.scenario.v2",
+        "id": format!("gen-{seed}-{index}-001"),
+        "description": "generated futurelock probe (twin_run generate, bd-9kll.2.10)",
+        "unit": "obligation",
+        "rules": ["rule.obligation.reserve", "rule.obligation.commit", "inv.determinism.replayable"],
+        "seed": rng.next_u64() % 1_000_000,
+        "lab": {"max_steps": 400, "futurelock_max_idle_steps": max_idle},
+        "regions": [{"name": "r.main", "parent": "root", "budget": null}],
+        "channels": [],
+        "sync": sync,
+        "tasks": tasks,
+        "script": [],
+        "expect": {"kind": if polled { "ok" } else { "futurelock" }},
+    })
+}
+
 /// Salt of the timer-heavy shape's stream. Only a batch generated with
 /// `--shape timers` draws from it, so the default stream is untouched.
 const TIMERS_SALT: u64 = 0x7131_7100_0000_0007;
@@ -1364,6 +1469,9 @@ pub fn scenario(seed: u64, index: u64) -> Value {
     if is_storm(seed, index) {
         return storm_scenario(seed, index);
     }
+    if is_futurelock(seed, index) {
+        return futurelock_scenario(seed, index);
+    }
     let mut rng = Rng::new(seed ^ index.wrapping_mul(0xA24B_AED4_963E_E407));
     rng.quantum = time_quantum(seed, index);
     // A crowd: more tasks than the C runtime once let wait on one mutex or
@@ -1583,6 +1691,7 @@ pub fn scenario(seed: u64, index: u64) -> Value {
 
     // The op families the main stream never draws, from a stream of their
     // own (a crowd is a lock queue: nothing is added to it).
+    let mut unbounded = false;
     if !crowd {
         let mut ext = Rng::new(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ index ^ EXT_SALT);
         ext.quantum = rng.quantum;
@@ -1595,9 +1704,11 @@ pub fn scenario(seed: u64, index: u64) -> Value {
             &mut script,
         );
         ext_declarations(&mut ext, &mut regions, &mut task_values, &script);
+        ext_senders(&mut ext, &mut channels, &tasks);
+        unbounded = ext_unbounded(&mut ext, &mut channels, &task_values);
     }
 
-    json!({
+    let mut doc = json!({
         "schema": "asx.scenario.v2",
         "id": format!("gen-{seed}-{index}-001"),
         "description": "generated (twin_run generate, bd-ij9w)",
@@ -1611,7 +1722,78 @@ pub fn scenario(seed: u64, index: u64) -> Value {
         "tasks": task_values,
         "script": script,
         "expect": {"kind": "ok"},
-    })
+    });
+    if unbounded {
+        doc["requires"] = json!(["unbounded_queue"]);
+    }
+    doc
+}
+
+/// Whether any step under `node` is one of `ops` on `channel`.
+fn ext_uses(node: &Value, ops: &[&str], channel: &str) -> bool {
+    match node {
+        Value::Object(fields) => {
+            let hit = fields
+                .get("op")
+                .and_then(Value::as_str)
+                .is_some_and(|op| ops.contains(&op))
+                && fields.get("channel").and_then(Value::as_str) == Some(channel);
+            hit || fields.values().any(|v| ext_uses(v, ops, channel))
+        }
+        Value::Array(items) => items.iter().any(|v| ext_uses(v, ops, channel)),
+        _ => false,
+    }
+}
+
+/// Give some mpsc channels one more sender (`senders`, DSL §3.6): a task that
+/// is neither the channel's sender nor its receiver is handed a clone at
+/// setup (twin_run `tx.clone()`, C `asx_channel_sender_clone`), and the
+/// channel stays connected until it, too, has ended. The task need not send:
+/// the clone, the token it takes and its drop at the task's end are the
+/// subject.
+fn ext_senders(ext: &mut Rng, channels: &mut [Value], tasks: &[String]) {
+    for channel in channels.iter_mut() {
+        if channel["type"] != "mpsc" || !ext.chance(25) {
+            continue;
+        }
+        let candidates: Vec<&String> = tasks
+            .iter()
+            .filter(|t| channel["sender"] != json!(t) && channel["receiver"] != json!(t))
+            .collect();
+        if candidates.is_empty() || channel.get("senders").is_some() {
+            continue;
+        }
+        let which = usize::try_from(ext.below(candidates.len() as u64)).unwrap_or(0);
+        channel["senders"] = json!([candidates[which]]);
+    }
+}
+
+/// Make some mpsc channels unbounded (`mpsc::unbounded_channel()`, DSL §3.6),
+/// from the extension stream: every mpsc step applies to one except
+/// `send_evict_oldest` and `closed`, which a channel that has one keeps
+/// bounded. Returns whether one was made, which the scenario then declares
+/// with `requires: ["unbounded_queue"]` (a profile that forbids unbounded
+/// queues skips it).
+fn ext_unbounded(ext: &mut Rng, channels: &mut [Value], task_values: &[Value]) -> bool {
+    let mut any = false;
+    for channel in channels.iter_mut() {
+        if channel["type"] != "mpsc" || !ext.chance(12) {
+            continue;
+        }
+        let name = channel["name"].as_str().unwrap_or_default().to_string();
+        if task_values
+            .iter()
+            .any(|t| ext_uses(t, &["send_evict_oldest", "closed"], &name))
+        {
+            continue;
+        }
+        if let Some(fields) = channel.as_object_mut() {
+            fields.remove("capacity");
+            fields.insert("unbounded".to_string(), json!(true));
+            any = true;
+        }
+    }
+    any
 }
 
 /// Salt of the extension stream (bd-9kll.2.10). It decides, per scenario,
@@ -2152,6 +2334,33 @@ fn ext_declarations(
                                     "collision": *ext.pick(&["fail", "replace"])});
                             }
                         }
+                    }
+                    // A task group in a supervised child's program: its
+                    // members run in each generation of the child, whose
+                    // names scope them (the interpreter's scope_collect).
+                    for child in children.iter_mut() {
+                        if !ext.chance(20) {
+                            continue;
+                        }
+                        let Some(program) = child["program"].as_array_mut() else {
+                            continue;
+                        };
+                        if program.iter().any(|s| s["members"].is_array()) {
+                            continue;
+                        }
+                        let members: Vec<Value> = (0..1 + ext.below(2))
+                            .map(|_| Value::Array(child_program(ext)))
+                            .collect();
+                        let group = match ext.below(3) {
+                            0 => json!({"op": "join_all", "members": members}),
+                            1 => json!({"op": "first_ok", "members": members}),
+                            _ => json!({"op": "race", "members": members}),
+                        };
+                        let at = program
+                            .iter()
+                            .position(|s| s["op"] == "return")
+                            .unwrap_or(program.len());
+                        program.insert(at, group);
                     }
                 }
                 _ => {}
@@ -2737,6 +2946,54 @@ mod tests {
         }
     }
 
+    /// bd-9kll.2.10: a futurelock probe arranges what it expects. The
+    /// positive ones (`expect futurelock`) keep the lab stepping for more
+    /// steps than the threshold while a holder waits; the negative ones
+    /// (`expect ok`) are a lone holder that yields, polled at every step.
+    #[test]
+    fn futurelock_probes_arrange_what_they_expect() {
+        let (mut positive, mut negative) = (0, 0);
+        for index in 0..1200 {
+            let s = scenario(1, index);
+            if s["description"] != "generated futurelock probe (twin_run generate, bd-9kll.2.10)" {
+                continue;
+            }
+            let idle = s["lab"]["futurelock_max_idle_steps"]
+                .as_u64()
+                .expect("a probe sets the knob");
+            assert!(idle >= 1, "probe {index}");
+            let yields = |task: &Value| {
+                task["program"]
+                    .as_array()
+                    .map_or(0, |p| p.iter().filter(|st| st["op"] == "yield").count())
+            };
+            let tasks = s["tasks"].as_array().expect("tasks");
+            let kind = s["expect"]["kind"].as_str();
+            if kind == Some("futurelock") {
+                positive += 1;
+                let driver = tasks
+                    .iter()
+                    .find(|t| t["name"] == "t.driver")
+                    .expect("a positive probe has a driver");
+                assert!(
+                    yields(driver) as u64 >= idle + 2,
+                    "probe {index}: the driver does not outlast the threshold"
+                );
+            } else {
+                assert_eq!(kind, Some("ok"), "probe {index}");
+                negative += 1;
+                assert_eq!(
+                    tasks.len(),
+                    1,
+                    "probe {index}: the negative is a lone holder"
+                );
+                assert!(yields(&tasks[0]) >= 1, "probe {index}");
+            }
+        }
+        assert!(positive >= 20, "{positive} positive probes in 1200");
+        assert!(negative >= 1, "{negative} negative probes in 1200");
+    }
+
     /// bd-9kll.2.10: as `the_generator_draws_every_op_of_the_dsl`, for the
     /// options of declarations and steps: every property name the schema
     /// declares occurs in 1200 default-shape scenarios, or is exempt with its
@@ -2746,21 +3003,12 @@ mod tests {
         // (property, why a generated scenario does not set it)
         const EXEMPT: &[(&str, &str)] = &[
             (
-                "unbounded",
-                "an unbounded channel needs requires [unbounded_queue], which a C profile may forbid: the runner skips it (DSL section 1, DEC-008)",
-            ),
-            ("requires", "only for an unbounded channel (see unbounded)"),
-            (
                 "oracles",
                 "selects the Rust lab oracles that check a run: a check, not a behavior; its own gate",
             ),
             (
                 "panic_on_leak",
                 "makes an obligation leak panic the lab for the whole run: covered by its own fixtures",
-            ),
-            (
-                "futurelock_max_idle_steps",
-                "a reporting mode (expect futurelock): covered by its own fixtures",
             ),
             (
                 "error",
