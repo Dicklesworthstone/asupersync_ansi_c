@@ -652,7 +652,14 @@ are scoped by their own generations, whose names start with the nested
 supervisor's scoped name. Both interpreters rewrite the program the same
 way when the generation starts (twin_run's `scope_program`, the
 interpreter's `scope_steps`). Group members are named after the
-generation, so groups are allowed.
+generation, so groups are allowed. Rust captures pin each naming step across
+two generations: `supervision-generation-spawns-and-joins-001` (`spawn`),
+`supervision-generation-opens-a-region-and-closes-it-001` (`open_region`, a
+`spawn` into the region and its `close_region`),
+`supervision-generation-server-and-nested-supervisor-001` (`server_spawn`
+and a nested `supervise`), and `supervision-shutdown-budget-reaches-the-
+generations-subregions-001` (a sub-region under a shutdown ceiling). The
+generator draws all four in a supervised child's program.
 
 A child with a `registration` takes that name in its supervisor's own
 registry (twin_run binds it with `bind_managed_with_registry`, a registry of

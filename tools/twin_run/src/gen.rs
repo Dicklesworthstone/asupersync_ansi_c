@@ -579,13 +579,14 @@ fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
 }
 
 /// A supervised child's program that creates names: a spawned child it
-/// joins, a server it uses and stops, or (only where the child runs once, so
+/// joins, a server it uses and stops, a region it opens, spawns a child into,
+/// joins that child in and closes, or (only where the child runs once, so
 /// the number of supervisors stays within the arena) a nested supervisor it
-/// joins. The names (`w`, `s`, `n`, `k`) are each generation's own: the
+/// joins. The names (`w`, `s`, `r`, `n`, `k`) are each generation's own: the
 /// interpreters scope them under the generation's name (DSL §3.8), so a
 /// restart does not repeat them.
 fn rich_child_program(rng: &mut Rng, runs_once: bool) -> Vec<Value> {
-    match rng.below(if runs_once { 3 } else { 2 }) {
+    match rng.below(if runs_once { 4 } else { 3 }) {
         0 => vec![
             json!({"op": "spawn", "as": "w", "program": child_program(rng)}),
             json!({"op": "yield"}),
@@ -596,6 +597,13 @@ fn rich_child_program(rng: &mut Rng, runs_once: bool) -> Vec<Value> {
             json!({"op": "cast", "server": "s", "value": 1}),
             json!({"op": "call", "server": "s", "request": 0}),
             json!({"op": "server_stop", "server": "s"}),
+        ],
+        2 => vec![
+            json!({"op": "open_region", "as": "r"}),
+            json!({"op": "spawn", "as": "w", "region": "r", "program": child_program(rng)}),
+            json!({"op": "yield"}),
+            json!({"op": "join", "task": "w"}),
+            json!({"op": "close_region", "region": "r"}),
         ],
         _ => vec![
             json!({"op": "supervise", "as": "n", "policy": "one_for_one", "max_restarts": 1,
@@ -2725,7 +2733,7 @@ fn extend(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
 
     /// (`return cancelled` steps anywhere in `v`, those that are the last step
     /// of a supervised child's own program).
@@ -2798,6 +2806,79 @@ mod tests {
             own_total > 0,
             "400 scenarios of seed 1 emitted no supervised child that returns cancelled"
         );
+    }
+
+    /// Every `supervise` node's children's own programs, the nested ones too.
+    fn generation_programs<'a>(v: &'a Value, into: &mut Vec<&'a Vec<Value>>) {
+        match v {
+            Value::Object(fields) => {
+                if fields.get("op") == Some(&json!("supervise")) {
+                    for child in fields
+                        .get("children")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                    {
+                        if let Some(program) = child.get("program").and_then(Value::as_array) {
+                            into.push(program);
+                        }
+                    }
+                }
+                for field in fields.values() {
+                    generation_programs(field, into);
+                }
+            }
+            Value::Array(items) => {
+                for item in items {
+                    generation_programs(item, into);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// bd-9kll.8.7: a supervised child's program creates names with all four
+    /// naming steps (`spawn`, `open_region`, `server_spawn`, `supervise`), and
+    /// a region it opens is the one it spawns into and closes.
+    #[test]
+    fn supervised_children_draw_every_naming_step() {
+        let mut seen: BTreeMap<&str, u32> = BTreeMap::new();
+        for index in 0..600 {
+            let value = scenario(1, index);
+            let mut programs = Vec::new();
+            generation_programs(&value, &mut programs);
+            for program in programs {
+                for step in program {
+                    let op = step["op"].as_str().unwrap_or_default();
+                    for naming in ["spawn", "open_region", "server_spawn", "supervise"] {
+                        if op == naming {
+                            *seen.entry(naming).or_insert(0) += 1;
+                        }
+                    }
+                    if op == "open_region" {
+                        let name = step["as"].clone();
+                        assert!(
+                            program
+                                .iter()
+                                .any(|s| s["op"] == "spawn" && s["region"] == name),
+                            "scenario {index}: an opened region nothing spawns into"
+                        );
+                        assert!(
+                            program
+                                .iter()
+                                .any(|s| s["op"] == "close_region" && s["region"] == name),
+                            "scenario {index}: an opened region that is never closed"
+                        );
+                    }
+                }
+            }
+        }
+        for naming in ["spawn", "open_region", "server_spawn", "supervise"] {
+            assert!(
+                seen.get(naming).copied().unwrap_or(0) > 0,
+                "600 scenarios of seed 1 draw no {naming} in a supervised child: {seen:?}"
+            );
+        }
     }
 
     /// The cancelled returns come from a stream of their own: a scenario
