@@ -1571,12 +1571,17 @@ fn exec_sync(
                 return Ok(Flow::Continue);
             }
             let ran = s.self_ids.contains_key(target);
+            // An earlier abort already took the refusal out of the handle
+            // (try_join consumes it): a second abort must not replace it
+            // with PolledAfterCompletion (bd-c129; gen-275-53 aborted
+            // t.3.c1 twice).
+            let refused_already = s.denied.contains_key(target);
             let handle = s
                 .handles
                 .get_mut(target)
                 .ok_or_else(|| format!("unknown task {target:?}"))?;
             // Finished without ever running: its admission refused it.
-            let denied = if !ran && handle.is_finished() {
+            let denied = if !ran && !refused_already && handle.is_finished() {
                 handle.try_join().err()
             } else {
                 None
@@ -4310,6 +4315,10 @@ fn apply_driver_op(
         // under the task name `driver`: none yet is ASX_E_NOT_FOUND.
         "region_close_outcome" => {
             let region = region_id("region")?;
+            // A reason's origin task may be one that was admitted and has not
+            // run: name the admissions first, as `cancel_task` does
+            // (bd-9kll.2.10: gen-9-14, an unnamed TaskId(3:0)).
+            resolve_admissions(lab, shared)?;
             let (status, value) = match lab.state.region_close_outcome(region) {
                 None => ("ASX_E_NOT_FOUND", Value::Null),
                 Some(outcome) => {
