@@ -630,21 +630,28 @@ TEST(kernel_clear_leaves_another_held_kernel_and_the_process_state_alone) {
         ASSERT_TRUE(asx_kernel_other_held(g_kernels[0]));
         ASSERT_TRUE(asx_kernel_other_held(k2));
 
-        /* Clearing kernel 0 drops its own hold and its arenas, and leaves
-         * the other kernel's hold and the process-wide trace alone. */
+        /* Clearing kernel 0 drops its own hold, arenas and trace, and leaves
+         * the other kernel's hold and trace, and the process-wide event
+         * log, alone. */
         ASSERT_EQ(asx_region_open(&region), ASX_OK);
+        asx_trace_emit_internal(k2, ASX_TRACE_USER, 7u, 8u);
         ASSERT_TRUE(asx_trace_emitted_total() != 0u);
+        ASSERT_TRUE(asx_event_log_count() != 0u);
         asx_runtime_clear_internal(g_kernels[0]);
         ASSERT_EQ(g_kernels[0]->rt_generation, 0u);
         ASSERT_EQ(g_kernels[0]->region_count, 0u);
+        ASSERT_EQ(asx_trace_emitted_total(), (uint64_t)0);
+        ASSERT_EQ(asx_trace_emitted_total_internal(k2), (uint64_t)1);
         ASSERT_EQ(k2->rt_generation, 9u);
-        ASSERT_TRUE(asx_trace_emitted_total() != 0u);
+        ASSERT_TRUE(asx_event_log_count() != 0u);
 
-        /* With no other kernel held the clear is the last one's. */
+        /* With no other kernel held the clear is the last one's: the
+         * process-wide subsystems are reset too, k2's own trace is not. */
         k2->rt_generation = 0u;
         ASSERT_FALSE(asx_kernel_other_held(g_kernels[0]));
         asx_runtime_clear_internal(g_kernels[0]);
-        ASSERT_EQ(asx_trace_emitted_total(), 0u);
+        ASSERT_EQ(asx_event_log_count(), 0u);
+        ASSERT_EQ(asx_trace_emitted_total_internal(k2), (uint64_t)1);
         g_kernels[1] = NULL;
         storage_block_free(&blk2);
     }
