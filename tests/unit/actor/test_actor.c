@@ -863,6 +863,7 @@ static void test_taken_name_is_refused_and_changes_nothing(void) {
     asx_name_registry reg;
     asx_name_lease first;
     asx_name_lease second;
+    unsigned char before[sizeof(second)];
     asx_region_id r;
     asx_task_id current = ASX_INVALID_ID;
     asx_task_id holder = ASX_INVALID_ID;
@@ -870,11 +871,16 @@ static void test_taken_name_is_refused_and_changes_nothing(void) {
     r = child_region();
     MUST_OK(asx_name_registry_init(&reg));
     ASSERT(asx_name_register(&reg, "svc", fake_task(1), r, 0u, &first, NULL) == ASX_OK, "first");
+    /* A refused registration writes no lease: the output keeps what the
+     * caller had in it, here a known pattern. (Reading an uninitialised
+     * lease for its `active` flag is what an earlier version did.) */
+    memset(&second, 0xA5, sizeof(second));
+    memcpy(before, &second, sizeof(second));
     ASSERT(asx_name_register(&reg, "svc", fake_task(2), r, 9u, &second, &current) ==
                ASX_E_NAME_CONFLICT,
            "a second registration of the name is refused (NameTaken)");
     ASSERT(current == fake_task(1), "with the current holder");
-    ASSERT(!asx_name_lease_is_active(&second), "no lease was minted");
+    ASSERT(memcmp(&second, before, sizeof(second)) == 0, "no lease was minted: output intact");
     ASSERT(asx_name_whereis(&reg, "svc", &holder) == ASX_OK && holder == fake_task(1),
            "the entry is the first holder's");
     ASSERT(asx_name_registry_count(&reg) == 1u, "and there is still one");
