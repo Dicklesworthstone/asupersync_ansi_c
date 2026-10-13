@@ -409,10 +409,16 @@ static int storm_threshold_valid(double t) {
 static int intensity_storm(const sup_slot *s, uint64_t now) {
     uint32_t count;
     double window_secs;
+    uint64_t whole;
+    uint64_t nanos;
     if (s->storm_threshold <= 0.0) return 0;
     count = recent_count(s, now);
     if (count == 0u) return 0;
-    window_secs = (double)(s->window_ns / 1000000000u) + (double)(s->window_ns % 1000000000u) / 1e9;
+    /* Duration::as_secs_f64: whole seconds plus nanos / 1e9, each its own
+     * statement so the integer quotient is never a floating operand. */
+    whole = s->window_ns / 1000000000u;
+    nanos = s->window_ns % 1000000000u;
+    window_secs = (double)whole + (double)nanos / 1e9;
     if (window_secs <= 0.0) return 0;
     return (double)count / window_secs > s->storm_threshold;
 }
