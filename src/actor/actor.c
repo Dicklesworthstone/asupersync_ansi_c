@@ -996,45 +996,130 @@ asx_status asx_name_registry_init(asx_name_registry *registry) {
     return ASX_OK;
 }
 
-asx_status asx_name_register(asx_name_registry *registry, const char *name, asx_task_id holder,
-                             asx_region_id region, asx_time now, asx_name_lease *out_lease,
-                             asx_task_id *current_holder) {
-    asx_name_entry *slot;
-    uint32_t taken;
-    uint32_t i;
-
-    if (registry == NULL || name == NULL || out_lease == NULL) return ASX_E_INVALID_ARGUMENT;
-    if (strlen(name) > ASX_NAME_MAX_LEN) return ASX_E_INVALID_ARGUMENT;
-
-    taken = name_index(registry, name);
-    if (taken < ASX_NAME_REGISTRY_CAPACITY) {
-        if (current_holder != NULL) *current_holder = registry->entries[taken].holder;
-        return ASX_E_NAME_CONFLICT;
-    }
-    /* The lease is minted before the table changes (:822): a root-region
-     * holder panics there, and the registry stays as it was. */
-    if (region_is_root(region)) return ASX_E_INVALID_ARGUMENT;
-    for (i = 0; i < ASX_NAME_REGISTRY_CAPACITY; i++) {
-        if (!registry->entries[i].in_use) break;
-    }
-    if (i >= ASX_NAME_REGISTRY_CAPACITY) return ASX_E_RESOURCE_EXHAUSTED;
-
-    slot = &registry->entries[i];
+/* An entry written for `holder`, and the lease that stands for it. */
+static void name_fill(asx_name_entry *slot, const char *name, asx_task_id holder,
+                      asx_region_id region, asx_time now) {
     memset(slot, 0, sizeof(*slot));
     memcpy(slot->name, name, strlen(name));
     slot->holder = holder;
     slot->region = region;
     slot->acquired_at = now;
     slot->in_use = 1;
-    registry->count++;
+}
 
-    memset(out_lease, 0, sizeof(*out_lease));
-    memcpy(out_lease->name, name, strlen(name));
-    out_lease->holder = holder;
-    out_lease->region = region;
-    out_lease->acquired_at = now;
-    out_lease->active = 1;
-    return ASX_OK;
+static void lease_fill(asx_name_lease *lease, const char *name, asx_task_id holder,
+                       asx_region_id region, asx_time now) {
+    memset(lease, 0, sizeof(*lease));
+    memcpy(lease->name, name, strlen(name));
+    lease->holder = holder;
+    lease->region = region;
+    lease->acquired_at = now;
+    lease->active = 1;
+}
+
+static uint32_t name_free_slot(const asx_name_registry *registry) {
+    uint32_t i;
+    for (i = 0; i < ASX_NAME_REGISTRY_CAPACITY; i++) {
+        if (!registry->entries[i].in_use) break;
+    }
+    return i;
+}
+
+static uint32_t waiters_in_use(const asx_name_registry *registry) {
+    uint32_t i;
+    uint32_t n = 0u;
+    for (i = 0; i < ASX_NAME_REGISTRY_CAPACITY; i++) {
+        if (registry->waiters[i].in_use) n++;
+    }
+    return n;
+}
+
+static uint32_t grants_in_use(const asx_name_registry *registry) {
+    uint32_t i;
+    uint32_t n = 0u;
+    for (i = 0; i < ASX_NAME_REGISTRY_CAPACITY; i++) {
+        if (registry->grants[i].in_use) n++;
+    }
+    return n;
+}
+
+asx_status asx_name_register_with_policy(asx_name_registry *registry, const char *name,
+                                         asx_task_id holder, asx_region_id region, asx_time now,
+                                         asx_name_collision policy, asx_time wait_deadline,
+                                         asx_name_lease *out_lease, asx_name_registration *out,
+                                         asx_task_id *current_holder) {
+    asx_name_entry *e;
+    uint32_t taken;
+    uint32_t i;
+
+    if (registry == NULL || name == NULL || out_lease == NULL || out == NULL) {
+        return ASX_E_INVALID_ARGUMENT;
+    }
+    if (strlen(name) > ASX_NAME_MAX_LEN) return ASX_E_INVALID_ARGUMENT;
+    if ((unsigned)policy > (unsigned)ASX_NAME_COLLISION_WAIT) return ASX_E_INVALID_ARGUMENT;
+
+    taken = name_index(registry, name);
+    if (taken >= ASX_NAME_REGISTRY_CAPACITY) {
+        /* No collision (:1059). The lease is minted before the table
+         * changes (:822): a root-region holder panics there, and the
+         * registry stays as it was. */
+        if (region_is_root(region)) return ASX_E_INVALID_ARGUMENT;
+        i = name_free_slot(registry);
+        if (i >= ASX_NAME_REGISTRY_CAPACITY) return ASX_E_RESOURCE_EXHAUSTED;
+        name_fill(&registry->entries[i], name, holder, region, now);
+        registry->count++;
+        lease_fill(out_lease, name, holder, region, now);
+        memset(out, 0, sizeof(*out));
+        out->outcome = ASX_NAME_REGISTERED;
+        return ASX_OK;
+    }
+
+    e = &registry->entries[taken];
+    switch (policy) {
+    case ASX_NAME_COLLISION_FAIL:
+        if (current_holder != NULL) *current_holder = e->holder;
+        return ASX_E_NAME_CONFLICT;
+    case ASX_NAME_COLLISION_REPLACE:
+        /* Minted before anyone is displaced (:1085). */
+        if (region_is_root(region)) return ASX_E_INVALID_ARGUMENT;
+        memset(out, 0, sizeof(*out));
+        out->outcome = ASX_NAME_REPLACED;
+        out->displaced_holder = e->holder;
+        out->displaced_region = e->region;
+        name_fill(e, name, holder, region, now); /* the count is unchanged */
+        lease_fill(out_lease, name, holder, region, now);
+        return ASX_OK;
+    case ASX_NAME_COLLISION_WAIT:
+        if (wait_deadline < now) return ASX_E_TIMED_OUT; /* WaitBudgetExceeded (:1119) */
+        if (region_is_root(region)) return ASX_E_INVALID_ARGUMENT;
+        if (waiters_in_use(registry) + grants_in_use(registry) >= ASX_NAME_REGISTRY_CAPACITY) {
+            return ASX_E_RESOURCE_EXHAUSTED;
+        }
+        for (i = 0; i < ASX_NAME_REGISTRY_CAPACITY; i++) {
+            if (!registry->waiters[i].in_use) break;
+        }
+        if (i >= ASX_NAME_REGISTRY_CAPACITY) return ASX_E_RESOURCE_EXHAUSTED;
+        memset(&registry->waiters[i], 0, sizeof(registry->waiters[i]));
+        memcpy(registry->waiters[i].name, name, strlen(name));
+        registry->waiters[i].holder = holder;
+        registry->waiters[i].region = region;
+        registry->waiters[i].deadline = wait_deadline;
+        registry->waiters[i].seq = registry->next_seq++;
+        registry->waiters[i].in_use = 1;
+        memset(out, 0, sizeof(*out));
+        out->outcome = ASX_NAME_ENQUEUED;
+        return ASX_OK;
+    }
+    return ASX_E_INVALID_ARGUMENT;
+}
+
+asx_status asx_name_register(asx_name_registry *registry, const char *name, asx_task_id holder,
+                             asx_region_id region, asx_time now, asx_name_lease *out_lease,
+                             asx_task_id *current_holder) {
+    asx_name_registration registration;
+    return asx_name_register_with_policy(registry, name, holder, region, now,
+                                         ASX_NAME_COLLISION_FAIL, 0u, out_lease, &registration,
+                                         current_holder);
 }
 
 asx_status asx_name_whereis(const asx_name_registry *registry, const char *name,
@@ -1062,11 +1147,55 @@ asx_status asx_name_unregister(asx_name_registry *registry, const char *name, as
     return ASX_OK;
 }
 
+/* try_grant_to_first_waiter (:1351): the waiters of `name` whose deadline is
+ * before `now` are dropped; the first of the rest, in arrival order, takes
+ * the name with a lease acquired at `now`, which waits in the grants for its
+ * holder to collect. The name has just been freed, and the grant takes the
+ * slot its waiter held (waiters and grants together never exceed the
+ * capacity). */
+static void name_grant_first(asx_name_registry *registry, const char *name, asx_time now) {
+    uint32_t i;
+    uint32_t first = ASX_NAME_REGISTRY_CAPACITY;
+    uint32_t slot;
+    uint32_t g;
+    asx_name_waiter *w;
+
+    for (i = 0; i < ASX_NAME_REGISTRY_CAPACITY; i++) {
+        asx_name_waiter *c = &registry->waiters[i];
+        if (!c->in_use || strcmp(c->name, name) != 0) continue;
+        if (c->deadline < now) {
+            memset(c, 0, sizeof(*c));
+            continue;
+        }
+        if (first >= ASX_NAME_REGISTRY_CAPACITY || c->seq < registry->waiters[first].seq) {
+            first = i;
+        }
+    }
+    if (first >= ASX_NAME_REGISTRY_CAPACITY) return;
+    slot = name_free_slot(registry);
+    if (slot >= ASX_NAME_REGISTRY_CAPACITY) return;
+    for (g = 0; g < ASX_NAME_REGISTRY_CAPACITY; g++) {
+        if (!registry->grants[g].in_use) break;
+    }
+    if (g >= ASX_NAME_REGISTRY_CAPACITY) return;
+
+    w = &registry->waiters[first];
+    name_fill(&registry->entries[slot], name, w->holder, w->region, now);
+    registry->count++;
+    memset(&registry->grants[g], 0, sizeof(registry->grants[g]));
+    memcpy(registry->grants[g].name, name, strlen(name));
+    registry->grants[g].holder = w->holder;
+    registry->grants[g].region = w->region;
+    registry->grants[g].acquired_at = now;
+    registry->grants[g].seq = registry->next_seq++;
+    registry->grants[g].in_use = 1;
+    memset(w, 0, sizeof(*w));
+}
+
 asx_status asx_name_unregister_owned(asx_name_registry *registry, const asx_name_lease *lease,
                                      asx_time now) {
     const asx_name_entry *e;
     uint32_t i;
-    (void)now; /* only a waiter's grant reads it, and none is ported */
     if (registry == NULL || lease == NULL) return ASX_E_INVALID_ARGUMENT;
     i = name_index(registry, lease->name);
     if (i >= ASX_NAME_REGISTRY_CAPACITY) return ASX_E_NOT_FOUND;
@@ -1076,33 +1205,152 @@ asx_status asx_name_unregister_owned(asx_name_registry *registry, const asx_name
         return ASX_E_PERMISSION_DENIED;
     }
     name_drop(registry, i);
+    name_grant_first(registry, lease->name, now);
     return ASX_OK;
 }
 
-uint32_t asx_name_cleanup_region(asx_name_registry *registry, asx_region_id region) {
+asx_status asx_name_unregister_and_grant(asx_name_registry *registry, const char *name,
+                                         asx_task_id caller, asx_time now) {
+    asx_status st = asx_name_unregister(registry, name, caller);
+    if (st == ASX_OK) name_grant_first(registry, name, now);
+    return st;
+}
+
+asx_status asx_name_take_granted_for(asx_name_registry *registry, const char *name,
+                                     asx_task_id holder, asx_region_id region,
+                                     asx_name_lease *out_lease) {
+    uint32_t i;
+    uint32_t first = ASX_NAME_REGISTRY_CAPACITY;
+    if (registry == NULL || name == NULL || out_lease == NULL) return ASX_E_INVALID_ARGUMENT;
+    for (i = 0; i < ASX_NAME_REGISTRY_CAPACITY; i++) {
+        const asx_name_grant *g = &registry->grants[i];
+        if (!g->in_use || g->holder != holder || g->region != region ||
+            strcmp(g->name, name) != 0) {
+            continue;
+        }
+        if (first >= ASX_NAME_REGISTRY_CAPACITY || g->seq < registry->grants[first].seq) first = i;
+    }
+    if (first >= ASX_NAME_REGISTRY_CAPACITY) return ASX_E_NOT_FOUND;
+    lease_fill(out_lease, registry->grants[first].name, holder, region,
+               registry->grants[first].acquired_at);
+    memset(&registry->grants[first], 0, sizeof(registry->grants[first]));
+    return ASX_OK;
+}
+
+int asx_name_owns_lease(const asx_name_registry *registry, const asx_name_lease *lease) {
+    const asx_name_entry *e;
+    uint32_t i;
+    if (registry == NULL || lease == NULL || !lease->active) return 0;
+    i = name_index(registry, lease->name);
+    if (i >= ASX_NAME_REGISTRY_CAPACITY) return 0;
+    e = &registry->entries[i];
+    return e->holder == lease->holder && e->region == lease->region &&
+           e->acquired_at == lease->acquired_at;
+}
+
+void asx_name_cancel_wait_for(asx_name_registry *registry, const char *name, asx_task_id holder,
+                              asx_region_id region, asx_time now) {
+    uint32_t i;
+    asx_name_lease grant;
+    if (registry == NULL || name == NULL) return;
+    for (i = 0; i < ASX_NAME_REGISTRY_CAPACITY; i++) {
+        asx_name_waiter *w = &registry->waiters[i];
+        if (w->in_use && w->holder == holder && w->region == region && strcmp(w->name, name) == 0) {
+            memset(w, 0, sizeof(*w));
+        }
+    }
+    /* An uncollected grant is aborted and its slot passed to the next waiter
+     * (:1440): its entry is freed by the lease's identity, then granted on. */
+    while (asx_name_take_granted_for(registry, name, holder, region, &grant) == ASX_OK) {
+        asx_status st = asx_name_unregister_owned(registry, &grant, now);
+        (void)st; /* the entry may have been replaced since */
+        grant.active = 0;
+    }
+}
+
+uint32_t asx_name_drain_expired_waiters(asx_name_registry *registry, asx_time now) {
     uint32_t i;
     uint32_t removed = 0u;
     if (registry == NULL) return 0u;
     for (i = 0; i < ASX_NAME_REGISTRY_CAPACITY; i++) {
-        if (registry->entries[i].in_use && registry->entries[i].region == region) {
-            name_drop(registry, i);
+        asx_name_waiter *w = &registry->waiters[i];
+        if (w->in_use && w->deadline < now) {
+            memset(w, 0, sizeof(*w));
             removed++;
         }
     }
     return removed;
 }
 
-uint32_t asx_name_cleanup_task(asx_name_registry *registry, asx_task_id task) {
+uint32_t asx_name_waiter_count(const asx_name_registry *registry) {
+    return registry != NULL ? waiters_in_use(registry) : 0u;
+}
+
+/* cleanup_region_at / cleanup_task_at (:1520, :1593): `by_region` selects
+ * the entries of a region, else of a holder task. Entries first, then their
+ * grants and waiters, then each freed name, in name order, goes to the first
+ * eligible waiter of what remains. */
+static uint32_t name_cleanup(asx_name_registry *registry, int by_region, asx_region_id region,
+                             asx_task_id task, asx_time now) {
+    char freed[ASX_NAME_REGISTRY_CAPACITY][ASX_NAME_MAX_LEN + 1u];
+    uint32_t order[ASX_NAME_REGISTRY_CAPACITY];
+    uint32_t n = 0u;
     uint32_t i;
-    uint32_t removed = 0u;
-    if (registry == NULL) return 0u;
+    uint32_t j;
+
     for (i = 0; i < ASX_NAME_REGISTRY_CAPACITY; i++) {
-        if (registry->entries[i].in_use && registry->entries[i].holder == task) {
-            name_drop(registry, i);
-            removed++;
+        const asx_name_entry *e = &registry->entries[i];
+        if (!e->in_use) continue;
+        if (by_region ? e->region != region : e->holder != task) continue;
+        memcpy(freed[n], e->name, sizeof(freed[n]));
+        order[n] = n;
+        n++;
+        name_drop(registry, i);
+    }
+    for (i = 0; i < ASX_NAME_REGISTRY_CAPACITY; i++) {
+        asx_name_grant *g = &registry->grants[i];
+        if (g->in_use && (by_region ? g->region == region : g->holder == task)) {
+            memset(g, 0, sizeof(*g));
         }
     }
-    return removed;
+    for (i = 0; i < ASX_NAME_REGISTRY_CAPACITY; i++) {
+        asx_name_waiter *w = &registry->waiters[i];
+        if (w->in_use && (by_region ? w->region == region : w->holder == task)) {
+            memset(w, 0, sizeof(*w));
+        }
+    }
+    for (i = 1; i < n; i++) { /* insertion sort by name */
+        uint32_t key = order[i];
+        for (j = i; j > 0u && strcmp(freed[order[j - 1u]], freed[key]) > 0; j--) {
+            order[j] = order[j - 1u];
+        }
+        order[j] = key;
+    }
+    for (i = 0; i < n; i++) name_grant_first(registry, freed[order[i]], now);
+    return n;
+}
+
+uint32_t asx_name_cleanup_region_at(asx_name_registry *registry, asx_region_id region,
+                                    asx_time now) {
+    if (registry == NULL) return 0u;
+    return name_cleanup(registry, 1, region, ASX_INVALID_ID, now);
+}
+
+uint32_t asx_name_cleanup_task_at(asx_name_registry *registry, asx_task_id task, asx_time now) {
+    if (registry == NULL) return 0u;
+    return name_cleanup(registry, 0, ASX_INVALID_ID, task, now);
+}
+
+/* Rust's cleanup_region / cleanup_task grant at a virtual time of 1 s
+ * (:1509, :1582). */
+#define NAME_CLEANUP_NOW 1000000000u
+
+uint32_t asx_name_cleanup_region(asx_name_registry *registry, asx_region_id region) {
+    return asx_name_cleanup_region_at(registry, region, NAME_CLEANUP_NOW);
+}
+
+uint32_t asx_name_cleanup_task(asx_name_registry *registry, asx_task_id task) {
+    return asx_name_cleanup_task_at(registry, task, NAME_CLEANUP_NOW);
 }
 
 uint32_t asx_name_registry_count(const asx_name_registry *registry) {

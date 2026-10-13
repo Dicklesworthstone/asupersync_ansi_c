@@ -997,6 +997,258 @@ static void test_cleanup_drops_a_regions_and_a_tasks_names(void) {
     ASSERT(asx_name_cleanup_task(&reg, fake_task(3)) == 0u, "nothing left to drop");
 }
 
+/* register_with_policy (registry.rs:1047): Replace displaces the holder and
+ * reports it; the displaced lease no longer names the entry. */
+static void test_replace_displaces_the_holder(void) {
+    asx_name_registry reg;
+    asx_name_lease old_lease;
+    asx_name_lease new_lease;
+    asx_name_registration got;
+    asx_region_id r;
+    asx_region_id other;
+    asx_task_id holder = ASX_INVALID_ID;
+    setup();
+    r = child_region();
+    other = child_region();
+    MUST_OK(asx_name_registry_init(&reg));
+    MUST_OK(asx_name_register(&reg, "svc", fake_task(1), r, 3u, &old_lease, NULL));
+    ASSERT(asx_name_register_with_policy(&reg, "svc", fake_task(2), other, 8u,
+                                         ASX_NAME_COLLISION_REPLACE, 0u, &new_lease, &got,
+                                         NULL) == ASX_OK,
+           "Replace takes a taken name");
+    ASSERT(got.outcome == ASX_NAME_REPLACED && got.displaced_holder == fake_task(1) &&
+               got.displaced_region == r,
+           "and reports the displaced holder and its region");
+    ASSERT(asx_name_lease_is_active(&new_lease) && new_lease.holder == fake_task(2) &&
+               new_lease.region == other && new_lease.acquired_at == 8u,
+           "the new lease is the replacer's");
+    ASSERT(asx_name_whereis(&reg, "svc", &holder) == ASX_OK && holder == fake_task(2),
+           "whereis names the replacer");
+    ASSERT(asx_name_registry_count(&reg) == 1u, "still one entry");
+    ASSERT(asx_name_unregister_owned(&reg, &old_lease, 9u) == ASX_E_PERMISSION_DENIED,
+           "the displaced lease frees nothing");
+    ASSERT(asx_name_owns_lease(&reg, &new_lease) && !asx_name_owns_lease(&reg, &old_lease),
+           "owns_lease tells them apart");
+    ASSERT(asx_name_unregister_owned(&reg, &new_lease, 9u) == ASX_OK, "the new one frees it");
+
+    /* A free name is Registered under every policy. */
+    ASSERT(asx_name_register_with_policy(&reg, "free", fake_task(3), r, 1u,
+                                         ASX_NAME_COLLISION_REPLACE, 0u, &new_lease, &got,
+                                         NULL) == ASX_OK &&
+               got.outcome == ASX_NAME_REGISTERED,
+           "Replace on a free name registers");
+    ASSERT(asx_name_register_with_policy(&reg, "svc", fake_task(3), g_root, 1u,
+                                         ASX_NAME_COLLISION_REPLACE, 0u, &new_lease, &got,
+                                         NULL) == ASX_E_INVALID_ARGUMENT,
+           "a root-region replacer cannot mint a lease");
+    ASSERT(asx_name_register_with_policy(&reg, "free", fake_task(4), r, 1u,
+                                         ASX_NAME_COLLISION_REPLACE, 0u, &new_lease, &got,
+                                         NULL) == ASX_OK,
+           "replacing again works");
+    ASSERT(asx_name_register_with_policy(&reg, "free", fake_task(5), r, 1u, ASX_NAME_COLLISION_FAIL,
+                                         0u, &new_lease, &got, &holder) == ASX_E_NAME_CONFLICT &&
+               holder == fake_task(4),
+           "Fail refuses with the holder");
+}
+
+/* Wait (registry.rs:1118, :1351, :1406): waiters are FIFO per name, and the
+ * name goes to the first whose deadline is not before the freeing time, as a
+ * lease acquired then, which its holder takes with take_granted_for. */
+static void test_wait_grants_the_name_to_the_first_waiter(void) {
+    asx_name_registry reg;
+    asx_name_lease first;
+    asx_name_lease granted;
+    asx_name_registration got;
+    asx_region_id r;
+    asx_task_id holder = ASX_INVALID_ID;
+    setup();
+    r = child_region();
+    memset(&granted, 0, sizeof(granted)); /* an enqueue writes no lease */
+    MUST_OK(asx_name_registry_init(&reg));
+    MUST_OK(asx_name_register(&reg, "svc", fake_task(1), r, 0u, &first, NULL));
+    ASSERT(asx_name_register_with_policy(&reg, "svc", fake_task(2), r, 1u, ASX_NAME_COLLISION_WAIT,
+                                         100u, &granted, &got, NULL) == ASX_OK &&
+               got.outcome == ASX_NAME_ENQUEUED,
+           "a first waiter");
+    ASSERT(!asx_name_lease_is_active(&granted), "no lease is minted for it yet");
+    ASSERT(asx_name_register_with_policy(&reg, "svc", fake_task(3), r, 2u, ASX_NAME_COLLISION_WAIT,
+                                         100u, &granted, &got, NULL) == ASX_OK &&
+               got.outcome == ASX_NAME_ENQUEUED,
+           "a second");
+    ASSERT(asx_name_waiter_count(&reg) == 2u, "two waiters");
+    ASSERT(asx_name_whereis(&reg, "svc", &holder) == ASX_OK && holder == fake_task(1),
+           "the name is still the holder's");
+
+    ASSERT(asx_name_unregister_owned(&reg, &first, 10u) == ASX_OK, "the holder frees it");
+    ASSERT(asx_name_whereis(&reg, "svc", &holder) == ASX_OK && holder == fake_task(2),
+           "the first waiter holds it at once");
+    ASSERT(asx_name_waiter_count(&reg) == 1u, "one waiter left");
+    ASSERT(asx_name_take_granted_for(&reg, "svc", fake_task(3), r, &granted) == ASX_E_NOT_FOUND,
+           "the second waiter has no grant");
+    ASSERT(asx_name_take_granted_for(&reg, "other", fake_task(2), r, &granted) == ASX_E_NOT_FOUND,
+           "and a name has its own");
+    ASSERT(asx_name_take_granted_for(&reg, "svc", fake_task(2), r, &granted) == ASX_OK,
+           "the first collects its grant");
+    ASSERT(asx_name_lease_is_active(&granted) && granted.acquired_at == 10u &&
+               granted.holder == fake_task(2),
+           "acquired when the name was freed");
+    ASSERT(asx_name_owns_lease(&reg, &granted), "and it owns the entry");
+    ASSERT(asx_name_take_granted_for(&reg, "svc", fake_task(2), r, &granted) == ASX_E_NOT_FOUND,
+           "a grant is collected once");
+
+    ASSERT(asx_name_unregister_owned(&reg, &granted, 20u) == ASX_OK, "it frees the name in turn");
+    ASSERT(asx_name_whereis(&reg, "svc", &holder) == ASX_OK && holder == fake_task(3),
+           "which goes to the second");
+    ASSERT(asx_name_waiter_count(&reg) == 0u, "no waiters");
+}
+
+static void test_wait_skips_the_expired_and_refuses_a_past_deadline(void) {
+    asx_name_registry reg;
+    asx_name_lease first;
+    asx_name_lease granted;
+    asx_name_registration got;
+    asx_region_id r;
+    asx_task_id holder = ASX_INVALID_ID;
+    setup();
+    r = child_region();
+    MUST_OK(asx_name_registry_init(&reg));
+    MUST_OK(asx_name_register(&reg, "svc", fake_task(1), r, 0u, &first, NULL));
+    ASSERT(asx_name_register_with_policy(&reg, "svc", fake_task(2), r, 1u, ASX_NAME_COLLISION_WAIT,
+                                         5u, &granted, &got, NULL) == ASX_OK,
+           "a waiter that will expire");
+    ASSERT(asx_name_register_with_policy(&reg, "svc", fake_task(3), r, 2u, ASX_NAME_COLLISION_WAIT,
+                                         50u, &granted, &got, NULL) == ASX_OK,
+           "and one that will not");
+    ASSERT(asx_name_register_with_policy(&reg, "svc", fake_task(4), r, 10u, ASX_NAME_COLLISION_WAIT,
+                                         9u, &granted, &got, NULL) == ASX_E_TIMED_OUT,
+           "a deadline before now is WaitBudgetExceeded at once");
+    ASSERT(asx_name_waiter_count(&reg) == 2u, "and enqueues nothing");
+    ASSERT(asx_name_unregister_owned(&reg, &first, 10u) == ASX_OK, "freed at 10");
+    ASSERT(asx_name_whereis(&reg, "svc", &holder) == ASX_OK && holder == fake_task(3),
+           "the expired waiter is dropped, the next is granted");
+    ASSERT(asx_name_waiter_count(&reg) == 0u, "no waiters");
+
+    /* A waiter whose deadline is exactly now is still eligible (>=). */
+    MUST_OK(asx_name_register(&reg, "edge", fake_task(1), r, 0u, &first, NULL));
+    MUST_OK(asx_name_register_with_policy(&reg, "edge", fake_task(2), r, 1u,
+                                          ASX_NAME_COLLISION_WAIT, 10u, &granted, &got, NULL));
+    MUST_OK(asx_name_unregister_owned(&reg, &first, 10u));
+    ASSERT(asx_name_whereis(&reg, "edge", &holder) == ASX_OK && holder == fake_task(2),
+           "deadline == now is granted");
+    ASSERT(asx_name_drain_expired_waiters(&reg, 1000u) == 0u, "nothing left to expire");
+}
+
+/* cancel_wait_for (:1433): removes the waiter, and a grant it never
+ * collected is aborted and the name passed on. */
+static void test_cancel_wait_passes_an_uncollected_grant_on(void) {
+    asx_name_registry reg;
+    asx_name_lease first;
+    asx_name_lease granted;
+    asx_name_registration got;
+    asx_region_id r;
+    asx_task_id holder = ASX_INVALID_ID;
+    setup();
+    r = child_region();
+    MUST_OK(asx_name_registry_init(&reg));
+    MUST_OK(asx_name_register(&reg, "svc", fake_task(1), r, 0u, &first, NULL));
+    MUST_OK(asx_name_register_with_policy(&reg, "svc", fake_task(2), r, 1u, ASX_NAME_COLLISION_WAIT,
+                                          100u, &granted, &got, NULL));
+    MUST_OK(asx_name_register_with_policy(&reg, "svc", fake_task(3), r, 2u, ASX_NAME_COLLISION_WAIT,
+                                          100u, &granted, &got, NULL));
+    MUST_OK(asx_name_unregister_owned(&reg, &first, 10u));
+    ASSERT(asx_name_whereis(&reg, "svc", &holder) == ASX_OK && holder == fake_task(2),
+           "the first waiter was granted and never collected it");
+    asx_name_cancel_wait_for(&reg, "svc", fake_task(2), r, 30u);
+    ASSERT(asx_name_whereis(&reg, "svc", &holder) == ASX_OK && holder == fake_task(3),
+           "its grant is aborted and the name goes to the next waiter");
+    ASSERT(asx_name_take_granted_for(&reg, "svc", fake_task(2), r, &granted) == ASX_E_NOT_FOUND,
+           "nothing of the first remains");
+    ASSERT(asx_name_take_granted_for(&reg, "svc", fake_task(3), r, &granted) == ASX_OK &&
+               granted.acquired_at == 30u,
+           "the second holds a grant from the cancel's time");
+
+    /* A waiter still queued is removed, others kept. */
+    MUST_OK(asx_name_register_with_policy(&reg, "svc", fake_task(4), r, 31u,
+                                          ASX_NAME_COLLISION_WAIT, 100u, &first, &got, NULL));
+    MUST_OK(asx_name_register_with_policy(&reg, "svc", fake_task(5), r, 32u,
+                                          ASX_NAME_COLLISION_WAIT, 100u, &first, &got, NULL));
+    ASSERT(asx_name_waiter_count(&reg) == 2u, "two queued");
+    asx_name_cancel_wait_for(&reg, "svc", fake_task(4), r, 33u);
+    ASSERT(asx_name_waiter_count(&reg) == 1u, "one removed");
+    asx_name_cancel_wait_for(&reg, "svc", fake_task(4), r, 33u);
+    ASSERT(asx_name_waiter_count(&reg) == 1u, "cancelling again changes nothing");
+}
+
+/* cleanup_region_at / cleanup_task_at (:1520, :1593) grant the names they
+ * free to waiters of other regions and tasks, and drop their own. */
+static void test_cleanup_grants_freed_names_to_waiters(void) {
+    asx_name_registry reg;
+    asx_name_lease lease;
+    asx_name_lease granted;
+    asx_name_registration got;
+    asx_region_id a;
+    asx_region_id b;
+    asx_task_id holder = ASX_INVALID_ID;
+    setup();
+    a = child_region();
+    b = child_region();
+    MUST_OK(asx_name_registry_init(&reg));
+    MUST_OK(asx_name_register(&reg, "x", fake_task(1), a, 0u, &lease, NULL));
+    MUST_OK(asx_name_register(&reg, "y", fake_task(2), a, 0u, &lease, NULL));
+    MUST_OK(asx_name_register_with_policy(&reg, "x", fake_task(7), b, 1u, ASX_NAME_COLLISION_WAIT,
+                                          100u, &granted, &got, NULL));
+    MUST_OK(asx_name_register_with_policy(&reg, "y", fake_task(8), a, 1u, ASX_NAME_COLLISION_WAIT,
+                                          100u, &granted, &got, NULL));
+    ASSERT(asx_name_cleanup_region_at(&reg, a, 40u) == 2u, "region a held two names");
+    ASSERT(asx_name_whereis(&reg, "x", &holder) == ASX_OK && holder == fake_task(7),
+           "x goes to region b's waiter");
+    ASSERT(asx_name_whereis(&reg, "y", &holder) == ASX_E_NOT_FOUND,
+           "y's only waiter was in the cleaned region and is gone");
+    ASSERT(asx_name_take_granted_for(&reg, "x", fake_task(7), b, &granted) == ASX_OK &&
+               granted.acquired_at == 40u,
+           "granted at the cleanup's time");
+
+    /* By task, with the default time of Rust's unsuffixed form (1 s). */
+    MUST_OK(asx_name_register_with_policy(&reg, "x", fake_task(9), b, 41u, ASX_NAME_COLLISION_WAIT,
+                                          2000000000u, &lease, &got, NULL));
+    ASSERT(asx_name_cleanup_task(&reg, fake_task(7)) == 1u, "task 7 held x");
+    ASSERT(asx_name_whereis(&reg, "x", &holder) == ASX_OK && holder == fake_task(9),
+           "its waiter is granted");
+    ASSERT(asx_name_take_granted_for(&reg, "x", fake_task(9), b, &granted) == ASX_OK &&
+               granted.acquired_at == 1000000000u,
+           "at one second");
+}
+
+/* A waiter needs a non-root region and room: waiters and uncollected grants
+ * together are bounded by the registry's capacity. */
+static void test_wait_is_bounded_and_needs_a_non_root_region(void) {
+    asx_name_registry reg;
+    asx_name_lease lease;
+    asx_name_registration got;
+    asx_region_id r;
+    uint32_t i;
+    setup();
+    r = child_region();
+    MUST_OK(asx_name_registry_init(&reg));
+    MUST_OK(asx_name_register(&reg, "svc", fake_task(1), r, 0u, &lease, NULL));
+    ASSERT(asx_name_register_with_policy(&reg, "svc", fake_task(2), g_root, 1u,
+                                         ASX_NAME_COLLISION_WAIT, 9u, &lease, &got,
+                                         NULL) == ASX_E_INVALID_ARGUMENT,
+           "a root-region waiter cannot be granted a lease ([ASUP-E103])");
+    ASSERT(asx_name_waiter_count(&reg) == 0u, "and is not enqueued");
+    for (i = 0; i < ASX_NAME_REGISTRY_CAPACITY; i++) {
+        asx_name_lease l;
+        MUST_OK(asx_name_register_with_policy(&reg, "svc", fake_task(10u + i), r, 1u,
+                                              ASX_NAME_COLLISION_WAIT, 100u, &l, &got, NULL));
+    }
+    ASSERT(asx_name_register_with_policy(&reg, "svc", fake_task(99), r, 1u, ASX_NAME_COLLISION_WAIT,
+                                         100u, &lease, &got, NULL) == ASX_E_RESOURCE_EXHAUSTED,
+           "the next waiter is refused for want of room");
+    ASSERT(asx_name_register_with_policy(&reg, "svc", fake_task(3), r, 1u, (asx_name_collision)9,
+                                         0u, &lease, &got, NULL) == ASX_E_INVALID_ARGUMENT,
+           "an unknown policy");
+}
+
 /* spawn_named_gen_server: the name belongs to the server's task. */
 static void test_named_server_registers_its_task(void) {
     asx_name_registry reg;
@@ -1909,6 +2161,12 @@ int main(void) {
     RUN(test_root_region_holder_and_full_registry_are_refused);
     RUN(test_name_arguments_are_checked);
     RUN(test_cleanup_drops_a_regions_and_a_tasks_names);
+    RUN(test_replace_displaces_the_holder);
+    RUN(test_wait_grants_the_name_to_the_first_waiter);
+    RUN(test_wait_skips_the_expired_and_refuses_a_past_deadline);
+    RUN(test_cancel_wait_passes_an_uncollected_grant_on);
+    RUN(test_cleanup_grants_freed_names_to_waiters);
+    RUN(test_wait_is_bounded_and_needs_a_non_root_region);
     RUN(test_named_server_registers_its_task);
     RUN(test_a_taken_name_spawns_no_server);
     RUN(test_release_name_waits_for_the_server_to_finish);

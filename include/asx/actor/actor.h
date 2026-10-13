@@ -325,11 +325,14 @@ ASX_API void asx_actor_op_drop(asx_actor_handle actor, asx_actor_op *op);
  * (Rust: a drop-bomb obligation token): it is resolved once, by release or
  * abort, and resolving it does not touch the registry; the entry is freed
  * by asx_name_unregister_owned (or a cleanup). Ported: registration with
- * Rust's default collision policy (a taken name is refused), whereis,
+ * the three collision policies (Fail refuses a taken name, Replace displaces
+ * its holder, Wait enqueues a budgeted FIFO waiter that the name is granted
+ * to when it is freed), the waiters' grants and their collection, whereis,
  * unregister, cleanup by region or task, and the named server. Not ported:
- * the Wait and Replace collision policies and their waiter grants, name
- * watchers and ownership notifications, and reserve/commit permits. The
- * registry is bounded: Rust's is a HashMap.
+ * name watchers and ownership notifications, and reserve/commit permits.
+ * The registry is bounded: Rust's is a HashMap, here the entries, and the
+ * waiters and uncollected grants together, are each at most
+ * ASX_NAME_REGISTRY_CAPACITY.
  * ------------------------------------------------------------------- */
 
 #ifndef ASX_NAME_REGISTRY_CAPACITY
@@ -350,10 +353,57 @@ typedef struct {
     int in_use;
 } asx_name_entry;
 
+/* A budgeted waiter (registry.rs WaiterEntry, :547): FIFO per name, by seq. */
+typedef struct {
+    char name[ASX_NAME_MAX_LEN + 1u];
+    asx_task_id holder;
+    asx_region_id region;
+    asx_time deadline;
+    uint64_t seq;
+    int in_use;
+} asx_name_waiter;
+
+/* A lease granted to a waiter, until its holder collects it
+ * (registry.rs GrantedLease, :559); by seq in the order granted. */
+typedef struct {
+    char name[ASX_NAME_MAX_LEN + 1u];
+    asx_task_id holder;
+    asx_region_id region;
+    asx_time acquired_at;
+    uint64_t seq;
+    int in_use;
+} asx_name_grant;
+
 typedef struct {
     asx_name_entry entries[ASX_NAME_REGISTRY_CAPACITY];
     uint32_t count;
+    /* Waiters and uncollected grants: together at most the capacity, so a
+     * grant always has the slot its waiter held. */
+    asx_name_waiter waiters[ASX_NAME_REGISTRY_CAPACITY];
+    asx_name_grant grants[ASX_NAME_REGISTRY_CAPACITY];
+    uint64_t next_seq;
 } asx_name_registry;
+
+/* How a registration treats a name that is taken (registry.rs
+ * NameCollisionPolicy, :396). */
+typedef enum {
+    ASX_NAME_COLLISION_FAIL = 0,    /* refuse (NameTaken) */
+    ASX_NAME_COLLISION_REPLACE = 1, /* displace the holder; the caller tells it */
+    ASX_NAME_COLLISION_WAIT = 2     /* enqueue a waiter with a deadline */
+} asx_name_collision;
+
+/* What register_with_policy did (registry.rs NameCollisionOutcome, :416). */
+typedef enum {
+    ASX_NAME_REGISTERED = 0, /* the name was free: the lease is the caller's */
+    ASX_NAME_REPLACED = 1,   /* the holder was displaced: the lease is the caller's */
+    ASX_NAME_ENQUEUED = 2    /* the caller waits; no lease yet */
+} asx_name_outcome;
+
+typedef struct {
+    asx_name_outcome outcome;
+    asx_task_id displaced_holder;   /* REPLACED */
+    asx_region_id displaced_region; /* REPLACED */
+} asx_name_registration;
 
 /* Rust NameLease (registry.rs:106): holder, region and acquisition time
  * identify the registration; active until released or aborted. */
@@ -398,18 +448,84 @@ ASX_API ASX_MUST_USE asx_status asx_name_whereis(const asx_name_registry *regist
 ASX_API ASX_MUST_USE asx_status asx_name_unregister(asx_name_registry *registry, const char *name,
                                                     asx_task_id caller);
 
+/* `registry.register_with_policy(name, holder, region, now, policy)`
+ * (:1047). `wait_deadline` is the Wait policy's deadline (the Rust
+ * `Wait { deadline }`), ignored by the others. ASX_OK writes the outcome,
+ * and the lease for REGISTERED and REPLACED; ENQUEUED writes no lease (the
+ * grant is collected with asx_name_take_granted_for). Refusals change
+ * nothing: ASX_E_NAME_CONFLICT under Fail for a taken name (the holder to
+ * *current_holder when it is not NULL); ASX_E_TIMED_OUT under Wait when the
+ * deadline is before `now` (Rust's WaitBudgetExceeded); ASX_E_INVALID_ARGUMENT
+ * for a NULL argument, a name over ASX_NAME_MAX_LEN, an unknown policy, or a
+ * holder in a root region (Rust's lease mint, or the Wait assertion, panics
+ * there, [ASUP-E103]); ASX_E_RESOURCE_EXHAUSTED when the registry or its
+ * waiters are full. */
+ASX_API ASX_MUST_USE asx_status asx_name_register_with_policy(
+    asx_name_registry *registry, const char *name, asx_task_id holder, asx_region_id region,
+    asx_time now, asx_name_collision policy, asx_time wait_deadline, asx_name_lease *out_lease,
+    asx_name_registration *out, asx_task_id *current_holder);
+
 /* `registry.unregister_owned_and_grant(&lease, now)` (:1317): frees the
  * entry the lease names, if its holder, region and acquisition time are the
- * lease's. ASX_E_NOT_FOUND, or ASX_E_PERMISSION_DENIED when the entry is
- * someone else's. (There are no waiters to grant to.) */
+ * lease's, and grants the name to the first waiter whose deadline is not
+ * before `now` (expired ones are dropped), as a lease acquired at `now`.
+ * ASX_E_NOT_FOUND, or ASX_E_PERMISSION_DENIED when the entry is someone
+ * else's. */
 ASX_API ASX_MUST_USE asx_status asx_name_unregister_owned(asx_name_registry *registry,
                                                           const asx_name_lease *lease,
                                                           asx_time now);
 
-/* `registry.cleanup_region(region)` / `cleanup_task(task)` (:1508, :1581):
- * drop every entry the region's or the task's holders have; the number
- * dropped. Leases are not touched. */
+/* `registry.unregister_and_grant(name, caller, now)` (:1213): as
+ * asx_name_unregister, and the name is granted to the first eligible waiter.
+ * (asx_name_unregister is Rust's unregister: no grant.) */
+ASX_API ASX_MUST_USE asx_status asx_name_unregister_and_grant(asx_name_registry *registry,
+                                                              const char *name, asx_task_id caller,
+                                                              asx_time now);
+
+/* `registry.take_granted_for(name, holder, region)` (:1406): the grant of
+ * that name to that holder and region, which leaves other holders' grants
+ * where they are. ASX_OK writes the (active) lease; ASX_E_NOT_FOUND. A later
+ * replacement can invalidate a grant: check asx_name_owns_lease before using
+ * the name. */
+ASX_API ASX_MUST_USE asx_status asx_name_take_granted_for(asx_name_registry *registry,
+                                                          const char *name, asx_task_id holder,
+                                                          asx_region_id region,
+                                                          asx_name_lease *out_lease);
+
+/* `registry.owns_lease(&lease)` (:1420): the lease is active and the entry
+ * of its name is the lease's holder, region and acquisition time. */
+ASX_API int asx_name_owns_lease(const asx_name_registry *registry, const asx_name_lease *lease);
+
+/* `registry.cancel_wait_for(name, holder, region, now)` (:1433): removes
+ * that holder's waiter, and aborts and frees any grant it has not collected,
+ * passing the name on to the next eligible waiter. */
+ASX_API void asx_name_cancel_wait_for(asx_name_registry *registry, const char *name,
+                                      asx_task_id holder, asx_region_id region, asx_time now);
+
+/* `registry.drain_expired_waiters(now)` (:1449): drop the waiters whose
+ * deadline is before `now`; the number dropped. */
+ASX_API uint32_t asx_name_drain_expired_waiters(asx_name_registry *registry, asx_time now);
+
+/* `registry.waiter_count()` (:1462): the waiters across all names. */
+ASX_API uint32_t asx_name_waiter_count(const asx_name_registry *registry);
+
+/* `registry.cleanup_region_at(region, now)` (:1520): drop every entry the
+ * region's holders have, and their uncollected grants and waiters, then
+ * grant each freed name (in name order) to the first eligible waiter at
+ * `now`; the number of entries dropped. Leases are not touched. */
+ASX_API uint32_t asx_name_cleanup_region_at(asx_name_registry *registry, asx_region_id region,
+                                            asx_time now);
+
+/* `registry.cleanup_task_at(task, now)` (:1593): as cleanup_region_at, for
+ * the entries, grants and waiters one task holds. */
+ASX_API uint32_t asx_name_cleanup_task_at(asx_name_registry *registry, asx_task_id task,
+                                          asx_time now);
+
+/* `registry.cleanup_region(region)` (:1508): cleanup_region_at at the
+ * virtual time Rust's unsuffixed form uses, 1 s (:1509). */
 ASX_API uint32_t asx_name_cleanup_region(asx_name_registry *registry, asx_region_id region);
+
+/* `registry.cleanup_task(task)` (:1581): cleanup_task_at at 1 s (:1582). */
 ASX_API uint32_t asx_name_cleanup_task(asx_name_registry *registry, asx_task_id task);
 
 /* Entries held (Rust len()). */
