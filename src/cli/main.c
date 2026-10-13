@@ -138,6 +138,7 @@ static const char *kind_name(unsigned kind) {
     case ASX_JOURNAL_KIND_NET_CTL: return "NET_CTL";
     case ASX_JOURNAL_KIND_PROCESS_WRITE: return "PROCESS_WRITE";
     case ASX_JOURNAL_KIND_PROCESS_READ: return "PROCESS_READ";
+    case ASX_JOURNAL_KIND_FS: return "FS";
     case ASX_JOURNAL_KIND_CHAIN: return "CHAIN";
     case ASX_JOURNAL_KIND_END: return "END";
     default: return "?";

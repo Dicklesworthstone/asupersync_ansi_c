@@ -6,6 +6,16 @@
  * (epoll/poll cannot watch regular files), so operations run directly on
  * the calling thread and never park the task; EINTR is retried.
  *
+ * Recording and replay (bd-9kll.11.2): every call that reaches the
+ * operating system is noted in the boundary journal when one is active (the
+ * FS record: its inputs and its outcome, the bytes a read returned), and
+ * while a replay is active each such call is answered from the journal
+ * instead, touching nothing. The handle tables stay what they are, with
+ * entries that hold no descriptor ("virtual": fd -1, no DIR) so a replayed
+ * handle answers to the name the recording gave it. A call the table itself
+ * answers (a stale handle, an access mode the open did not grant, a
+ * refused offset) is the same in both and makes no record.
+ *
  * Arguments are validated by fs.c before they reach this file; errno
  * values map onto the same statuses the MEMORY backend reports:
  *   ENOENT -> NOT_FOUND, EEXIST -> ALREADY_EXISTS,
@@ -27,6 +37,9 @@
 #endif
 
 #include "../../fs/fs_native.h"
+#include <asx/platform/atomics.h>
+#include <asx/runtime/journal.h>
+#include <asx/runtime/journal_replay.h>
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -63,6 +76,14 @@ typedef struct {
 
 static native_file g_files[ASX_FS_NATIVE_MAX_FILES];
 static native_dir g_dirs[ASX_FS_NATIVE_MAX_DIRS];
+
+/* Calls that ran their real implementation. A blocking job may call the
+ * fs surface beside the runtime thread, so the count is atomic. */
+static asx_atomic_u32 g_real_calls;
+
+static void real_call(void) { (void)asx_atomic_u32_fetch_add(&g_real_calls, 1u); }
+
+uint32_t asx_native_fs_real_calls(void) { return asx_atomic_u32_load(&g_real_calls); }
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -171,13 +192,85 @@ static asx_status fs_mkdir_one(const char *path) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Journal and replay                                                  */
+/* ------------------------------------------------------------------ */
+
+/* The journal's name for a handle: slot (native bit included), generation. */
+static uint64_t fs_handle_id(uint32_t slot, uint32_t generation) {
+    return ((uint64_t)slot << 32) | (uint64_t)generation;
+}
+
+static uint64_t fs_path_key(const asx_fs_path *path) { return asx_journal_text_hash(path->text); }
+
+/* A metadata result as the FS record carries it: kind, exists, writable, 0,
+ * size, modified_ns, mode, little-endian. */
+#define FS_META_BYTES 24u
+
+static void fs_put_le(uint8_t *p, uint64_t v, uint32_t bytes) {
+    uint32_t i;
+    for (i = 0; i < bytes; i++) { p[i] = (uint8_t)(v >> (8u * i)); }
+}
+
+static uint64_t fs_get_le(const uint8_t *p, uint32_t bytes) {
+    uint64_t v = 0u;
+    uint32_t i;
+    for (i = 0; i < bytes; i++) { v |= (uint64_t)p[i] << (8u * i); }
+    return v;
+}
+
+static void fs_meta_pack(const asx_fs_metadata *m, uint8_t *b) {
+    b[0] = (uint8_t)m->kind;
+    b[1] = (uint8_t)(m->exists != 0);
+    b[2] = (uint8_t)(m->writable != 0);
+    b[3] = 0u;
+    fs_put_le(b + 4, m->size, 8u);
+    fs_put_le(b + 12, m->modified_ns, 8u);
+    fs_put_le(b + 20, m->mode, 4u);
+}
+
+static void fs_meta_unpack(const uint8_t *b, asx_fs_metadata *m) {
+    memset(m, 0, sizeof(*m));
+    m->kind = (asx_fs_entry_kind)b[0];
+    m->exists = b[1] != 0u;
+    m->writable = b[2] != 0u;
+    m->size = fs_get_le(b + 4, 8u);
+    m->modified_ns = fs_get_le(b + 12, 8u);
+    m->mode = (uint32_t)fs_get_le(b + 20, 4u);
+}
+
+/* While a replay is active a call that reaches the OS is answered from the
+ * journal: 1 when it was (*st is the recorded status, *result its result,
+ * `dst` its data and *n their count), 0 when the call is real. */
+static int fs_serve(uint8_t op, uint64_t key, uint64_t arg, uint32_t len, asx_status *st,
+                    uint64_t *result, uint8_t *dst, uint32_t cap, uint32_t *n) {
+    int32_t status = 0;
+    if (!asx_replay_active()) return 0;
+    (void)asx_replay_serve_fs(op, key, arg, len, &status, result, dst, cap, n);
+    *st = (asx_status)status;
+    return 1;
+}
+
+/* A call with a status and nothing else. */
+static asx_status fs_status_call(uint8_t op, uint64_t key, uint64_t arg, int *served) {
+    asx_status st = ASX_OK;
+    uint64_t result = 0u;
+    uint32_t n = 0u;
+    *served = fs_serve(op, key, arg, 0u, &st, &result, NULL, 0u, &n);
+    return st;
+}
+
+static void fs_note_status(uint8_t op, uint64_t key, uint64_t arg, asx_status st) {
+    asx_journal_note_fs(op, key, arg, 0u, (int32_t)st, 0u, NULL, 0u);
+}
+
+/* ------------------------------------------------------------------ */
 /* Reset                                                               */
 /* ------------------------------------------------------------------ */
 
 void asx_native_fs_reset(void) {
     uint32_t i;
     for (i = 0; i < ASX_FS_NATIVE_MAX_FILES; i++) {
-        if (g_files[i].in_use) (void)fs_close_fd(g_files[i].fd);
+        if (g_files[i].in_use && g_files[i].fd >= 0) (void)fs_close_fd(g_files[i].fd);
         g_files[i].in_use = 0;
         g_files[i].fd = -1;
         g_files[i].generation = fs_next_gen(g_files[i].generation);
@@ -194,9 +287,18 @@ void asx_native_fs_reset(void) {
 /* Path operations                                                     */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_native_fs_dir_create(const asx_fs_path *path) { return fs_mkdir_one(path->text); }
+asx_status asx_native_fs_dir_create(const asx_fs_path *path) {
+    uint64_t key = fs_path_key(path);
+    int served;
+    asx_status st = fs_status_call(ASX_JOURNAL_FS_DIR_CREATE, key, 0u, &served);
+    if (served) return st;
+    real_call();
+    st = fs_mkdir_one(path->text);
+    fs_note_status(ASX_JOURNAL_FS_DIR_CREATE, key, 0u, st);
+    return st;
+}
 
-asx_status asx_native_fs_dir_create_all(const asx_fs_path *path) {
+static asx_status fs_mkdir_all(const asx_fs_path *path) {
     char buf[ASX_FS_PATH_MAX];
     uint32_t len = path->len;
     uint32_t i;
@@ -214,47 +316,105 @@ asx_status asx_native_fs_dir_create_all(const asx_fs_path *path) {
     return fs_mkdir_one(buf);
 }
 
+asx_status asx_native_fs_dir_create_all(const asx_fs_path *path) {
+    uint64_t key = fs_path_key(path);
+    int served;
+    asx_status st = fs_status_call(ASX_JOURNAL_FS_DIR_CREATE_ALL, key, 0u, &served);
+    if (served) return st;
+    real_call();
+    st = fs_mkdir_all(path);
+    fs_note_status(ASX_JOURNAL_FS_DIR_CREATE_ALL, key, 0u, st);
+    return st;
+}
+
 asx_status asx_native_fs_metadata(const asx_fs_path *path, asx_fs_metadata *out) {
+    uint64_t key = fs_path_key(path);
+    uint8_t packed[FS_META_BYTES];
+    uint64_t result = 0u;
+    uint32_t n = 0u;
+    asx_status rst = ASX_OK;
     struct stat st;
-    if (stat(path->text, &st) != 0) return fs_errno_status(errno);
+
+    if (fs_serve(ASX_JOURNAL_FS_METADATA, key, 0u, 0u, &rst, &result, packed, sizeof(packed), &n)) {
+        if (rst != ASX_OK) return rst;
+        if (n != FS_META_BYTES) return ASX_E_REPLAY_MISMATCH;
+        fs_meta_unpack(packed, out);
+        return ASX_OK;
+    }
+    real_call();
+    if (stat(path->text, &st) != 0) {
+        rst = fs_errno_status(errno);
+        asx_journal_note_fs(ASX_JOURNAL_FS_METADATA, key, 0u, 0u, (int32_t)rst, 0u, NULL, 0u);
+        return rst;
+    }
     fs_fill_meta(&st, out);
+    fs_meta_pack(out, packed);
+    asx_journal_note_fs(ASX_JOURNAL_FS_METADATA, key, 0u, 0u, (int32_t)ASX_OK, 0u, packed,
+                        FS_META_BYTES);
     return ASX_OK;
 }
 
 asx_status asx_native_fs_remove_file(const asx_fs_path *path) {
-    struct stat st;
-    if (unlink(path->text) == 0) return ASX_OK;
-    if ((errno == EISDIR || errno == EPERM) && lstat(path->text, &st) == 0 && S_ISDIR(st.st_mode)) {
-        return ASX_E_INVALID_STATE;
+    uint64_t key = fs_path_key(path);
+    struct stat sb;
+    int served;
+    asx_status st = fs_status_call(ASX_JOURNAL_FS_REMOVE_FILE, key, 0u, &served);
+    if (served) return st;
+    real_call();
+    if (unlink(path->text) == 0) {
+        st = ASX_OK;
+    } else if ((errno == EISDIR || errno == EPERM) && lstat(path->text, &sb) == 0 &&
+               S_ISDIR(sb.st_mode)) {
+        st = ASX_E_INVALID_STATE;
+    } else {
+        st = fs_errno_status(errno);
     }
-    return fs_errno_status(errno);
+    fs_note_status(ASX_JOURNAL_FS_REMOVE_FILE, key, 0u, st);
+    return st;
 }
 
 asx_status asx_native_fs_remove_dir(const asx_fs_path *path) {
-    if (rmdir(path->text) == 0) return ASX_OK;
-    if (errno == EEXIST) return ASX_E_INVALID_STATE; /* non-empty on some systems */
-    return fs_errno_status(errno);
+    uint64_t key = fs_path_key(path);
+    int served;
+    asx_status st = fs_status_call(ASX_JOURNAL_FS_REMOVE_DIR, key, 0u, &served);
+    if (served) return st;
+    real_call();
+    if (rmdir(path->text) == 0) {
+        st = ASX_OK;
+    } else if (errno == EEXIST) {
+        st = ASX_E_INVALID_STATE; /* non-empty on some systems */
+    } else {
+        st = fs_errno_status(errno);
+    }
+    fs_note_status(ASX_JOURNAL_FS_REMOVE_DIR, key, 0u, st);
+    return st;
 }
 
 asx_status asx_native_fs_rename(const asx_fs_path *from, const asx_fs_path *to) {
-    if (rename(from->text, to->text) == 0) return ASX_OK;
-    if (errno == EEXIST) return ASX_E_INVALID_STATE; /* non-empty target directory */
-    return fs_errno_status(errno);
+    uint64_t key = fs_path_key(from);
+    uint64_t to_key = fs_path_key(to);
+    int served;
+    asx_status st = fs_status_call(ASX_JOURNAL_FS_RENAME, key, to_key, &served);
+    if (served) return st;
+    real_call();
+    if (rename(from->text, to->text) == 0) {
+        st = ASX_OK;
+    } else if (errno == EEXIST) {
+        st = ASX_E_INVALID_STATE; /* non-empty target directory */
+    } else {
+        st = fs_errno_status(errno);
+    }
+    fs_note_status(ASX_JOURNAL_FS_RENAME, key, to_key, st);
+    return st;
 }
 
 /* ------------------------------------------------------------------ */
 /* Directory iteration                                                 */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_native_fs_dir_open(const asx_fs_path *path, asx_fs_dir_handle *out) {
-    uint32_t idx;
+static asx_status fs_dir_open_real(uint32_t idx, const asx_fs_path *path, asx_fs_dir_handle *out) {
     int fd;
     DIR *d;
-
-    for (idx = 0; idx < ASX_FS_NATIVE_MAX_DIRS; idx++) {
-        if (!g_dirs[idx].in_use) break;
-    }
-    if (idx >= ASX_FS_NATIVE_MAX_DIRS) return ASX_E_RESOURCE_EXHAUSTED;
 
     do {
         fd = open(path->text, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
@@ -274,12 +434,45 @@ asx_status asx_native_fs_dir_open(const asx_fs_path *path, asx_fs_dir_handle *ou
     return ASX_OK;
 }
 
-asx_status asx_native_fs_dir_next(asx_fs_dir_handle dir, asx_fs_dir_entry *out,
-                                  int *out_has_entry) {
-    native_dir *d = fs_dir_lookup(dir);
+asx_status asx_native_fs_dir_open(const asx_fs_path *path, asx_fs_dir_handle *out) {
+    uint64_t key = fs_path_key(path);
+    uint32_t idx;
+    asx_status st;
+
+    for (idx = 0; idx < ASX_FS_NATIVE_MAX_DIRS; idx++) {
+        if (!g_dirs[idx].in_use) break;
+    }
+    if (idx >= ASX_FS_NATIVE_MAX_DIRS) return ASX_E_RESOURCE_EXHAUSTED;
+
+    if (asx_replay_active()) {
+        /* The handle is the recording's, in a table that mirrors it. */
+        uint64_t result = 0u;
+        uint32_t n = 0u;
+        uint32_t slot;
+        (void)fs_serve(ASX_JOURNAL_FS_DIR_OPEN, key, 0u, 0u, &st, &result, NULL, 0u, &n);
+        if (st != ASX_OK) return st;
+        slot = (uint32_t)(result >> 32);
+        idx = slot & ~ASX_FS_NATIVE_SLOT_BIT;
+        if (!asx_fs_slot_is_native(slot) || idx >= ASX_FS_NATIVE_MAX_DIRS || g_dirs[idx].in_use) {
+            return ASX_E_REPLAY_MISMATCH;
+        }
+        g_dirs[idx].dir = NULL;
+        g_dirs[idx].in_use = 1;
+        g_dirs[idx].generation = (uint32_t)result;
+        out->slot = slot;
+        out->generation = (uint32_t)result;
+        return ASX_OK;
+    }
+    real_call();
+    st = fs_dir_open_real(idx, path, out);
+    asx_journal_note_fs(ASX_JOURNAL_FS_DIR_OPEN, key, 0u, 0u, (int32_t)st,
+                        st == ASX_OK ? fs_handle_id(out->slot, out->generation) : 0u, NULL, 0u);
+    return st;
+}
+
+static asx_status fs_dir_next_real(native_dir *d, asx_fs_dir_entry *out, int *out_has_entry) {
     struct dirent *ent;
 
-    if (d == NULL) return ASX_E_NOT_FOUND;
     for (;;) {
         size_t len;
         asx_fs_entry_kind kind = ASX_FS_ENTRY_OTHER;
@@ -325,32 +518,78 @@ asx_status asx_native_fs_dir_next(asx_fs_dir_handle dir, asx_fs_dir_entry *out,
     }
 }
 
+asx_status asx_native_fs_dir_next(asx_fs_dir_handle dir, asx_fs_dir_entry *out,
+                                  int *out_has_entry) {
+    native_dir *d = fs_dir_lookup(dir);
+    uint64_t key;
+    asx_status st;
+
+    if (d == NULL) return ASX_E_NOT_FOUND;
+    key = fs_handle_id(dir.slot, dir.generation);
+    if (asx_replay_active()) {
+        uint8_t name[ASX_FS_NAME_MAX];
+        uint64_t result = 0u;
+        uint32_t n = 0u;
+        (void)fs_serve(ASX_JOURNAL_FS_DIR_NEXT, key, 0u, 0u, &st, &result, name, sizeof(name), &n);
+        if (st != ASX_OK) return st;
+        if ((result & 1u) != 0u) {
+            if (n >= ASX_FS_NAME_MAX) return ASX_E_REPLAY_MISMATCH;
+            memset(out, 0, sizeof(*out));
+            memcpy(out->name, name, n);
+            out->name_len = n;
+            out->kind = (asx_fs_entry_kind)((result >> 8) & 0xFFu);
+            *out_has_entry = 1;
+        }
+        return ASX_OK;
+    }
+    real_call();
+    {
+        int has = 0;
+        asx_fs_dir_entry entry;
+        st = fs_dir_next_real(d, &entry, &has);
+        if (st == ASX_OK && has) {
+            *out = entry;
+            *out_has_entry = 1;
+            asx_journal_note_fs(ASX_JOURNAL_FS_DIR_NEXT, key, 0u, 0u, (int32_t)ASX_OK,
+                                1u | ((uint64_t)entry.kind << 8), (const uint8_t *)entry.name,
+                                entry.name_len);
+        } else {
+            asx_journal_note_fs(ASX_JOURNAL_FS_DIR_NEXT, key, 0u, 0u, (int32_t)st, 0u, NULL, 0u);
+        }
+    }
+    return st;
+}
+
 asx_status asx_native_fs_dir_close(asx_fs_dir_handle dir) {
     native_dir *d = fs_dir_lookup(dir);
+    uint64_t key;
+    int served;
+    asx_status st;
     if (d == NULL) return ASX_E_NOT_FOUND;
-    (void)closedir(d->dir);
+    key = fs_handle_id(dir.slot, dir.generation);
+    st = fs_status_call(ASX_JOURNAL_FS_DIR_CLOSE, key, 0u, &served);
+    if (!served) {
+        real_call();
+        if (d->dir != NULL) (void)closedir(d->dir);
+        st = ASX_OK;
+        fs_note_status(ASX_JOURNAL_FS_DIR_CLOSE, key, 0u, st);
+    }
     d->dir = NULL;
     d->in_use = 0;
-    return ASX_OK;
+    return st;
 }
 
 /* ------------------------------------------------------------------ */
 /* Files                                                               */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_native_fs_open(const asx_fs_path *path, uint32_t flags, asx_file_handle *out) {
-    uint32_t idx;
+static asx_status fs_open_real(uint32_t idx, const asx_fs_path *path, uint32_t flags,
+                               asx_file_handle *out) {
     int oflags = O_CLOEXEC;
     int want_read = (flags & (uint32_t)ASX_FS_OPEN_READ) != 0u;
     int want_write = (flags & ((uint32_t)ASX_FS_OPEN_WRITE | (uint32_t)ASX_FS_OPEN_APPEND)) != 0u;
     struct stat st;
     int fd;
-
-    /* Claim a slot first so exhaustion never leaves a created file. */
-    for (idx = 0; idx < ASX_FS_NATIVE_MAX_FILES; idx++) {
-        if (!g_files[idx].in_use) break;
-    }
-    if (idx >= ASX_FS_NATIVE_MAX_FILES) return ASX_E_RESOURCE_EXHAUSTED;
 
     if (want_read && want_write) {
         oflags |= O_RDWR;
@@ -382,6 +621,46 @@ asx_status asx_native_fs_open(const asx_fs_path *path, uint32_t flags, asx_file_
     return ASX_OK;
 }
 
+asx_status asx_native_fs_open(const asx_fs_path *path, uint32_t flags, asx_file_handle *out) {
+    uint64_t key = fs_path_key(path);
+    uint32_t idx;
+    asx_status st;
+
+    /* Claim a slot first so exhaustion never leaves a created file. */
+    for (idx = 0; idx < ASX_FS_NATIVE_MAX_FILES; idx++) {
+        if (!g_files[idx].in_use) break;
+    }
+    if (idx >= ASX_FS_NATIVE_MAX_FILES) return ASX_E_RESOURCE_EXHAUSTED;
+
+    if (asx_replay_active()) {
+        /* The handle is the recording's, in a table that mirrors it; the
+         * entry holds no descriptor. */
+        uint64_t result = 0u;
+        uint32_t n = 0u;
+        uint32_t slot;
+        (void)fs_serve(ASX_JOURNAL_FS_OPEN, key, (uint64_t)flags, 0u, &st, &result, NULL, 0u, &n);
+        if (st != ASX_OK) return st;
+        slot = (uint32_t)(result >> 32);
+        idx = slot & ~ASX_FS_NATIVE_SLOT_BIT;
+        if (!asx_fs_slot_is_native(slot) || idx >= ASX_FS_NATIVE_MAX_FILES || g_files[idx].in_use) {
+            return ASX_E_REPLAY_MISMATCH;
+        }
+        g_files[idx].fd = -1;
+        g_files[idx].flags = flags;
+        g_files[idx].path = *path;
+        g_files[idx].in_use = 1;
+        g_files[idx].generation = (uint32_t)result;
+        out->slot = slot;
+        out->generation = (uint32_t)result;
+        return ASX_OK;
+    }
+    real_call();
+    st = fs_open_real(idx, path, flags, out);
+    asx_journal_note_fs(ASX_JOURNAL_FS_OPEN, key, (uint64_t)flags, 0u, (int32_t)st,
+                        st == ASX_OK ? fs_handle_id(out->slot, out->generation) : 0u, NULL, 0u);
+    return st;
+}
+
 asx_status asx_native_fs_check(asx_file_handle file, int want_read, int want_write) {
     native_file *f = fs_file_lookup(file);
     if (f == NULL) return ASX_E_NOT_FOUND;
@@ -396,60 +675,128 @@ asx_status asx_native_fs_check(asx_file_handle file, int want_read, int want_wri
 asx_status asx_native_fs_read(asx_file_handle file, uint8_t *dst, uint32_t cap,
                               uint32_t *out_read) {
     native_file *f = fs_file_lookup(file);
+    uint64_t key;
     ssize_t n;
+    asx_status st;
     if (f == NULL) return ASX_E_NOT_FOUND;
     if (cap > ASX_FS_NATIVE_IO_MAX) cap = ASX_FS_NATIVE_IO_MAX;
+    key = fs_handle_id(file.slot, file.generation);
+    if (asx_replay_active()) {
+        uint64_t result = 0u;
+        uint32_t got = 0u;
+        (void)fs_serve(ASX_JOURNAL_FS_READ, key, 0u, cap, &st, &result, dst, cap, &got);
+        if (st == ASX_OK) *out_read = got;
+        return st;
+    }
+    real_call();
     do { n = read(f->fd, dst, (size_t)cap); } while (n < 0 && errno == EINTR);
-    if (n < 0) return fs_errno_status(errno);
+    if (n < 0) {
+        st = fs_errno_status(errno);
+        asx_journal_note_fs(ASX_JOURNAL_FS_READ, key, 0u, cap, (int32_t)st, 0u, NULL, 0u);
+        return st;
+    }
     *out_read = (uint32_t)n;
+    asx_journal_note_fs(ASX_JOURNAL_FS_READ, key, 0u, cap, (int32_t)ASX_OK, 0u, dst, (uint32_t)n);
     return ASX_OK;
 }
 
 asx_status asx_native_fs_write(asx_file_handle file, const uint8_t *src, uint32_t len,
                                uint32_t *out_written) {
     native_file *f = fs_file_lookup(file);
+    uint64_t key;
     ssize_t n;
+    asx_status st;
     if (f == NULL) return ASX_E_NOT_FOUND;
     if (len > ASX_FS_NATIVE_IO_MAX) len = ASX_FS_NATIVE_IO_MAX;
+    key = fs_handle_id(file.slot, file.generation);
+    if (asx_replay_active()) {
+        uint64_t result = 0u;
+        uint32_t none = 0u;
+        (void)fs_serve(ASX_JOURNAL_FS_WRITE, key, 0u, len, &st, &result, NULL, 0u, &none);
+        if (st == ASX_OK) *out_written = (uint32_t)result;
+        return st;
+    }
+    real_call();
     do { n = write(f->fd, src, (size_t)len); } while (n < 0 && errno == EINTR);
-    if (n < 0) return fs_errno_status(errno);
+    if (n < 0) {
+        st = fs_errno_status(errno);
+        asx_journal_note_fs(ASX_JOURNAL_FS_WRITE, key, 0u, len, (int32_t)st, 0u, NULL, 0u);
+        return st;
+    }
     *out_written = (uint32_t)n;
+    asx_journal_note_fs(ASX_JOURNAL_FS_WRITE, key, 0u, len, (int32_t)ASX_OK, (uint64_t)n, NULL, 0u);
     return ASX_OK;
 }
 
 asx_status asx_native_fs_read_at(asx_file_handle file, uint64_t offset, uint8_t *dst, uint32_t cap,
                                  uint32_t *out_read) {
     native_file *f = fs_file_lookup(file);
+    uint64_t key;
     ssize_t n;
+    asx_status st;
     if (f == NULL) return ASX_E_NOT_FOUND;
     if (!fs_offset_fits(offset)) return ASX_OK; /* beyond any possible end-of-file */
     if (cap > ASX_FS_NATIVE_IO_MAX) cap = ASX_FS_NATIVE_IO_MAX;
+    key = fs_handle_id(file.slot, file.generation);
+    if (asx_replay_active()) {
+        uint64_t result = 0u;
+        uint32_t got = 0u;
+        (void)fs_serve(ASX_JOURNAL_FS_READ_AT, key, offset, cap, &st, &result, dst, cap, &got);
+        if (st == ASX_OK) *out_read = got;
+        return st;
+    }
+    real_call();
     do { n = pread(f->fd, dst, (size_t)cap, (off_t)offset); } while (n < 0 && errno == EINTR);
-    if (n < 0) return fs_errno_status(errno);
+    if (n < 0) {
+        st = fs_errno_status(errno);
+        asx_journal_note_fs(ASX_JOURNAL_FS_READ_AT, key, offset, cap, (int32_t)st, 0u, NULL, 0u);
+        return st;
+    }
     *out_read = (uint32_t)n;
+    asx_journal_note_fs(ASX_JOURNAL_FS_READ_AT, key, offset, cap, (int32_t)ASX_OK, 0u, dst,
+                        (uint32_t)n);
     return ASX_OK;
 }
 
 asx_status asx_native_fs_write_at(asx_file_handle file, uint64_t offset, const uint8_t *src,
                                   uint32_t len, uint32_t *out_written) {
     native_file *f = fs_file_lookup(file);
+    uint64_t key;
     ssize_t n;
+    asx_status st;
     if (f == NULL) return ASX_E_NOT_FOUND;
     /* Linux pwrite() appends on O_APPEND descriptors; refuse, like MEMORY. */
     if ((f->flags & (uint32_t)ASX_FS_OPEN_APPEND) != 0u) return ASX_E_INVALID_STATE;
     if (!fs_offset_fits(offset)) return ASX_E_INVALID_ARGUMENT;
     if (len > ASX_FS_NATIVE_IO_MAX) len = ASX_FS_NATIVE_IO_MAX;
+    key = fs_handle_id(file.slot, file.generation);
+    if (asx_replay_active()) {
+        uint64_t result = 0u;
+        uint32_t none = 0u;
+        (void)fs_serve(ASX_JOURNAL_FS_WRITE_AT, key, offset, len, &st, &result, NULL, 0u, &none);
+        if (st == ASX_OK) *out_written = (uint32_t)result;
+        return st;
+    }
+    real_call();
     do { n = pwrite(f->fd, src, (size_t)len, (off_t)offset); } while (n < 0 && errno == EINTR);
-    if (n < 0) return fs_errno_status(errno);
+    if (n < 0) {
+        st = fs_errno_status(errno);
+        asx_journal_note_fs(ASX_JOURNAL_FS_WRITE_AT, key, offset, len, (int32_t)st, 0u, NULL, 0u);
+        return st;
+    }
     *out_written = (uint32_t)n;
+    asx_journal_note_fs(ASX_JOURNAL_FS_WRITE_AT, key, offset, len, (int32_t)ASX_OK, (uint64_t)n,
+                        NULL, 0u);
     return ASX_OK;
 }
 
 asx_status asx_native_fs_seek(asx_file_handle file, int64_t offset, asx_fs_seek_whence whence,
                               uint64_t *out_pos) {
     native_file *f = fs_file_lookup(file);
+    uint64_t key;
     int how;
     off_t pos;
+    asx_status st;
     if (f == NULL) return ASX_E_NOT_FOUND;
     switch (whence) {
     case ASX_FS_SEEK_CUR: how = SEEK_CUR; break;
@@ -461,46 +808,111 @@ asx_status asx_native_fs_seek(asx_file_handle file, int64_t offset, asx_fs_seek_
     if (!fs_offset_fits(offset < 0 ? (uint64_t)(-(offset + 1)) : (uint64_t)offset)) {
         return ASX_E_INVALID_ARGUMENT;
     }
+    key = fs_handle_id(file.slot, file.generation);
+    if (asx_replay_active()) {
+        uint64_t result = 0u;
+        uint32_t none = 0u;
+        (void)fs_serve(ASX_JOURNAL_FS_SEEK, key, (uint64_t)offset, (uint32_t)how, &st, &result,
+                       NULL, 0u, &none);
+        if (st == ASX_OK && out_pos != NULL) *out_pos = result;
+        return st;
+    }
+    real_call();
     pos = lseek(f->fd, (off_t)offset, how);
-    if (pos < 0) return fs_errno_status(errno);
+    if (pos < 0) {
+        st = fs_errno_status(errno);
+        asx_journal_note_fs(ASX_JOURNAL_FS_SEEK, key, (uint64_t)offset, (uint32_t)how, (int32_t)st,
+                            0u, NULL, 0u);
+        return st;
+    }
     if (out_pos != NULL) *out_pos = (uint64_t)pos;
+    asx_journal_note_fs(ASX_JOURNAL_FS_SEEK, key, (uint64_t)offset, (uint32_t)how, (int32_t)ASX_OK,
+                        (uint64_t)pos, NULL, 0u);
     return ASX_OK;
 }
 
 asx_status asx_native_fs_sync(asx_file_handle file) {
     native_file *f = fs_file_lookup(file);
+    uint64_t key;
+    int served;
     int rv;
+    asx_status st;
     if (f == NULL) return ASX_E_NOT_FOUND;
+    key = fs_handle_id(file.slot, file.generation);
+    st = fs_status_call(ASX_JOURNAL_FS_SYNC, key, 0u, &served);
+    if (served) return st;
+    real_call();
     do { rv = fsync(f->fd); } while (rv != 0 && errno == EINTR);
-    return rv == 0 ? ASX_OK : fs_errno_status(errno);
+    st = rv == 0 ? ASX_OK : fs_errno_status(errno);
+    fs_note_status(ASX_JOURNAL_FS_SYNC, key, 0u, st);
+    return st;
 }
 
 asx_status asx_native_fs_set_len(asx_file_handle file, uint64_t len) {
     native_file *f = fs_file_lookup(file);
+    uint64_t key;
+    int served;
     int rv;
+    asx_status st;
     if (f == NULL) return ASX_E_NOT_FOUND;
     if (!fs_offset_fits(len)) return ASX_E_RESOURCE_EXHAUSTED;
+    key = fs_handle_id(file.slot, file.generation);
+    st = fs_status_call(ASX_JOURNAL_FS_SET_LEN, key, len, &served);
+    if (served) return st;
+    real_call();
     do { rv = ftruncate(f->fd, (off_t)len); } while (rv != 0 && errno == EINTR);
-    return rv == 0 ? ASX_OK : fs_errno_status(errno);
+    st = rv == 0 ? ASX_OK : fs_errno_status(errno);
+    fs_note_status(ASX_JOURNAL_FS_SET_LEN, key, len, st);
+    return st;
 }
 
 asx_status asx_native_fs_file_metadata(asx_file_handle file, asx_fs_metadata *out) {
     native_file *f = fs_file_lookup(file);
+    uint64_t key;
+    uint8_t packed[FS_META_BYTES];
+    uint64_t result = 0u;
+    uint32_t n = 0u;
+    asx_status rst = ASX_OK;
     struct stat st;
     if (f == NULL) return ASX_E_NOT_FOUND;
-    if (fstat(f->fd, &st) != 0) return fs_errno_status(errno);
+    key = fs_handle_id(file.slot, file.generation);
+    if (fs_serve(ASX_JOURNAL_FS_FILE_METADATA, key, 0u, 0u, &rst, &result, packed, sizeof(packed),
+                 &n)) {
+        if (rst != ASX_OK) return rst;
+        if (n != FS_META_BYTES) return ASX_E_REPLAY_MISMATCH;
+        fs_meta_unpack(packed, out);
+        return ASX_OK;
+    }
+    real_call();
+    if (fstat(f->fd, &st) != 0) {
+        rst = fs_errno_status(errno);
+        asx_journal_note_fs(ASX_JOURNAL_FS_FILE_METADATA, key, 0u, 0u, (int32_t)rst, 0u, NULL, 0u);
+        return rst;
+    }
     fs_fill_meta(&st, out);
+    fs_meta_pack(out, packed);
+    asx_journal_note_fs(ASX_JOURNAL_FS_FILE_METADATA, key, 0u, 0u, (int32_t)ASX_OK, 0u, packed,
+                        FS_META_BYTES);
     return ASX_OK;
 }
 
 asx_status asx_native_fs_close(asx_file_handle file) {
     native_file *f = fs_file_lookup(file);
+    uint64_t key;
+    int served;
     int fd;
+    asx_status st;
     if (f == NULL) return ASX_E_NOT_FOUND;
+    key = fs_handle_id(file.slot, file.generation);
+    st = fs_status_call(ASX_JOURNAL_FS_CLOSE, key, 0u, &served);
     fd = f->fd;
     f->in_use = 0;
     f->fd = -1;
-    return fs_close_fd(fd);
+    if (served) return st;
+    real_call();
+    st = fs_close_fd(fd);
+    fs_note_status(ASX_JOURNAL_FS_CLOSE, key, 0u, st);
+    return st;
 }
 
 asx_status asx_native_fs_file_path(asx_file_handle file, asx_fs_path *out) {

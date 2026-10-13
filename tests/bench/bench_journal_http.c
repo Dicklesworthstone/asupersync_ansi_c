@@ -21,8 +21,10 @@
  *          the disk. The file is unlinked once opened, so nothing is left.
  *
  * Reported per mode: requests per second (median of the rounds), ns per
- * request, journal records and bytes per request, and the throughput loss
- * against "off". The verdict is on "null"; --gate makes it the exit status.
+ * request, journal records and bytes per request, the throughput ratio
+ * against "off" (journal on over journal off) and the loss it implies. A
+ * summary line names both throughputs and the ratio of "null". The verdict
+ * is on "null"; --gate makes it the exit status.
  *
  * Needs a live POSIX build (PROFILE=POSIX DETERMINISTIC=0); `make
  * bench-journal-overhead` builds one and runs this.
@@ -403,6 +405,8 @@ int main(int argc, char **argv) {
     int i;
     int failures = 0;
     double loss_null = 0.0;
+    double ratio_null = 1.0;
+    double rps_of[MODE_COUNT];
 
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--gate") == 0) {
@@ -460,28 +464,42 @@ int main(int argc, char **argv) {
         }
     }
 
-    printf("\n%-5s %12s %12s %14s %14s %10s\n", "mode", "requests/s", "ns/request", "records/req",
-           "bytes/req", "loss vs off");
+    printf("\n%-5s %12s %12s %14s %14s %8s %10s\n", "mode", "requests/s", "ns/request",
+           "records/req", "bytes/req", "ratio", "loss vs off");
+    memset(rps_of, 0, sizeof(rps_of));
     for (m = 0; m < MODE_COUNT; m++) {
         double rps;
         double loss;
         double nsreq;
+        double ratio;
         if ((modes_mask & (1u << m)) == 0u || done[m] == 0u) continue;
         med_ns[m] = median(ns[m], done[m]);
         nsreq = (double)med_ns[m] / (double)requests;
         rps = 1e9 / nsreq;
-        loss = m == MODE_OFF ? 0.0 : (1.0 - ((double)med_ns[MODE_OFF] / (double)med_ns[m])) * 100.0;
-        if (m == MODE_NULL) loss_null = loss;
-        printf("%-5s %12.0f %12.0f %14.2f %14.1f %9.2f%%\n", k_mode_name[m], rps, nsreq,
+        rps_of[m] = rps;
+        /* Throughput with the journal over throughput without it. */
+        ratio = m == MODE_OFF || done[MODE_OFF] == 0u
+                    ? 1.0
+                    : (double)med_ns[MODE_OFF] / (double)med_ns[m];
+        loss = (1.0 - ratio) * 100.0;
+        if (m == MODE_NULL) {
+            loss_null = loss;
+            ratio_null = ratio;
+        }
+        printf("%-5s %12.0f %12.0f %14.2f %14.1f %8.4f %9.2f%%\n", k_mode_name[m], rps, nsreq,
                m == MODE_OFF ? 0.0 : (double)median(rec[m], done[m]) / (double)requests,
-               m == MODE_OFF ? 0.0 : (double)median(byt[m], done[m]) / (double)requests, loss);
+               m == MODE_OFF ? 0.0 : (double)median(byt[m], done[m]) / (double)requests, ratio,
+               loss);
     }
     if (done[MODE_OFF] == 0u || ((modes_mask & (1u << MODE_NULL)) != 0u && done[MODE_NULL] == 0u)) {
         fprintf(stderr, "bench_journal_http: no complete rounds\n");
         return 1;
     }
     if ((modes_mask & (1u << MODE_NULL)) != 0u) {
-        printf("\nRP1 budget: recording costs at most %.1f%% of throughput (mode null): %.2f%% -> "
+        printf("\nRP1 overhead: journal off %.0f requests/s, journal on (null sink) %.0f "
+               "requests/s, on/off ratio %.4f\n",
+               rps_of[MODE_OFF], rps_of[MODE_NULL], ratio_null);
+        printf("RP1 budget: recording costs at most %.1f%% of throughput (mode null): %.2f%% -> "
                "%s\n",
                budget_pct, loss_null, loss_null <= budget_pct ? "WITHIN BUDGET" : "OVER BUDGET");
         if (gate && loss_null > budget_pct) failures++;

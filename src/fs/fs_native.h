@@ -27,6 +27,11 @@ static inline int asx_fs_slot_is_native(uint32_t slot) {
 /* Reset: close every native file and directory handle. */
 void asx_native_fs_reset(void);
 
+/* Calls that reached the operating system. A replay serves every call from
+ * the journal, with a virtual table in place of descriptors, and leaves
+ * this where it was. */
+uint32_t asx_native_fs_real_calls(void);
+
 /* Path operations (paths are pre-validated by fs.c). */
 asx_status asx_native_fs_dir_create(const asx_fs_path *path);
 asx_status asx_native_fs_dir_create_all(const asx_fs_path *path);

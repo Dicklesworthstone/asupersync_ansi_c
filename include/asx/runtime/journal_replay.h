@@ -25,7 +25,7 @@
  *      stored as a hash, an off-thread record that is not a blocking
  *      completion or a resolution. Supported kinds: CLOCK, ENTROPY,
  *      REACTOR_WAIT, REACTOR_POLL, RESOLVE, SIGNAL everywhere, and, in a
- *      live POSIX build, NET_*, UDP_*, PROCESS_* and BLOCKING_DONE (the
+ *      live POSIX build, NET_*, UDP_*, PROCESS_*, FS and BLOCKING_DONE (the
  *      native adapters serve them while a replay is active).
  *   4. Fidelity. Each request must match the next record: its kind, and
  *      its shape (a wait's timeout or logical step, a poll's timeout and
@@ -346,6 +346,15 @@ ASX_API int asx_replay_serve_process_write(uint64_t handle, uint32_t len, int32_
  * (2): *status and *n bytes into `dst`. */
 ASX_API int asx_replay_serve_process_read(uint64_t handle, uint8_t which, uint32_t cap,
                                           int32_t *status, uint8_t *dst, uint32_t *n);
+
+/* A native filesystem call (the FS record): `op` (ASX_JOURNAL_FS_*), `key`
+ * (the path's asx_journal_text_hash, or the handle), and the inputs `arg`
+ * and `len`, which must be the recording's. *status and *result are its
+ * answer; up to `cap` bytes of its data go to `dst` and *n is their count
+ * (`dst` may be NULL with `cap` 0 for a call that returns none). */
+ASX_API int asx_replay_serve_fs(uint8_t op, uint64_t key, uint64_t arg, uint32_t len,
+                                int32_t *status, uint64_t *result, uint8_t *dst, uint32_t cap,
+                                uint32_t *n);
 
 /* An adapter's check of a table entry it needs against what the recording
  * had: 1 when `recorded` equals `actual`, else the replay fails with

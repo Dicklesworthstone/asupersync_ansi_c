@@ -1055,8 +1055,10 @@ TEST(a_recovery_replay_checks_identity_and_only_the_prefix_s_records) {
 
 #if defined(ASX_PROFILE_POSIX) && !ASX_DETERMINISTIC
 
+#include "../../../src/fs/fs_native.h"
 #include "../../../src/net/net_native.h"
 #include "../../../src/process/process_native.h"
+#include <asx/fs/fs.h>
 #include <asx/net/net.h>
 #include <asx/platform/posix.h>
 #include <asx/process/process.h>
@@ -1066,7 +1068,10 @@ TEST(a_recovery_replay_checks_identity_and_only_the_prefix_s_records) {
 #include <asx/runtime/trace.h>
 #include <asx/runtime/waker.h>
 #include <asx/time/sleep.h>
-#include <time.h> /* nanosleep */
+#include <stdio.h>    /* snprintf */
+#include <stdlib.h>   /* mkdtemp */
+#include <sys/stat.h> /* stat */
+#include <time.h>     /* nanosleep */
 
 typedef struct {
     asx_time t0;
@@ -1677,6 +1682,224 @@ TEST(a_spawn_of_another_command_is_a_divergence_at_the_spawn_record) {
     ASSERT_EQ(asx_replay_failure(&rp)->expected_kind, (uint8_t)ASX_JOURNAL_KIND_PROCESS_SPAWN);
     ASSERT_STR_EQ(asx_replay_failure(&rp)->what, "spawn command");
     clean_natives();
+}
+
+/* --- the filesystem: results recorded as the native adapter got them and
+ * served back to a program whose world has no such files (bd-9kll.11.2) --- */
+
+typedef struct {
+    asx_status st[24];
+    uint32_t nst;
+    uint32_t wrote;
+    uint32_t read_n;
+    uint32_t read_at_n;
+    uint8_t read_buf[16];
+    uint8_t read_at_buf[16];
+    uint64_t seek_pos;
+    uint64_t size_open;
+    uint64_t size_cut;
+    uint32_t entries;
+    uint32_t name_sum;
+    uint32_t kind_sum;
+} fs_obs;
+
+static void fs_step(fs_obs *o, asx_status st) {
+    if (o->nst < (uint32_t)(sizeof(o->st) / sizeof(o->st[0]))) o->st[o->nst++] = st;
+}
+
+/* The program: a directory with two files, written, read, cut, renamed,
+ * listed, and removed again, with the refusals a world without the files
+ * would give kept in the results. `dir` is its working directory. */
+static void fs_program(fs_obs *o, const char *dir) {
+    asx_fs_path pd;
+    asx_fs_path pa;
+    asx_fs_path pb;
+    asx_fs_path pc;
+    asx_fs_path nope;
+    char tmp[ASX_FS_PATH_MAX];
+    asx_file_handle f;
+    asx_fs_metadata meta;
+    asx_fs_dir_handle d;
+    asx_fs_dir_entry ent;
+    int has = 0;
+    uint32_t i;
+
+    memset(o, 0, sizeof(*o));
+    fs_step(o, asx_fs_set_backend(ASX_FS_BACKEND_NATIVE));
+    fs_step(o, asx_fs_path_from_cstr(&pd, dir));
+    (void)snprintf(tmp, sizeof(tmp), "%s/a.txt", dir);
+    fs_step(o, asx_fs_path_from_cstr(&pa, tmp));
+    (void)snprintf(tmp, sizeof(tmp), "%s/b.txt", dir);
+    fs_step(o, asx_fs_path_from_cstr(&pb, tmp));
+    (void)snprintf(tmp, sizeof(tmp), "%s/c.txt", dir);
+    fs_step(o, asx_fs_path_from_cstr(&pc, tmp));
+    (void)snprintf(tmp, sizeof(tmp), "%s/missing.txt", dir);
+    fs_step(o, asx_fs_path_from_cstr(&nope, tmp));
+
+    fs_step(o, asx_fs_dir_create_all(&pd));
+    fs_step(o, asx_fs_file_open(&f, &pa,
+                                (uint32_t)(ASX_FS_OPEN_READ | ASX_FS_OPEN_WRITE |
+                                           ASX_FS_OPEN_CREATE | ASX_FS_OPEN_TRUNC)));
+    fs_step(o, asx_fs_file_write(f, (const uint8_t *)"hello world", 11u, &o->wrote));
+    fs_step(o, asx_fs_file_seek(f, 0, ASX_FS_SEEK_SET, &o->seek_pos));
+    fs_step(o, asx_fs_file_read(f, o->read_buf, (uint32_t)sizeof(o->read_buf), &o->read_n));
+    fs_step(o, asx_fs_file_read_at(f, 6u, o->read_at_buf, 5u, &o->read_at_n));
+    fs_step(o, asx_fs_file_metadata(f, &meta));
+    o->size_open = meta.size;
+    fs_step(o, asx_fs_file_set_len(f, 5u));
+    fs_step(o, asx_fs_file_sync(f));
+    fs_step(o, asx_fs_file_close(f));
+    fs_step(o, asx_fs_metadata_query(&pa, &meta));
+    o->size_cut = meta.size;
+
+    fs_step(o, asx_fs_file_open(&f, &pb, (uint32_t)(ASX_FS_OPEN_WRITE | ASX_FS_OPEN_CREATE)));
+    fs_step(o, asx_fs_file_close(f));
+    fs_step(o, asx_fs_rename(&pa, &pc));
+    fs_step(o, asx_fs_file_open(&f, &nope, (uint32_t)ASX_FS_OPEN_READ)); /* NOT_FOUND */
+    fs_step(o, asx_fs_remove_dir(&pd));                                  /* not empty */
+
+    fs_step(o, asx_fs_dir_open(&d, &pd));
+    for (i = 0u; i < 8u; i++) {
+        has = 0;
+        if (asx_fs_dir_next(d, &ent, &has) != ASX_OK || !has) break;
+        o->entries++;
+        o->name_sum += (uint32_t)(uint8_t)ent.name[0];
+        o->kind_sum += (uint32_t)ent.kind;
+    }
+    fs_step(o, asx_fs_dir_close(d));
+
+    fs_step(o, asx_fs_remove_file(&pc));
+    fs_step(o, asx_fs_remove_file(&pb));
+    fs_step(o, asx_fs_remove_dir(&pd));
+}
+
+/* A scratch root the test owns (mkdtemp) and the program's working
+ * directory inside it, `dir`: the path is the same in the recording and the
+ * replay, and the program removes everything it makes. The test removes the
+ * root. */
+static int fs_roots(char *root, char *dir, size_t cap) {
+    size_t n = (size_t)snprintf(root, cap, "/tmp/asx-fs-replay-");
+    size_t i;
+    if (n + 7u > cap) return 0;
+    for (i = 0u; i < 6u; i++) root[n + i] = 'X'; /* mkdtemp's template */
+    root[n + 6u] = '\0';
+    if (mkdtemp(root) == NULL) return 0;
+    (void)snprintf(dir, cap, "%s/work", root);
+    return 1;
+}
+
+static void fs_clean(void) {
+    asx_replay_deactivate();
+    asx_native_fs_reset();
+    asx_fs_reset();
+}
+
+TEST(a_filesystem_run_replays_from_the_journal_in_a_world_without_its_files) {
+    asx_journal j;
+    asx_replay rp;
+    asx_replay_report rep;
+    fs_obs rec;
+    fs_obs got;
+    char root[ASX_FS_PATH_MAX];
+    char dir[ASX_FS_PATH_MAX];
+    struct stat sb;
+    uint32_t calls;
+    uint32_t i;
+
+    ASSERT_TRUE(fs_roots(root, dir, sizeof(dir)));
+    fs_clean();
+    ASSERT_EQ(open_journal(&j, 0u), ASX_OK);
+    ASSERT_EQ(asx_journal_install(&j), ASX_OK);
+    fs_program(&rec, dir);
+    asx_journal_uninstall();
+    ASSERT_EQ(asx_journal_finish(&j), ASX_OK);
+    fs_clean();
+
+    /* What the real filesystem gave. */
+    ASSERT_EQ(rec.wrote, 11u);
+    ASSERT_EQ(rec.seek_pos, (uint64_t)0u);
+    ASSERT_EQ(rec.read_n, 11u);
+    ASSERT_EQ(memcmp(rec.read_buf, "hello world", 11u), 0);
+    ASSERT_EQ(rec.read_at_n, 5u);
+    ASSERT_EQ(memcmp(rec.read_at_buf, "world", 5u), 0);
+    ASSERT_EQ(rec.size_open, (uint64_t)11u);
+    ASSERT_EQ(rec.size_cut, (uint64_t)5u);
+    ASSERT_EQ(rec.entries, 2u);
+    for (i = 0u; i < rec.nst; i++) {
+        /* Only the two refusals are not OK. */
+        if (rec.st[i] != ASX_OK) {
+            ASSERT_TRUE(rec.st[i] == ASX_E_NOT_FOUND || rec.st[i] == ASX_E_INVALID_STATE);
+        }
+    }
+    ASSERT_TRUE(asx_native_fs_real_calls() > 0u);
+    ASSERT_TRUE(stat(dir, &sb) != 0); /* the program removed what it made */
+    ASSERT_EQ(rmdir(root), 0);        /* and the root has nothing in it */
+
+    /* Replayed: the same results, no call reaches the OS, nothing is
+     * created, and the program's own removals are served too. */
+    ASSERT_TRUE(begin_replay(&rp));
+    calls = asx_native_fs_real_calls();
+    fs_program(&got, dir);
+    ASSERT_EQ(asx_native_fs_real_calls(), calls);
+    ASSERT_TRUE(asx_replay_failure(&rp) == NULL);
+    ASSERT_EQ((int)asx_replay_finish(&rp, &rep), (int)ASX_REPLAY_OK);
+    fs_clean();
+    ASSERT_TRUE(stat(dir, &sb) != 0);
+    ASSERT_EQ(got.nst, rec.nst);
+    ASSERT_EQ(memcmp(&got, &rec, sizeof(got)), 0);
+}
+
+TEST(a_filesystem_call_that_differs_diverges_naming_the_path_or_the_field) {
+    asx_journal j;
+    asx_replay rp;
+    fs_obs o;
+    asx_fs_path other;
+    char root[ASX_FS_PATH_MAX];
+    char dir[ASX_FS_PATH_MAX];
+    char tmp[ASX_FS_PATH_MAX];
+    asx_file_handle f;
+
+    ASSERT_TRUE(fs_roots(root, dir, sizeof(dir)));
+    fs_clean();
+    ASSERT_EQ(open_journal(&j, 0u), ASX_OK);
+    ASSERT_EQ(asx_journal_install(&j), ASX_OK);
+    fs_program(&o, dir);
+    asx_journal_uninstall();
+    ASSERT_EQ(asx_journal_finish(&j), ASX_OK);
+    fs_clean();
+    ASSERT_EQ(rmdir(root), 0);
+
+    /* The recording's first filesystem call is the directory's creation:
+     * another directory is another path. */
+    ASSERT_TRUE(begin_replay(&rp));
+    ASSERT_EQ(asx_fs_set_backend(ASX_FS_BACKEND_NATIVE), ASX_OK);
+    (void)snprintf(tmp, sizeof(tmp), "%s-other", dir);
+    ASSERT_EQ(asx_fs_path_from_cstr(&other, tmp), ASX_OK);
+    ASSERT_EQ(asx_fs_dir_create_all(&other), ASX_E_REPLAY_MISMATCH);
+    ASSERT_TRUE(asx_replay_failure(&rp) != NULL);
+    ASSERT_EQ((int)asx_replay_failure(&rp)->error, (int)ASX_REPLAY_E_DIVERGED);
+    ASSERT_EQ(asx_replay_failure(&rp)->expected_kind, (uint8_t)ASX_JOURNAL_KIND_FS);
+    ASSERT_STR_EQ(asx_replay_failure(&rp)->what, "filesystem path or handle");
+    fs_clean();
+
+    /* The same path through another call: the call is what differs. */
+    ASSERT_TRUE(begin_replay(&rp));
+    ASSERT_EQ(asx_fs_set_backend(ASX_FS_BACKEND_NATIVE), ASX_OK);
+    ASSERT_EQ(asx_fs_path_from_cstr(&other, dir), ASX_OK);
+    ASSERT_EQ(asx_fs_dir_create(&other), ASX_E_REPLAY_MISMATCH);
+    ASSERT_STR_EQ(asx_replay_failure(&rp)->what, "filesystem call");
+    fs_clean();
+
+    /* A file opened with other flags than the recorded open: its argument. */
+    ASSERT_TRUE(begin_replay(&rp));
+    ASSERT_EQ(asx_fs_set_backend(ASX_FS_BACKEND_NATIVE), ASX_OK);
+    ASSERT_EQ(asx_fs_path_from_cstr(&other, dir), ASX_OK);
+    ASSERT_EQ(asx_fs_dir_create_all(&other), ASX_OK); /* served as recorded */
+    (void)snprintf(tmp, sizeof(tmp), "%s/a.txt", dir);
+    ASSERT_EQ(asx_fs_path_from_cstr(&other, tmp), ASX_OK);
+    ASSERT_EQ(asx_fs_file_open(&f, &other, (uint32_t)(ASX_FS_OPEN_READ)), ASX_E_REPLAY_MISMATCH);
+    ASSERT_STR_EQ(asx_replay_failure(&rp)->what, "filesystem argument");
+    fs_clean();
 }
 
 /* --- generic live programs: recorded under the POSIX hooks, replayed ---
@@ -2325,6 +2548,8 @@ int main(void) {
     RUN_TEST(a_child_replays_its_output_and_exit_with_no_process_started);
     RUN_TEST(a_childs_stdin_and_stdout_replay_with_the_same_polling);
     RUN_TEST(a_spawn_of_another_command_is_a_divergence_at_the_spawn_record);
+    RUN_TEST(a_filesystem_run_replays_from_the_journal_in_a_world_without_its_files);
+    RUN_TEST(a_filesystem_call_that_differs_diverges_naming_the_path_or_the_field);
     RUN_TEST(a_tcp_round_trip_replays_with_no_socket_opened);
     RUN_TEST(a_blocking_job_is_run_again_where_its_completion_was_recorded);
     RUN_TEST(asx_journal_replay_runs_a_program_against_a_stream_in_one_call);

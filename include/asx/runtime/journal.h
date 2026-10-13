@@ -82,6 +82,30 @@
  *   PROCESS_WRITE u64 handle | u32 len | i32 status | u32 written
  *   PROCESS_READ u64 handle | u8 which (1 stdout, 2 stderr) | u32 cap | i32
  *                status | u32 n | data
+ *   FS           u8 op (ASX_JOURNAL_FS_*) | u64 key | u64 arg | u32 len |
+ *                i32 status | u64 result | u32 n | data. One per call the
+ *                native filesystem adapter makes to the OS (fs_posix.c):
+ *                key is the asx_journal_text_hash of the path (path
+ *                operations, DIR_OPEN, OPEN) or the handle (a u64: slot
+ *                with the native bit << 32 | generation); arg and len are
+ *                the call's inputs, which a replay compares (the rename
+ *                target's path hash, open flags, a file offset, a seek's
+ *                offset and whence, a read's buffer length, a write's
+ *                length); result and data are its outputs. Per op:
+ *                  METADATA, FILE_METADATA  data: 24 bytes (u8 kind, u8
+ *                                           exists, u8 writable, u8 0, u64
+ *                                           size, u64 modified_ns, u32 mode)
+ *                  DIR_OPEN, OPEN           result: the new handle
+ *                  DIR_NEXT                 result: bit 0 an entry came,
+ *                                           bits 8.. its kind; data: its name
+ *                  READ, READ_AT            n bytes read, as TCP read data
+ *                  WRITE, WRITE_AT          result: bytes written
+ *                  SEEK                     result: the new position
+ *                The adapter answers some calls from its own table with no
+ *                OS call (a stale handle, an access mode the open did not
+ *                grant, a refused offset, file_path): they make no record,
+ *                and a replay's table, which the records rebuild, answers
+ *                them the same way.
  *   SIGNAL       u8 n | n x (u8 kind, u32 count). One per drain, n == 0
  *                for a drain that found nothing: a replay serves drains in
  *                order, so the empty ones are part of the stream.
@@ -182,6 +206,27 @@ extern "C" {
 /* PROCESS_SPAWN flags. */
 #define ASX_JOURNAL_SPAWN_PIDFD 0x1u /* the exit is awaited on a pidfd, not a timer */
 
+/* FS operations. */
+#define ASX_JOURNAL_FS_DIR_CREATE 0u
+#define ASX_JOURNAL_FS_DIR_CREATE_ALL 1u
+#define ASX_JOURNAL_FS_METADATA 2u
+#define ASX_JOURNAL_FS_REMOVE_FILE 3u
+#define ASX_JOURNAL_FS_REMOVE_DIR 4u
+#define ASX_JOURNAL_FS_RENAME 5u
+#define ASX_JOURNAL_FS_DIR_OPEN 6u
+#define ASX_JOURNAL_FS_DIR_NEXT 7u
+#define ASX_JOURNAL_FS_DIR_CLOSE 8u
+#define ASX_JOURNAL_FS_OPEN 9u
+#define ASX_JOURNAL_FS_READ 10u
+#define ASX_JOURNAL_FS_WRITE 11u
+#define ASX_JOURNAL_FS_READ_AT 12u
+#define ASX_JOURNAL_FS_WRITE_AT 13u
+#define ASX_JOURNAL_FS_SEEK 14u
+#define ASX_JOURNAL_FS_SYNC 15u
+#define ASX_JOURNAL_FS_SET_LEN 16u
+#define ASX_JOURNAL_FS_FILE_METADATA 17u
+#define ASX_JOURNAL_FS_CLOSE 18u
+
 /* Record flags. */
 #define ASX_JOURNAL_REC_SHAPE 0x1u     /* data replaced by its FNV-1a-64 */
 #define ASX_JOURNAL_REC_OFFTHREAD 0x2u /* taken off the runtime thread: trace_seq 0 */
@@ -214,6 +259,7 @@ typedef enum {
     ASX_JOURNAL_KIND_NET_CTL = 18,
     ASX_JOURNAL_KIND_PROCESS_WRITE = 19,
     ASX_JOURNAL_KIND_PROCESS_READ = 20,
+    ASX_JOURNAL_KIND_FS = 21,
     ASX_JOURNAL_KIND_CHAIN = 0xF0,
     ASX_JOURNAL_KIND_END = 0xFF
 } asx_journal_kind;
@@ -659,6 +705,13 @@ ASX_API void asx_journal_note_process_exit(uint64_t handle, uint32_t state, int3
  * (at most ASX_JOURNAL_MAX_SIGNAL_KINDS); a drain that found nothing is
  * recorded too. */
 ASX_API void asx_journal_note_signal(const uint32_t *counts, uint32_t kinds);
+
+/* One native filesystem call (the FS kind): its `op` (ASX_JOURNAL_FS_*),
+ * `key` (path hash or handle), inputs `arg` and `len`, `status`, `result`
+ * and the `n` bytes at `data` it produced (stored as for a TCP read, and
+ * only when `status` is ASX_OK). */
+ASX_API void asx_journal_note_fs(uint8_t op, uint64_t key, uint64_t arg, uint32_t len,
+                                 int32_t status, uint64_t result, const uint8_t *data, uint32_t n);
 
 /* A blocking-pool job (`slot`, `generation`) returned `result`. Called on
  * the pool thread: the record carries no trace position. */

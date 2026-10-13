@@ -1005,6 +1005,31 @@ void asx_journal_note_process_exit(uint64_t handle, uint32_t state, int32_t code
     j_emit((uint8_t)ASX_JOURNAL_KIND_PROCESS_EXIT, 0u, 1, b, (uint32_t)(p - b), NULL, 0u);
 }
 
+void asx_journal_note_fs(uint8_t op, uint64_t key, uint64_t arg, uint32_t len, int32_t status,
+                         uint64_t result, const uint8_t *data, uint32_t n) {
+    uint8_t b[1 + 8 + 8 + 4 + 4 + 8 + 4];
+    uint8_t shape[8];
+    uint8_t flags = 0u;
+    uint8_t *p = b;
+    uint32_t tail_len = 0u;
+    const uint8_t *tail;
+    if (g_active == NULL) return;
+    n = data_len_for(status, n);
+    p = put_u8(p, op);
+    p = put_u64(p, key);
+    p = put_u64(p, arg);
+    p = put_u32(p, len);
+    p = put_u32(p, (uint32_t)status);
+    p = put_u64(p, result);
+    p = put_u32(p, n);
+    if (n == 0u) {
+        j_emit((uint8_t)ASX_JOURNAL_KIND_FS, 0u, 1, b, (uint32_t)(p - b), NULL, 0u);
+        return;
+    }
+    tail = data_part(data, n, (uint32_t)(p - b), &flags, shape, &tail_len);
+    j_emit((uint8_t)ASX_JOURNAL_KIND_FS, flags, 1, b, (uint32_t)(p - b), tail, tail_len);
+}
+
 void asx_journal_note_signal(const uint32_t *counts, uint32_t kinds) {
     uint8_t b[1u + ASX_JOURNAL_MAX_SIGNAL_KINDS * 5u];
     uint8_t *p = b + 1;

@@ -109,7 +109,7 @@ static int kind_served(uint8_t kind) {
         kind == (uint8_t)ASX_JOURNAL_KIND_NET_LISTEN ||
         kind == (uint8_t)ASX_JOURNAL_KIND_UDP_BIND || kind == (uint8_t)ASX_JOURNAL_KIND_NET_CTL ||
         kind == (uint8_t)ASX_JOURNAL_KIND_PROCESS_WRITE ||
-        kind == (uint8_t)ASX_JOURNAL_KIND_PROCESS_READ) {
+        kind == (uint8_t)ASX_JOURNAL_KIND_PROCESS_READ || kind == (uint8_t)ASX_JOURNAL_KIND_FS) {
         return 1;
     }
 #if ASX_HAS_BLOCKING_SURFACE
@@ -1091,6 +1091,54 @@ int asx_replay_serve_process_read(uint64_t handle, uint8_t which, uint32_t cap, 
         return 1;
     }
     if (serve_read_body(r, 9u, cap, status, dst, n)) consume(r);
+    return 1;
+}
+
+/* ------------------------------------------------------------------ */
+/* Filesystem                                                          */
+/* ------------------------------------------------------------------ */
+
+/* FS: u8 op | u64 key | u64 arg | u32 len | i32 status | u64 result | u32 n
+ * | data (37 bytes before the data). */
+#define FS_HEAD_BYTES 37u
+
+int asx_replay_serve_fs(uint8_t op, uint64_t key, uint64_t arg, uint32_t len, int32_t *status,
+                        uint64_t *result, uint8_t *dst, uint32_t cap, uint32_t *n) {
+    asx_replay *r = g_replay;
+    const uint8_t *p;
+    uint32_t got;
+    if (r == NULL) return 0;
+    *status = (int32_t)ASX_E_REPLAY_MISMATCH;
+    *result = 0u;
+    *n = 0u;
+    if (!expect(r, (uint8_t)ASX_JOURNAL_KIND_FS, FS_HEAD_BYTES)) return 1;
+    p = r->cur.payload;
+    if (p[0] != op) {
+        diverge(r, "filesystem call");
+        return 1;
+    }
+    if (asx_journal_get_u64(p + 1) != key) {
+        diverge(r, "filesystem path or handle");
+        return 1;
+    }
+    if (asx_journal_get_u64(p + 9) != arg) {
+        diverge(r, "filesystem argument");
+        return 1;
+    }
+    if (asx_journal_get_u32(p + 17) != len) {
+        diverge(r, "filesystem length");
+        return 1;
+    }
+    got = asx_journal_get_u32(p + 33);
+    if (got > cap || r->cur.payload_len != FS_HEAD_BYTES + got) {
+        malformed(r, "filesystem data length");
+        return 1;
+    }
+    if (got > 0u && dst != NULL) memcpy(dst, p + FS_HEAD_BYTES, got);
+    *status = (int32_t)asx_journal_get_u32(p + 21);
+    *result = asx_journal_get_u64(p + 25);
+    *n = got;
+    consume(r);
     return 1;
 }
 
