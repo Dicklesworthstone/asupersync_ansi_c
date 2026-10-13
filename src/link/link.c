@@ -31,6 +31,8 @@ typedef struct {
     asx_task_id task_a; /* the holder */
     asx_task_id task_b; /* the peer */
     asx_task_id waiter; /* a task parked in asx_link_exit_poll, else invalid */
+    /* The priority of the waker it registered (lab dispatch). */
+    uint8_t waiter_prio;
     asx_actor_handle server;
     asx_exit_signal signal;
 } lk_entry;
@@ -207,6 +209,7 @@ asx_status asx_link_exit_poll(asx_task_id self, asx_cx *cx, asx_link_ref ref,
     if (cx != NULL && asx_cx_checkpoint(cx) != ASX_OK) return ASX_E_CANCELLED;
     if (asx_task_slot_lookup(self, &t) != ASX_OK) return ASX_E_STALE_HANDLE;
     e->waiter = self;
+    e->waiter_prio = t->lab_waker_prio;
     if (t->in_poll) t->park_requested = 1;
     return ASX_E_PENDING;
 }
@@ -282,7 +285,11 @@ static void deliver_exit(lk_entry *e, asx_task_id from, const asx_outcome *reaso
         e->has_signal = 1u;
         if (e->waiter != ASX_INVALID_ID && asx_task_slot_lookup(e->waiter, &w) == ASX_OK) {
             e->waiter = ASX_INVALID_ID;
-            asx_task_wake_slot_internal(w);
+            /* The stored waker keeps the priority of the poll that registered it. */
+            if (asx_lab_dispatch_active())
+                asx_lab_schedule(w, e->waiter_prio);
+            else
+                asx_task_wake_slot_internal(w);
         }
     }
 }

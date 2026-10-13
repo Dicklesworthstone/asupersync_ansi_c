@@ -30,6 +30,8 @@ typedef struct {
     asx_task_id watcher;
     asx_task_id monitored;
     asx_task_id waiter; /* a task parked in asx_monitor_down_poll, else invalid */
+    /* The priority of the waker it registered (lab dispatch). */
+    uint8_t waiter_prio;
     asx_actor_handle server;
     asx_down notice;
 } mon_entry;
@@ -221,6 +223,7 @@ asx_status asx_monitor_down_poll(asx_task_id self, asx_cx *cx, asx_monitor_ref r
     if (cx != NULL && asx_cx_checkpoint(cx) != ASX_OK) return ASX_E_CANCELLED;
     if (asx_task_slot_lookup(self, &t) != ASX_OK) return ASX_E_STALE_HANDLE;
     e->waiter = self;
+    e->waiter_prio = t->lab_waker_prio;
     if (t->in_poll) t->park_requested = 1;
     return ASX_E_PENDING;
 }
@@ -285,12 +288,18 @@ void asx_monitor_task_finished(asx_task_id task, const asx_outcome *outcome, asx
             /* The notice is stored, and the task waiting for it wakes at
              * this dispatch (WatchSlot::deliver, :803). */
             asx_task_id waiter = e->waiter;
+            uint8_t prio = e->waiter_prio;
             asx_task_slot *w;
             e->state = MON_FIRED;
             e->notice = down;
             e->waiter = ASX_INVALID_ID;
             if (waiter != ASX_INVALID_ID && asx_task_slot_lookup(waiter, &w) == ASX_OK) {
-                asx_task_wake_slot_internal(w);
+                /* The stored waker keeps the priority of the poll that registered it, which
+                 * the task may have left since (a cancel's cleanup budget). */
+                if (asx_lab_dispatch_active())
+                    asx_lab_schedule(w, prio);
+                else
+                    asx_task_wake_slot_internal(w);
             }
         }
     }

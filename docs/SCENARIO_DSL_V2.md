@@ -796,6 +796,15 @@ region's close outcome folds Ok
 `region-close-outcome-budget-deadline-unacknowledged-ok-001`). The next
 checkpoint of such a task acknowledges the deadline and reconciles the record.
 
+A monitor or a link keeps the waker its `await_down` or `await_exit` registered
+until the DOWN or the exit is delivered, also after that await was cancelled
+and the task went on. The delivery wakes the task through it, at the priority
+of the poll that registered it (a cancelled task's cleanup budget runs it at
+another), so the stale wake queues behind work of a higher priority than the
+task's own latest one
+(`monitor-stale-down-wake-keeps-registered-priority-001`,
+`link-stale-exit-wake-keeps-registered-priority-001`).
+
 | op | Fields | Rust | C | Observation |
 |---|---|---|---|---|
 | `monitor` | `task` (a task name, as `join` takes it), `as` (the monitor's name) | `cx.monitor(target).await` (`monitor.rs:1090`): `target` is the task's handle when the harness holds one, else its id | `asx_monitor_open_poll` until done | `ASX_OK` with the monitor's reference (`MonitorRef::id`, from 1); `ASX_E_NOT_FOUND` when the task is not live when the request is applied (finished, or its spawn was refused). A name is used once per task. |
