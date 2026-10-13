@@ -1211,13 +1211,16 @@ static int lab_forced_resolve(uint64_t compact, uint32_t *slot, uint16_t *task_g
 
     if (g_lab_forced_cfg != NULL && g_lab_forced_cfg->resolve != NULL) {
         asx_task_id id = ASX_INVALID_ID;
-        if (g_lab_forced_cfg->resolve(g_lab_forced_cfg->resolve_ctx, compact, &id) != ASX_OK) {
-            return 0;
+        if (g_lab_forced_cfg->resolve(g_lab_forced_cfg->resolve_ctx, compact, &id) == ASX_OK &&
+            asx_handle_is_valid(id) && asx_handle_type_tag(id) == ASX_TYPE_TASK) {
+            *slot = (uint32_t)asx_handle_slot(id);
+            *task_gen = asx_handle_generation(id);
+            return 1;
         }
-        if (!asx_handle_is_valid(id) || asx_handle_type_tag(id) != ASX_TYPE_TASK) return 0;
-        *slot = (uint32_t)asx_handle_slot(id);
-        *task_gen = asx_handle_generation(id);
-        return 1;
+        /* The caller knows only the tasks it names. A task the runtime
+         * created (a supervisor's generation, a finalizer, a controller)
+         * has no name to give: it resolves through the arena shadow, as
+         * with no resolver. */
     }
     /* The lab's arena shadow: a live task by its Rust (index, generation),
      * else a retired task a cancel waker scheduled. */

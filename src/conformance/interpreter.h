@@ -55,7 +55,10 @@ ASX_MUST_USE asx_status asx_conformance_run_sweep(const asx_json_doc *in, uint32
  * receipt says or fails with the first divergence, its step and dispatch
  * index in `error`. `names[i]` is the scenario task name of dispatch i (the
  * fixture's "schedule"."dispatches" gives it); a recorded task id maps to
- * the task of the first dispatch that carries it. Both must outlive the
+ * the task of the first dispatch that carries it, when the scenario has a
+ * task of that name. A task the runtime creates (a supervisor's
+ * generation, a region finalizer, a controller) is no scenario task: its
+ * id resolves through the lab's Rust arena shadow. Both must outlive the
  * runs. NULL clears the replay. */
 void asx_conformance_force_schedule(const asx_forced_schedule *schedule, const char *const *names);
 

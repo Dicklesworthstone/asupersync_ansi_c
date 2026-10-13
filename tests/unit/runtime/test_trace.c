@@ -1261,19 +1261,27 @@ static asx_status swarm_wave(void) {
     enum { tasks_per_wave = 4 }; /* fits the smallest resource class (16 tasks) */
     asx_region_id rid;
     asx_budget budget;
-    asx_task_id tid;
+    asx_task_id tids[tasks_per_wave];
+    asx_outcome outcome;
     asx_status st;
     uint32_t i;
 
     st = asx_region_open(&rid);
     if (st != ASX_OK) return st;
     for (i = 0; i < (uint32_t)tasks_per_wave; i++) {
-        st = asx_task_spawn(rid, poll_swarm_task, NULL, &tid);
+        st = asx_task_spawn(rid, poll_swarm_task, NULL, &tids[i]);
         if (st != ASX_OK) return st;
     }
     budget = asx_budget_infinite();
     st = asx_scheduler_run(rid, &budget);
     if (st != ASX_OK) return st;
+    /* A finished task nobody joins keeps its region's slot (its outcome
+     * stays joinable), so a long swarm would run out of regions in any
+     * arena. Joining frees the task and lets the next wave recycle. */
+    for (i = 0; i < (uint32_t)tasks_per_wave; i++) {
+        st = asx_task_join(tids[i], &outcome);
+        if (st != ASX_OK) return st;
+    }
     budget = asx_budget_infinite();
     return asx_region_drain(rid, &budget);
 }

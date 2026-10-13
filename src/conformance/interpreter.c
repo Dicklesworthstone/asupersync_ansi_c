@@ -3916,7 +3916,10 @@ void asx_conformance_force_schedule(const asx_forced_schedule *schedule, const c
 }
 
 /* A recorded task id to the scenario task that plays it: the name the
- * fixture's dispatch list gives the dispatch it first appears in. */
+ * fixture's dispatch list gives the dispatch it first appears in. A task
+ * with no scenario name yet (or none: a supervisor's generation, a region
+ * finalizer) is declined with ASX_E_NOT_FOUND, and the lab then resolves
+ * it through its Rust arena shadow. */
 static asx_status forced_resolve(void *ctx, uint64_t compact_task, asx_task_id *out) {
     uint32_t i;
     (void)ctx;

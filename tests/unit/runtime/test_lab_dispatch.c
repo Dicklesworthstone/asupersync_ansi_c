@@ -13,6 +13,7 @@
 
 #include "../../../src/runtime/runtime_internal.h"
 #include "test_harness.h"
+#include <asx/actor/supervisor.h>
 #include <asx/asx.h>
 #include <asx/core/broadcast.h>
 #include <asx/core/channel.h>
@@ -1942,12 +1943,13 @@ TEST(forced_schedule_resolver_maps_recorded_task_ids) {
     fs_scene sc;
 
     ASSERT_TRUE(fs_scene_record(&s, d));
-    /* B, C, A, B under invented ids 40 (B), 41 (C), 42 (A) */
+    /* B, C, A, B under invented ids 40 (B), 41 (C), 42 (A). The receipt's
+     * hash stays the recorded run's: the lab folds its own arena ids, not
+     * the ids the schedule names the tasks by. */
     d[0].task = (uint64_t)40u << 32;
     d[1].task = (uint64_t)41u << 32;
     d[2].task = (uint64_t)42u << 32;
     d[3].task = (uint64_t)40u << 32;
-    s.terminal_schedule_hash = asx_forced_schedule_certificate(d, 4u);
 
     ASSERT_EQ(fs_scene_build(&sc), ASX_OK);
     memset(&cfg, 0, sizeof(cfg));
@@ -1956,7 +1958,8 @@ TEST(forced_schedule_resolver_maps_recorded_task_ids) {
     ASSERT_EQ(asx_lab_run_forced_schedule(&s, sc.region, &cfg, &rep, &err), ASX_OK);
     ASSERT_EQ(strcmp(g_order, "BCAB"), 0);
 
-    /* An id the resolver does not know is a task that is not runnable. */
+    /* An id neither the resolver nor the lab's arena knows is a task that
+     * is not runnable. */
     d[1].task = (uint64_t)99u << 32;
     ASSERT_EQ(fs_scene_build(&sc), ASX_OK);
     cfg.resolve_ctx = &sc;
@@ -1964,6 +1967,169 @@ TEST(forced_schedule_resolver_maps_recorded_task_ids) {
     ASSERT_EQ(err.kind, ASX_FORCED_E_TASK_UNAVAILABLE);
     ASSERT_EQ(err.index, 1u);
     ASSERT_EQ(err.step, (uint64_t)2u);
+}
+
+/* A resolver names only the tasks its caller knows. The ids it declines
+ * resolve through the lab's arena shadow: here it knows C alone, and A and
+ * B (arena indices 0 and 1) are found by their Rust ids. */
+typedef struct {
+    const fs_scene *scene;
+    uint32_t declined;
+} fs_partial_ctx;
+
+static asx_status fs_resolve_only_c(void *ctx, uint64_t compact, asx_task_id *out) {
+    fs_partial_ctx *p = (fs_partial_ctx *)ctx;
+
+    if (compact == ((uint64_t)2u << 32)) {
+        *out = p->scene->tc;
+        return ASX_OK;
+    }
+    p->declined++;
+    return ASX_E_NOT_FOUND;
+}
+
+TEST(forced_schedule_resolver_declines_fall_back_to_the_arena_shadow) {
+    asx_forced_dispatch d[8];
+    asx_forced_schedule s;
+    asx_forced_error err;
+    asx_forced_report rep;
+    asx_forced_run_config cfg;
+    fs_partial_ctx pc;
+    fs_scene sc;
+
+    ASSERT_TRUE(fs_scene_record(&s, d));
+    ASSERT_EQ(fs_scene_build(&sc), ASX_OK);
+    pc.scene = &sc;
+    pc.declined = 0u;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.resolve = fs_resolve_only_c;
+    cfg.resolve_ctx = &pc;
+    ASSERT_EQ(asx_lab_run_forced_schedule(&s, sc.region, &cfg, &rep, &err), ASX_OK);
+    ASSERT_EQ(strcmp(g_order, "BCAB"), 0);
+    /* B, A, B were declined by the resolver and found by arena id */
+    ASSERT_EQ(pc.declined, 3u);
+    ASSERT_EQ(rep.schedule_hash, s.terminal_schedule_hash);
+}
+
+/* A supervisor's generation is a task the runtime creates: no scenario
+ * names it. Replaying a recorded supervised run with a resolver that knows
+ * only the owner resolves the controller and the generation by arena id. */
+typedef struct {
+    asx_region_id region; /* the owner's: the supervisor is spawned here */
+    asx_supervisor_config cfg;
+    asx_child_spec specs[1];
+    asx_supervisor_handle h;
+    asx_supervisor_report report;
+    asx_status spawn_st;
+    int spawned;
+    int joined;
+} sup_owner;
+
+typedef struct {
+    sup_owner owner;
+    asx_region_id root;
+    asx_region_id owner_region;
+    asx_task_id owner_task;
+    uint32_t declined;
+} sup_scene;
+
+static asx_status sup_child_poll(void *user_data, asx_task_id self) {
+    (void)user_data;
+    (void)self;
+    return ASX_OK;
+}
+
+static asx_status sup_child_start(void *user_data, const asx_supervisor_generation *gen,
+                                  asx_task_poll_fn *out_poll, void **out_data) {
+    (void)user_data;
+    (void)gen;
+    *out_poll = sup_child_poll;
+    *out_data = NULL;
+    return ASX_OK;
+}
+
+static asx_status sup_owner_poll(void *user_data, asx_task_id self) {
+    sup_owner *o = (sup_owner *)user_data;
+    asx_status st;
+
+    if (!o->spawned) {
+        o->spawned = 1;
+        o->spawn_st = asx_supervisor_spawn(&o->h, o->region, &o->cfg, o->specs, 1u);
+        if (o->spawn_st != ASX_OK) return ASX_OK;
+    }
+    st = asx_supervisor_join(o->h, self, &o->report);
+    if (st == ASX_E_PENDING) return ASX_E_PENDING;
+    o->joined = 1;
+    return ASX_OK;
+}
+
+/* root, the owner's region, the supervisor's, one generation's: 4 regions,
+ * the most the smallest resource class has. */
+static asx_status sup_scene_build(sup_scene *sc) {
+    asx_status st = setup();
+
+    memset(sc, 0, sizeof(*sc));
+    if (st == ASX_OK) st = asx_scheduler_use_lab_dispatch(42u);
+    asx_supervisor_reset();
+    if (st == ASX_OK) st = asx_region_open(&sc->root);
+    if (st == ASX_OK) st = asx_region_open_child(sc->root, &sc->owner_region);
+    sc->owner.region = sc->owner_region;
+    asx_supervisor_config_init(&sc->owner.cfg, "sup", 0u, 60000000000u);
+    sc->owner.cfg.backoff.kind = ASX_RESTART_BACKOFF_NONE;
+    asx_child_spec_init(&sc->owner.specs[0], "worker", ASX_CHILD_TRANSIENT, sup_child_start, NULL);
+    if (st == ASX_OK) {
+        st = asx_task_spawn(sc->owner_region, sup_owner_poll, &sc->owner, &sc->owner_task);
+    }
+    return st;
+}
+
+static asx_status sup_resolve_owner_only(void *ctx, uint64_t compact, asx_task_id *out) {
+    sup_scene *sc = (sup_scene *)ctx;
+
+    if (compact == 0u) { /* the owner is the first task: arena index 0, generation 0 */
+        *out = sc->owner_task;
+        return ASX_OK;
+    }
+    sc->declined++;
+    return ASX_E_NOT_FOUND;
+}
+
+TEST(forced_schedule_replays_a_supervisor_generation_by_arena_id) {
+    asx_forced_dispatch d[32];
+    asx_forced_schedule s;
+    asx_forced_error err;
+    asx_forced_report rep;
+    asx_forced_run_config cfg;
+    asx_budget budget = asx_budget_from_polls(1000);
+    sup_scene sc;
+    uint32_t i;
+    uint32_t others = 0u;
+
+    if ((unsigned)ASX_MAX_REGIONS < 4u || (unsigned)ASX_MAX_TASKS < 4u) return;
+
+    /* record the supervised run on the seeded picker */
+    ASSERT_EQ(sup_scene_build(&sc), ASX_OK);
+    ASSERT_EQ(asx_lab_start_forced_schedule_recording(d, 32u), ASX_OK);
+    ASSERT_EQ(asx_scheduler_run(sc.root, &budget), ASX_OK);
+    ASSERT_TRUE(sc.owner.joined);
+    ASSERT_EQ(asx_lab_finish_forced_schedule_recording(0u, 1, &s), ASX_OK);
+    for (i = 0u; i < s.dispatch_count; i++) {
+        if (s.dispatches[i].task != 0u) others++;
+    }
+    /* the controller and the generation are dispatched, and are not the owner */
+    ASSERT_TRUE(others >= 2u);
+
+    /* replay it with a resolver that knows the owner only */
+    ASSERT_EQ(sup_scene_build(&sc), ASX_OK);
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.resolve = sup_resolve_owner_only;
+    cfg.resolve_ctx = &sc;
+    memset(&rep, 0, sizeof(rep));
+    ASSERT_EQ(asx_lab_run_forced_schedule(&s, sc.root, &cfg, &rep, &err), ASX_OK);
+    ASSERT_TRUE(sc.owner.joined);
+    ASSERT_EQ(rep.dispatches, s.dispatch_count);
+    ASSERT_EQ(rep.schedule_hash, s.terminal_schedule_hash);
+    ASSERT_TRUE(sc.declined >= others);
 }
 
 /* Each divergence ends the run at its own step, with that step's task left
@@ -2258,6 +2424,8 @@ int main(void) {
     RUN_TEST(forced_schedule_replays_the_recorded_run_exactly);
     RUN_TEST(forced_schedule_overrides_the_seeded_pick);
     RUN_TEST(forced_schedule_resolver_maps_recorded_task_ids);
+    RUN_TEST(forced_schedule_resolver_declines_fall_back_to_the_arena_shadow);
+    RUN_TEST(forced_schedule_replays_a_supervisor_generation_by_arena_id);
     RUN_TEST(forced_schedule_divergences_report_their_step_and_leave_the_task_unpolled);
     RUN_TEST(forced_schedule_begin_end_replays_a_runner_driven_run);
     RUN_TEST(forced_schedule_begin_end_reports_the_divergence_that_stopped_the_run);

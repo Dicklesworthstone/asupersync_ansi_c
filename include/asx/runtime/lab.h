@@ -391,10 +391,15 @@ typedef struct {
 typedef struct {
     /* Step limit for the run (0: the schedule's terminal step). */
     uint64_t max_steps;
-    /* Maps a recorded task id to the task that plays it in this run, or
-     * NULL: the live task whose Rust arena id (the lab dispatcher keeps
-     * Rust's arena index and generation for every task) is the recorded
-     * one, or a retired task a cancel waker scheduled. */
+    /* Maps a recorded task id to the task that plays it in this run: ASX_OK
+     * with the task, anything else to decline. A declined id, and every id
+     * when this is NULL, resolves through the lab's arena shadow: the live
+     * task whose Rust arena id (the lab dispatcher keeps Rust's arena
+     * index and generation for every task) is the recorded one, or a
+     * retired task a cancel waker scheduled. So a resolver names the tasks
+     * the caller knows (a scenario's named tasks) and the tasks the
+     * runtime creates itself (supervisor generations, finalizers) need no
+     * entry. */
     asx_status (*resolve)(void *ctx, uint64_t compact_task, asx_task_id *out);
     void *resolve_ctx;
 } asx_forced_run_config;
