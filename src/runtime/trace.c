@@ -173,9 +173,9 @@ static uint64_t trace_digest_of(const asx_trace_event *events, uint32_t count) {
  * fold over the stored events.
  * ------------------------------------------------------------------- */
 
-/* Kinds are grouped 0x00-0x5F; per-kind totals are exact even after the
+/* Kinds are grouped 0x00-0x60; per-kind totals are exact even after the
  * ring wraps, so callers never need retained events to count them. */
-#define ASX_TRACE_KIND_SLOTS 0x60u
+#define ASX_TRACE_KIND_SLOTS 0x61u
 
 static asx_trace_event g_trace_ring[ASX_TRACE_CAPACITY];
 static uint64_t g_trace_emitted;
@@ -627,6 +627,7 @@ const char *asx_trace_event_kind_str(asx_trace_event_kind kind) {
     case ASX_TRACE_TIMER_FIRE: return "timer_fire";
     case ASX_TRACE_TIMER_CANCEL: return "timer_cancel";
     case ASX_TRACE_USER: return "user";
+    case ASX_TRACE_LAB_FUTURELOCK: return "lab_futurelock";
     default: return "unknown";
     }
 }

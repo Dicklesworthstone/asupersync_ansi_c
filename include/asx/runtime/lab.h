@@ -528,7 +528,7 @@ ASX_API uint32_t asx_scheduler_stuck_tasks(asx_region_id region, asx_stuck_task 
 
 /* One futurelocked task: Rust's InvariantViolation::Futurelock and the
  * FuturelockDetected trace data. */
-typedef struct {
+typedef struct asx_futurelock {
     asx_task_id task;
     asx_region_id region;
     uint64_t idle_steps; /* lab steps since the task's last poll */
@@ -545,14 +545,30 @@ typedef struct {
  * 0, which Rust's config uses to switch the check off; Rust's default is
  * 10000 and its panic_on_futurelock is on.
  *
- * Unlike Rust it does not run on its own: no step evaluates it, no trace
- * event is emitted (FuturelockDetected is a harness failure in a conformance
- * run, docs/VOCABULARY_EXCLUSIONS.md) and nothing panics; the caller asks
- * after a run. Fills out[0 .. min(count, cap)) in task-arena order, as
- * Rust's BTreeMap by TaskId orders them, and returns the count. Returns 0
+ * Unlike Rust it does not run on its own unless asked to
+ * (asx_lab_set_futurelock_check), and nothing ever panics. Fills
+ * out[0 .. min(count, cap)) in the order Rust's BTreeMap by TaskId gives
+ * (the arena index and generation Rust gave the task), each held list in
+ * the order of the C obligation arena, and returns the count. Returns 0
  * when lab dispatch is off. `out` may be NULL to count.
  * Thread-safety: not thread-safe; single-threaded mode only. */
 ASX_API uint32_t asx_lab_futurelocks(uint64_t max_idle_steps, asx_futurelock *out, uint32_t cap);
+
+/* Rust's per-step futurelock check with panic_on_futurelock off
+ * (check_futurelocks, lab/runtime.rs:4508). With max_idle_steps > 0 every
+ * lab step, after its draw and before due timers fire, evaluates
+ * asx_lab_futurelocks(max_idle_steps) and emits one ASX_TRACE_LAB_FUTURELOCK
+ * event per task it reports, in its order (entity: the task, aux: its idle
+ * steps; the observer payload carries the region and the held list): Rust's
+ * FuturelockDetected events. A task that stays idle is reported again at
+ * every following step, as Rust does. Zero switches the check off, which
+ * is the default.
+ *
+ * The setting lasts until the lab dispatch state is reset
+ * (asx_scheduler_use_lab_dispatch or a runtime reset). Returns
+ * ASX_E_INVALID_STATE when lab dispatch is not active.
+ * Thread-safety: not thread-safe; single-threaded mode only. */
+ASX_API ASX_MUST_USE asx_status asx_lab_set_futurelock_check(uint64_t max_idle_steps);
 
 /* A stable lowercase name for an error kind ("task_unavailable", ...). */
 ASX_API const char *asx_forced_error_kind_name(asx_forced_error_kind kind);

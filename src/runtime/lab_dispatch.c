@@ -209,21 +209,20 @@ static uint64_t g_lab_steps = 0;
 static asx_dispatch_record *g_lab_rec = NULL;
 static uint32_t g_lab_rec_cap = 0;
 static uint32_t g_lab_rec_n = 0;
+static uint64_t g_lab_fl_max = 0; /* the per-step futurelock check's threshold, 0 = off */
 
-/* Forced schedule replay (asx_lab_run_forced_schedule, bd-9kll.9.3): the
- * seed asx_scheduler_use_lab_dispatch was given, and, while a replay runs,
- * the schedule, the dispatches consumed, the running certificate, and the
- * first divergence (kind ASX_FORCED_OK until there is one). */
+/* Forced replay (asx_lab_run_forced_schedule, bd-9kll.9.3): the seed asx_scheduler_use_lab_dispatch
+ * was given and, while a replay runs, the schedule, the dispatches consumed, the running
+ * certificate and the first divergence (ASX_FORCED_OK until there is one). */
 static uint64_t g_lab_seed = 0;
 static const asx_forced_schedule *g_lab_forced = NULL;
 static const asx_forced_run_config *g_lab_forced_cfg = NULL;
 static uint32_t g_lab_forced_next = 0;
 static asx_forced_error g_lab_forced_err;
 
-/* Rust's ScheduleCertificate and its decision count (priority.rs:1303),
- * folded at every pick whether or not anything records; the CompactTaskId
- * of the task being picked, set by the pick; and the forced-schedule
- * recorder's buffer (asx_lab_start_forced_schedule_recording). */
+/* Rust's ScheduleCertificate and its decision count (priority.rs:1303), folded at every
+ * pick whether or not anything records; the CompactTaskId of the task being picked, set by
+ * the pick; and the forced-schedule recorder's buffer (asx_lab_start_forced_schedule_recording). */
 static uint64_t g_lab_cert = 0;
 static uint64_t g_lab_decisions = 0;
 static uint64_t g_lab_pick_task = 0;
@@ -260,6 +259,7 @@ void asx_lab_dispatch_reset_internal(void) {
     g_lab_rec = NULL;
     g_lab_rec_cap = 0;
     g_lab_rec_n = 0;
+    g_lab_fl_max = 0;
     g_lab_ent_seed = 0;
     g_lab_ent_forks = 0;
     g_lab_mailbox_ids = 0;
@@ -1798,48 +1798,127 @@ uint32_t asx_scheduler_stuck_tasks(asx_region_id region, asx_stuck_task *out, ui
     return total;
 }
 
-uint32_t asx_lab_futurelocks(uint64_t max_idle_steps, asx_futurelock *out, uint32_t cap) {
-    uint32_t total = 0;
-    uint32_t i;
+/* The futurelock of task slot `i`: the pending obligations it holds, in
+ * obligation-arena order as Rust's obligations_iter gives them. Returns 0
+ * when it holds none. */
+static int lab_futurelock_of(uint32_t i, asx_futurelock *f) {
+    const asx_task_slot *t = &g_tasks[i];
+    uint32_t held = 0;
+    uint32_t o;
 
-    /* futurelock_violations (LR:5612-5655): a zero threshold disables the
-     * check, and no task can pass the threshold before the run has. */
+    memset(f, 0, sizeof(*f));
+    for (o = 0; o < g_obligation_count; o++) {
+        const asx_obligation_slot *ob = &g_obligations[o];
+        ASX_CHECKPOINT_WAIVER("bounded: g_obligation_count <= ASX_MAX_OBLIGATIONS");
+        if (!ob->alive || ob->state != ASX_OBLIGATION_RESERVED) continue;
+        if (ob->holder == ASX_INVALID_ID || asx_handle_slot(ob->holder) != (uint16_t)i ||
+            asx_handle_generation(ob->holder) != t->generation) {
+            continue;
+        }
+        if (held < ASX_FUTURELOCK_HELD_MAX) {
+            f->held[held] = asx_handle_mint(g_kernels[0], ASX_TYPE_OBLIGATION,
+                                            (uint16_t)(1u << (unsigned)ASX_OBLIGATION_RESERVED),
+                                            asx_handle_pack_index(ob->generation, (uint16_t)o));
+            f->held_kind[held] = ob->kind;
+        }
+        held++;
+    }
+    if (held == 0u) return 0;
+    f->task = asx_task_handle_for_slot(g_kernels[0], i);
+    f->region = t->region;
+    f->idle_steps = lab_idle_steps(t);
+    f->held_count = held;
+    return 1;
+}
+
+typedef void (*lab_futurelock_sink)(void *ctx, const asx_futurelock *f);
+
+/* futurelock_violations (LR:5612-5655): calls `sink` for every task Rust
+ * reports now, in its order (a BTreeMap by TaskId, the arena index and
+ * generation lab_compact_task keeps), and returns how many. A zero
+ * threshold disables the check, and no task can pass the threshold before
+ * the run has. */
+static uint32_t lab_scan_futurelocks(uint64_t max_idle_steps, lab_futurelock_sink sink, void *ctx) {
+    uint32_t total = 0;
+    uint64_t after_key = 0;
+    uint32_t after_slot = ASX_SLOT_NONE; /* ASX_SLOT_NONE: nothing visited yet */
+
     if (!g_lab_active || max_idle_steps == 0u || g_lab_steps <= max_idle_steps) return 0u;
-    for (i = 0; i < g_task_count; i++) {
-        const asx_task_slot *t = &g_tasks[i];
-        uint32_t held = 0;
-        uint32_t o;
+    for (;;) {
+        uint64_t best_key = 0;
+        uint32_t best = ASX_SLOT_NONE;
+        uint32_t i;
         asx_futurelock f;
-        ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= ASX_MAX_TASKS");
-        if (!t->alive || asx_task_is_terminal(t->state)) continue;
-        if (lab_idle_steps(t) <= max_idle_steps) continue;
-        memset(&f, 0, sizeof(f));
-        /* The held list in obligation-arena order, as obligations_iter. */
-        for (o = 0; o < g_obligation_count; o++) {
-            const asx_obligation_slot *ob = &g_obligations[o];
-            ASX_CHECKPOINT_WAIVER("bounded: g_obligation_count <= ASX_MAX_OBLIGATIONS");
-            if (!ob->alive || ob->state != ASX_OBLIGATION_RESERVED) continue;
-            if (ob->holder == ASX_INVALID_ID || asx_handle_slot(ob->holder) != (uint16_t)i ||
-                asx_handle_generation(ob->holder) != t->generation) {
-                continue;
+        ASX_CHECKPOINT_WAIVER("bounded: each pass visits one more task, at most g_task_count");
+        for (i = 0; i < g_task_count; i++) {
+            const asx_task_slot *t = &g_tasks[i];
+            uint64_t key;
+            ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= ASX_MAX_TASKS");
+            if (!t->alive || asx_task_is_terminal(t->state)) continue;
+            if (lab_idle_steps(t) <= max_idle_steps) continue;
+            key = lab_compact_task(t);
+            if (after_slot != ASX_SLOT_NONE &&
+                (key < after_key || (key == after_key && i <= after_slot))) {
+                continue; /* already visited */
             }
-            if (held < ASX_FUTURELOCK_HELD_MAX) {
-                f.held[held] = asx_handle_mint(g_kernels[0], ASX_TYPE_OBLIGATION,
-                                               (uint16_t)(1u << (unsigned)ASX_OBLIGATION_RESERVED),
-                                               asx_handle_pack_index(ob->generation, (uint16_t)o));
-                f.held_kind[held] = ob->kind;
+            if (best == ASX_SLOT_NONE || key < best_key) {
+                best = i;
+                best_key = key;
             }
-            held++;
         }
-        if (held == 0u) continue;
-        if (out != NULL && total < cap) {
-            f.task = asx_task_handle_for_slot(g_kernels[0], i);
-            f.region = t->region;
-            f.idle_steps = lab_idle_steps(t);
-            f.held_count = held;
-            out[total] = f;
+        if (best == ASX_SLOT_NONE) break;
+        after_key = best_key;
+        after_slot = best;
+        if (lab_futurelock_of(best, &f)) {
+            sink(ctx, &f);
+            total++;
         }
-        total++;
     }
     return total;
+}
+
+typedef struct {
+    asx_futurelock *out;
+    uint32_t cap;
+    uint32_t n;
+} lab_futurelock_collect;
+
+static void lab_futurelock_collect_sink(void *ctx, const asx_futurelock *f) {
+    lab_futurelock_collect *c = (lab_futurelock_collect *)ctx;
+    if (c->out != NULL && c->n < c->cap) c->out[c->n] = *f;
+    c->n++;
+}
+
+uint32_t asx_lab_futurelocks(uint64_t max_idle_steps, asx_futurelock *out, uint32_t cap) {
+    lab_futurelock_collect c;
+    c.out = out;
+    c.cap = cap;
+    c.n = 0;
+    return lab_scan_futurelocks(max_idle_steps, lab_futurelock_collect_sink, &c);
+}
+
+/* FuturelockDetected (LR:5702-5714): the task, its idle steps and, in the
+ * payload, its region and held obligations. */
+static void lab_futurelock_emit_sink(void *ctx, const asx_futurelock *f) {
+    asx_trace_payload payload = {0};
+    (void)ctx;
+    payload.futurelock = f;
+    asx_trace_emit_payload_internal(ASX_TRACE_LAB_FUTURELOCK, (uint64_t)f->task, f->idle_steps,
+                                    &payload);
+}
+
+asx_status asx_lab_set_futurelock_check(uint64_t max_idle_steps) {
+    if (!g_lab_active) return ASX_E_INVALID_STATE;
+    g_lab_fl_max = max_idle_steps;
+    return ASX_OK;
+}
+
+/* The step's draw (LR:4507) and then check_futurelocks (LR:4508), before the
+ * timers fire. */
+uint64_t asx_lab_step_draw_internal(void) {
+    uint64_t r = lab_xorshift(&g_lab_rng);
+    if (g_lab_fl_max != 0u) {
+        (void)lab_scan_futurelocks(g_lab_fl_max, lab_futurelock_emit_sink, NULL);
+    }
+    return r;
 }

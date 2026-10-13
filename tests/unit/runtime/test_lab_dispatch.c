@@ -2830,6 +2830,220 @@ TEST(the_futurelock_check_needs_lab_dispatch_and_the_sweep_lists_parked_tasks) {
     ASSERT_EQ(st[0].idle_steps, (uint64_t)0u);
 }
 
+/* ---- The per-step futurelock check (bd-9kll.9.6) ---- */
+
+#define FL_CAP 64u
+
+typedef struct {
+    uint32_t n;
+    uint64_t task[FL_CAP];
+    uint64_t idle[FL_CAP];
+    uint64_t region[FL_CAP];
+    uint32_t held_count[FL_CAP];
+    uint64_t held0[FL_CAP];
+    int held_kind0[FL_CAP];
+} fl_capture;
+
+static fl_capture g_fl;
+
+static void fl_observe(void *ctx, const asx_trace_event *ev, const asx_trace_payload *payload) {
+    (void)ctx;
+    if (ev->kind != ASX_TRACE_LAB_FUTURELOCK || g_fl.n >= FL_CAP) return;
+    g_fl.task[g_fl.n] = ev->entity_id;
+    g_fl.idle[g_fl.n] = ev->aux;
+    if (payload->futurelock != NULL) {
+        g_fl.region[g_fl.n] = payload->futurelock->region;
+        g_fl.held_count[g_fl.n] = payload->futurelock->held_count;
+        g_fl.held0[g_fl.n] = payload->futurelock->held[0];
+        g_fl.held_kind0[g_fl.n] = (int)payload->futurelock->held_kind[0];
+    }
+    g_fl.n++;
+}
+
+static void fl_begin(void) {
+    memset(&g_fl, 0, sizeof(g_fl));
+    asx_trace_reset();
+    asx_trace_set_observer(fl_observe, NULL);
+}
+
+/* Reserves one obligation, parks until `released`, then commits it. */
+typedef struct {
+    asx_region_id region;
+    asx_obligation_id id;
+    int reserved;
+    int released;
+} rel_holder;
+
+static asx_status poll_rel_holder(void *ud, asx_task_id self) {
+    rel_holder *h = (rel_holder *)ud;
+    if (!h->reserved) {
+        asx_status st = asx_obligation_reserve(h->region, &h->id);
+        if (st != ASX_OK) return st;
+        h->reserved = 1;
+    }
+    if (!h->released) return asx_task_park(self) == ASX_OK ? ASX_E_PENDING : ASX_E_INVALID_STATE;
+    return asx_obligation_commit(h->id);
+}
+
+/* Yields `yields` times, then releases and wakes its target. */
+typedef struct {
+    uint32_t yields;
+    asx_task_id target;
+    rel_holder *holder;
+} releaser;
+
+static asx_status poll_releaser(void *ud, asx_task_id self) {
+    releaser *r = (releaser *)ud;
+    (void)self;
+    if (r->yields > 0u) {
+        r->yields--;
+        return ASX_E_PENDING;
+    }
+    r->holder->released = 1;
+    return asx_task_wake(r->target);
+}
+
+/* Rust's check_futurelocks (LR:4508) runs at every step and emits a
+ * FuturelockDetected for every task still idle past the threshold, so a
+ * holder that stays idle is reported again at each following step, its idle
+ * count one higher each time. The first report is at threshold + 1; once the
+ * holder is polled and completes there are no more. */
+TEST(the_futurelock_check_reports_a_holder_at_every_step_it_stays_idle) {
+    asx_region_id r;
+    asx_task_id th;
+    asx_task_id tw;
+    asx_budget budget;
+    rel_holder h;
+    releaser w;
+    uint32_t i;
+
+    ASSERT_EQ(setup(), ASX_OK);
+    ASSERT_EQ(asx_scheduler_use_lab_dispatch(7u), ASX_OK);
+    ASSERT_EQ(asx_lab_set_futurelock_check(3u), ASX_OK);
+    fl_begin();
+    memset(&h, 0, sizeof(h));
+    memset(&w, 0, sizeof(w));
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    h.region = r;
+    ASSERT_EQ(asx_task_spawn(r, poll_rel_holder, &h, &th), ASX_OK);
+    w.yields = 10u;
+    w.holder = &h;
+    ASSERT_EQ(asx_task_spawn(r, poll_releaser, &w, &tw), ASX_OK);
+    w.target = th;
+
+    budget = asx_budget_infinite();
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
+    asx_trace_set_observer(NULL, NULL);
+
+    ASSERT_TRUE(g_fl.n >= 3u);
+    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_LAB_FUTURELOCK), (uint64_t)g_fl.n);
+    ASSERT_EQ(g_fl.idle[0], (uint64_t)4u); /* threshold 3, so the first idle count over it */
+    for (i = 0; i < g_fl.n; i++) {
+        ASSERT_TRUE(asx_handle_index((asx_task_id)g_fl.task[i]) == asx_handle_index(th));
+        ASSERT_TRUE(asx_handle_index((asx_region_id)g_fl.region[i]) == asx_handle_index(r));
+        ASSERT_EQ(g_fl.held_count[i], 1u);
+        ASSERT_TRUE(asx_handle_index((asx_obligation_id)g_fl.held0[i]) == asx_handle_index(h.id));
+        ASSERT_EQ(g_fl.held_kind0[i], (int)ASX_OBLIGATION_KIND_GENERIC);
+        ASSERT_EQ(g_fl.idle[i], (uint64_t)(4u + i)); /* one more at each following step */
+    }
+    /* The holder committed, so no obligation is left held. */
+    ASSERT_EQ(asx_lab_futurelocks(3u, NULL, 0u), 0u);
+}
+
+/* Two holders that park for good are both reported, and in Rust's TaskId
+ * order (the arena index each was given): the query and the events come out
+ * first task first, whichever of them was polled last. */
+TEST(the_futurelock_check_reports_holders_in_task_id_order) {
+    asx_region_id r;
+    asx_task_id ta;
+    asx_task_id tb;
+    asx_budget budget;
+    rel_holder a;
+    rel_holder b;
+    asx_futurelock fl[4];
+    uint32_t i;
+    int saw_a = 0;
+    int saw_b = 0;
+
+    ASSERT_EQ(setup(), ASX_OK);
+    ASSERT_EQ(asx_scheduler_use_lab_dispatch(7u), ASX_OK);
+    ASSERT_EQ(asx_lab_set_futurelock_check(2u), ASX_OK);
+    fl_begin();
+    memset(&a, 0, sizeof(a));
+    memset(&b, 0, sizeof(b));
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    a.region = r;
+    b.region = r;
+    ASSERT_EQ(asx_task_spawn(r, poll_rel_holder, &a, &ta), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(r, poll_rel_holder, &b, &tb), ASX_OK);
+
+    budget = asx_budget_infinite();
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_E_WOULD_BLOCK);
+    asx_trace_set_observer(NULL, NULL);
+
+    ASSERT_EQ(asx_lab_futurelocks(2u, fl, 4u), 2u);
+    ASSERT_TRUE(asx_handle_index(fl[0].task) == asx_handle_index(ta));
+    ASSERT_TRUE(asx_handle_index(fl[1].task) == asx_handle_index(tb));
+    ASSERT_EQ(fl[0].held_count, 1u);
+    ASSERT_EQ(fl[1].held_count, 1u);
+
+    ASSERT_TRUE(g_fl.n >= 4u);
+    for (i = 0; i < g_fl.n; i++) {
+        saw_a |= asx_handle_index((asx_task_id)g_fl.task[i]) == asx_handle_index(ta);
+        saw_b |= asx_handle_index((asx_task_id)g_fl.task[i]) == asx_handle_index(tb);
+    }
+    ASSERT_TRUE(saw_a && saw_b);
+    /* The run stays stuck for 1000 steps with both reported at each, far
+     * more than the capture holds. */
+    ASSERT_TRUE(asx_trace_kind_total(ASX_TRACE_LAB_FUTURELOCK) > (uint64_t)FL_CAP);
+}
+
+/* Negative: a holder polled at every step never passes the threshold. The
+ * check is also off unless asked for, and a threshold the run never
+ * reaches reports nothing. */
+TEST(the_futurelock_check_is_silent_for_a_polled_holder_and_when_off) {
+    asx_region_id r;
+    asx_task_id t;
+    asx_budget budget;
+    holder_state hs;
+
+    ASSERT_EQ(setup(), ASX_OK);
+    /* Lab dispatch is not active yet: nothing to set. */
+    ASSERT_EQ(asx_lab_set_futurelock_check(3u), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_scheduler_use_lab_dispatch(11u), ASX_OK);
+    ASSERT_EQ(asx_lab_set_futurelock_check(3u), ASX_OK);
+    fl_begin();
+    memset(&hs, 0, sizeof(hs));
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    hs.region = r;
+    ASSERT_EQ(asx_task_spawn(r, poll_holder, &hs, &t), ASX_OK);
+    budget = asx_budget_from_polls(40u);
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_E_POLL_BUDGET_EXHAUSTED);
+    ASSERT_EQ(g_fl.n, 0u);
+    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_LAB_FUTURELOCK), (uint64_t)0u);
+    asx_trace_set_observer(NULL, NULL);
+
+    /* Off by default: a fresh lab reports nothing for a holder idle for
+     * 1000 steps, though the on-demand query names it. */
+    ASSERT_EQ(setup(), ASX_OK);
+    ASSERT_EQ(asx_scheduler_use_lab_dispatch(7u), ASX_OK);
+    fl_begin();
+    {
+        holder_state hp;
+        asx_futurelock fl[2];
+        memset(&hp, 0, sizeof(hp));
+        ASSERT_EQ(asx_region_open(&r), ASX_OK);
+        hp.region = r;
+        hp.park = 1;
+        ASSERT_EQ(asx_task_spawn(r, poll_holder, &hp, &t), ASX_OK);
+        budget = asx_budget_infinite();
+        ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_E_WOULD_BLOCK);
+        ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_LAB_FUTURELOCK), (uint64_t)0u);
+        ASSERT_EQ(asx_lab_futurelocks(3u, fl, 2u), 1u);
+    }
+    asx_trace_set_observer(NULL, NULL);
+}
+
 int main(void) {
     fprintf(stderr, "=== test_lab_dispatch ===\n");
     RUN_TEST(rng_replicates_rust_xorshift64);
@@ -2891,6 +3105,9 @@ int main(void) {
     RUN_TEST(a_task_polled_every_step_is_not_a_futurelock);
     RUN_TEST(a_sleeper_that_wakes_is_neither_stuck_nor_futurelocked);
     RUN_TEST(the_futurelock_check_needs_lab_dispatch_and_the_sweep_lists_parked_tasks);
+    RUN_TEST(the_futurelock_check_reports_a_holder_at_every_step_it_stays_idle);
+    RUN_TEST(the_futurelock_check_reports_holders_in_task_id_order);
+    RUN_TEST(the_futurelock_check_is_silent_for_a_polled_holder_and_when_off);
     RUN_TEST_IF(8u * (uint32_t)ASX_MAX_TASKS >= CAP_TEST_ENTRIES,
                 a_priority_group_is_capped_at_256_entries,
                 "this resource class's lab lanes hold fewer than 300 entries");

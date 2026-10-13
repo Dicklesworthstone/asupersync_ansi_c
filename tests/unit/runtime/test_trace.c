@@ -1468,6 +1468,19 @@ TEST(trace_event_kind_str_all_kinds) {
     ASSERT_TRUE(asx_trace_event_kind_str(ASX_TRACE_REGION_OPEN) != NULL);
     ASSERT_TRUE(asx_trace_event_kind_str(ASX_TRACE_OBLIGATION_COMMIT) != NULL);
     ASSERT_TRUE(asx_trace_event_kind_str(ASX_TRACE_TIMER_FIRE) != NULL);
+    ASSERT_TRUE(strcmp(asx_trace_event_kind_str(ASX_TRACE_LAB_FUTURELOCK), "lab_futurelock") == 0);
+}
+
+/* The lab diagnostic kind is the last one, 0x60: its total is exact and the
+ * kinds beside it are untouched. */
+TEST(lab_futurelock_kind_is_counted_like_the_others) {
+    asx_trace_reset();
+    asx_trace_emit(ASX_TRACE_LAB_FUTURELOCK, 7u, 4u);
+    asx_trace_emit(ASX_TRACE_LAB_FUTURELOCK, 7u, 5u);
+    asx_trace_emit(ASX_TRACE_USER, 7u, 0u);
+    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_LAB_FUTURELOCK), UINT64_C(2));
+    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_USER), UINT64_C(1));
+    asx_trace_reset();
 }
 
 TEST(replay_result_kind_str_all_kinds) {
@@ -1536,6 +1549,7 @@ int main(void) {
     RUN_TEST(trace_digest_sensitive_to_order);
     RUN_TEST(trace_all_event_kinds);
     RUN_TEST(trace_event_kind_str_all_kinds);
+    RUN_TEST(lab_futurelock_kind_is_counted_like_the_others);
     RUN_TEST(replay_result_kind_str_all_kinds);
 
     TEST_REPORT();

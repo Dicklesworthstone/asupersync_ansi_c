@@ -1232,7 +1232,7 @@ static asx_status sched_lab_step(uint32_t step, int *out_dispatched) {
     asx_lab_drain_handle_cancels();
     asx_lab_drain_deferred_cancels();
     if (asx_lab_handle_cancels_pending() || asx_lab_deferred_cancels_pending()) return ASX_OK;
-    r = asx_lab_rng_next();
+    r = asx_lab_step_draw_internal();
     if (sched_timers_pending()) (void)timers_fire(sched_now());
     (void)sched_drain_wakers();
     (void)asx_region_admit_finalizers_internal(); /* schedule_async_finalizers, LR:4513 */

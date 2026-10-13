@@ -70,7 +70,10 @@ typedef enum {
     ASX_TRACE_TIMER_CANCEL = 0x42,
 
     /* User events (0x50–0x5F) */
-    ASX_TRACE_USER = 0x50 /* user trace message (entity: task, aux: FNV-1a 64 of the text) */
+    ASX_TRACE_USER = 0x50, /* user trace message (entity: task, aux: FNV-1a 64 of the text) */
+
+    /* Lab diagnostics (0x60–0x6F) */
+    ASX_TRACE_LAB_FUTURELOCK = 0x60 /* entity: task, aux: idle steps; payload: the held list */
 } asx_trace_event_kind;
 
 /* -------------------------------------------------------------------
@@ -184,9 +187,11 @@ ASX_API void asx_trace_user(asx_task_id task, const char *message);
 /* What an event refers to beyond its record, valid only during the
  * observer call: the message of an ASX_TRACE_USER event, and the cancel
  * reason an ASX_TRACE_CANCEL_REQUEST or ASX_TRACE_REGION_CANCELLED event
- * was emitted with. Absent fields are NULL. */
+ * was emitted with, and the task, region and held obligations of an
+ * ASX_TRACE_LAB_FUTURELOCK event. Absent fields are NULL. */
 struct asx_cancel_reason;
 struct asx_obligation_info;
+struct asx_futurelock;
 typedef struct {
     asx_task_id from_task;
     asx_task_id to_task;
@@ -199,6 +204,7 @@ typedef struct {
     const struct asx_cancel_reason *reason;
     const asx_trace_handoff *handoff;             /* present only for OBLIGATION_HANDOFF */
     const struct asx_obligation_info *obligation; /* original binding of a posted reserve */
+    const struct asx_futurelock *futurelock;      /* present only for LAB_FUTURELOCK */
 } asx_trace_payload;
 
 /* Streaming observer: called synchronously for every event after it is

@@ -633,6 +633,7 @@ void asx_lab_dispatch_reset_internal(void);
 int asx_lab_dispatch_active(void);
 int asx_lab_dispatch_overflowed(void);
 uint64_t asx_lab_rng_next(void);
+uint64_t asx_lab_step_draw_internal(void); /* the draw, then check_futurelocks (LR:4507-4508) */
 uint32_t asx_lab_scheduled_count(void);
 int asx_lab_is_scheduled(const asx_task_slot *t);
 /* Ready lane (no-op when already scheduled) / cancel lane (always pushes). */
@@ -643,10 +644,9 @@ void asx_lab_schedule_cancel(asx_task_slot *t, uint8_t priority);
  * the slot's live task's, or a terminal task, is a retired task: its
  * dispatch polls nothing. */
 int asx_lab_pick(uint64_t r, uint32_t *out_slot, uint16_t *out_task_gen, int *out_cancel_lane);
-/* While a recorded schedule is replayed (asx_lab_run_forced_schedule), the
- * step's pick comes from the schedule instead: *out_picked is 1 with the
- * task and lane, or 0 for a step with nothing to dispatch. A divergence is
- * ASX_E_REPLAY_MISMATCH with the task left unpolled. */
+/* While a recorded schedule is replayed (asx_lab_run_forced_schedule), the step's pick comes
+ * from the schedule instead: *out_picked is 1 with the task and lane, or 0 for a step with
+ * nothing to dispatch. A divergence is ASX_E_REPLAY_MISMATCH with the task left unpolled. */
 int asx_lab_forced_active(void);
 asx_status asx_lab_forced_pick(uint64_t step, asx_time now, uint32_t *out_slot,
                                uint16_t *out_task_gen, int *out_cancel_lane, int *out_picked);

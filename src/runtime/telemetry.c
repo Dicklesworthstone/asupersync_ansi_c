@@ -90,6 +90,7 @@ int asx_telemetry_retains(asx_telemetry_tier tier, asx_trace_event_kind kind) {
     case ASX_TRACE_OBLIGATION_LEAK:
     case ASX_TRACE_SCHED_COMPLETE:
     case ASX_TRACE_SCHED_QUIESCENT:
+    case ASX_TRACE_LAB_FUTURELOCK:
     case ASX_TRACE_SCHED_BUDGET: return 1;
 
     case ASX_TRACE_SCHED_POLL:
