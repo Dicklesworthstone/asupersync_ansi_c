@@ -2432,6 +2432,74 @@ release:
 	$(MAKE) build BUILD_TYPE=release
 
 # ---------------------------------------------------------------------------
+# kernel-only — the ASX_KERNEL_ONLY build (bd-9kll.13.3; owner decision
+# DEC-011/D6): the library without the conformance interpreter, the CLI and
+# the protocol models (D5: QUIC, gRPC, DB, messaging, distributed, transport,
+# remote). It is the artifact the plan section 11 footprint targets are
+# measured on; size-report does the measuring. Its sources are the library's
+# minus those, compiled in their own tree (KERNEL_BUILD_DIR) with
+# -DASX_KERNEL_ONLY=1. kernel-only-check fails when a kernel object refers to
+# a symbol only a left-out module defines (tools/ci/check_kernel_only.sh).
+# ---------------------------------------------------------------------------
+KERNEL_EXCLUDE_SRC := $(CONFORMANCE_SRC) $(CLI_SRC) $(TRANSPORT_SRC) $(REMOTE_SRC) \
+	src/net/quic.c src/net/grpc.c src/net/db.c src/net/messaging.c src/net/distributed.c
+KERNEL_SRC := $(filter-out $(KERNEL_EXCLUDE_SRC),$(LIB_SRC))
+KERNEL_OBJ := $(patsubst src/%.c,$(OBJ_DIR)/%.o,$(KERNEL_SRC))
+KERNEL_BUILD_DIR := $(BUILD_DIR)/kernel-only
+KERNEL_LIB := $(KERNEL_BUILD_DIR)/lib/libasx_kernel.a
+KERNEL_QUICKSTART := $(KERNEL_BUILD_DIR)/bin/ex_quickstart
+
+.PHONY: kernel-only kernel-only-quickstart kernel-only-check
+
+kernel-only:
+	@$(MAKE) --no-print-directory BUILD_DIR=$(KERNEL_BUILD_DIR) \
+		CFLAGS='$(CFLAGS) -DASX_KERNEL_ONLY=1' $(KERNEL_LIB)
+	@echo "[asx] kernel-only: $(KERNEL_LIB) ($(words $(KERNEL_SRC)) of $(words $(LIB_SRC)) library sources)"
+
+# The archive exists only in the kernel-only tree, whose make is given the
+# macro: a plain `make build/lib/libasx_kernel.a` would archive objects built
+# without it.
+ifneq ($(filter -DASX_KERNEL_ONLY=1,$(CFLAGS)),)
+$(LIB_DIR)/libasx_kernel.a: $(KERNEL_OBJ) | $(LIB_DIR)
+	@tmp="$@.$$$$.tmp"; \
+	$(AR) rcs "$$tmp" $^ && \
+	mv "$$tmp" "$@"
+endif
+
+# The quickstart example linked against the kernel-only archive alone: what
+# an application using the kernel pays, and the proof that the archive links.
+kernel-only-quickstart: kernel-only
+	@mkdir -p $(KERNEL_BUILD_DIR)/bin
+	$(CC) $(VIGNETTE_CFLAGS) -DASX_KERNEL_ONLY=1 -o $(KERNEL_QUICKSTART) \
+		examples/ex_quickstart.c $(KERNEL_LIB) $(ALL_LDFLAGS)
+	@echo "[asx] kernel-only-quickstart: $(KERNEL_QUICKSTART)"
+
+kernel-only-check: $(LIB_A) kernel-only
+	@bash tools/ci/check_kernel_only.sh $(LIB_A) $(KERNEL_LIB)
+
+# ---------------------------------------------------------------------------
+# size-report — footprint of the kernel-only build per profile x resource
+# class x build type, against the plan's CORE and EMBEDDED_ROUTER targets
+# (bd-9kll.13.3): text/data/bss per object file, the archive totals and the
+# linked quickstart. It builds in SIZE_REPORT_DIR, edits no baseline, and is
+# observe-only unless SIZE_REPORT_STRICT=1 (then a build error or a figure
+# over the hard threshold fails it). Output: report.json and report.txt there.
+#   make size-report SIZE_REPORT_PROFILES="CORE" SIZE_REPORT_CLASSES="1"
+# ---------------------------------------------------------------------------
+SIZE_REPORT_DIR ?= $(BUILD_DIR)/size-report
+SIZE_REPORT_PROFILES ?= CORE POSIX FREESTANDING EMBEDDED_ROUTER
+SIZE_REPORT_CLASSES ?= default 1 2 3
+SIZE_REPORT_TYPES ?= release
+SIZE_REPORT_STRICT ?= 0
+
+.PHONY: size-report
+size-report:
+	@python3 tools/ci/size_report.py --out "$(SIZE_REPORT_DIR)" \
+		--profiles "$(SIZE_REPORT_PROFILES)" --classes "$(SIZE_REPORT_CLASSES)" \
+		--types "$(SIZE_REPORT_TYPES)" --cc "$(CC)" \
+		$(if $(filter 1,$(SIZE_REPORT_STRICT)),--strict,)
+
+# ---------------------------------------------------------------------------
 # release-artifacts — deterministic tar.xz bundles + integrity metadata
 # ---------------------------------------------------------------------------
 release-artifacts:
@@ -2729,6 +2797,9 @@ help:
 	@echo "  release-evidence-manifest Generate unified release evidence manifest"
 	@echo "  resource-pressure-gate Replay failure-atomic resource pressure scenarios"
 	@echo "  release            Optimized production build"
+	@echo "  kernel-only        ASX_KERNEL_ONLY archive: no conformance interpreter, CLI or protocol models"
+	@echo "  kernel-only-check  Fail if a kernel-only object needs a left-out module"
+	@echo "  size-report        Footprint per profile x class: objects, archive, linked quickstart"
 	@echo "  release-artifacts  Build release tar.xz + checksum/signature/provenance bundles"
 	@echo "  release-install-smoke Install release tarball into a prefix and run README quickstart"
 	@echo "  install            Install to PREFIX (default /usr/local)"
