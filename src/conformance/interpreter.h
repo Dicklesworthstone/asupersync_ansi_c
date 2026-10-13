@@ -62,4 +62,10 @@ ASX_MUST_USE asx_status asx_conformance_run_sweep(const asx_json_doc *in, uint32
  * runs. NULL clears the replay. */
 void asx_conformance_force_schedule(const asx_forced_schedule *schedule, const char *const *names);
 
+/* The vocabulary name ("<holder>/o<k>") the last run's projection gave the
+ * obligation with this handle (a ghost violation's or a trace event's
+ * entity), or NULL when the run never named it. The ghost-checked runner
+ * uses it to ask whether Rust's trace expects that obligation to leak. */
+const char *asx_conformance_obligation_name(uint64_t entity_id);
+
 #endif /* ASX_CONFORMANCE_INTERPRETER_H */

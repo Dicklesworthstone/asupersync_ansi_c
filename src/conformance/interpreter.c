@@ -5462,3 +5462,11 @@ asx_status asx_conformance_run_sweep(const asx_json_doc *in, uint32_t scenario, 
                                      uint32_t *out_root, char *error, size_t error_cap) {
     return conformance_run(in, scenario, out, out_root, error, error_cap, 0);
 }
+
+const char *asx_conformance_obligation_name(uint64_t entity_id) {
+    uint32_t i;
+    for (i = 0; i < g_n_obl_names; i++) {
+        if (same_entity(g_obl_names[i].id, entity_id)) return &g_text[g_obl_names[i].name_off];
+    }
+    return NULL;
+}

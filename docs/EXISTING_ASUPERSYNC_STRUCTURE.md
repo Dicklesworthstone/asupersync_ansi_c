@@ -214,7 +214,7 @@ All must hold before transition to Closed:
 2. All child sub-regions in `Closed` state
 3. No obligation of the region is still `Reserved`
 4. Finalizers drained (Rust: empty finalizer stack; C: cleanup stack drained LIFO, `src/core/cleanup.c:94-113`)
-5. C only: the ghost linearity monitor reports unresolved obligations (`src/core/ghost.c:182`); it reports and does not block
+5. C only: the ghost linearity monitor reports the region's unresolved obligations (`src/core/ghost.c:182`); it reports and does not block
 
 Finalizers run before the remaining ledger check in both engines (`src/runtime/quiescence.c:249-261`). C exposes its synchronous LIFO stack through `asx_region_defer_sync` (`src/runtime/quiescence.c`), the one registration, and async finalizers through `asx_region_defer_async`. Registration requires an Open, unpoisoned region and a caller that holds it (the host or a task of that region); an entry cannot be taken back. Callbacks may resolve obligations or admit explicit cleanup tasks. Closure waits for those tasks and for the active callback drain to return (`src/runtime/quiescence.c:253-255`). Each callback is retired before invocation, recursive drains cannot invoke it twice (`src/core/cleanup.c:94-113`), and nested cancellation/drain traversal validates its saved region handles before advancing them.
 

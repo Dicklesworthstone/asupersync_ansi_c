@@ -44,8 +44,8 @@ static int g_ghost_ring_overflow;   /* set once ring wraps */
 
 typedef struct {
     asx_obligation_id id;
-    int reserved;
-    int resolved;
+    asx_region_id region; /* where it is held; a handoff moves it */
+    int reserved, resolved;
 } asx_ghost_linearity_entry;
 
 static asx_ghost_linearity_entry g_ghost_linearity[ASX_GHOST_LINEARITY_CAPACITY];
@@ -153,15 +153,15 @@ asx_status asx_ghost_check_obligation_transition(asx_obligation_id id, asx_oblig
 
 /* --- Linearity monitor --- */
 
-void asx_ghost_obligation_reserved(asx_obligation_id id) {
+void asx_ghost_obligation_reserved(asx_obligation_id id, asx_region_id region) {
     asx_ghost_linearity_entry *entry;
 
     if (g_ghost_linearity_count >= ASX_GHOST_LINEARITY_CAPACITY) {
         return; /* table full — silent cap */
     }
-
     entry = &g_ghost_linearity[g_ghost_linearity_count++];
     entry->id = id;
+    entry->region = region;
     entry->reserved = 1;
     entry->resolved = 0;
 }
@@ -188,17 +188,17 @@ uint32_t asx_ghost_check_obligation_leaks(asx_region_id region) {
         if (!entry->reserved || entry->resolved) { continue; }
 
         /*
-         * Check if this obligation belongs to the given region.
-         * The obligation handle encodes the slot index; we use
-         * a lightweight check via handle inspection only.
-         * For the walking skeleton, obligations store their region
-         * in the arena slot, but we don't have access to that here
-         * without coupling to runtime_internal.h. Instead, we
-         * report ALL unresolved obligations when region is
-         * ASX_INVALID_ID, or filter by region handle prefix
-         * comparison if the caller provides a valid region.
+         * An obligation belongs to the region it is held in (its entry
+         * follows a handoff). A scan of one region leaves the others
+         * alone: they may still hold reserved obligations that resolve
+         * before they finalize, and are asked when they do. ASX_INVALID_ID
+         * asks about every region. Handles compare by slot and
+         * generation, not state tag.
          */
-        (void)region; /* walking skeleton: report all unresolved */
+        if (region != ASX_INVALID_ID &&
+            asx_handle_index(entry->region) != asx_handle_index(region)) {
+            continue;
+        }
 
         ghost_record_violation(ASX_GHOST_LINEARITY_LEAK, entry->id, -1, -1);
         leak_count++;
@@ -449,5 +449,13 @@ uint64_t asx_ghost_determinism_digest(void) {
 }
 
 uint32_t asx_ghost_determinism_event_count(void) { return g_ghost_det_count; }
+
+/* --- Linearity monitor: ownership moves (after the determinism monitor so
+ * the line anchors of the functions above stay where the docs cite them) --- */
+
+void asx_ghost_obligation_moved(asx_obligation_id id, asx_region_id region) {
+    asx_ghost_linearity_entry *entry = ghost_linearity_find(id);
+    if (entry != NULL) { entry->region = region; }
+}
 
 #endif /* ASX_DEBUG_GHOST */

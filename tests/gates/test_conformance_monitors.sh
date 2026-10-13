@@ -17,6 +17,15 @@
 #                             Created
 #                             -> `conformance-ghost` (ghost-checked runner)
 #                             FAILs scenarios naming that violation first.
+#   GHOST_UNEXPECTED_LEAK     logging a reservation asks the linearity monitor
+#                             about the obligation's region at once, so every
+#                             reserved obligation is reported as a leak
+#                             -> the ghost lane accepts the leaks Rust's trace
+#                             expects (obligation.leaked) and FAILs the rest,
+#                             naming the obligation. Its clean build must
+#                             also pass the fixtures that leak on purpose and
+#                             the one whose obligation resolves after its
+#                             sibling regions finalize (a scoped scan).
 #   SANITIZER_OOB_READ        every logged event reads one byte past a
 #                             static table
 #                             -> `conformance-asan` reports a
@@ -112,6 +121,80 @@ else
         failures=$((failures + 1))
     fi
     log_case "GHOST_ILLEGAL_TRANSITION" "ghost-runner-fails" "exit$g_rc fail=$g_fails ghost=$g_ghost" "$g_status" "$G_GHOST/compare.log"
+fi
+
+# --- GHOST_UNEXPECTED_LEAK ----------------------------------------------------
+# The ghost lane accepts a linearity_leak only for an obligation whose Rust
+# trace has obligation.leaked. The corpus leaks on purpose in these two; the
+# mutant reports every reserved obligation as a leak, so the lane must accept
+# those and FAIL every obligation Rust commits or aborts.
+LEAK_FIXTURES=(
+    fixtures/rust_reference_v2/lab-dispatch-waker-rearm-001.json
+    fixtures/rust_reference_v2/obligation-drop-leaks-at-once-001.json
+)
+# A scoped scan must not report an obligation another region still holds: this
+# fixture's child resolves its obligation after its siblings' regions finalize.
+SCOPE_FIXTURE=fixtures/rust_reference_v2/supervision-child-holds-obligation-001.json
+
+L_PLAIN="$MUTANT_BUILD_ROOT/GHOST_UNEXPECTED_LEAK-plain"
+L_GHOST="$MUTANT_BUILD_ROOT/GHOST_UNEXPECTED_LEAK-ghost"
+L_CLEAN="$MUTANT_BUILD_ROOT/GHOST_CLEAN-ghost"
+
+# The clean ghost-checked runner: the leaks the corpus expects and the
+# scoped scan must not be reported.
+if ! build_runner "$L_CLEAN" "-DASX_DEBUG_GHOST=1 -DASX_CONFORMANCE_GHOST_CHECK=1"; then
+    echo "  FAIL: GHOST_CLEAN ghost-checked runner does not build (log $L_CLEAN/build.log)"
+    log_case "GHOST_CLEAN" "build" "build-failed" "fail" "$L_CLEAN/build.log"
+    failures=$((failures + 1))
+else
+    c_out="$(cd "$REPO_ROOT" && "$L_CLEAN/bin/asx-conformance" compare "${LEAK_FIXTURES[@]}" "$SCOPE_FIXTURE" 2>&1)"
+    c_rc=$?
+    printf '%s\n' "$c_out" >"$L_CLEAN/compare.log"
+    if [ "$c_rc" -eq 0 ] && ! grep -Eq '^(FAIL|ERROR) ' <<<"$c_out"; then
+        echo "  PASS: the clean ghost-checked runner passes the fixtures that leak on purpose and the scoped-scan fixture"
+        log_case "GHOST_CLEAN" "clean-ghost-runner-passes" "exit$c_rc" "pass" "$L_CLEAN/compare.log"
+    else
+        echo "  FAIL: the clean ghost-checked runner rejects a fixture it must accept (exit$c_rc; log $L_CLEAN/compare.log)"
+        log_case "GHOST_CLEAN" "clean-ghost-runner-passes" "exit$c_rc" "fail" "$L_CLEAN/compare.log"
+        failures=$((failures + 1))
+    fi
+fi
+
+if ! build_runner "$L_PLAIN" "-DASX_MUTANT_GHOST_UNEXPECTED_LEAK"; then
+    echo "  FAIL: GHOST_UNEXPECTED_LEAK plain runner does not build (log $L_PLAIN/build.log)"
+    log_case "GHOST_UNEXPECTED_LEAK" "build" "build-failed" "fail" "$L_PLAIN/build.log"
+    failures=$((failures + 1))
+elif ! plain_passes "GHOST_UNEXPECTED_LEAK" "$L_PLAIN"; then
+    failures=$((failures + 1))
+fi
+
+if ! build_runner "$L_GHOST" \
+    "-DASX_DEBUG_GHOST=1 -DASX_CONFORMANCE_GHOST_CHECK=1 -DASX_MUTANT_GHOST_UNEXPECTED_LEAK"; then
+    echo "  FAIL: GHOST_UNEXPECTED_LEAK ghost-checked runner does not build (log $L_GHOST/build.log)"
+    log_case "GHOST_UNEXPECTED_LEAK" "build" "build-failed" "fail" "$L_GHOST/build.log"
+    failures=$((failures + 1))
+else
+    l_out="$(cd "$REPO_ROOT" && "$L_GHOST/bin/asx-conformance" compare fixtures/rust_reference_v2/*.json 2>&1)"
+    l_rc=$?
+    printf '%s\n' "$l_out" >"$L_GHOST/compare.log"
+    l_fails="$(grep -cE '^FAIL ' <<<"$l_out")"
+    l_leaks="$(grep -cE '^FAIL [^ ]+: ghost monitor recorded [0-9]+ violation\(s\) in [^;]+; first: linearity_leak entity=0x[0-9a-f]+ obligation=[^ ]+ ' <<<"$l_out")"
+    l_status="pass"
+    # Nonzero; every FAIL line an unexpected leak and nothing else; the leaks
+    # the corpus expects accepted (named in a NOTE), never failed.
+    if [ "$l_rc" -eq 0 ] || [ "$l_leaks" -eq 0 ] || [ "$l_leaks" -ne "$l_fails" ]; then l_status="fail"; fi
+    for f in "${LEAK_FIXTURES[@]}"; do
+        id="$(basename "$f" .json)"
+        if grep -Eq "^FAIL $id:" <<<"$l_out"; then l_status="fail"; fi
+        if ! grep -Eq "^NOTE $id: ghost monitor accepted [0-9]+ linearity_leak" <<<"$l_out"; then l_status="fail"; fi
+    done
+    if [ "$l_status" = "pass" ]; then
+        echo "  PASS: GHOST_UNEXPECTED_LEAK caught ($l_leaks scenario run(s) fail on a leak Rust does not report; the leaks it expects are accepted)"
+    else
+        echo "  FAIL: GHOST_UNEXPECTED_LEAK not caught as expected (exit$l_rc; fail=$l_fails leak=$l_leaks; log $L_GHOST/compare.log)"
+        failures=$((failures + 1))
+    fi
+    log_case "GHOST_UNEXPECTED_LEAK" "ghost-runner-fails-on-unexpected-leak" "exit$l_rc fail=$l_fails leak=$l_leaks" "$l_status" "$L_GHOST/compare.log"
 fi
 
 # --- SANITIZER_OOB_READ -------------------------------------------------------

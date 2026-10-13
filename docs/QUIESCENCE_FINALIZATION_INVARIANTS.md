@@ -647,7 +647,7 @@ v4 §8 describes oracle usage (`[Implementation]`).
 | `QuiescenceOracle` | `src/lab/oracle/quiescence.rs:86` | region close implies its tasks completed, child regions closed, finalizers run, ledger empty | No oracle. Close itself guards these (`src/runtime/quiescence.c:231-271`); `asx_quiescence_check_detailed` reports Q1-Q4 |
 | `FinalizerOracle` | `src/lab/oracle/finalizer.rs:84` | every registered finalizer ran before close | none |
 | `TaskLeakOracle` | `src/lab/oracle/task_leak.rs:65` | every task of a closed region completed | none |
-| `ObligationLeakOracle` | `src/lab/oracle/obligation_leak.rs:88` | obligations resolved before their region closes | ghost linearity check `asx_ghost_check_obligation_leaks` (`src/core/ghost.c:182-208`), which reports every unresolved obligation in its table whatever the region (`:201`) |
+| `ObligationLeakOracle` | `src/lab/oracle/obligation_leak.rs:88` | obligations resolved before their region closes | ghost linearity check `asx_ghost_check_obligation_leaks` (`src/core/ghost.c:182-208`), which reports the unresolved obligations held in the region it is asked about (`ASX_INVALID_ID` asks about every region; an ownership handoff moves an obligation's entry). The leak policy marks a leaked obligation Leaked without resolving it for the monitor, so the ghost-checked conformance runner accepts such a violation only when Rust's trace has `obligation.leaked` for that obligation (bd-9kll.2.21) |
 | `NoLeakProver` | `src/obligation/no_leak_proof.rs:389` | ghost-counter proof | none |
 
 The C names in the earlier version (`asx_ghost_quiescence_check`, `asx_ghost_finalizer_check`, `asx_ghost_task_leak_check`, `asx_ghost_obligation_leak_check`, `asx_ghost_no_leak_proof`) do not exist. The open bead bd-9kll.9.2 tracks mapping Rust's lab oracles to C.
@@ -670,7 +670,7 @@ The variant names were checked; the one-line statements are carried over from th
 
 ### 12.3 Ghost Monitor Integration (Debug Builds)
 
-**C status:** the ghost monitors are compiled in when `ASX_DEBUG_GHOST` is defined, which `ASX_DEBUG` turns on unless `ASX_DEBUG_GHOST_DISABLE` is set (`include/asx/core/ghost.h:28-33`). Otherwise every ghost entry point is a macro stub with no cost (`include/asx/core/ghost.h:179-206`). The `ASX_GHOST_CHECK_*` macros of the earlier version do not exist. On the close path the monitors are called through `asx_ghost_check_region_transition` (`src/runtime/quiescence.c:223`) and `asx_ghost_check_obligation_leaks` (`:261`).
+**C status:** the ghost monitors are compiled in when `ASX_DEBUG_GHOST` is defined, which `ASX_DEBUG` turns on unless `ASX_DEBUG_GHOST_DISABLE` is set (`include/asx/core/ghost.h:28-33`). Otherwise every ghost entry point is a macro stub with no cost (`include/asx/core/ghost.h:185-213`). The `ASX_GHOST_CHECK_*` macros of the earlier version do not exist. On the close path the monitors are called through `asx_ghost_check_region_transition` (`src/runtime/quiescence.c:223`) and `asx_ghost_check_obligation_leaks` (`:261`).
 
 ---
 

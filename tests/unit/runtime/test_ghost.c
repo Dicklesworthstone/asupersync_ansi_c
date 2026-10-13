@@ -132,7 +132,7 @@ TEST(ghost_linearity_normal_lifecycle) {
 
     asx_ghost_reset();
 
-    asx_ghost_obligation_reserved(oid);
+    asx_ghost_obligation_reserved(oid, ASX_INVALID_ID);
     asx_ghost_obligation_resolved(oid);
 
     /* No violations: reserve then resolve once */
@@ -148,7 +148,7 @@ TEST(ghost_linearity_double_resolve) {
 
     asx_ghost_reset();
 
-    asx_ghost_obligation_reserved(oid);
+    asx_ghost_obligation_reserved(oid, ASX_INVALID_ID);
     asx_ghost_obligation_resolved(oid);
 
     /* Second resolution should trigger LINEARITY_DOUBLE */
@@ -168,8 +168,8 @@ TEST(ghost_linearity_leak_detection) {
     asx_ghost_reset();
 
     /* Reserve two, resolve only one */
-    asx_ghost_obligation_reserved(oid1);
-    asx_ghost_obligation_reserved(oid2);
+    asx_ghost_obligation_reserved(oid1, ASX_INVALID_ID);
+    asx_ghost_obligation_reserved(oid2, ASX_INVALID_ID);
     asx_ghost_obligation_resolved(oid1);
 
     leak_count = asx_ghost_check_obligation_leaks(ASX_INVALID_ID);
@@ -188,13 +188,73 @@ TEST(ghost_linearity_multiple_leaks) {
     asx_ghost_reset();
 
     /* Reserve three, resolve none */
-    asx_ghost_obligation_reserved(oid1);
-    asx_ghost_obligation_reserved(oid2);
-    asx_ghost_obligation_reserved(oid3);
+    asx_ghost_obligation_reserved(oid1, ASX_INVALID_ID);
+    asx_ghost_obligation_reserved(oid2, ASX_INVALID_ID);
+    asx_ghost_obligation_reserved(oid3, ASX_INVALID_ID);
 
     leak_count = asx_ghost_check_obligation_leaks(ASX_INVALID_ID);
     ASSERT_EQ(leak_count, 3u);
     ASSERT_EQ(asx_ghost_violation_count(), 3u);
+}
+
+/* A scan asks only about the region it names: an obligation another region
+ * still holds may resolve before that region finalizes (a supervised
+ * child's does, after its siblings' regions finalized: fixture
+ * supervision-child-holds-obligation-001), so it is not a leak yet. */
+TEST(ghost_linearity_leak_scan_is_scoped_to_its_region) {
+    asx_region_id a = 0x0001000100010000ULL;
+    asx_region_id b = 0x0001000100010001ULL;
+    asx_obligation_id in_a = 0x0003000100030000ULL;
+    asx_obligation_id in_b = 0x0003000100030001ULL;
+    asx_ghost_violation v;
+
+    asx_ghost_reset();
+    asx_ghost_obligation_reserved(in_a, a);
+    asx_ghost_obligation_reserved(in_b, b);
+
+    ASSERT_EQ(asx_ghost_check_obligation_leaks(a), 1u);
+    ASSERT_EQ(asx_ghost_violation_count(), 1u);
+    ASSERT_TRUE(asx_ghost_violation_get(0, &v));
+    ASSERT_EQ((int)v.kind, (int)ASX_GHOST_LINEARITY_LEAK);
+    ASSERT_EQ(v.entity_id, in_a);
+
+    /* b's obligation resolves in time: asking b later finds nothing. */
+    asx_ghost_obligation_resolved(in_b);
+    ASSERT_EQ(asx_ghost_check_obligation_leaks(b), 0u);
+    ASSERT_EQ(asx_ghost_violation_count(), 1u);
+}
+
+/* A region's handle carries its state in a tag that changes as it does; the
+ * scan matches by slot and generation. */
+TEST(ghost_linearity_leak_scan_ignores_the_region_state_tag) {
+    asx_region_id open =
+        asx_handle_pack(ASX_TYPE_REGION, (uint16_t)(1u << (unsigned)ASX_REGION_OPEN), 7u);
+    asx_region_id closing =
+        asx_handle_pack(ASX_TYPE_REGION, (uint16_t)(1u << (unsigned)ASX_REGION_CLOSING), 7u);
+    asx_obligation_id oid = 0x0003000100030000ULL;
+
+    asx_ghost_reset();
+    asx_ghost_obligation_reserved(oid, open);
+    ASSERT_EQ(asx_ghost_check_obligation_leaks(closing), 1u);
+}
+
+/* An ownership handoff moves the obligation: its old region has nothing
+ * left to ask about and its new one is answerable for it. An untracked ID
+ * is ignored. */
+TEST(ghost_linearity_moved_obligation_is_asked_of_its_new_region) {
+    asx_region_id a = 0x0001000100010000ULL;
+    asx_region_id b = 0x0001000100010001ULL;
+    asx_obligation_id oid = 0x0003000100030000ULL;
+
+    asx_ghost_reset();
+    asx_ghost_obligation_reserved(oid, a);
+    asx_ghost_obligation_moved(oid, b);
+    asx_ghost_obligation_moved(0x0003000100030009ULL, a);
+
+    ASSERT_EQ(asx_ghost_check_obligation_leaks(a), 0u);
+    ASSERT_EQ(asx_ghost_violation_count(), 0u);
+    ASSERT_EQ(asx_ghost_check_obligation_leaks(b), 1u);
+    ASSERT_EQ(asx_ghost_violation_count(), 1u);
 }
 
 /* ================================================================== */
@@ -386,6 +446,9 @@ int main(void) {
     RUN_TEST(ghost_linearity_double_resolve);
     RUN_TEST(ghost_linearity_leak_detection);
     RUN_TEST(ghost_linearity_multiple_leaks);
+    RUN_TEST(ghost_linearity_leak_scan_is_scoped_to_its_region);
+    RUN_TEST(ghost_linearity_leak_scan_ignores_the_region_state_tag);
+    RUN_TEST(ghost_linearity_moved_obligation_is_asked_of_its_new_region);
 
     /* Ring buffer */
     RUN_TEST(ghost_violation_get_empty);

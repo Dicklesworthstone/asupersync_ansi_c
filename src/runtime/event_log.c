@@ -98,6 +98,17 @@ uint32_t asx_event_emit(asx_event_kind kind, uint64_t entity_id, uint64_t parent
                                               ASX_TASK_CREATED);
     }
 #endif
+#ifdef ASX_MUTANT_GHOST_UNEXPECTED_LEAK
+    /* Planted ghost-monitor bug (bd-9kll.2.21): logging a reservation also
+     * asks the linearity monitor about the obligation's region while the
+     * obligation is still reserved, so it reports a leak of a token Rust
+     * commits or aborts, with no obligation.leaked in Rust's trace. The
+     * runner must FAIL it; only a leak the capture expects is accepted.
+     * Nothing the runtime does, traces or digests changes. */
+    if (kind == ASX_EVENT_OBLIGATION_CREATE) {
+        (void)asx_ghost_check_obligation_leaks((asx_region_id)parent_id);
+    }
+#endif
 
     if (g_event_count < ASX_EVENT_LOG_CAPACITY) {
         asx_event_record *e = &g_event_log[g_event_count];

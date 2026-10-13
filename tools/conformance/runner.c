@@ -104,14 +104,18 @@ static void show(const char *label, const char *bytes) {
 
 /* Ghost-monitor assertion (bd-9kll.2.21). Built with
  * -DASX_CONFORMANCE_GHOST_CHECK (make conformance-ghost) against a library
- * that has the ghost monitors compiled in, a scenario whose run recorded any
- * ghost violation FAILs, naming the first. The plain runner does not look:
- * the monitors judge the runtime's own protocol, which no Rust capture
- * carries, so a clean corpus here shows legal lifecycle transitions and
- * linear obligations in these scenarios and nothing about memory safety
- * (the sanitizer lane, bd-9kll.2.22, covers that). The runtime of a run is
- * still alive when asx_conformance_run returns and the next run's init
- * resets the monitors, so the count read here is that run's own. */
+ * that has the ghost monitors compiled in, a scenario whose run recorded a
+ * ghost violation FAILs, naming the first. The one exception is a
+ * linearity_leak of an obligation whose Rust trace has obligation.leaked: a
+ * scenario that leaks on purpose, where Rust reports the same leak. Every
+ * other violation, a leak Rust did not report included, still FAILs. The
+ * plain runner does not look: the monitors judge the runtime's own
+ * protocol, which no Rust capture carries, so a clean corpus here shows
+ * legal lifecycle transitions and linear obligations in these scenarios and
+ * nothing about memory safety (the sanitizer lane, bd-9kll.2.22, covers
+ * that). The runtime of a run is still alive when asx_conformance_run
+ * returns and the next run's init resets the monitors, so the violations
+ * read here are that run's own. */
 #ifdef ASX_CONFORMANCE_GHOST_CHECK
 #if !(defined(ASX_DEBUG_GHOST) && ASX_DEBUG_GHOST)
 #error "ASX_CONFORMANCE_GHOST_CHECK needs the ghost monitors: build with -DASX_DEBUG_GHOST=1"
@@ -126,30 +130,98 @@ static const char *ghost_state_name(asx_ghost_violation_kind kind, int state) {
     return "-";
 }
 
-/* 1 when the monitors recorded nothing since the run began; otherwise print
- * a FAIL line for scenario `id` (the first violation, oldest retained) to
- * `out` and return 0. `where` names the run that was checked. */
-static int ghost_clean(FILE *out, const char *id, const char *where) {
+/* Whether Rust's captured trace has `obligation.leaked` for the obligation
+ * named `name` ("<holder>/o<k>"): a scenario that leaks on purpose. */
+static int fixture_expects_leak(uint32_t want_trace, const char *name) {
+    uint32_t layer;
+    uint32_t ev;
+    if (want_trace == ASX_JSON_NONE || name == NULL) return 0;
+    for (layer = asx_json_item(&g_fixture, want_trace, 0); layer != ASX_JSON_NONE;
+         layer = g_fixture.nodes[layer].next) {
+        for (ev = asx_json_item(&g_fixture, layer, 0); ev != ASX_JSON_NONE;
+             ev = g_fixture.nodes[ev].next) {
+            const char *k = asx_json_get_string(&g_fixture, ev, "k");
+            const char *o = asx_json_get_string(&g_fixture, ev, "obligation");
+            if (k != NULL && o != NULL && strcmp(k, "obligation.leaked") == 0 &&
+                strcmp(o, name) == 0) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+/* 1 when every violation the monitors recorded since the run began is a
+ * leak Rust's trace `want_trace` (ASX_JSON_NONE: none) expects; otherwise
+ * print a FAIL line for scenario `id` (the first violation not expected,
+ * oldest retained) to `out` and return 0. `where` names the run that was
+ * checked. Violations the ring no longer holds were not examined and count
+ * against the run. */
+static int ghost_clean(FILE *out, const char *id, const char *where, uint32_t want_trace) {
     asx_ghost_violation v;
-    uint32_t n = asx_ghost_violation_count();
-    if (n == 0u) return 1;
-    if (!asx_ghost_violation_get(0u, &v)) {
+    asx_ghost_violation first;
+    const char *first_name = NULL;
+    uint32_t total = asx_ghost_violation_count();
+    uint32_t unexpected = 0u;
+    uint32_t accepted = 0u;
+    uint32_t i;
+    int have_first = 0;
+    char note[64];
+
+    if (total == 0u) return 1;
+    memset(&first, 0, sizeof(first));
+    for (i = 0u; i < total && asx_ghost_violation_get(i, &v); i++) {
+        const char *name = NULL;
+        if (v.kind == ASX_GHOST_LINEARITY_LEAK) {
+            name = asx_conformance_obligation_name(v.entity_id);
+            if (fixture_expects_leak(want_trace, name)) {
+                accepted++;
+                continue;
+            }
+        }
+        if (!have_first) {
+            first = v;
+            first_name = name;
+            have_first = 1;
+        }
+        unexpected++;
+    }
+    unexpected += total - i;
+    if (unexpected == 0u) {
+        if (accepted > 0u) {
+            fprintf(out,
+                    "NOTE %s: ghost monitor accepted %u linearity_leak violation(s) in %s that "
+                    "Rust's trace expects (obligation.leaked)\n",
+                    id, (unsigned)accepted, where);
+        }
+        return 1;
+    }
+    note[0] = '\0';
+    if (accepted > 0u) {
+        (void)snprintf(note, sizeof(note), " [%u expected leak(s) accepted]", (unsigned)accepted);
+    }
+    if (!have_first) {
         fprintf(out,
-                "FAIL %s: ghost monitor recorded %u violation(s) in %s, the first unreadable\n", id,
-                (unsigned)n, where);
+                "FAIL %s: ghost monitor recorded %u violation(s) in %s beyond what its ring "
+                "holds, %u not examined%s\n",
+                id, (unsigned)total, where, (unsigned)unexpected, note);
         return 0;
     }
     fprintf(out,
-            "FAIL %s: ghost monitor recorded %u violation(s) in %s%s; first: %s entity=0x%llx "
-            "%s -> %s (violation sequence %u)\n",
-            id, (unsigned)n, where, asx_ghost_ring_overflowed() ? " (ring overflowed)" : "",
-            asx_ghost_violation_kind_str(v.kind), (unsigned long long)v.entity_id,
-            ghost_state_name(v.kind, v.from_state), ghost_state_name(v.kind, v.to_state),
-            (unsigned)v.sequence);
+            "FAIL %s: ghost monitor recorded %u violation(s) in %s%s; first: %s entity=0x%llx%s%s "
+            "%s -> %s (violation sequence %u)%s\n",
+            id, (unsigned)unexpected, where,
+            asx_ghost_ring_overflowed() ? " (ring overflowed)" : "",
+            asx_ghost_violation_kind_str(first.kind), (unsigned long long)first.entity_id,
+            first.kind == ASX_GHOST_LINEARITY_LEAK ? " obligation=" : "",
+            first.kind == ASX_GHOST_LINEARITY_LEAK ? (first_name != NULL ? first_name : "?") : "",
+            ghost_state_name(first.kind, first.from_state),
+            ghost_state_name(first.kind, first.to_state), (unsigned)first.sequence, note);
     return 0;
 }
 #else
-#define ghost_clean(out, id, where) ((void)(out), (void)(id), (void)(where), 1)
+#define ghost_clean(out, id, where, want_trace)                                                    \
+    ((void)(out), (void)(id), (void)(where), (void)(want_trace), 1)
 #endif
 
 /* Compare the members of two objects; report the differing ones. */
@@ -489,7 +561,10 @@ static int forced_replay(const char *id, uint32_t root, uint32_t scenario, uint3
                 g_error[0] != '\0' ? g_error : "?");
         return 0;
     }
-    if (!ghost_clean(stdout, id, "the replay of Rust's schedule")) return 0;
+    if (!ghost_clean(stdout, id, "the replay of Rust's schedule",
+                     asx_json_get(&g_fixture, root, "trace"))) {
+        return 0;
+    }
     got_sem = asx_json_get_string(&g_digest, run, "semantic_digest");
     if (got_sem == NULL || want_sem == NULL || strcmp(got_sem, want_sem) != 0) {
         fprintf(stdout, "FAIL %s: replaying Rust's schedule in C: semantic digest %s, Rust's %s\n",
@@ -555,7 +630,7 @@ static cmp_result compare_one(const char *path, int mutate) {
         return CMP_ERROR;
     }
     /* Not under the self-test: a corrupted expectation must be what fails. */
-    if (!mutate && !ghost_clean(stdout, id, "the C run")) ok = 0;
+    if (!mutate && !ghost_clean(stdout, id, "the C run", want_trace)) ok = 0;
     if (!trace_binary_round_trip(id)) ok = 0;
 
     if (!same_part(want_trace, asx_json_get(&g_run, run, "trace"))) {
@@ -633,7 +708,7 @@ static int cmd_run(const char *path) {
         fprintf(stderr, "asx-conformance: C run failed: %s\n", g_error[0] != '\0' ? g_error : "?");
         return 1;
     }
-    if (!ghost_clean(stderr, path, "the C run")) return 1;
+    if (!ghost_clean(stderr, path, "the C run", ASX_JSON_NONE)) return 1;
     if (!canonical(&g_run, run, g_a)) {
         fprintf(stderr, "asx-conformance: projection does not fit the output buffer\n");
         return 1;

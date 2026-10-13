@@ -94,16 +94,22 @@ ASX_API asx_status asx_ghost_check_obligation_transition(asx_obligation_id id,
 
 /* --- Linearity monitor --- */
 
-/* Track a newly reserved obligation. */
-ASX_API void asx_ghost_obligation_reserved(asx_obligation_id id);
+/* Track a newly reserved obligation held in `region`. */
+ASX_API void asx_ghost_obligation_reserved(asx_obligation_id id, asx_region_id region);
+
+/* The obligation is held in another region now (an ownership handoff):
+ * later leak scans ask that region about it. An untracked ID is ignored. */
+ASX_API void asx_ghost_obligation_moved(asx_obligation_id id, asx_region_id region);
 
 /* Track obligation resolution (commit or abort). Records violation on
  * double-resolution. */
 ASX_API void asx_ghost_obligation_resolved(asx_obligation_id id);
 
-/* Scan for leaked obligations (reserved but never resolved) in a region.
- * Returns the count of leaked obligations found and records violations.
- * No ASX_MUST_USE — primarily a side-effect operation. */
+/* Scan for leaked obligations (reserved but never resolved) held in `region`;
+ * the others are left alone, since a region still open may hold reserved
+ * obligations that resolve before it finalizes. ASX_INVALID_ID scans every
+ * region. Returns the count of leaked obligations found and records a
+ * violation for each. No ASX_MUST_USE — primarily a side-effect operation. */
 ASX_API uint32_t asx_ghost_check_obligation_leaks(asx_region_id region);
 
 /* --- Query interface --- */
@@ -183,7 +189,8 @@ ASX_API ASX_MUST_USE uint32_t asx_ghost_determinism_event_count(void);
 #define asx_ghost_check_region_transition(id, f, t) (ASX_OK)
 #define asx_ghost_check_task_transition(id, f, t) (ASX_OK)
 #define asx_ghost_check_obligation_transition(id, f, t) (ASX_OK)
-#define asx_ghost_obligation_reserved(id) ((void)0)
+#define asx_ghost_obligation_reserved(id, r) ((void)(id), (void)(r))
+#define asx_ghost_obligation_moved(id, r) ((void)(id), (void)(r))
 #define asx_ghost_obligation_resolved(id) ((void)0)
 #define asx_ghost_check_obligation_leaks(r) ((uint32_t)0)
 #define asx_ghost_violation_count() ((uint32_t)0)

@@ -1727,7 +1727,7 @@ static void obligation_apply_reserve(uint32_t idx, const asx_obligation_info *or
     /* Rust stamps the record when the reserve is applied: a posted
      * reserve's clock is the end of its poll, not the call. */
     g_obligations[idx].reserved_at = obligation_clock();
-    asx_ghost_obligation_reserved(id);
+    asx_ghost_obligation_reserved(id, region);
     (void)asx_event_emit(ASX_EVENT_OBLIGATION_CREATE, id, (uint64_t)region, ASX_OK);
     payload.obligation = original;
     asx_trace_emit_payload_internal(ASX_TRACE_OBLIGATION_RESERVE, id, (uint64_t)region, &payload);
@@ -2184,6 +2184,7 @@ asx_status asx_obligation_handoff(asx_obligation_id id, asx_task_id destination)
     asx_obligation_unlink_holder(idx);
     o->holder = destination;
     o->region = target->region;
+    asx_ghost_obligation_moved(obligation_handle(idx), target->region);
     o->next_held = target->first_held;
     target->first_held = idx;
     payload.handoff = &handoff;
