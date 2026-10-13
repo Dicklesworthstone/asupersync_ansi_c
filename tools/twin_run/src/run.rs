@@ -1327,7 +1327,7 @@ fn masked_nested(
     body: &mut dyn FnMut() -> RunResult<Flow>,
 ) -> RunResult<Flow> {
     if depth <= 1 {
-        cx.masked(|| body())
+        cx.masked(&mut *body)
     } else {
         cx.masked(|| masked_nested(cx, depth - 1, body))
     }
