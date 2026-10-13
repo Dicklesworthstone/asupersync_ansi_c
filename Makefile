@@ -493,9 +493,7 @@ UNIT_TEST_SRC := $(wildcard tests/unit/core/*_test.c) \
                  $(wildcard tests/unit/observability/*_test.c) \
                  $(wildcard tests/unit/observability/test_*.c) \
                  $(wildcard tests/unit/conformance/test_*.c)
-# The task-less GenServer's test (bd-t20v): its subject left the library; the
-# file leaves the tree with its git rm, and until then it is not built.
-UNIT_TEST_SRC := $(filter-out tests/unit/actor/test_gen_server.c,$(sort $(UNIT_TEST_SRC)))
+UNIT_TEST_SRC := $(sort $(UNIT_TEST_SRC))
 
 INVARIANT_TEST_SRC := $(wildcard tests/invariant/lifecycle/*_test.c) \
                       $(wildcard tests/invariant/lifecycle/test_*.c) \

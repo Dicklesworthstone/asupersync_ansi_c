@@ -9,14 +9,14 @@
 ![C99](https://img.shields.io/badge/C-C99-00599C)
 ![No external deps](https://img.shields.io/badge/dependencies-none-brightgreen)
 ![Deterministic replay](https://img.shields.io/badge/replay-deterministic-orange)
-![Public API declarations](https://img.shields.io/badge/public%20API-2%2C263%20declarations-blue)
-![C test programs](https://img.shields.io/badge/tests-239%20programs-brightgreen)
+![Public API declarations](https://img.shields.io/badge/public%20API-2%2C248%20declarations-blue)
+![C test programs](https://img.shields.io/badge/tests-238%20programs-brightgreen)
 ![9 profiles](https://img.shields.io/badge/profiles-9%20deployment%20targets-blue)
 [![License: MIT+Rider](https://img.shields.io/badge/License-MIT%2BOpenAI%2FAnthropic%20Rider-blue.svg)](./LICENSE)
 
 </div>
 
-Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->2,263<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->239<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
+Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->2,248<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->238<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
 
 <div align="center">
 <h3>Quick Source Build</h3>
@@ -59,7 +59,7 @@ The port targets asupersync commit `5e60b1c4c` (2026-10).
 
 | Feature | What It Gives You |
 |---|---|
-| **<!-- fact:api_declarations -->2,263<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> header families** | Async runtime API: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
+| **<!-- fact:api_declarations -->2,248<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> header families** | Async runtime API: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
 | **No external dependencies** | Pure C runtime core; ships into constrained and audited environments unchanged |
 | **Deterministic replay and trace hashing** | Deterministic builds replay a scenario exactly from its seed and input; trace digests let you diff behavior across builds, profiles, and codec modes |
 | **Structured cancellation with witness protocol** | 11 cancel kinds with severity lattice, witness phase tracking, and cleanup budgets (advisory as in Rust; an opt-in hard bound) |
@@ -69,7 +69,7 @@ The port targets asupersync commit `5e60b1c4c` (2026-10).
 | **<!-- fact:status_codes -->55<!-- /fact --> typed error codes with recovery guidance** | Each error has a category, recoverability class, recovery action, and backoff hints |
 | **Resource contracts instead of silent degradation** | Explicit memory/queue/timer ceilings with deterministic failure taxonomy per resource class (R1/R2/R3) |
 | **9 deployment profiles** | CORE, POSIX, WIN32, FREESTANDING, EMBEDDED_ROUTER, HFT, AUTOMOTIVE, PARALLEL, BROWSER |
-| **<!-- fact:test_programs -->239<!-- /fact --> tracked C test programs across 7 categories** | <!-- fact:test_unit -->175<!-- /fact --> unit, <!-- fact:test_e2e -->24<!-- /fact --> e2e, <!-- fact:test_invariant -->3<!-- /fact --> invariant, <!-- fact:test_vignettes -->12<!-- /fact --> vignette, <!-- fact:test_conformance -->6<!-- /fact --> conformance, <!-- fact:test_fuzz -->5<!-- /fact --> fuzz, and <!-- fact:test_formal -->14<!-- /fact --> formal files in the current tree |
+| **<!-- fact:test_programs -->238<!-- /fact --> tracked C test programs across 7 categories** | <!-- fact:test_unit -->174<!-- /fact --> unit, <!-- fact:test_e2e -->24<!-- /fact --> e2e, <!-- fact:test_invariant -->3<!-- /fact --> invariant, <!-- fact:test_vignettes -->12<!-- /fact --> vignette, <!-- fact:test_conformance -->6<!-- /fact --> conformance, <!-- fact:test_fuzz -->5<!-- /fact --> fuzz, and <!-- fact:test_formal -->14<!-- /fact --> formal files in the current tree |
 | **Cross-profile checks** | Profiles are meant to change limits and defaults, never semantics. `make profile-parity` executes every Rust-captured fixture under CORE, POSIX, FREESTANDING, EMBEDDED_ROUTER, HFT, AUTOMOTIVE, PARALLEL and BROWSER builds, each compared with the same Rust captures; CI also runs them under EMBEDDED_ROUTER on five ISAs (QEMU) and on 32-bit x86 |
 
 The current repository is library-first: it ships the static library, public
@@ -991,13 +991,13 @@ tools/                       CI, capture, replay, fuzz, and minimization tooling
 docs/                        Port architecture, parity tracking, deployment hardening
 ```
 
-The tree holds <!-- fact:header_files -->131<!-- /fact --> public headers
+The tree holds <!-- fact:header_files -->130<!-- /fact --> public headers
 (<!-- fact:headers_core -->22<!-- /fact --> in `core/`,
-<!-- fact:headers_runtime -->31<!-- /fact --> in `runtime/`), <!-- fact:source_files -->142<!-- /fact -->
-C sources (<!-- fact:sources_core -->19<!-- /fact --> in `core/`,
+<!-- fact:headers_runtime -->31<!-- /fact --> in `runtime/`), <!-- fact:source_files -->140<!-- /fact -->
+C sources (<!-- fact:sources_core -->18<!-- /fact --> in `core/`,
 <!-- fact:sources_runtime -->43<!-- /fact --> in `runtime/`,
 <!-- fact:sources_platform -->8<!-- /fact --> in `platform/`),
-<!-- fact:test_programs -->239<!-- /fact --> C test programs and
+<!-- fact:test_programs -->238<!-- /fact --> C test programs and
 <!-- fact:examples -->14<!-- /fact --> examples (`make lint-docs` checks these numbers
 against `tools/count_inventory.sh`).
 
@@ -1173,14 +1173,14 @@ make profile-parity
 
 ## Testing and Quality Gates
 
-`asx` currently ships with <!-- fact:test_programs -->239<!-- /fact --> tracked C test programs across 7 categories in
+`asx` currently ships with <!-- fact:test_programs -->238<!-- /fact --> tracked C test programs across 7 categories in
 the checked-in `tests/` tree. Individual assertion counts evolve over time; see
 `tests/TEST.md` for the current indexed suite inventory and per-suite case
 totals where tracked.
 
 | Category | Files | Coverage |
 |---|---|---|
-| **Unit tests** | <!-- fact:test_unit -->175<!-- /fact --> | Broad public API and subsystem coverage across the current tree |
+| **Unit tests** | <!-- fact:test_unit -->174<!-- /fact --> | Broad public API and subsystem coverage across the current tree |
 | **End-to-end scenarios** | <!-- fact:test_e2e -->24<!-- /fact --> | Core lifecycle, automotive, HFT, codec parity, continuity, network surfaces, POSIX adapter, HTTP server on real sockets, native record and lab replay (browser and CLI lanes are shell families) |
 | **Invariant tests** | <!-- fact:test_invariant -->3<!-- /fact --> | Lifecycle transition legality, quiescence, obligation linearity |
 | **API vignettes** | <!-- fact:test_vignettes -->12<!-- /fact --> | Ergonomics and usage pattern demonstrations |
@@ -2818,7 +2818,7 @@ It has not been benchmarked against live builds here, and the two differ in more
 
 ### Can I embed this as a library without the CLI?
 
-Yes. The C API is first-class: <!-- fact:api_declarations -->2,263<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact -->
+Yes. The C API is first-class: <!-- fact:api_declarations -->2,248<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact -->
 public header families in the current `include/asx/` tree, and one umbrella
 `#include <asx/asx.h>`. The repository is library-first: `make install`
 installs only `libasx.a` and the headers. The `asx` CLI (`version`, `info`,
