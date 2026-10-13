@@ -986,7 +986,7 @@ static asx_status hedge_first_poll_waits(uint64_t delay_ns, asx_hedge_state *hs,
 TEST(hedge_waits_for_its_delay_when_the_timer_wheel_is_full) {
     asx_runtime_hooks saved;
     asx_vtime_state vt;
-    asx_timer_wheel *wheel = asx_timer_wheel_global();
+    asx_timer_wheel *wheel = asx_timer_wheel_global(test_runtime());
     asx_timer_handle h;
     asx_hedge_state hs;
     int backup_polls;
@@ -1044,7 +1044,7 @@ TEST(hedge_with_an_overflowing_delay_waits_forever) {
 TEST(hedge_registers_nothing_with_the_timer_wheel) {
     asx_runtime_hooks saved;
     asx_vtime_state vt;
-    asx_timer_wheel *wheel = asx_timer_wheel_global();
+    asx_timer_wheel *wheel = asx_timer_wheel_global(test_runtime());
     asx_hedge_state hs;
     int backup_polls;
 

@@ -13,6 +13,7 @@
  */
 
 #include "../../test_harness.h"
+#include "../../test_runtime.h"
 #include <asx/runtime/rt.h>
 #include <asx/runtime/virtual_time.h>
 #include <asx/time/deadline.h>
@@ -113,12 +114,12 @@ TEST(saturated_deadline_arms_and_clamps_to_the_maximum) {
     void *fired[2];
     const asx_time start = 1000000ULL; /* 1 ms: the wheel's time is 1 ms */
     setup();
-    wheel = asx_timer_wheel_global();
+    wheel = asx_timer_wheel_global(test_runtime());
     asx_timer_wheel_reset(wheel);
     asx_vtime_init(&g_vt, start, 1u);
     ASSERT_EQ(asx_deadline_after(&dl, UINT64_MAX), ASX_OK);
     ASSERT_EQ(asx_deadline_target(&dl), (asx_time)UINT64_MAX);
-    ASSERT_EQ(asx_deadline_arm(&dl, NULL), ASX_OK);
+    ASSERT_EQ(asx_deadline_arm(test_runtime(), &dl, NULL), ASX_OK);
     ASSERT_EQ(asx_timer_collect_expired(wheel, start + ASX_TIMER_MAX_DURATION_NS - 1u, fired, 2u),
               0u);
     ASSERT_EQ(asx_timer_collect_expired(wheel, start + ASX_TIMER_MAX_DURATION_NS, fired, 2u), 1u);
@@ -130,16 +131,21 @@ TEST(saturated_deadline_arms_and_clamps_to_the_maximum) {
 /* Arm / Disarm tests                                                  */
 /* ------------------------------------------------------------------ */
 
-TEST(arm_null_fails) { ASSERT_EQ(asx_deadline_arm(NULL, NULL), ASX_E_INVALID_ARGUMENT); }
+TEST(arm_null_fails) {
+    asx_deadline dl;
+    MUST_OK(asx_deadline_init(&dl, 5000000ULL));
+    ASSERT_EQ(asx_deadline_arm(test_runtime(), NULL, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_deadline_arm(NULL, &dl, NULL), ASX_E_INVALID_ARGUMENT);
+}
 
 TEST(arm_registers_timer) {
     asx_deadline dl;
     setup();
     MUST_OK(asx_deadline_init(&dl, 5000000ULL));
     ASSERT_FALSE(asx_deadline_is_armed(&dl));
-    MUST_OK(asx_deadline_arm(&dl, NULL));
+    MUST_OK(asx_deadline_arm(test_runtime(), &dl, NULL));
     ASSERT_TRUE(asx_deadline_is_armed(&dl));
-    ASSERT_TRUE(asx_timer_active_count(asx_timer_wheel_global()) > 0);
+    ASSERT_TRUE(asx_timer_active_count(asx_timer_wheel_global(test_runtime())) > 0);
     teardown();
 }
 
@@ -147,8 +153,8 @@ TEST(arm_double_arm_fails) {
     asx_deadline dl;
     setup();
     MUST_OK(asx_deadline_init(&dl, 5000000ULL));
-    MUST_OK(asx_deadline_arm(&dl, NULL));
-    ASSERT_EQ(asx_deadline_arm(&dl, NULL), ASX_E_INVALID_STATE);
+    MUST_OK(asx_deadline_arm(test_runtime(), &dl, NULL));
+    ASSERT_EQ(asx_deadline_arm(test_runtime(), &dl, NULL), ASX_E_INVALID_STATE);
     teardown();
 }
 
@@ -169,16 +175,16 @@ TEST(arm_after_long_uptime) {
     setup();
     asx_vtime_init(&g_vt, ASX_TIMER_MAX_DURATION_NS + 3600000000000ULL, 1000000ULL);
     ASSERT_EQ(asx_deadline_after(&soon, 1000000ULL), ASX_OK);
-    ASSERT_EQ(asx_deadline_arm(&soon, NULL), ASX_OK);
+    ASSERT_EQ(asx_deadline_arm(test_runtime(), &soon, NULL), ASX_OK);
     ASSERT_TRUE(asx_deadline_is_armed(&soon));
     MUST_OK(asx_deadline_disarm(&soon));
 
     /* A second past the maximum from now: armed, clamped. */
     ASSERT_EQ(asx_deadline_after(&far, ASX_TIMER_MAX_DURATION_NS + 1000000000ULL), ASX_OK);
-    ASSERT_EQ(asx_deadline_arm(&far, NULL), ASX_OK);
+    ASSERT_EQ(asx_deadline_arm(test_runtime(), &far, NULL), ASX_OK);
     ASSERT_TRUE(asx_deadline_is_armed(&far));
     target = asx_deadline_target(&far);
-    wheel = asx_timer_wheel_global();
+    wheel = asx_timer_wheel_global(test_runtime());
     /* Not before the clamp (about a second short of the target)... */
     ASSERT_EQ(asx_timer_collect_expired(wheel, target - 1100000000ULL, fired, 2u), 0u);
     /* ... but before the true target, which its owner then re-checks. */
@@ -197,13 +203,17 @@ TEST(arm_keeps_earlier_timers_pending) {
     int tag_second = 2;
     setup();
     MUST_OK(asx_deadline_init(&first, 5000000ULL));
-    ASSERT_EQ(asx_deadline_arm(&first, &tag_first), ASX_OK);
+    ASSERT_EQ(asx_deadline_arm(test_runtime(), &first, &tag_first), ASX_OK);
     asx_vtime_init(&g_vt, 50000000ULL, 1000000ULL);
     MUST_OK(asx_deadline_init(&second, 60000000ULL));
-    ASSERT_EQ(asx_deadline_arm(&second, &tag_second), ASX_OK);
-    ASSERT_EQ(asx_timer_collect_expired(asx_timer_wheel_global(), 50000000ULL, fired, 4u), 1u);
+    ASSERT_EQ(asx_deadline_arm(test_runtime(), &second, &tag_second), ASX_OK);
+    ASSERT_EQ(asx_timer_collect_expired(asx_timer_wheel_global(test_runtime()), 50000000ULL, fired,
+                                        4u),
+              1u);
     ASSERT_TRUE(fired[0] == (void *)&tag_first);
-    ASSERT_EQ(asx_timer_collect_expired(asx_timer_wheel_global(), 60000000ULL, fired, 4u), 1u);
+    ASSERT_EQ(asx_timer_collect_expired(asx_timer_wheel_global(test_runtime()), 60000000ULL, fired,
+                                        4u),
+              1u);
     ASSERT_TRUE(fired[0] == (void *)&tag_second);
     teardown();
 }
@@ -215,11 +225,11 @@ TEST(disarm_cancels_timer) {
     uint32_t before;
     setup();
     MUST_OK(asx_deadline_init(&dl, 5000000ULL));
-    MUST_OK(asx_deadline_arm(&dl, NULL));
-    before = asx_timer_active_count(asx_timer_wheel_global());
+    MUST_OK(asx_deadline_arm(test_runtime(), &dl, NULL));
+    before = asx_timer_active_count(asx_timer_wheel_global(test_runtime()));
     MUST_OK(asx_deadline_disarm(&dl));
     ASSERT_FALSE(asx_deadline_is_armed(&dl));
-    ASSERT_EQ(asx_timer_active_count(asx_timer_wheel_global()), before - 1);
+    ASSERT_EQ(asx_timer_active_count(asx_timer_wheel_global(test_runtime())), before - 1);
     teardown();
 }
 

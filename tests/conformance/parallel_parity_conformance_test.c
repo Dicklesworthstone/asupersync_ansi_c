@@ -143,7 +143,7 @@ static void reset_all(void) {
     asx_ghost_reset();
     asx_parallel_reset();
     asx_waker_reset(test_runtime());
-    asx_timer_wheel_reset(asx_timer_wheel_global());
+    asx_timer_wheel_reset(asx_timer_wheel_global(test_runtime()));
 #if ASX_HAS_NATIVE_IO_DRIVER
     asx_io_driver_reset();
 #endif
@@ -459,12 +459,13 @@ static asx_status run_timer_waker(uint32_t worker_count, parity_result *out) {
     if (st != ASX_OK) { return st; }
     st = asx_inject_timed(t2);
     if (st != ASX_OK) { return st; }
-    st = asx_timer_register(asx_timer_wheel_global(), 100u, &w1, &h1);
+    st = asx_timer_register(asx_timer_wheel_global(test_runtime()), 100u, &w1, &h1);
     if (st != ASX_OK) { return st; }
-    st = asx_timer_register(asx_timer_wheel_global(), 100u, &w2, &h2);
+    st = asx_timer_register(asx_timer_wheel_global(test_runtime()), 100u, &w2, &h2);
     if (st != ASX_OK) { return st; }
 
-    ready_count = asx_timer_collect_expired(asx_timer_wheel_global(), 100u, ready_wakers, 2u);
+    ready_count =
+        asx_timer_collect_expired(asx_timer_wheel_global(test_runtime()), 100u, ready_wakers, 2u);
     if (ready_count != 2u) { return ASX_E_INVALID_STATE; }
     for (i = 0u; i < ready_count; i++) {
         st = asx_waker_wake((const asx_waker *)ready_wakers[i]);
@@ -693,10 +694,12 @@ static asx_status run_mixed_liveness(uint32_t worker_count, parity_result *out) 
     if (st != ASX_OK) { return st; }
     st = asx_inject_timed(timer_task);
     if (st != ASX_OK) { return st; }
-    st = asx_timer_register(asx_timer_wheel_global(), 50u, &timer_waker, &timer_handle);
+    st = asx_timer_register(asx_timer_wheel_global(test_runtime()), 50u, &timer_waker,
+                            &timer_handle);
     if (st != ASX_OK) { return st; }
 
-    ready_count = asx_timer_collect_expired(asx_timer_wheel_global(), 50u, ready_wakers, 1u);
+    ready_count =
+        asx_timer_collect_expired(asx_timer_wheel_global(test_runtime()), 50u, ready_wakers, 1u);
     if (ready_count != 1u) { return ASX_E_INVALID_STATE; }
     st = asx_waker_wake((const asx_waker *)ready_wakers[0]);
     if (st != ASX_OK) { return st; }

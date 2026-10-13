@@ -217,7 +217,7 @@ static void scenario_obligation_exhaustion(void) {
 static void scenario_timer_exhaustion(void) {
     SCENARIO_BEGIN("exhaustion.timer_arena");
 
-    asx_timer_wheel *wheel = asx_timer_wheel_global();
+    asx_timer_wheel *wheel = asx_timer_wheel_global(test_runtime());
     asx_timer_wheel_reset(wheel);
 
     asx_timer_handle h;

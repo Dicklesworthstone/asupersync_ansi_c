@@ -124,6 +124,10 @@ TEST(two_runtimes_have_independent_regions_tasks_and_quiescence) {
     asx_waker wa;
     asx_waker wb;
     asx_task_id drained[4];
+    asx_timer_wheel *wheel_a;
+    asx_timer_wheel *wheel_b;
+    asx_timer_handle th;
+    asx_deadline dl;
 
     memset(&a, 0, sizeof(a));
     memset(&b, 0, sizeof(b));
@@ -178,6 +182,24 @@ TEST(two_runtimes_have_independent_regions_tasks_and_quiescence) {
     asx_waker_deregister(&wb);
     ASSERT_EQ(asx_waker_active_count(&a), 0u);
     ASSERT_EQ(asx_waker_active_count(&b), 0u);
+
+    /* Application timers are each runtime's own: a timer of one is not in
+     * the other's wheel, and a deadline remembers the wheel that holds it. */
+    wheel_a = asx_timer_wheel_global(&a);
+    wheel_b = asx_timer_wheel_global(&b);
+    ASSERT_TRUE(wheel_a != NULL && wheel_b != NULL && wheel_a != wheel_b);
+    ASSERT_TRUE(asx_timer_wheel_global(NULL) == NULL);
+    ASSERT_EQ(asx_timer_register(wheel_b, 50u, NULL, &th), ASX_OK);
+    ASSERT_EQ(asx_timer_active_count(wheel_a), 0u);
+    ASSERT_EQ(asx_timer_active_count(wheel_b), 1u);
+    ASSERT_EQ(asx_deadline_init(&dl, 1000u), ASX_OK);
+    ASSERT_EQ(asx_deadline_arm(&b, &dl, NULL), ASX_OK);
+    ASSERT_EQ(asx_timer_active_count(wheel_a), 0u);
+    ASSERT_EQ(asx_timer_active_count(wheel_b), 2u);
+    ASSERT_EQ(asx_deadline_disarm(&dl), ASX_OK);
+    ASSERT_EQ(asx_timer_active_count(wheel_b), 1u);
+    ASSERT_TRUE(asx_timer_cancel(wheel_b, &th));
+    ASSERT_EQ(asx_timer_active_count(wheel_b), 0u);
 
     /* A handle of the other runtime is no member of this one's world. */
     ASSERT_EQ(asx_task_watch(ta, tb), ASX_E_NOT_FOUND);

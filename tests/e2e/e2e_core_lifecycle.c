@@ -640,7 +640,7 @@ static void scenario_quiescence_after_drain(void) {
 static void scenario_timer_register_expire(void) {
     SCENARIO_BEGIN("timer.register_expire");
 
-    asx_timer_wheel *wheel = asx_timer_wheel_global();
+    asx_timer_wheel *wheel = asx_timer_wheel_global(test_runtime());
     asx_timer_wheel_reset(wheel);
 
     asx_timer_handle h;
@@ -662,7 +662,7 @@ static void scenario_timer_register_expire(void) {
 static void scenario_timer_cancel_before_expire(void) {
     SCENARIO_BEGIN("timer.cancel_before_expire");
 
-    asx_timer_wheel *wheel = asx_timer_wheel_global();
+    asx_timer_wheel *wheel = asx_timer_wheel_global(test_runtime());
     asx_timer_wheel_reset(wheel);
 
     asx_timer_handle h;
@@ -684,7 +684,7 @@ static void scenario_timer_cancel_before_expire(void) {
 static void scenario_timer_deterministic_order(void) {
     SCENARIO_BEGIN("timer.deterministic_order");
 
-    asx_timer_wheel *wheel = asx_timer_wheel_global();
+    asx_timer_wheel *wheel = asx_timer_wheel_global(test_runtime());
     asx_timer_wheel_reset(wheel);
 
     int a = 1, b = 2, c = 3;

@@ -347,7 +347,7 @@ TEST(multi_region_cancel_one_leaves_other_intact) {
 #define CHURN_TIMERS ((ASX_MAX_TIMERS) < 64u ? ((ASX_MAX_TIMERS) & ~1u) : 64u)
 
 TEST(timer_rapid_register_cancel_churn) {
-    asx_timer_wheel *wheel = asx_timer_wheel_global();
+    asx_timer_wheel *wheel = asx_timer_wheel_global(test_runtime());
     asx_timer_handle handles[64];
     uint32_t i;
 
@@ -380,7 +380,7 @@ TEST(timer_rapid_register_cancel_churn) {
 }
 
 TEST(timer_exhaustion_then_fire_then_reuse) {
-    asx_timer_wheel *wheel = asx_timer_wheel_global();
+    asx_timer_wheel *wheel = asx_timer_wheel_global(test_runtime());
     asx_timer_handle handles[ASX_MAX_TIMERS];
     asx_timer_handle extra;
     uint32_t i;

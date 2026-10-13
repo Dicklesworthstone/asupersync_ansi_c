@@ -749,7 +749,7 @@ TEST(trace_timer_events_emitted_by_runtime) {
     void *wakers[2];
     uint32_t count;
 
-    wheel = asx_timer_wheel_global();
+    wheel = asx_timer_wheel_global(test_runtime());
     asx_timer_wheel_reset(wheel);
     asx_trace_reset(test_runtime());
 
@@ -807,21 +807,22 @@ TEST(runtime_reset_clears_global_support_state) {
     ASSERT_EQ(asx_channel_create(rid, 2, &ch), ASX_OK);
     ASSERT_EQ(asx_channel_try_reserve(ch, &permit), ASX_OK);
     ASSERT_EQ(asx_send_permit_send(&permit, 55u), ASX_OK);
-    ASSERT_EQ(asx_timer_register(asx_timer_wheel_global(), 100, (void *)0x1, &timer_handle),
+    ASSERT_EQ(asx_timer_register(asx_timer_wheel_global(test_runtime()), 100, (void *)0x1,
+                                 &timer_handle),
               ASX_OK);
     ASSERT_EQ(asx_telemetry_set_tier(ASX_TELEMETRY_OPS_LIGHT), ASX_OK);
     asx_telemetry_emit(ASX_TRACE_SCHED_COMPLETE, 1u, 0u);
     asx_hindsight_log(ASX_ND_CLOCK_READ, 1u, 99u);
 
     ASSERT_TRUE(asx_trace_event_count(test_runtime()) > (uint32_t)0);
-    ASSERT_TRUE(asx_timer_active_count(asx_timer_wheel_global()) > (uint32_t)0);
+    ASSERT_TRUE(asx_timer_active_count(asx_timer_wheel_global(test_runtime())) > (uint32_t)0);
     ASSERT_EQ(asx_telemetry_emitted_count(), (uint32_t)1);
     ASSERT_EQ(asx_hindsight_total_count(), (uint32_t)1);
 
     asx_runtime_reset(test_runtime());
 
     ASSERT_EQ(asx_trace_event_count(test_runtime()), (uint32_t)0);
-    ASSERT_EQ(asx_timer_active_count(asx_timer_wheel_global()), (uint32_t)0);
+    ASSERT_EQ(asx_timer_active_count(asx_timer_wheel_global(test_runtime())), (uint32_t)0);
     ASSERT_EQ(asx_telemetry_get_tier(), ASX_TELEMETRY_FORENSIC);
     ASSERT_EQ(asx_telemetry_emitted_count(), (uint32_t)0);
     ASSERT_EQ(asx_telemetry_filtered_count(), (uint32_t)0);

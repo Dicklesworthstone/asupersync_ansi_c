@@ -704,7 +704,7 @@ static asx_status min_execute_one_op(const min_op *op, min_handle_state *hs) {
         if (hs->timer_count < MIN_MAX_TIMERS) {
             asx_timer_handle th;
             memset(&th, 0, sizeof(th));
-            st = asx_timer_register(asx_timer_wheel_global(),
+            st = asx_timer_register(asx_timer_wheel_global(test_runtime()),
                                     hs->sim_time + 1u + (op->arg_u64 % 5000u), NULL, &th);
             if (st == ASX_OK) hs->timers[hs->timer_count++] = th;
         } else {
@@ -714,7 +714,7 @@ static asx_status min_execute_one_op(const min_op *op, min_handle_state *hs) {
     }
     case MIN_OP_TIMER_CANCEL: {
         if (hs->timer_count > 0u) {
-            int c = asx_timer_cancel(asx_timer_wheel_global(),
+            int c = asx_timer_cancel(asx_timer_wheel_global(test_runtime()),
                                      &hs->timers[op->idx_a % hs->timer_count]);
             st = c ? ASX_OK : ASX_E_TIMER_NOT_FOUND;
         } else {
@@ -725,7 +725,8 @@ static asx_status min_execute_one_op(const min_op *op, min_handle_state *hs) {
     case MIN_OP_ADVANCE_TIME: {
         void *wakers[16];
         hs->sim_time += 1u + (op->arg_u64 % 2000u);
-        asx_timer_collect_expired(asx_timer_wheel_global(), hs->sim_time, wakers, 16u);
+        asx_timer_collect_expired(asx_timer_wheel_global(test_runtime()), hs->sim_time, wakers,
+                                  16u);
         break;
     }
     case MIN_OP_SCHEDULER_RUN: {
@@ -776,7 +777,7 @@ static uint64_t min_execute_digest(const min_scenario *sc) {
     asx_runtime_reset(test_runtime());
     asx_scheduler_event_reset();
     asx_channel_reset();
-    asx_timer_wheel_reset(asx_timer_wheel_global());
+    asx_timer_wheel_reset(asx_timer_wheel_global(test_runtime()));
     min_reset_task_states();
 
     min_hasher_init(&hasher);
@@ -1155,7 +1156,7 @@ static int min_predicate_has_poisoned_spawn(const min_scenario *sc, void *user_d
     asx_runtime_reset(test_runtime());
     asx_scheduler_event_reset();
     asx_channel_reset();
-    asx_timer_wheel_reset(asx_timer_wheel_global());
+    asx_timer_wheel_reset(asx_timer_wheel_global(test_runtime()));
     min_reset_task_states();
 
     for (i = 0u; i < sc->op_count; i++) {

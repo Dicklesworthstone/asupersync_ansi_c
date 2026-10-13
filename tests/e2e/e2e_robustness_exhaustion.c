@@ -190,7 +190,7 @@ static void scenario_channel_capacity_exhaustion(void) {
 static void scenario_timer_wheel_exhaustion(void) {
     SCENARIO_BEGIN("robust-exhaustion-004.timer_wheel_full");
 
-    asx_timer_wheel *wheel = asx_timer_wheel_global();
+    asx_timer_wheel *wheel = asx_timer_wheel_global(test_runtime());
     asx_timer_wheel_reset(wheel);
 
     asx_timer_handle h;

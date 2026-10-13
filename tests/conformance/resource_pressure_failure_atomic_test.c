@@ -81,7 +81,7 @@ static void reset_all(void) {
     asx_runtime_reset(test_runtime());
     asx_channel_reset();
     asx_trace_reset(test_runtime());
-    asx_timer_wheel_reset(asx_timer_wheel_global());
+    asx_timer_wheel_reset(asx_timer_wheel_global(test_runtime()));
 }
 
 /* reset_all plus the opt-in hard cleanup bound
@@ -106,7 +106,7 @@ static void metrics_capture(pressure_metrics *metrics) {
     metrics->regions_used = asx_resource_used(test_runtime(), ASX_RESOURCE_REGION);
     metrics->tasks_used = asx_resource_used(test_runtime(), ASX_RESOURCE_TASK);
     metrics->obligations_used = asx_resource_used(test_runtime(), ASX_RESOURCE_OBLIGATION);
-    metrics->timer_active_count = asx_timer_active_count(asx_timer_wheel_global());
+    metrics->timer_active_count = asx_timer_active_count(asx_timer_wheel_global(test_runtime()));
     metrics->scheduler_event_count = asx_scheduler_event_count();
 }
 
@@ -539,7 +539,7 @@ finish:
 }
 
 static void scenario_timer_allocation_exhaustion(pressure_case_result *result) {
-    asx_timer_wheel *wheel = asx_timer_wheel_global();
+    asx_timer_wheel *wheel = asx_timer_wheel_global(test_runtime());
     asx_timer_handle handles[ASX_MAX_TIMERS];
     asx_timer_handle overflow_handle;
     asx_runtime_snapshot before_snapshot;

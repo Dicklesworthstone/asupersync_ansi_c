@@ -42,7 +42,7 @@ static uint64_t timer_trace_entity_id(const asx_timer_handle *handle) {
  * ------------------------------------------------------------------- */
 
 TEST(timer_register_and_fire) {
-    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
     asx_timer_handle h;
     void *wakers[4];
     uint32_t count;
@@ -64,7 +64,7 @@ TEST(timer_register_and_fire) {
  * ------------------------------------------------------------------- */
 
 TEST(timer_does_not_fire_early) {
-    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
     asx_timer_handle h;
     void *wakers[4];
     uint32_t count;
@@ -84,7 +84,7 @@ TEST(timer_does_not_fire_early) {
  * ------------------------------------------------------------------- */
 
 TEST(timer_cancel_prevents_fire) {
-    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
     asx_timer_handle h;
     void *wakers[4];
     uint32_t count;
@@ -104,7 +104,7 @@ TEST(timer_cancel_prevents_fire) {
 }
 
 TEST(timer_trace_emits_set_fire_and_cancel) {
-    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
     asx_timer_handle fire_h, cancel_h;
     asx_trace_event ev;
     void *wakers[4];
@@ -149,7 +149,7 @@ TEST(timer_trace_emits_set_fire_and_cancel) {
  * ------------------------------------------------------------------- */
 
 TEST(timer_stale_handle_cancel_returns_false) {
-    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
     asx_timer_handle h1, h2;
 
     asx_timer_wheel_reset(w);
@@ -171,7 +171,7 @@ TEST(timer_stale_handle_cancel_returns_false) {
  * ------------------------------------------------------------------- */
 
 TEST(timer_cancel_after_fire_returns_false) {
-    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
     asx_timer_handle h;
     void *wakers[4];
 
@@ -191,7 +191,7 @@ TEST(timer_cancel_after_fire_returns_false) {
  * ------------------------------------------------------------------- */
 
 TEST(timer_tiebreak_insertion_order) {
-    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
     asx_timer_handle h1, h2, h3;
     void *wakers[8];
     uint32_t count;
@@ -226,7 +226,7 @@ TEST(timer_tiebreak_insertion_order) {
 /* The bd-9kll.7.1 example: A at 5.7 ms registered before B at 5.2 ms. Both
  * sit in tick 5's slot as [A, B] and are readied in that order. */
 TEST(timer_same_tick_fires_in_registration_order) {
-    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
     asx_timer_handle h;
     void *wakers[4];
 
@@ -243,7 +243,7 @@ TEST(timer_same_tick_fires_in_registration_order) {
 /* Timers in different ticks fire in tick order, whatever the registration
  * order: the slots are visited as time advances. */
 TEST(timer_ticks_fire_in_tick_order) {
-    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
     asx_timer_handle h;
     void *wakers[4];
 
@@ -262,7 +262,7 @@ TEST(timer_ticks_fire_in_tick_order) {
 /* Two ticks interleaved in registration order: each tick's timers keep
  * their registration order, the earlier tick comes first. */
 TEST(timer_interleaved_ticks_keep_registration_order_within_each) {
-    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
     asx_timer_handle h;
     void *wakers[8];
 
@@ -287,7 +287,7 @@ TEST(timer_interleaved_ticks_keep_registration_order_within_each) {
  * order. These are the ns-scale values the C wheel used to sort by exact
  * deadline: Rust fires them as registered. */
 TEST(timer_sub_millisecond_deadlines_fire_in_registration_order) {
-    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
     asx_timer_handle h;
     void *wakers[8];
 
@@ -304,7 +304,7 @@ TEST(timer_sub_millisecond_deadlines_fire_in_registration_order) {
 }
 
 TEST(timer_ready_list_keeps_registration_order_across_equal_and_earlier_deadlines) {
-    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
     asx_timer_handle h;
     void *wakers[8];
 
@@ -328,7 +328,7 @@ TEST(timer_ready_list_keeps_registration_order_across_equal_and_earlier_deadline
  * (drain_ready re-inserts it, :948-949) and fires on a later collect;
  * a due one beside it fires at once. */
 TEST(timer_in_current_tick_but_not_due_waits) {
-    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
     asx_timer_handle h;
     void *wakers[4];
 
@@ -355,7 +355,7 @@ TEST(timer_in_current_tick_but_not_due_waits) {
  * At tick 256 level 1 cascades and A lands in slot 44 after B, so B fires
  * first although A was registered first (and has the same deadline). */
 TEST(timer_cascaded_from_coarser_level_follows_direct_timer_in_slot) {
-    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
     asx_timer_handle h;
     void *wakers[4];
 
@@ -373,7 +373,7 @@ TEST(timer_cascaded_from_coarser_level_follows_direct_timer_in_slot) {
 /* The cascade keeps registration order among the timers that came down
  * together: three timers 300 ms out (level 1, slot 1) fire as registered. */
 TEST(timer_cascade_preserves_slot_order) {
-    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
     asx_timer_handle h;
     void *wakers[4];
 
@@ -392,7 +392,7 @@ TEST(timer_cascade_preserves_slot_order) {
 /* A timer in a long-range level fires at its own deadline, not at the
  * cascade that reaches it. */
 TEST(timer_in_coarse_levels_fires_at_its_deadline) {
-    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
     asx_timer_handle h;
     void *wakers[4];
 
@@ -416,7 +416,7 @@ TEST(timer_in_coarse_levels_fires_at_its_deadline) {
  * ------------------------------------------------------------------- */
 
 TEST(timer_next_deadline_none_when_empty) {
-    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
     asx_timer_handle h;
     asx_time next = 77u;
 
@@ -434,7 +434,7 @@ TEST(timer_next_deadline_none_when_empty) {
  * (wheel.rs:1459): a 500 us deadline is on the ready list, still in the
  * current tick, and is reported as itself, not rounded to the tick. */
 TEST(timer_next_deadline_same_tick_future_deadline_is_kept) {
-    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
     asx_timer_handle h;
     asx_time next = 0u;
 
@@ -447,7 +447,7 @@ TEST(timer_next_deadline_same_tick_future_deadline_is_kept) {
 /* A timer that is already due is reported at the wheel's time, whole
  * milliseconds (raw_next_deadline, wheel.rs:642-643). */
 TEST(timer_next_deadline_clamps_a_due_timer_to_wheel_time) {
-    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
     asx_timer_handle h;
     asx_time next = 0u;
 
@@ -463,7 +463,7 @@ TEST(timer_next_deadline_clamps_a_due_timer_to_wheel_time) {
  * B at 400 ms, registered at 200 ms, sits in a wrapped level-0 slot. The
  * next deadline is A's, and A fires at 300 ms. */
 TEST(timer_next_deadline_sees_uncascaded_higher_level_entry) {
-    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
     asx_timer_handle h;
     void *wakers[4];
     asx_time next = 0u;
@@ -486,7 +486,7 @@ TEST(timer_next_deadline_sees_uncascaded_higher_level_entry) {
  * ------------------------------------------------------------------- */
 
 TEST(timer_resource_exhaustion) {
-    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
     asx_timer_handle h;
     uint32_t i;
     asx_status st;
@@ -509,7 +509,7 @@ TEST(timer_resource_exhaustion) {
  * ------------------------------------------------------------------- */
 
 TEST(timer_slot_recycling_after_cancel) {
-    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
     asx_timer_handle h[ASX_MAX_TIMERS + 1];
     uint32_t i;
     asx_status st;
@@ -537,7 +537,7 @@ TEST(timer_slot_recycling_after_cancel) {
  * ------------------------------------------------------------------- */
 
 TEST(timer_beyond_max_duration_is_clamped_to_the_maximum) {
-    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
     asx_timer_handle h;
     void *wakers[4];
 
@@ -557,7 +557,7 @@ TEST(timer_beyond_max_duration_is_clamped_to_the_maximum) {
  * 6-day and a 7-day deadline are kept; an 8-day one is clamped to 7 days
  * and fires with the 7-day one, behind it. */
 TEST(timer_default_max_duration_is_seven_days_and_clamps_beyond_it) {
-    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
     asx_timer_handle h;
     void *wakers[4];
 
@@ -588,7 +588,7 @@ TEST(timer_default_max_duration_is_seven_days_and_clamps_beyond_it) {
  * is at 1 ms, so a deadline 7 days and 0.4 ms past 1 ms is clamped to
  * 1 ms + 7 days. */
 TEST(timer_clamp_measures_from_wheel_time_in_whole_milliseconds) {
-    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
     asx_timer_handle h;
     void *wakers[4];
     const asx_time clamped = 1u * TW_MS + 7u * TW_DAY;
@@ -611,7 +611,7 @@ TEST(timer_clamp_measures_from_wheel_time_in_whole_milliseconds) {
 /* Rust wheel_overflow_promotes_when_in_range (wheel.rs:1440): a timer one
  * tick past the wheel's range fires when time reaches it. */
 TEST(timer_overflow_timer_promotes_and_fires) {
-    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
     asx_timer_handle h;
     void *wakers[4];
     const asx_time far = ASX_TIMER_MAX_WHEEL_DURATION_NS + TW_MS;
@@ -628,7 +628,7 @@ TEST(timer_overflow_timer_promotes_and_fires) {
  * (OverflowEntry::cmp, wheel.rs:276-294), and fire in the order they
  * reach the ready list. */
 TEST(timer_overflow_timers_fire_by_deadline_then_registration) {
-    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
     asx_timer_handle h;
     void *wakers[4];
 
@@ -646,7 +646,7 @@ TEST(timer_overflow_timers_fire_by_deadline_then_registration) {
 
 /* Cancelling an overflow timer removes it from the heap. */
 TEST(timer_overflow_timer_can_be_cancelled) {
-    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
     asx_timer_handle a, b, c;
     void *wakers[4];
 
@@ -668,7 +668,7 @@ TEST(timer_overflow_timer_can_be_cancelled) {
  * ------------------------------------------------------------------- */
 
 TEST(timer_collect_respects_max_wakers) {
-    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
     asx_timer_handle h;
     void *wakers[8];
     uint32_t i, count;
@@ -699,7 +699,7 @@ TEST(timer_collect_respects_max_wakers) {
  * ------------------------------------------------------------------- */
 
 TEST(timer_collect_zero_capacity_advances_time) {
-    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
     asx_timer_handle h;
     void *wakers[4];
     uint32_t count;
@@ -727,7 +727,7 @@ TEST(timer_collect_zero_capacity_advances_time) {
  * ------------------------------------------------------------------- */
 
 TEST(timer_update_cancels_old_and_registers_new) {
-    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
     asx_timer_handle old_h, new_h;
     void *wakers[4];
     uint32_t count;
@@ -753,7 +753,7 @@ TEST(timer_update_cancels_old_and_registers_new) {
 }
 
 TEST(timer_update_allows_null_old_handle) {
-    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
     asx_timer_handle h;
     void *wakers[2];
     uint32_t count;
@@ -767,7 +767,7 @@ TEST(timer_update_allows_null_old_handle) {
 }
 
 TEST(timer_update_on_a_full_wheel_reuses_the_slot) {
-    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
     asx_timer_handle handles[ASX_MAX_TIMERS];
     asx_timer_handle replacement;
     void *wakers[4];
@@ -796,7 +796,7 @@ TEST(timer_update_on_a_full_wheel_reuses_the_slot) {
 }
 
 TEST(timer_update_refuses_stale_handles_and_registers_nothing) {
-    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
     asx_timer_handle fired, cancelled, reused, out;
     void *wakers[4];
     uint32_t count;
@@ -836,7 +836,7 @@ TEST(timer_update_refuses_stale_handles_and_registers_nothing) {
 /* update is cancel + register (time/driver.rs:522-540), so a deadline
  * beyond the maximum is clamped as in register, and the old timer is gone. */
 TEST(timer_update_clamps_a_deadline_beyond_the_maximum) {
-    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
     asx_timer_handle old_h, replacement;
     void *wakers[4];
     uint32_t count;
@@ -860,7 +860,7 @@ TEST(timer_update_clamps_a_deadline_beyond_the_maximum) {
  * in its tick, not back to its old place. A and B at 5.2 and 5.5 ms; A is
  * moved to 5.3 ms and so fires after B. */
 TEST(timer_update_moves_the_timer_behind_those_already_in_its_tick) {
-    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
     asx_timer_handle a, b, a2;
     void *wakers[4];
 
@@ -880,7 +880,7 @@ TEST(timer_update_moves_the_timer_behind_those_already_in_its_tick) {
  * ------------------------------------------------------------------- */
 
 TEST(timer_churn_register_cancel) {
-    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
     asx_timer_handle h;
     uint32_t i;
 
@@ -900,7 +900,7 @@ TEST(timer_churn_register_cancel) {
  * ------------------------------------------------------------------- */
 
 TEST(timer_generation_increments_on_reuse) {
-    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
     asx_timer_handle h1, h2;
 
     asx_timer_wheel_reset(w);
@@ -920,7 +920,7 @@ TEST(timer_generation_increments_on_reuse) {
  * ------------------------------------------------------------------- */
 
 TEST(timer_stale_handle_rejected_after_reset) {
-    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
     asx_timer_handle old_h, new_h;
 
     asx_timer_wheel_reset(w);
@@ -941,7 +941,7 @@ TEST(timer_stale_handle_rejected_after_reset) {
  * ------------------------------------------------------------------- */
 
 TEST(timer_zero_deadline_fires_immediately) {
-    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
     asx_timer_handle h;
     void *wakers[4];
     uint32_t count;
@@ -960,7 +960,7 @@ TEST(timer_zero_deadline_fires_immediately) {
  * ------------------------------------------------------------------- */
 
 TEST(timer_null_argument_rejection) {
-    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
     asx_timer_handle h;
 
     asx_timer_wheel_reset(w);
@@ -977,7 +977,7 @@ TEST(timer_null_argument_rejection) {
  * ------------------------------------------------------------------- */
 
 TEST(timer_advance_does_not_fire) {
-    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
     asx_timer_handle h;
 
     asx_timer_wheel_reset(w);
@@ -994,7 +994,7 @@ TEST(timer_advance_does_not_fire) {
  * ------------------------------------------------------------------- */
 
 TEST(timer_collect_after_advance) {
-    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
     asx_timer_handle h;
     void *wakers[4];
     uint32_t count;
@@ -1015,7 +1015,7 @@ TEST(timer_collect_after_advance) {
  * ------------------------------------------------------------------- */
 
 TEST(timer_double_cancel_returns_false) {
-    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
     asx_timer_handle h;
 
     asx_timer_wheel_reset(w);
@@ -1030,7 +1030,7 @@ TEST(timer_double_cancel_returns_false) {
  * ------------------------------------------------------------------- */
 
 TEST(timer_cancellation_race) {
-    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
     asx_timer_handle h[6];
     void *wakers[8];
     uint32_t count;
@@ -1063,7 +1063,7 @@ TEST(timer_cancellation_race) {
  * ------------------------------------------------------------------- */
 
 TEST(timer_large_time_jump) {
-    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
     asx_timer_handle h;
     void *wakers[8];
     uint32_t count;
@@ -1090,7 +1090,7 @@ TEST(timer_large_time_jump) {
  * ------------------------------------------------------------------- */
 
 TEST(timer_runtime_wheel_is_separate_and_silent) {
-    asx_timer_wheel *app = asx_timer_wheel_global();
+    asx_timer_wheel *app = asx_timer_wheel_global(test_runtime());
     asx_timer_wheel *rt;
     asx_timer_handle h;
     void *wakers[4];
@@ -1149,7 +1149,7 @@ static asx_time churn_span(uint64_t pick, uint64_t r) {
 
 TEST(timer_churn_never_fires_early_loses_none_and_next_deadline_matches_a_scan) {
     enum { LIVE = 20, OPS = 4000 };
-    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
     asx_timer_handle handles[LIVE];
     asx_time deadlines[LIVE]; /* the deadline each timer is registered at */
     int live[LIVE];

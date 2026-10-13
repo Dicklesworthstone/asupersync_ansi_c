@@ -858,7 +858,8 @@ static void scenario_timer_burst(void) {
             finish_result(&result);
             return;
         }
-        st = asx_timer_register(asx_timer_wheel_global(), 100u, &wakers[i], &handles[i]);
+        st = asx_timer_register(asx_timer_wheel_global(test_runtime()), 100u, &wakers[i],
+                                &handles[i]);
         if (st != ASX_OK) {
             result_fail(&result, "timer_register", st);
             finish_result(&result);
@@ -868,7 +869,8 @@ static void scenario_timer_burst(void) {
     if (asx_parallel_get_telemetry_snapshot(&pre) == ASX_OK) {
         result_note_pressure(&result, &pre);
     }
-    ready_count = asx_timer_collect_expired(asx_timer_wheel_global(), 100u, ready_wakers, count);
+    ready_count = asx_timer_collect_expired(asx_timer_wheel_global(test_runtime()), 100u,
+                                            ready_wakers, count);
     result.timer_ready = ready_count;
     if (ready_count != count) {
         result_fail(&result, "timer_ready_count", ASX_E_INVALID_STATE);

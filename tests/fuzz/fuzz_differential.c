@@ -561,7 +561,7 @@ static void fuzz_execute(const fuzz_scenario *sc, fuzz_execution *exec) {
     /* Reset all runtime state for clean execution */
     asx_runtime_reset(test_runtime());
     asx_channel_reset();
-    asx_timer_wheel_reset(asx_timer_wheel_global());
+    asx_timer_wheel_reset(asx_timer_wheel_global(test_runtime()));
     fuzz_reset_task_states();
 
     fuzz_hasher_init(&hasher);
@@ -772,7 +772,8 @@ static void fuzz_execute(const fuzz_scenario *sc, fuzz_execution *exec) {
                 asx_timer_handle th;
                 asx_time deadline = hs.sim_time + 1u + (op->arg_u64 % 5000u);
                 memset(&th, 0, sizeof(th));
-                st = asx_timer_register(asx_timer_wheel_global(), deadline, NULL, &th);
+                st =
+                    asx_timer_register(asx_timer_wheel_global(test_runtime()), deadline, NULL, &th);
                 if (st == ASX_OK) { hs.timers[hs.timer_count++] = th; }
             } else {
                 st = ASX_E_RESOURCE_EXHAUSTED;
@@ -783,7 +784,8 @@ static void fuzz_execute(const fuzz_scenario *sc, fuzz_execution *exec) {
         case FUZZ_OP_TIMER_CANCEL: {
             if (hs.timer_count > 0u) {
                 uint32_t tidx = op->idx_a % hs.timer_count;
-                int cancelled = asx_timer_cancel(asx_timer_wheel_global(), &hs.timers[tidx]);
+                int cancelled =
+                    asx_timer_cancel(asx_timer_wheel_global(test_runtime()), &hs.timers[tidx]);
                 st = cancelled ? ASX_OK : ASX_E_TIMER_NOT_FOUND;
             } else {
                 st = ASX_E_NOT_FOUND;
@@ -795,7 +797,8 @@ static void fuzz_execute(const fuzz_scenario *sc, fuzz_execution *exec) {
             uint64_t advance = 1u + (op->arg_u64 % 2000u);
             void *wakers[16];
             hs.sim_time += advance;
-            asx_timer_collect_expired(asx_timer_wheel_global(), hs.sim_time, wakers, 16u);
+            asx_timer_collect_expired(asx_timer_wheel_global(test_runtime()), hs.sim_time, wakers,
+                                      16u);
             st = ASX_OK;
             break;
         }

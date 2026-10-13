@@ -293,7 +293,7 @@ TEST(deadline_and_cancellation_misuse_are_exact_and_non_emitting) {
     guard_capture(&guard);
     ASSERT_EQ(asx_deadline_init(NULL, 1u), ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_deadline_after(NULL, 1u), ASX_E_INVALID_ARGUMENT);
-    ASSERT_EQ(asx_deadline_arm(NULL, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_deadline_arm(test_runtime(), NULL, NULL), ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_deadline_disarm(NULL), ASX_E_INVALID_ARGUMENT);
     ASSERT_FALSE(asx_deadline_is_expired(NULL));
     ASSERT_FALSE(asx_deadline_is_expired_at(NULL, 1u));
@@ -308,9 +308,10 @@ TEST(deadline_and_cancellation_misuse_are_exact_and_non_emitting) {
 
     reset_all();
     ASSERT_EQ(asx_deadline_init(&deadline, 10u), ASX_OK);
-    ASSERT_EQ(asx_deadline_arm(&deadline, NULL), ASX_OK);
+    ASSERT_EQ(asx_deadline_arm(test_runtime(), &deadline, NULL), ASX_OK);
     guard_capture(&guard);
-    ASSERT_EQ(asx_deadline_arm(&deadline, NULL), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_deadline_arm(NULL, &deadline, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_deadline_arm(test_runtime(), &deadline, NULL), ASX_E_INVALID_STATE);
     guard_assert_no_semantic_mutation(&guard);
 
     reset_all();

@@ -128,7 +128,7 @@ static void reset_all(void) {
     asx_ghost_reset();
     asx_parallel_reset();
     asx_waker_reset(test_runtime());
-    asx_timer_wheel_reset(asx_timer_wheel_global());
+    asx_timer_wheel_reset(asx_timer_wheel_global(test_runtime()));
 #if ASX_HAS_NATIVE_IO_DRIVER
     asx_io_driver_reset();
 #endif
@@ -988,9 +988,10 @@ TEST(timed_equal_deadline_wakers_preserve_fire_order) {
     ASSERT_EQ(asx_inject_timed(t1), ASX_OK);
     ASSERT_EQ(asx_inject_timed(t2), ASX_OK);
 
-    ASSERT_EQ(asx_timer_register(asx_timer_wheel_global(), 100, &w1, &h1), ASX_OK);
-    ASSERT_EQ(asx_timer_register(asx_timer_wheel_global(), 100, &w2, &h2), ASX_OK);
-    ready_count = asx_timer_collect_expired(asx_timer_wheel_global(), 100, ready_wakers, 2);
+    ASSERT_EQ(asx_timer_register(asx_timer_wheel_global(test_runtime()), 100, &w1, &h1), ASX_OK);
+    ASSERT_EQ(asx_timer_register(asx_timer_wheel_global(test_runtime()), 100, &w2, &h2), ASX_OK);
+    ready_count =
+        asx_timer_collect_expired(asx_timer_wheel_global(test_runtime()), 100, ready_wakers, 2);
     ASSERT_EQ(ready_count, 2u);
     for (i = 0; i < ready_count; i++) {
         ASSERT_EQ(asx_waker_wake((const asx_waker *)ready_wakers[i]), ASX_OK);

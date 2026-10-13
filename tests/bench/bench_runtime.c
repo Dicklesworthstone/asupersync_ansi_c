@@ -480,7 +480,7 @@ static bench_stats bench_timer_register(void) {
     bench_samples_init(&s);
 
     for (iter = 0; iter < 2000; iter++) {
-        asx_timer_wheel *w = asx_timer_wheel_global();
+        asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
         asx_timer_handle h;
         uint64_t t0, t1;
         uint32_t t_i;
@@ -513,7 +513,7 @@ static bench_stats bench_timer_cancel(void) {
     bench_samples_init(&s);
 
     for (iter = 0; iter < 2000; iter++) {
-        asx_timer_wheel *w = asx_timer_wheel_global();
+        asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
         uint64_t t0, t1;
         uint32_t t_i;
 
@@ -548,7 +548,7 @@ static bench_stats bench_timer_collect(void) {
     bench_samples_init(&s);
 
     for (iter = 0; iter < 2000; iter++) {
-        asx_timer_wheel *w = asx_timer_wheel_global();
+        asx_timer_wheel *w = asx_timer_wheel_global(test_runtime());
         asx_timer_handle h;
         void *wakers[ASX_MAX_TIMERS];
         uint64_t t0, t1;

@@ -315,7 +315,7 @@ TEST(channel_arena_exhaustion) {
  * ==================================================================== */
 
 TEST(timer_exhaust_cancel_all_reregister) {
-    asx_timer_wheel *wheel = asx_timer_wheel_global();
+    asx_timer_wheel *wheel = asx_timer_wheel_global(test_runtime());
     asx_timer_handle handles[ASX_MAX_TIMERS];
     asx_timer_handle fresh;
     uint32_t i;
@@ -343,7 +343,7 @@ TEST(timer_exhaust_cancel_all_reregister) {
 }
 
 TEST(timer_cancel_reregister_interleaved) {
-    asx_timer_wheel *wheel = asx_timer_wheel_global();
+    asx_timer_wheel *wheel = asx_timer_wheel_global(test_runtime());
     asx_timer_handle handles[ASX_MAX_TIMERS];
     asx_timer_handle fresh;
     uint32_t i;
@@ -370,7 +370,7 @@ TEST(timer_cancel_reregister_interleaved) {
 }
 
 TEST(timer_fire_frees_slots_for_reregister) {
-    asx_timer_wheel *wheel = asx_timer_wheel_global();
+    asx_timer_wheel *wheel = asx_timer_wheel_global(test_runtime());
     asx_timer_handle handles[ASX_MAX_TIMERS];
     asx_timer_handle fresh;
     void *wakers[ASX_MAX_TIMERS];
@@ -638,7 +638,7 @@ TEST(determinism_timer_exhaustion_twice) {
     asx_status results[2];
 
     for (run = 0; run < 2; run++) {
-        asx_timer_wheel *wheel = asx_timer_wheel_global();
+        asx_timer_wheel *wheel = asx_timer_wheel_global(test_runtime());
         asx_timer_handle h;
         uint32_t i;
 
