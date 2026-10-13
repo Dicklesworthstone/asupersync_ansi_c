@@ -103,11 +103,7 @@ static int parallel_task_handle_valid(asx_task_id tid) {
 
 /* The clock the run reads: the runtime clock when hooks are installed, the
  * virtual clock otherwise (as the sweep scheduler's sched_now). */
-static asx_time parallel_now(void) {
-    asx_time now;
-    if (asx_runtime_now_ns(&now) != ASX_OK) { now = asx_runtime_virtual_now(); }
-    return now;
-}
+static asx_time parallel_now(const asx_kernel *k) { return asx_kernel_now_or_virtual_internal(k); }
 
 /* The earliest instant the task asked to run at: its armed wake timer or
  * its budget deadline (a deadline of 0 is due at once), whichever is
@@ -1060,12 +1056,12 @@ static uint32_t parallel_ms_until(asx_time deadline, asx_time now) {
 
 /* Whether time or external readiness can still wake a task: an armed task
  * timer, a pending I/O registration or a blocking-pool job. */
-static int parallel_can_wake_later(void) {
+static int parallel_can_wake_later(asx_kernel *k) {
     asx_time next = 0;
 #if PARALLEL_EXTERNAL_WAKES
     if (parallel_external_pending()) { return 1; }
 #endif
-    return asx_scheduler_next_timer_internal(&next);
+    return asx_scheduler_next_timer_internal(k, &next);
 }
 
 /* One idle step: fire due timers; with the virtual clock jump straight to
@@ -1074,31 +1070,32 @@ static int parallel_can_wake_later(void) {
  * deadline, ASX_TIME_INFINITE = none). Returns 1 when something may have
  * become runnable and the round loop should go on, 0 when nothing can wake
  * the remaining tasks (or a frozen clock never moves). */
-static int parallel_idle_step(asx_time run_deadline, asx_time *last_idle_now, uint32_t *stall) {
-    asx_time now = parallel_now();
+static int parallel_idle_step(asx_kernel *k, asx_time run_deadline, asx_time *last_idle_now,
+                              uint32_t *stall) {
+    asx_time now = parallel_now(k);
     asx_time next = 0;
 
-    if (asx_scheduler_next_timer_internal(&next)) {
+    if (asx_scheduler_next_timer_internal(k, &next)) {
         asx_time target = next;
         if (run_deadline < target) { target = run_deadline; }
         if (now < target && asx_runtime_clock_is_virtual()) {
-            asx_runtime_virtual_advance(target);
-            now = parallel_now();
+            asx_kernel_virtual_advance(k, target);
+            now = parallel_now(k);
         }
-        if (asx_scheduler_fire_due_timers_internal() > 0u) {
+        if (asx_scheduler_fire_due_timers_internal(k) > 0u) {
             *stall = 0u;
             return 1;
         }
         if (now < target) {
             parallel_block(parallel_ms_until(target, now));
-            now = parallel_now();
+            now = parallel_now(k);
         }
     }
 #if PARALLEL_EXTERNAL_WAKES
     else if (parallel_external_pending()) {
         if (run_deadline != ASX_TIME_INFINITE && now >= run_deadline) { return 1; }
         parallel_block(parallel_ms_until(run_deadline, now));
-        now = parallel_now();
+        now = parallel_now(k);
     }
 #endif
     else {
@@ -1290,19 +1287,19 @@ static asx_status parallel_run_impl(asx_region_id region, asx_budget *budget) {
         /* The run budget's deadline bounds the whole run, including time
          * spent waiting for a timer or I/O (as the sweep scheduler). */
         if (budget->deadline != ASX_TIME_INFINITE &&
-            asx_budget_is_past_deadline(budget, parallel_now())) {
+            asx_budget_is_past_deadline(budget, parallel_now(k))) {
             asx_trace_emit(ASX_TRACE_SCHED_BUDGET, ASX_INVALID_ID, round);
             return parallel_return_refused(ASX_E_TIMED_OUT);
         }
 
         /* Due task timers wake their parked tasks at the start of a round,
          * as a sweep round does. */
-        if (asx_scheduler_next_timer_internal(&next_timer)) {
-            (void)asx_scheduler_fire_due_timers_internal();
+        if (asx_scheduler_next_timer_internal(k, &next_timer)) {
+            (void)asx_scheduler_fire_due_timers_internal(k);
         }
         parallel_drain_ready_sources(region, round);
         parallel_promote_cancelled(k);
-        now = g_lanes[ASX_LANE_TIMED].count > 0u ? parallel_now() : 0u;
+        now = g_lanes[ASX_LANE_TIMED].count > 0u ? parallel_now(k) : 0u;
 
         total_active = asx_lane_total_tasks();
         if (total_active == 0) { return parallel_return_quiescent(round); }
@@ -1678,7 +1675,7 @@ static asx_status parallel_run_impl(asx_region_id region, asx_budget *budget) {
         if (!any_polled) {
             uint32_t parked = 0u;
             uint32_t unparked = 0u;
-            asx_time idle_now = g_lanes[ASX_LANE_TIMED].count > 0u ? parallel_now() : 0u;
+            asx_time idle_now = g_lanes[ASX_LANE_TIMED].count > 0u ? parallel_now(k) : 0u;
             int runnable = parallel_lane_has_eligible(k, ASX_LANE_CANCEL, idle_now) ||
                            parallel_lane_has_eligible(k, ASX_LANE_TIMED, idle_now) ||
                            parallel_lane_has_eligible(k, ASX_LANE_READY, idle_now);
@@ -1690,8 +1687,8 @@ static asx_status parallel_run_impl(asx_region_id region, asx_budget *budget) {
              * or not due yet: a parked task waits on a wake, a timed one on
              * its deadline, and time and external readiness can supply
              * both, as when the sweep idles. */
-            if (!runnable && (parked > 0u || parallel_can_wake_later()) &&
-                parallel_idle_step(budget->deadline, &last_idle_now, &idle_stall)) {
+            if (!runnable && (parked > 0u || parallel_can_wake_later(k)) &&
+                parallel_idle_step(k, budget->deadline, &last_idle_now, &idle_stall)) {
                 continue;
             }
 

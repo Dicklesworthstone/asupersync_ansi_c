@@ -28,7 +28,7 @@ asx_status asx_snapshot_take(const asx_lab *lab, asx_snapshot_id *out) {
         if (!g_snapshots[i].valid) {
             g_snapshots[i].config = lab->config;
             g_snapshots[i].entropy_state = lab->entropy_state;
-            g_snapshots[i].current_time = asx_runtime_virtual_now();
+            g_snapshots[i].current_time = asx_kernel_virtual_now(asx_kernel_for_tag(lab->rt.tag));
             g_snapshots[i].valid = 1;
             out->slot = i;
             if (i >= g_snapshot_count) g_snapshot_count = i + 1;
@@ -55,7 +55,7 @@ asx_status asx_snapshot_restore_checked(asx_lab *lab, asx_snapshot_id id,
     st = asx_lab_init_checked(lab, &snap->config, application_fingerprint);
     if (st != ASX_OK) return st;
     lab->entropy_state = snap->entropy_state;
-    asx_runtime_virtual_set_internal(snap->current_time);
+    asx_kernel_virtual_set_internal(asx_kernel_for_tag(lab->rt.tag), snap->current_time);
 
     return ASX_OK;
 }

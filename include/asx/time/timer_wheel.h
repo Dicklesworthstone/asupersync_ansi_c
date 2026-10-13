@@ -179,16 +179,108 @@ ASX_API int asx_timer_next_deadline(const asx_timer_wheel *wheel, asx_time *out_
 /* Get the global timer wheel instance. The runtime never collects it. */
 ASX_API asx_timer_wheel *asx_timer_wheel_global(void);
 
-#ifdef ASX_INTERNAL_TIMER_WHEEL_ACCESS
-/* The scheduler's own wheel for task wake and budget-deadline timers: the
- * same implementation as the global one, a separate instance with room
- * for two timers per task, emitting no trace events of its own (the
- * scheduler records sleeps itself). */
-ASX_API asx_timer_wheel *asx_timer_wheel_runtime(void);
-#endif
-
 #ifdef __cplusplus
 }
 #endif
 
 #endif /* ASX_TIME_TIMER_WHEEL_H */
+
+/* -------------------------------------------------------------------
+ * Internal access: the wheel's layout and the scheduler's instance.
+ *
+ * Guarded apart from the public part, so a unit that included the header
+ * without the access macro and then asks for it (runtime_internal.h) gets
+ * the layout too. The runtime kernel embeds the scheduler's wheel and its
+ * arena, one per runtime.
+ * ------------------------------------------------------------------- */
+
+#if defined(ASX_INTERNAL_TIMER_WHEEL_ACCESS) && !defined(ASX_TIME_TIMER_WHEEL_INTERNAL_H)
+#define ASX_TIME_TIMER_WHEEL_INTERNAL_H
+
+/* Geometry (wheel.rs:46-57) */
+#define TW_LEVELS 4u
+#define TW_SLOTS 256u
+#define TW_BITMAP_WORDS (TW_SLOTS / 64u)
+#define TW_TICK_NS ((uint64_t)1000000u) /* level 0 resolution: 1 ms */
+#define TW_NIL 0xFFFFu
+
+/* Arena indices are 16-bit. */
+#if (ASX_MAX_TIMERS) > 65534
+#error "ASX_MAX_TIMERS must be at most 65534"
+#endif
+#if (2 * (ASX_MAX_TASKS)) > 65534
+#error "twice ASX_MAX_TASKS must be at most 65534 (the runtime wheel holds two timers per task)"
+#endif
+
+#define TW_APP_CAPACITY ((uint32_t)(ASX_MAX_TIMERS))
+#define TW_RUNTIME_CAPACITY (2u * (uint32_t)(ASX_MAX_TASKS))
+
+/* Where a timer is stored. */
+#define TW_FREE 0u
+#define TW_READY 1u
+#define TW_BUCKET 2u
+#define TW_OVERFLOW 3u
+
+typedef struct {
+    /* When this timer fires (clamped to the maximum duration). */
+    asx_time deadline;
+    /* Opaque callback data. */
+    void *waker_data;
+    /* Registration order: the overflow heap's tie-break. */
+    uint64_t seq;
+    /* For stale-handle detection. */
+    uint32_t generation;
+    /* List links; `next` is also the free-list link. */
+    uint16_t prev;
+    uint16_t next;
+    /* Position in the overflow heap. */
+    uint16_t heap_pos;
+    /* TW_FREE, TW_READY, TW_BUCKET or TW_OVERFLOW; for TW_BUCKET, the
+     * wheel level and the slot within it. */
+    uint8_t where;
+    uint8_t level;
+    uint8_t slot;
+} tw_entry;
+
+typedef struct {
+    uint16_t head;
+    uint16_t tail;
+} tw_list;
+
+struct asx_timer_wheel {
+    tw_entry *entries;
+    uint16_t *overflow; /* binary min-heap of entry indices by (deadline, seq) */
+    uint32_t capacity;
+    uint32_t slot_count; /* arena high-water mark */
+    uint32_t free_head;  /* LIFO list of released slots, as Rust's slab */
+    uint32_t active_count;
+    uint32_t overflow_len;
+    uint64_t next_seq;
+    uint64_t current_tick; /* current time in 1 ms ticks */
+    uint32_t cursor[TW_LEVELS];
+    uint64_t occupied[TW_LEVELS][TW_BITMAP_WORDS];
+    tw_list bucket[TW_LEVELS][TW_SLOTS];
+    tw_list ready;
+    uint64_t max_timer_duration_ns; /* longer registrations are clamped (wheel.rs:98-104) */
+    uint64_t max_wheel_duration_ns; /* longer ones wait in the overflow heap */
+    int traced;                     /* emit TIMER_SET / TIMER_FIRE / TIMER_CANCEL */
+};
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* Set up `wheel` as a scheduler wheel over the caller's arena of
+ * TW_RUNTIME_CAPACITY entries and overflow slots: the same implementation as
+ * the global wheel, with room for two timers per task, emitting no trace
+ * events of its own (the scheduler records sleeps itself). Clears the
+ * arena; a wheel set up once is reset with asx_timer_wheel_reset, which
+ * keeps stale-handle safety across the reset. */
+ASX_API void asx_timer_wheel_setup_scheduler(asx_timer_wheel *wheel, tw_entry *entries,
+                                             uint16_t *overflow);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* ASX_INTERNAL_TIMER_WHEEL_ACCESS */

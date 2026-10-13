@@ -16,6 +16,7 @@
 #include <asx/core/cancel.h>
 #include <asx/core/cleanup.h>
 #include <asx/core/outcome.h>
+#define ASX_INTERNAL_TIMER_WHEEL_ACCESS 1
 #include <asx/time/timer_wheel.h>
 #define ASX_INTERNAL_TRACE_FAMILY_ACCESS 1
 #include <asx/runtime/trace.h>
@@ -217,8 +218,8 @@ typedef struct {
      * tasks in this order, as Rust's insertion-ordered Membership. */
     uint64_t member_seq;
     asx_status last_error; /* status returned by a failing poll_fn */
-    /* Task timer: the task's registration in the runtime timer wheel
-     * (asx_timer_wheel_runtime), `timer` valid while `timer_armed`. */
+    /* Task timer: the task's registration in its kernel's scheduler wheel
+     * (asx_kernel.wheel), `timer` valid while `timer_armed`. */
     asx_time wake_at;
     asx_timer_handle timer;
     uint8_t timer_armed;
@@ -400,6 +401,19 @@ typedef struct asx_kernel {
     uint32_t finalizer_poll_budget;
     uint64_t finalizer_time_budget_ns;
     asx_finalizer_escalation finalizer_escalation;
+    /* The default clock hooks' virtual time and the default entropy hook's
+     * stream: this runtime's own, so one runtime's sleeps and draws do not
+     * move another's. entropy_state is the LCG state xor the default seed
+     * (hooks.c), so a zeroed kernel draws from the seed. */
+    asx_time virtual_now;
+    uint64_t entropy_state;
+    /* The scheduler's timer wheel and its arena: a task's wake timer and
+     * its lab budget deadline, two per task slot, tokened by slot index of
+     * this kernel. Set up by asx_runtime_clear_internal (the wheel's arena
+     * pointers point into this block); zero until then. */
+    asx_timer_wheel wheel;
+    tw_entry wheel_entries[TW_RUNTIME_CAPACITY];
+    uint16_t wheel_overflow[TW_RUNTIME_CAPACITY];
     uint32_t rt_generation; /* nonzero while an initialized runtime holds it */
     uint16_t tag;           /* its index in g_kernels; stamped on its handles */
 } asx_kernel;
@@ -516,9 +530,10 @@ void asx_task_on_complete_internal(asx_task_slot *task, asx_region_slot *region)
  * obligation-mailbox drain at the end of a lab poll, bd-2fga). */
 void asx_obligation_drain_posts_internal(asx_kernel *k);
 
-/* Reset wake-driven scheduler state (timer heap, sequence counters).
- * Called from asx_runtime_reset(). Defined in scheduler.c. */
-void asx_scheduler_reset_internal(void);
+/* Reset wake-driven scheduler state: kernel `k`'s timer wheel (set up on its
+ * first reset) and, with no other kernel held, the current task. Called
+ * from the clear. Defined in scheduler.c. */
+void asx_scheduler_reset_internal(asx_kernel *k);
 
 /* Initialize the scheduling fields of a freshly allocated task slot. */
 void asx_task_sched_init_internal(asx_task_slot *task);
@@ -557,14 +572,14 @@ uint32_t asx_region_live_admitted_internal(const asx_region_slot *r);
 ASX_MUST_USE asx_status asx_task_refuse_admission_internal(asx_task_slot *t, asx_region_slot *r,
                                                            asx_status why);
 
-/* The earliest armed task timer (task wake timers and, under lab
- * dispatch, budget-deadline timers): 1 and *out_next, or 0 when none is
+/* The earliest armed task timer of kernel `k` (task wake timers and, under
+ * lab dispatch, budget-deadline timers): 1 and *out_next, or 0 when none is
  * armed. Defined in scheduler.c. */
-int asx_scheduler_next_timer_internal(asx_time *out_next);
+int asx_scheduler_next_timer_internal(asx_kernel *k, asx_time *out_next);
 
-/* Fire the task timers due now (waking their tasks); the number woken.
- * Defined in scheduler.c. */
-uint32_t asx_scheduler_fire_due_timers_internal(void);
+/* Fire the task timers of kernel `k` due now (waking their tasks); the
+ * number woken. Defined in scheduler.c. */
+uint32_t asx_scheduler_fire_due_timers_internal(asx_kernel *k);
 
 /* Run `t`'s poll function as the current task (asx_task_current() names
  * `tid` inside), as the sweep does, for a run loop of its own
@@ -572,9 +587,30 @@ uint32_t asx_scheduler_fire_due_timers_internal(void);
  * scheduler.c. */
 asx_status asx_task_poll_current_internal(asx_task_slot *t, asx_task_id tid);
 
-/* Set the runtime virtual clock, backwards too (a lab snapshot restore).
- * Defined in hooks.c. */
-void asx_runtime_virtual_set_internal(asx_time to);
+/* The virtual clock of kernel `k`: read, advance (no-op unless `to` is in
+ * the future) and set (backwards too, a lab snapshot restore). Defined in
+ * hooks.c. asx_runtime_virtual_now/advance of the public API are kernel 0's. */
+asx_time asx_kernel_virtual_now(const asx_kernel *k);
+void asx_kernel_virtual_advance(asx_kernel *k, asx_time to);
+void asx_kernel_virtual_set_internal(asx_kernel *k, asx_time to);
+
+/* asx_runtime_now_ns and asx_runtime_random_u64 as runtime `k` sees them:
+ * the default clock and entropy hooks answer from k's own virtual time and
+ * stream, any other installed hook as it is. Defined in hooks.c. */
+asx_status asx_kernel_now_ns(const asx_kernel *k, asx_time *out_now);
+asx_status asx_kernel_random_u64(asx_kernel *k, uint64_t *out_value);
+
+/* The reading scheduling and stamping take: asx_kernel_now_ns, or k's virtual
+ * time when no clock hook answers. */
+asx_time asx_kernel_now_or_virtual_internal(const asx_kernel *k);
+
+/* The same clock read without asx_kernel_now_ns's side effects (fault
+ * injection call counts, the hindsight record): bookkeeping that must shift
+ * neither, an obligation's held time. */
+asx_time asx_kernel_clock_peek_internal(const asx_kernel *k);
+
+/* Restart k's virtual clock and entropy stream, as a runtime's reset does. */
+void asx_kernel_clock_reset_internal(asx_kernel *k);
 
 /* Finalize a closing region whose tasks have all completed, then its
  * closing ancestors in turn (Rust advance_region_state). No-op for an Open
@@ -586,7 +622,7 @@ void asx_trace_emit_payload_internal(asx_trace_event_kind kind, uint64_t entity_
                                      const asx_trace_payload *payload);
 
 /* The time a cancel reason is stamped with (runtime clock, else virtual). */
-asx_time asx_cancel_now_internal(void);
+asx_time asx_cancel_now_internal(const asx_kernel *k);
 
 /* Where a cancel request comes from. It decides the trace event and, under
  * lab dispatch, how the task is scheduled (Rust: run.rs driver cancels,

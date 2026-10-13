@@ -653,6 +653,86 @@ TEST(kernel_clear_leaves_another_held_kernel_and_the_process_state_alone) {
     asx_runtime_reset();
 }
 
+/* The default seeded entropy stream's step (hooks.c), as the channel-wake
+ * test mirrors it: the stream every kernel draws, from the same seed. */
+static uint64_t default_stream_next(uint64_t state) {
+    return state * 6364136223846793005ULL + 1442695040888963407ULL;
+}
+
+/* K18: the default clock and entropy hooks answer from the kernel asked. A
+ * kernel starts at time 0 and draws from the default seed, its clock and its
+ * stream move only through it, and the public calls are kernel 0's. */
+TEST(kernel_clock_and_entropy_belong_to_the_kernel) {
+    asx_runtime rt;
+    asx_runtime_config cfg;
+    asx_runtime_hooks hooks;
+    asx_time now = 0;
+    uint64_t draw = 0;
+    uint64_t s1 = default_stream_next(0x5DEECE66DULL);
+    uint64_t s2 = default_stream_next(s1);
+
+    make_valid_config(&cfg);
+    make_valid_hooks(&hooks);
+    MUST_OK(asx_runtime_init(&rt, &cfg, &hooks));
+
+    ASSERT_EQ(asx_kernel_virtual_now(g_kernels[0]), (asx_time)0);
+    ASSERT_EQ(asx_kernel_random_u64(g_kernels[0], &draw), ASX_OK);
+    ASSERT_EQ(draw, s1);
+    ASSERT_EQ(asx_runtime_random_u64(&draw), ASX_OK);
+    ASSERT_EQ(draw, s2);
+
+    /* Advance never goes back; set does. The public clock is kernel 0's. */
+    asx_kernel_virtual_advance(g_kernels[0], 500u);
+    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)500);
+    ASSERT_EQ(asx_kernel_now_ns(g_kernels[0], &now), ASX_OK);
+    ASSERT_EQ(now, (asx_time)500);
+    asx_kernel_virtual_advance(g_kernels[0], 100u);
+    ASSERT_EQ(asx_kernel_virtual_now(g_kernels[0]), (asx_time)500);
+    asx_kernel_virtual_set_internal(g_kernels[0], 100u);
+    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)100);
+
+    /* A reset restarts both. */
+    asx_kernel_clock_reset_internal(g_kernels[0]);
+    ASSERT_EQ(asx_kernel_virtual_now(g_kernels[0]), (asx_time)0);
+    ASSERT_EQ(asx_kernel_random_u64(g_kernels[0], &draw), ASX_OK);
+    ASSERT_EQ(draw, s1);
+
+#if ASX_MAX_RUNTIMES >= 2u
+    {
+        storage_block blk2;
+        asx_kernel *k2;
+
+        ASSERT_TRUE(storage_block_make(&blk2, 0u));
+        k2 = (asx_kernel *)(void *)blk2.block;
+        k2->tag = 1u;
+        k2->rt_generation = 9u;
+        g_kernels[1] = k2;
+
+        /* A zeroed kernel is at time 0 and at the seed, whatever kernel 0
+         * has done; moving one clock does not move the other. */
+        ASSERT_EQ(asx_kernel_virtual_now(k2), (asx_time)0);
+        asx_kernel_virtual_advance(k2, 900u);
+        ASSERT_EQ(asx_kernel_now_ns(k2, &now), ASX_OK);
+        ASSERT_EQ(now, (asx_time)900);
+        ASSERT_EQ(asx_kernel_now_ns(g_kernels[0], &now), ASX_OK);
+        ASSERT_EQ(now, (asx_time)0);
+
+        /* Interleaved draws: each kernel steps its own stream. */
+        ASSERT_EQ(asx_kernel_random_u64(k2, &draw), ASX_OK);
+        ASSERT_EQ(draw, s1);
+        ASSERT_EQ(asx_kernel_random_u64(g_kernels[0], &draw), ASX_OK);
+        ASSERT_EQ(draw, s2);
+        ASSERT_EQ(asx_kernel_random_u64(k2, &draw), ASX_OK);
+        ASSERT_EQ(draw, s2);
+
+        g_kernels[1] = NULL;
+        storage_block_free(&blk2);
+    }
+#endif
+    asx_runtime_shutdown(&rt);
+    asx_runtime_reset();
+}
+
 TEST(runtime_storage_refusals_bind_nothing_and_change_no_byte) {
     asx_runtime rt;
     asx_runtime before;
@@ -1855,6 +1935,7 @@ int main(void) {
     RUN_TEST(runtime_arenas_live_in_the_callers_storage_and_return_to_the_static_block);
     RUN_TEST(kernel_registry_names_only_the_kernels_runtimes_hold);
     RUN_TEST(kernel_clear_leaves_another_held_kernel_and_the_process_state_alone);
+    RUN_TEST(kernel_clock_and_entropy_belong_to_the_kernel);
     RUN_TEST(runtime_storage_refusals_bind_nothing_and_change_no_byte);
     RUN_TEST(refused_storage_init_preserves_the_live_runtime_and_the_block);
     RUN_TEST(runtimes_in_turn_in_their_own_blocks_do_not_share_arenas);

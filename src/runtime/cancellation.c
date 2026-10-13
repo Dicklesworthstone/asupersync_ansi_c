@@ -27,11 +27,11 @@ static uint64_t asx_trace_task_transition_aux(asx_task_state from, asx_task_stat
  * ------------------------------------------------------------------- */
 
 /* The time a cancel reason is stamped with: the runtime clock, or the
- * virtual clock when no clock hook is installed. */
-asx_time asx_cancel_now_internal(void) {
-    asx_time now;
-    if (asx_runtime_now_ns(&now) != ASX_OK) now = asx_runtime_virtual_now();
-    return now;
+ * virtual clock when no clock hook is installed, of the kernel `k` of the
+ * entity cancelled (kernel 0 for a handle no runtime holds, which read the
+ * clock before, too). */
+asx_time asx_cancel_now_internal(const asx_kernel *k) {
+    return asx_kernel_now_or_virtual_internal(k != NULL ? k : g_kernels[0]);
 }
 
 asx_cancel_reason asx_cancel_reason_default(asx_cancel_kind kind, const char *message) {
@@ -369,7 +369,7 @@ asx_status asx_task_cancel_with_origin(asx_task_id id, asx_cancel_kind kind,
     reason.kind = kind;
     reason.origin_region = origin_region;
     reason.origin_task = origin_task;
-    reason.timestamp = asx_cancel_now_internal();
+    reason.timestamp = asx_cancel_now_internal(asx_kernel_of(id));
     reason.message = NULL;
     reason.cause = NULL;
     reason.truncated = 0;
@@ -490,7 +490,7 @@ uint32_t asx_cancel_propagate(asx_region_id region, asx_cancel_kind kind) {
     asx_kernel *k = asx_kernel_of(region);
     uint32_t r;
     uint32_t n;
-    asx_time now = asx_cancel_now_internal();
+    asx_time now = asx_cancel_now_internal(k);
 
     /* Task-only structured cancellation: the region's own tasks receive
      * `kind`, attributed to the region; tasks of each descendant region a
@@ -639,7 +639,7 @@ asx_status asx_checkpoint(asx_task_id self, asx_checkpoint_result *out) {
      * cancel already pending. Only a first cancel of a task with a deadline
      * timer (not a cleanup task) is stamped with the deadline, as the timer. */
     if (t->budget.deadline != ASX_TIME_INFINITE && !asx_task_is_terminal(t->state)) {
-        asx_time now = asx_cancel_now_internal();
+        asx_time now = asx_cancel_now_internal(asx_kernel_of(self));
         if (now >= t->budget.deadline) {
             asx_time stamp = t->budget.deadline;
             if (asx_lab_dispatch_active() || t->cancel_pending || t->cleanup_only) stamp = now;
@@ -658,12 +658,12 @@ asx_status asx_checkpoint(asx_task_id self, asx_checkpoint_result *out) {
     if (!asx_task_is_terminal(t->state)) {
         if (t->budget.poll_quota == 0u) {
             st = asx_task_cancel_budget_internal(self, ASX_CANCEL_POLL_QUOTA,
-                                                 asx_cancel_now_internal());
+                                                 asx_cancel_now_internal(asx_kernel_of(self)));
             (void)st;
             budget_cancel = 1;
         } else if (t->budget.cost_quota == 0u) {
             st = asx_task_cancel_budget_internal(self, ASX_CANCEL_COST_BUDGET,
-                                                 asx_cancel_now_internal());
+                                                 asx_cancel_now_internal(asx_kernel_of(self)));
             (void)st;
             budget_cancel = 1;
         }

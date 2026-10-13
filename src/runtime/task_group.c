@@ -15,10 +15,9 @@
 #include <asx/runtime/task_group.h>
 #include <string.h>
 
-static asx_time group_now(void) {
-    asx_time now;
-    if (asx_runtime_now_ns(&now) != ASX_OK) now = asx_runtime_virtual_now();
-    return now;
+/* The clock of the owner's runtime. */
+static asx_time group_now(const asx_task_slot *owner) {
+    return asx_kernel_now_or_virtual_internal(asx_kernel_of(owner->region));
 }
 
 /* Status a completed member contributes to the group result. */
@@ -280,7 +279,7 @@ static void group_decide(asx_task_group *g, asx_task_slot *owner, asx_task_id se
         group_begin_drain(g, ASX_CANCEL_PARENT, ASX_E_CANCELLED, 1);
         return;
     }
-    if (g->deadline != ASX_TIME_INFINITE && group_now() >= g->deadline) {
+    if (g->deadline != ASX_TIME_INFINITE && group_now(owner) >= g->deadline) {
         group_begin_drain(g, ASX_CANCEL_TIMEOUT,
                           g->mode == ASX_TASK_GROUP_QUORUM ? ASX_E_THRESHOLD_TIMEOUT
                                                            : ASX_E_TIMED_OUT,
@@ -327,7 +326,7 @@ static asx_status group_first_ok_poll(asx_task_group *g, asx_task_slot *owner, a
             if (!g->completed[cur]) {
                 /* A deadline ends the attempt with TIMEOUT. */
                 if (!g->forwarded && g->deadline != ASX_TIME_INFINITE &&
-                    group_now() >= g->deadline) {
+                    group_now(owner) >= g->deadline) {
                     st = asx_task_cancel(g->members[cur], ASX_CANCEL_TIMEOUT);
                     (void)st;
                     g->forwarded = 1u;

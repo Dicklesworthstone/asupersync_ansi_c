@@ -132,12 +132,13 @@ void asx_runtime_clear_internal(asx_kernel *k) {
     k->leak_count = 0;
     k->cleanup_hard_bound = 0;
     k->member_seq = 0;
+    asx_kernel_clock_reset_internal(k);
+    asx_scheduler_reset_internal(k);
     asx_cancel_reset_internal(k->tag);
     asx_region_finalizers_reset_internal(k);
     if (asx_kernel_other_held(k)) return; /* the subsystems below are process-wide */
     asx_ghost_reset();
     asx_scheduler_event_reset();
-    asx_scheduler_reset_internal();
     asx_lab_dispatch_reset_internal();
     /* Before the primitives: every wait queue is empty afterwards. */
     asx_wait_pool_reset();
@@ -483,29 +484,18 @@ static asx_leak_response obligation_leak_batch_policy(asx_kernel *k, uint64_t n)
     return k->leak_response;
 }
 
-/* The runtime's clock, read without the side effects of
- * asx_runtime_now_ns (its fault-injection call counts and the hindsight
- * log): an obligation's held time is bookkeeping and must not shift
- * either. Deterministic builds read the logical clock, as the scheduler's
- * own reading does, so the value is the virtual time Rust's lab reports. */
-static asx_time obligation_clock(void) {
-    const asx_runtime_hooks *hooks = asx_runtime_get_hooks();
-    if (hooks != NULL) {
-#if ASX_DETERMINISTIC
-        if (hooks->clock.logical_now_ns_fn != NULL) {
-            return hooks->clock.logical_now_ns_fn(hooks->clock.ctx);
-        }
-#endif
-        if (hooks->clock.now_ns_fn != NULL) return hooks->clock.now_ns_fn(hooks->clock.ctx);
-    }
-    return asx_runtime_virtual_now();
-}
+/* The kernel's clock, read without the side effects of asx_runtime_now_ns
+ * (its fault-injection call counts and the hindsight log): an obligation's
+ * held time is bookkeeping and must not shift either. Deterministic builds
+ * read the logical clock, as the scheduler's own reading does, so the value
+ * is the virtual time Rust's lab reports. */
+static asx_time obligation_clock(const asx_kernel *k) { return asx_kernel_clock_peek_internal(k); }
 
 /* How long the obligation has been held, as of the resolution being
  * applied (Rust's held_duration_ns = now - reserved_at). Taken before the
  * resolution's trace event, so an observer reads it with the event. */
-static void obligation_note_held(asx_obligation_slot *o) {
-    asx_time now = obligation_clock();
+static void obligation_note_held(const asx_kernel *k, asx_obligation_slot *o) {
+    asx_time now = obligation_clock(k);
     o->held_ns = now >= o->reserved_at ? now - o->reserved_at : 0u;
 }
 
@@ -532,7 +522,7 @@ static int obligation_leak_apply(asx_kernel *k, uint32_t idx, asx_leak_response 
         asx_handle_mint(k, ASX_TYPE_OBLIGATION, (uint16_t)(1u << (unsigned)ASX_OBLIGATION_RESERVED),
                         asx_handle_pack_index(o->generation, (uint16_t)idx));
     o->counted = 0;
-    obligation_note_held(o);
+    obligation_note_held(k, o);
     if (policy == ASX_LEAK_RECOVER) {
         /* Recovered leak: abort, still counted as a leak. */
         o->state = ASX_OBLIGATION_ABORTED;
@@ -717,7 +707,7 @@ void asx_task_on_complete_internal(asx_task_slot *task, asx_region_slot *region)
     if (region != NULL && region->task_count > 0u) region->task_count--;
     /* Watch effects dispatch after the join waiters (lab/runtime.rs:5010). */
     asx_watches_task_finished(asx_task_handle_for_slot(k, (uint32_t)(task - k->tasks)),
-                              &task->outcome, obligation_clock());
+                              &task->outcome, obligation_clock(k));
     if (task->detached) { asx_task_slot_release(k, (uint32_t)(task - k->tasks)); }
 }
 
@@ -1698,7 +1688,7 @@ static void obligation_apply_reserve(asx_kernel *k, uint32_t idx,
     asx_trace_payload payload = {0};
     /* Rust stamps the record when the reserve is applied: a posted
      * reserve's clock is the end of its poll, not the call. */
-    k->obligations[idx].reserved_at = obligation_clock();
+    k->obligations[idx].reserved_at = obligation_clock(k);
     asx_ghost_obligation_reserved(id, region);
     (void)asx_event_emit(ASX_EVENT_OBLIGATION_CREATE, id, (uint64_t)region, ASX_OK);
     payload.obligation = original;
@@ -1707,7 +1697,7 @@ static void obligation_apply_reserve(asx_kernel *k, uint32_t idx,
 
 static void obligation_apply_resolution(asx_kernel *k, uint32_t idx, asx_obligation_state to) {
     asx_obligation_id id = obligation_handle(k, idx);
-    obligation_note_held(&k->obligations[idx]);
+    obligation_note_held(k, &k->obligations[idx]);
     (void)asx_ghost_check_obligation_transition(id, ASX_OBLIGATION_RESERVED, to);
     asx_ghost_obligation_resolved(id);
     if (to == ASX_OBLIGATION_COMMITTED) {

@@ -1440,11 +1440,7 @@ asx_status asx_lab_forced_pick(uint64_t step, asx_time now, uint32_t *out_slot,
     return ASX_OK;
 }
 
-static asx_time lab_clock_now(void) {
-    asx_time now = 0u;
-    if (asx_runtime_now_ns(&now) != ASX_OK) now = asx_runtime_virtual_now();
-    return now;
-}
+static asx_time lab_clock_now(void) { return asx_kernel_now_or_virtual_internal(lab_kernel()); }
 
 uint64_t asx_scheduler_schedule_certificate(void) { return g_lab_cert; }
 

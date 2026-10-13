@@ -235,40 +235,57 @@ static void static_arena_free(void *ctx, void *ptr) {
     (void)static_arena_header_for((asx_static_arena *)ctx, ptr);
 }
 
-/* Virtual time: the default clock hooks read this counter, which only the
- * scheduler advances (to the next armed task timer) when every runnable
- * task is parked. This is lab-runtime time: deterministic, and sleeping
- * costs no wall-clock time. Real platforms install real clock hooks. */
-static asx_time g_virtual_now = 0;
-
+/* Virtual time: the default clock hooks read the kernel's counter, which
+ * only the scheduler advances (to the next armed task timer) when every
+ * runnable task is parked. This is lab-runtime time: deterministic, and
+ * sleeping costs no wall-clock time. Real platforms install real clock
+ * hooks. The counter is the runtime's own (asx_kernel.virtual_now); the
+ * hook functions below are what a caller that invokes the table itself
+ * gets, kernel 0's, and asx_kernel_now_ns answers from the kernel it is
+ * given. */
 static asx_time default_logical_clock(void *ctx) {
     (void)ctx;
-    return g_virtual_now;
+    return g_kernels[0]->virtual_now;
 }
 
 static asx_time default_wall_clock(void *ctx) {
     (void)ctx;
-    return g_virtual_now;
+    return g_kernels[0]->virtual_now;
 }
 
-asx_time asx_runtime_virtual_now(void) { return g_virtual_now; }
+asx_time asx_kernel_virtual_now(const asx_kernel *k) { return k->virtual_now; }
 
-void asx_runtime_virtual_advance(asx_time to) {
-    if (to > g_virtual_now) g_virtual_now = to;
+void asx_kernel_virtual_advance(asx_kernel *k, asx_time to) {
+    if (to > k->virtual_now) k->virtual_now = to;
 }
 
-void asx_runtime_virtual_set_internal(asx_time to) { g_virtual_now = to; }
+void asx_kernel_virtual_set_internal(asx_kernel *k, asx_time to) { k->virtual_now = to; }
+
+asx_time asx_runtime_virtual_now(void) { return asx_kernel_virtual_now(g_kernels[0]); }
+
+void asx_runtime_virtual_advance(asx_time to) { asx_kernel_virtual_advance(g_kernels[0], to); }
 
 /* The default seeded entropy stream (an LCG; real deployments install
  * their own source). It restarts with the runtime, as the virtual clock
- * does, so every runtime of a deterministic build draws the same values. */
+ * does, so every runtime of a deterministic build draws the same values.
+ * A kernel stores the state xor the seed (zero is the seed). */
 #define ASX_DEFAULT_ENTROPY_SEED 0x5DEECE66DULL
-static uint64_t g_seeded_entropy = ASX_DEFAULT_ENTROPY_SEED;
+
+static uint64_t seeded_entropy_next(asx_kernel *k) {
+    uint64_t state = k->entropy_state ^ ASX_DEFAULT_ENTROPY_SEED;
+    state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+    k->entropy_state = state ^ ASX_DEFAULT_ENTROPY_SEED;
+    return state;
+}
 
 static uint64_t default_seeded_entropy(void *ctx) {
     (void)ctx;
-    g_seeded_entropy = g_seeded_entropy * 6364136223846793005ULL + 1442695040888963407ULL;
-    return g_seeded_entropy;
+    return seeded_entropy_next(g_kernels[0]);
+}
+
+void asx_kernel_clock_reset_internal(asx_kernel *k) {
+    k->virtual_now = 0;
+    k->entropy_state = 0;
 }
 
 static asx_status default_ghost_reactor_wait(void *ctx, uint64_t logical_step,
@@ -289,8 +306,6 @@ static int g_hooks_installed = 0;
 void asx_runtime_hooks_reset_internal(void) {
     memset(&g_hooks, 0, sizeof(g_hooks));
     g_hooks_installed = 0;
-    g_virtual_now = 0;
-    g_seeded_entropy = ASX_DEFAULT_ENTROPY_SEED;
 }
 
 /* ------------------------------------------------------------------ */
@@ -614,7 +629,10 @@ int asx_runtime_clock_is_virtual(void) {
     return 1;
 }
 
-asx_status asx_runtime_now_ns(asx_time *out_now) {
+/* The clock as kernel `k` reads it. The default clock hooks answer with the
+ * virtual time of the kernel asked (the table is shared, the counter is the
+ * runtime's own). */
+asx_status asx_kernel_now_ns(const asx_kernel *k, asx_time *out_now) {
     asx_time raw;
     uint32_t i;
 
@@ -622,11 +640,15 @@ asx_status asx_runtime_now_ns(asx_time *out_now) {
     if (!g_hooks_installed) return ASX_E_HOOK_MISSING;
 
 #if ASX_DETERMINISTIC
-    if (g_hooks.clock.logical_now_ns_fn) {
+    if (g_hooks.clock.logical_now_ns_fn == default_logical_clock) {
+        raw = k->virtual_now;
+    } else if (g_hooks.clock.logical_now_ns_fn) {
         raw = g_hooks.clock.logical_now_ns_fn(g_hooks.clock.ctx);
     } else
 #endif
-        if (g_hooks.clock.now_ns_fn) {
+        if (g_hooks.clock.now_ns_fn == default_wall_clock) {
+        raw = k->virtual_now;
+    } else if (g_hooks.clock.now_ns_fn) {
         raw = g_hooks.clock.now_ns_fn(g_hooks.clock.ctx);
     } else {
         return ASX_E_HOOK_MISSING;
@@ -655,12 +677,36 @@ asx_status asx_runtime_now_ns(asx_time *out_now) {
     return ASX_OK;
 }
 
+asx_status asx_runtime_now_ns(asx_time *out_now) {
+    return asx_kernel_now_ns(g_kernels[0], out_now);
+}
+
+asx_time asx_kernel_now_or_virtual_internal(const asx_kernel *k) {
+    asx_time now;
+    if (asx_kernel_now_ns(k, &now) != ASX_OK) now = k->virtual_now;
+    return now;
+}
+
+asx_time asx_kernel_clock_peek_internal(const asx_kernel *k) {
+    if (g_hooks_installed) {
+#if ASX_DETERMINISTIC
+        if (g_hooks.clock.logical_now_ns_fn == default_logical_clock) return k->virtual_now;
+        if (g_hooks.clock.logical_now_ns_fn != NULL) {
+            return g_hooks.clock.logical_now_ns_fn(g_hooks.clock.ctx);
+        }
+#endif
+        if (g_hooks.clock.now_ns_fn == default_wall_clock) return k->virtual_now;
+        if (g_hooks.clock.now_ns_fn != NULL) return g_hooks.clock.now_ns_fn(g_hooks.clock.ctx);
+    }
+    return k->virtual_now;
+}
+
 /* Whether the installed entropy family has any source. */
 static int entropy_source_installed(void) {
     return g_hooks.entropy.random_u64_fn != NULL || g_hooks.entropy.try_u64_fn != NULL;
 }
 
-asx_status asx_runtime_random_u64(uint64_t *out_value) {
+asx_status asx_kernel_random_u64(asx_kernel *k, uint64_t *out_value) {
     uint32_t i;
 
     if (!out_value) return ASX_E_INVALID_ARGUMENT;
@@ -682,6 +728,8 @@ asx_status asx_runtime_random_u64(uint64_t *out_value) {
         asx_status st = g_hooks.entropy.try_u64_fn(g_hooks.entropy.ctx, &value);
         if (st != ASX_OK) return st;
         *out_value = value;
+    } else if (g_hooks.entropy.random_u64_fn == default_seeded_entropy) {
+        *out_value = seeded_entropy_next(k); /* the runtime's own stream */
     } else {
         *out_value = g_hooks.entropy.random_u64_fn(g_hooks.entropy.ctx);
     }
@@ -699,6 +747,10 @@ asx_status asx_runtime_random_u64(uint64_t *out_value) {
     asx_hindsight_log(ASX_ND_ENTROPY_READ, 0, *out_value);
 
     return ASX_OK;
+}
+
+asx_status asx_runtime_random_u64(uint64_t *out_value) {
+    return asx_kernel_random_u64(g_kernels[0], out_value);
 }
 
 asx_status asx_runtime_random_secure_u64(uint64_t *out_value) {
@@ -1354,8 +1406,12 @@ asx_status asx_canonical_fixture_validate(const asx_canonical_fixture *fixture) 
         return ASX_E_INVALID_ARGUMENT;
     }
 
+    /* A legacy fixture's input carries its op list; a DSL v2 one is the
+     * scenario itself, named by its schema (bd-vhrp). */
     if (!asx_codec_json_value_matches(fixture->input_json, '{') ||
-        strstr(fixture->input_json, "\"ops\"") == NULL) {
+        strstr(fixture->input_json, strcmp(fixture->scenario_dsl_version, "asx.scenario.v2") == 0
+                                        ? "\"schema\":\"asx.scenario.v2\""
+                                        : "\"ops\"") == NULL) {
         return ASX_E_INVALID_ARGUMENT;
     }
     if (!asx_codec_json_value_matches(fixture->expected_events_json, '[') ||
@@ -2058,6 +2114,11 @@ static asx_status asx_codec_bin_append_string_field(asx_codec_buffer *buf, uint3
 
     if (buf == NULL || value == NULL) { return ASX_E_INVALID_ARGUMENT; }
     len = strlen(value);
+#ifdef ASX_MUTANT_CODEC_BIN_SNAPSHOT_TRUNCATED
+    /* Planted bug, compiled only by tests/gates/test_oracle_mutants.sh
+     * (bd-vhrp): the BIN frame drops the snapshot's last byte. */
+    if (tag == ASX_CODEC_BIN_TAG_EXPECTED_FINAL_SNAPSHOT_JSON && len > 1u) len--;
+#endif
 
     st = asx_codec_bin_append_key(buf, tag, ASX_CODEC_BIN_WIRE_BYTES);
     if (st != ASX_OK) { return st; }
@@ -2163,8 +2224,13 @@ static asx_status asx_codec_bin_validate_view(const asx_codec_bin_fixture_view *
         !asx_codec_slice_nonempty(view->capture_run_id)) {
         return ASX_E_INVALID_ARGUMENT;
     }
+    /* The same input rule as asx_canonical_fixture_validate (bd-vhrp). */
     if (!asx_codec_slice_json_validate(view->input_json, '{') ||
-        !asx_codec_slice_contains(view->input_json, "\"ops\"")) {
+        !asx_codec_slice_contains(view->input_json,
+                                  asx_codec_slice_matches(view->scenario_dsl_version,
+                                                          "asx.scenario.v2")
+                                      ? "\"schema\":\"asx.scenario.v2\""
+                                      : "\"ops\"")) {
         return ASX_E_INVALID_ARGUMENT;
     }
     if (!asx_codec_slice_json_validate(view->expected_events_json, '[') ||

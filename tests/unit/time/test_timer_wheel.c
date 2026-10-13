@@ -16,6 +16,7 @@
 /* The runtime's own wheel is declared for internal access only. */
 #define ASX_INTERNAL_TIMER_WHEEL_ACCESS 1
 
+#include "../../../src/runtime/runtime_internal.h"
 #include "../../test_harness.h"
 #include <asx/runtime/trace.h>
 #include <asx/time/timer_wheel.h>
@@ -1082,17 +1083,19 @@ TEST(timer_large_time_jump) {
 }
 
 /* -------------------------------------------------------------------
- * The runtime's wheel is the same implementation, a separate instance:
- * application timers never share it, and it emits no trace events (the
- * scheduler records sleeps itself)
+ * The runtime's wheel is the same implementation, a separate instance (the
+ * kernel's own): application timers never share it, and it emits no trace
+ * events (the scheduler records sleeps itself)
  * ------------------------------------------------------------------- */
 
 TEST(timer_runtime_wheel_is_separate_and_silent) {
     asx_timer_wheel *app = asx_timer_wheel_global();
-    asx_timer_wheel *rt = asx_timer_wheel_runtime();
+    asx_timer_wheel *rt;
     asx_timer_handle h;
     void *wakers[4];
 
+    asx_runtime_reset();
+    rt = &g_kernels[0]->wheel;
     ASSERT_TRUE(app != rt);
     asx_timer_wheel_reset(app);
     asx_timer_wheel_reset(rt);

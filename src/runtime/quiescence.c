@@ -611,7 +611,7 @@ static asx_status asx_finalizer_task_poll(void *user_data, asx_task_id self) {
     const asx_kernel *k = asx_kernel_of(self);
     asx_region_slot *r = (asx_region_slot *)user_data;
     asx_region_finalizer *f = &r->finalizer;
-    int spent = f->polls >= f->poll_budget || asx_cancel_now_internal() >= f->deadline;
+    int spent = f->polls >= f->poll_budget || asx_cancel_now_internal(k) >= f->deadline;
 
     if (spent && !f->exhausted) {
         f->exhausted = 1;
@@ -646,7 +646,7 @@ uint32_t asx_region_admit_finalizers_internal(asx_kernel *k) {
 
         /* finalizer_budget().with_deadline(now + FINALIZER_TIME_BUDGET_NANOS)
          * (state.rs:8878-8881): the poll quota, priority 128, the deadline. */
-        now = asx_cancel_now_internal();
+        now = asx_cancel_now_internal(k);
         budget = asx_budget_from_polls(finalizer_poll_budget_of(k));
         budget.deadline = finalizer_time_budget_ns_of(k) > UINT64_MAX - now
                               ? UINT64_MAX

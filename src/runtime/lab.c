@@ -80,7 +80,7 @@ static asx_status lab_bootstrap_runtime(asx_lab *lab) {
 
     st = asx_runtime_init_checked(&lab->rt, &rt_cfg, &hooks, fingerprint);
     if (st != ASX_OK) return st;
-    asx_runtime_virtual_set_internal(lab->config.start_time_ns);
+    asx_kernel_virtual_set_internal(asx_kernel_for_tag(lab->rt.tag), lab->config.start_time_ns);
 
     /* Rust's LabRuntime dispatch, seeded as the lab is: the runtime was just
      * initialized, so no task is alive and nothing awaits admission. The
@@ -149,34 +149,46 @@ asx_status asx_lab_reset_checked(asx_lab *lab, uint64_t application_fingerprint)
 /* Time control                                                        */
 /* ------------------------------------------------------------------ */
 
+/* The kernel of the runtime the lab owns (kernel 0 for a lab that never
+ * initialized one, whose tag is its zero). */
+static asx_kernel *lab_runtime_kernel(const asx_lab *lab) {
+    asx_kernel *k = asx_kernel_for_tag(lab->rt.tag);
+    return k != NULL ? k : g_kernels[0];
+}
+
 void asx_lab_advance_time(asx_lab *lab, asx_time ns) {
+    asx_kernel *k;
     asx_time now;
     if (lab == NULL) return;
-    now = asx_runtime_virtual_now();
-    asx_runtime_virtual_advance(now <= UINT64_MAX - ns ? now + ns : UINT64_MAX);
+    k = lab_runtime_kernel(lab);
+    now = asx_kernel_virtual_now(k);
+    asx_kernel_virtual_advance(k, now <= UINT64_MAX - ns ? now + ns : UINT64_MAX);
 }
 
 asx_status asx_lab_next_timer_deadline(const asx_lab *lab, asx_time *out) {
     if (lab == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
     if (!lab->initialized) return ASX_E_INVALID_STATE;
-    return asx_scheduler_next_timer_internal(out) ? ASX_OK : ASX_E_NOT_FOUND;
+    return asx_scheduler_next_timer_internal(lab_runtime_kernel(lab), out) ? ASX_OK
+                                                                           : ASX_E_NOT_FOUND;
 }
 
 asx_status asx_lab_advance_to_next_timer(asx_lab *lab, uint32_t *out_woken) {
+    asx_kernel *k;
     asx_time next;
     uint32_t woken;
     if (lab == NULL) return ASX_E_INVALID_ARGUMENT;
     if (!lab->initialized) return ASX_E_INVALID_STATE;
-    if (!asx_scheduler_next_timer_internal(&next)) return ASX_E_NOT_FOUND;
-    asx_runtime_virtual_advance(next);
-    woken = asx_scheduler_fire_due_timers_internal();
+    k = lab_runtime_kernel(lab);
+    if (!asx_scheduler_next_timer_internal(k, &next)) return ASX_E_NOT_FOUND;
+    asx_kernel_virtual_advance(k, next);
+    woken = asx_scheduler_fire_due_timers_internal(k);
     if (out_woken != NULL) *out_woken = woken;
     return ASX_OK;
 }
 
 asx_time asx_lab_now(const asx_lab *lab) {
     if (lab == NULL) return 0;
-    return asx_runtime_virtual_now();
+    return asx_kernel_virtual_now(lab_runtime_kernel(lab));
 }
 
 asx_status asx_lab_run(asx_lab *lab, asx_region_id region, asx_budget *budget) {

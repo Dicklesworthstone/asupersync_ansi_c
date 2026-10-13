@@ -110,7 +110,7 @@ static asx_task_id g_current_task = ASX_INVALID_ID;
 #define TIMER_KIND_WAKE 0u
 #define TIMER_KIND_DEADLINE 1u
 
-static asx_time sched_now(void);
+static asx_time sched_now(const asx_kernel *k);
 static void *timer_token(uint32_t slot, uint32_t kind) {
     /* ASX_ANALYZER_WAIVER("opaque token: slot and kind packed into the timer's user pointer") */
     return (void *)(uintptr_t)(((uintptr_t)slot << 1) | (uintptr_t)kind);
@@ -118,38 +118,35 @@ static void *timer_token(uint32_t slot, uint32_t kind) {
 
 /* Register a timer, bringing the wheel to the clock first as Rust's
  * TimerDriver::register does (time/driver.rs:501-508). */
-static int timer_register(uint32_t slot, uint32_t kind, asx_time deadline,
+static int timer_register(asx_kernel *k, uint32_t slot, uint32_t kind, asx_time deadline,
                           asx_timer_handle *out_handle) {
-    asx_timer_wheel *wheel = asx_timer_wheel_runtime();
-    asx_timer_advance(wheel, sched_now());
-    return asx_timer_register(wheel, deadline, timer_token(slot, kind), out_handle) == ASX_OK;
+    asx_timer_advance(&k->wheel, sched_now(k));
+    return asx_timer_register(&k->wheel, deadline, timer_token(slot, kind), out_handle) == ASX_OK;
 }
 
-static void wake_timer_disarm(asx_task_slot *t) {
+static void wake_timer_disarm(asx_kernel *k, asx_task_slot *t) {
     if (!t->timer_armed) return;
     t->timer_armed = 0u;
-    (void)asx_timer_cancel(asx_timer_wheel_runtime(), &t->timer);
+    (void)asx_timer_cancel(&k->wheel, &t->timer);
 }
 
 /* Whether a registration for `deadline` made now is past the wheel's
  * maximum timer duration and so clamped: the timer fires early, at the
  * horizon (Rust computes the same at registration, time/sleep.rs:935). */
-static uint8_t timer_past_horizon(asx_time deadline) {
-    asx_time now = sched_now();
+static uint8_t timer_past_horizon(const asx_kernel *k, asx_time deadline) {
+    asx_time now = sched_now(k);
     asx_time end = UINT64_MAX;
     if (now <= UINT64_MAX - ASX_TIMER_MAX_DURATION_NS) end = now + ASX_TIMER_MAX_DURATION_NS;
     return deadline > end ? 1u : 0u;
 }
 
 /* Whether any timer is registered. */
-static int sched_timers_pending(void) {
-    return asx_timer_active_count(asx_timer_wheel_runtime()) > 0u;
-}
+static int sched_timers_pending(asx_kernel *k) { return asx_timer_active_count(&k->wheel) > 0u; }
 
-static void lab_deadline_disarm(asx_task_slot *t) {
+static void lab_deadline_disarm(asx_kernel *k, asx_task_slot *t) {
     if (!t->deadline_timer_armed) return;
     t->deadline_timer_armed = 0u;
-    (void)asx_timer_cancel(asx_timer_wheel_runtime(), &t->deadline_timer);
+    (void)asx_timer_cancel(&k->wheel, &t->deadline_timer);
 }
 
 void asx_task_timer_disarm_internal(asx_task_slot *task) {
@@ -158,7 +155,7 @@ void asx_task_timer_disarm_internal(asx_task_slot *task) {
     k = asx_kernel_of(task->region);
     /* A finished task's budget-deadline timer leaves the wheel with it
      * (take_cancel_wakers, types/task_context.rs:1118-1124). */
-    lab_deadline_disarm(task);
+    lab_deadline_disarm(k, task);
     /* A sleep timer that never fired is dropped with its task (Rust: the
      * Sleep future is dropped, TimerCancelled). */
     if (task->traced_deadline != 0u) {
@@ -167,7 +164,7 @@ void asx_task_timer_disarm_internal(asx_task_slot *task) {
                        task->traced_deadline);
         task->traced_deadline = 0u;
     }
-    wake_timer_disarm(task);
+    wake_timer_disarm(k, task);
 }
 
 /* Arm (or tighten) a task's timer. Keeps the earliest deadline. */
@@ -177,13 +174,13 @@ static void timer_arm(asx_kernel *k, uint32_t idx, asx_time deadline) {
         if (deadline >= t->wake_at) return;
         /* Tighter: Rust moves the registration (timer.update), which goes
          * behind the timers already registered. */
-        wake_timer_disarm(t);
+        wake_timer_disarm(k, t);
     }
     /* Each task holds at most two registrations (this and its budget
      * deadline), which the runtime wheel has room for. */
-    if (!timer_register(idx, TIMER_KIND_WAKE, deadline, &t->timer)) return;
+    if (!timer_register(k, idx, TIMER_KIND_WAKE, deadline, &t->timer)) return;
     t->timer_armed = 1u;
-    t->timer_partial = timer_past_horizon(deadline);
+    t->timer_partial = timer_past_horizon(k, deadline);
     t->wake_at = deadline;
     t->timer_waker_prio = t->lab_waker_prio;
 }
@@ -194,7 +191,7 @@ static void timer_arm(asx_kernel *k, uint32_t idx, asx_time deadline) {
  * before it. */
 static void lab_deadline_register(asx_kernel *k, uint32_t slot, asx_time at) {
     asx_task_slot *t = &k->tasks[slot];
-    if (!timer_register(slot, TIMER_KIND_DEADLINE, at, &t->deadline_timer)) return;
+    if (!timer_register(k, slot, TIMER_KIND_DEADLINE, at, &t->deadline_timer)) return;
     t->deadline_timer_armed = 1u;
     t->deadline_timer_at = at;
 }
@@ -208,7 +205,7 @@ void asx_lab_arm_budget_deadline_internal(asx_task_slot *t) {
          * deadline. Nothing registers between the two calls, so it keeps
          * its place. */
         if (t->deadline_timer_at == t->budget.deadline) return;
-        lab_deadline_disarm(t);
+        lab_deadline_disarm(k, t);
     }
     lab_deadline_register(k, (uint32_t)(t - k->tasks), t->budget.deadline);
 }
@@ -223,9 +220,9 @@ static void lab_deadline_fire(asx_kernel *k, uint32_t slot) {
     asx_task_slot *t = &k->tasks[slot];
     asx_time at = t->deadline_timer_at;
     asx_status st;
-    lab_deadline_disarm(t);
+    lab_deadline_disarm(k, t);
     if (!t->alive || asx_task_is_terminal(t->state) || t->cancel_pending) return;
-    if (sched_now() < at) {
+    if (sched_now(k) < at) {
         lab_deadline_register(k, slot, at);
         return;
     }
@@ -240,9 +237,9 @@ static void lab_deadline_fire(asx_kernel *k, uint32_t slot) {
 /* Whether a timer is pending, and when the next one fires (lab
  * budget-deadline timers included): the wheel's next deadline, no earlier
  * than now, as Rust's TimerDriver::next_deadline (time/driver.rs:614-626). */
-int asx_scheduler_next_timer_internal(asx_time *out_next) {
-    asx_timer_wheel *wheel = asx_timer_wheel_runtime();
-    asx_time now = sched_now();
+int asx_scheduler_next_timer_internal(asx_kernel *k, asx_time *out_next) {
+    asx_timer_wheel *wheel = &k->wheel;
+    asx_time now = sched_now(k);
     asx_time next;
     asx_timer_advance(wheel, now);
     if (!asx_timer_next_deadline(wheel, &next)) return 0;
@@ -263,7 +260,7 @@ int asx_scheduler_next_timer_internal(asx_time *out_next) {
  * on. Returns the number of timers fired. */
 static uint32_t timers_fire(asx_kernel *k, asx_time now) {
     void *due[2u * (uint32_t)ASX_MAX_TASKS];
-    asx_timer_wheel *wheel = asx_timer_wheel_runtime();
+    asx_timer_wheel *wheel = &k->wheel;
     int lab = asx_lab_dispatch_active();
     uint32_t n;
     uint32_t i;
@@ -294,9 +291,13 @@ static uint32_t timers_fire(asx_kernel *k, asx_time now) {
  * Task scheduling state
  * ------------------------------------------------------------------- */
 
-void asx_scheduler_reset_internal(void) {
-    asx_timer_wheel_reset(asx_timer_wheel_runtime());
-    g_current_task = ASX_INVALID_ID;
+void asx_scheduler_reset_internal(asx_kernel *k) {
+    if (k->wheel.entries == NULL) {
+        asx_timer_wheel_setup_scheduler(&k->wheel, k->wheel_entries, k->wheel_overflow);
+    } else {
+        asx_timer_wheel_reset(&k->wheel);
+    }
+    if (!asx_kernel_other_held(k)) g_current_task = ASX_INVALID_ID;
 }
 
 void asx_task_sched_init_internal(asx_task_slot *task) {
@@ -472,14 +473,18 @@ void asx_region_wake_close_waiters_internal(asx_region_id id) {
 
 /* Clock read for scheduling decisions: the runtime clock when hooks are
  * installed, the virtual clock otherwise. */
-static asx_time sched_now(void) {
-    asx_time now;
-    if (asx_runtime_now_ns(&now) != ASX_OK) now = asx_runtime_virtual_now();
-    return now;
+static asx_time sched_now(const asx_kernel *k) { return asx_kernel_now_or_virtual_internal(k); }
+
+uint32_t asx_scheduler_fire_due_timers_internal(asx_kernel *k) {
+    return timers_fire(k, sched_now(k));
 }
 
-uint32_t asx_scheduler_fire_due_timers_internal(void) {
-    return timers_fire(g_kernels[0], sched_now());
+/* The kernel whose clock an operation on `id` reads: the handle's, or
+ * kernel 0 for a handle no runtime holds (a refused handle read the clock
+ * before, too). */
+static asx_kernel *sched_clock_kernel(asx_task_id id) {
+    asx_kernel *k = asx_kernel_of(id);
+    return k != NULL ? k : g_kernels[0];
 }
 
 /* -------------------------------------------------------------------
@@ -541,7 +546,7 @@ static void sched_trace_sleep_timer(asx_task_id self, asx_task_slot *t, asx_time
         t->traced_deadline = deadline;
         t->traced_waker_epoch = t->lab_waker_epoch;
         asx_trace_emit(ASX_TRACE_TIMER_SET, (uint64_t)self, deadline);
-    } else if ((t->timer_partial && !t->timer_armed && sched_now() < deadline) ||
+    } else if ((t->timer_partial && !t->timer_armed && sched_now(asx_kernel_of(self)) < deadline) ||
                (asx_lab_dispatch_active() && t->traced_waker_epoch != t->lab_waker_epoch)) {
         /* Two cases register the sleep afresh, behind the timers already
          * registered, as the same timer (the new registration is marked
@@ -559,14 +564,14 @@ static void sched_trace_sleep_timer(asx_task_id self, asx_task_slot *t, asx_time
         asx_trace_emit_payload_internal(ASX_TRACE_TIMER_SET, (uint64_t)self, deadline, &rearm);
         t->traced_waker_epoch = t->lab_waker_epoch;
         t->timer_partial = 0u;
-        wake_timer_disarm(t);
+        wake_timer_disarm(asx_kernel_of(self), t);
     }
     timer_arm(asx_kernel_of(self), (uint32_t)(t - asx_kernel_of(self)->tasks), deadline);
 }
 
 asx_status asx_task_wait_until(asx_task_id self, asx_time deadline) {
     asx_task_slot *t;
-    asx_time now = sched_now();
+    asx_time now = sched_now(sched_clock_kernel(self));
 
     if (now >= deadline) return ASX_OK;
     if (asx_task_slot_lookup(self, &t) == ASX_OK && t->in_poll) {
@@ -578,7 +583,7 @@ asx_status asx_task_wait_until(asx_task_id self, asx_time deadline) {
 
 int asx_task_poll_deadline_sleep_internal(asx_task_id self, asx_time deadline) {
     asx_task_slot *t;
-    if (sched_now() >= deadline) {
+    if (sched_now(sched_clock_kernel(self)) >= deadline) {
         /* Ready: a sleep registered by an earlier poll records its fire. */
         asx_status st = asx_task_complete_timer(self);
         (void)st;
@@ -601,7 +606,7 @@ asx_status asx_task_cancel_timer(asx_task_id self) {
         asx_trace_emit(ASX_TRACE_TIMER_CANCEL, (uint64_t)self, t->traced_deadline);
         t->traced_deadline = 0u;
     }
-    wake_timer_disarm(t);
+    wake_timer_disarm(asx_kernel_of(self), t);
     return ASX_OK;
 }
 
@@ -616,7 +621,7 @@ asx_status asx_task_complete_timer(asx_task_id self) {
         asx_trace_emit(ASX_TRACE_TIMER_FIRE, (uint64_t)self, t->traced_deadline);
         t->traced_deadline = 0u;
     }
-    wake_timer_disarm(t);
+    wake_timer_disarm(asx_kernel_of(self), t);
     return ASX_OK;
 }
 
@@ -777,7 +782,7 @@ static void sched_enforce_budget(const asx_task_slot *t, asx_task_id tid, asx_ti
     if (!asx_lab_dispatch_active() && !t->cancel_pending && !t->cleanup_only &&
         t->budget.deadline != ASX_TIME_INFINITE) {
         if (!*have_now) {
-            *now = sched_now();
+            *now = sched_now(asx_kernel_of(tid));
             *have_now = 1;
         }
         if (*now >= t->budget.deadline) {
@@ -967,35 +972,35 @@ static asx_status sched_idle(asx_kernel *k, asx_time *last_idle_now, uint32_t *s
      * while some task is runnable; the clock is the caller's to move. */
     if (!advance_clock) {
         /* ASX_ANALYZER_WAIVER("config-dependent: 0 without blocking pool/native I/O") */
-        return (sched_timers_pending() || sched_external_pending()) ? ASX_E_PENDING
-                                                                    : ASX_E_WOULD_BLOCK;
+        return (sched_timers_pending(k) || sched_external_pending()) ? ASX_E_PENDING
+                                                                     : ASX_E_WOULD_BLOCK;
     }
 
-    if (sched_timers_pending()) {
+    if (sched_timers_pending(k)) {
         asx_time next = 0;
         asx_time target;
-        (void)asx_scheduler_next_timer_internal(&next);
+        (void)asx_scheduler_next_timer_internal(k, &next);
         target = next;
         if (run_deadline < target) target = run_deadline;
-        now = sched_now();
+        now = sched_now(k);
         if (now < target && asx_runtime_clock_is_virtual()) {
-            asx_runtime_virtual_advance(target);
-            now = sched_now();
+            asx_kernel_virtual_advance(k, target);
+            now = sched_now(k);
         }
         if (timers_fire(k, now) > 0u) return ASX_OK;
         if (now < target) {
             sched_block(sched_ms_until(target, now, ASX_SCHED_MAX_IDLE_WAIT_MS));
             (void)sched_drain_wakers();
-            now = sched_now();
+            now = sched_now(k);
             (void)timers_fire(k, now);
         }
         /* ASX_ANALYZER_WAIVER("config-dependent: 0 without blocking pool/native I/O") */
     } else if (sched_external_pending()) {
-        now = sched_now();
+        now = sched_now(k);
         if (run_deadline != ASX_TIME_INFINITE && now >= run_deadline) return ASX_OK;
         sched_block(sched_ms_until(run_deadline, now, ASX_SCHED_MAX_IDLE_WAIT_MS));
         (void)sched_drain_wakers();
-        now = sched_now();
+        now = sched_now(k);
     } else if (asx_cleanup_hard_bound_internal(k) && sched_unpark_cancelled(k, 1) > 0u) {
         return ASX_OK;
     } else {
@@ -1248,7 +1253,7 @@ static asx_status sched_lab_step(asx_kernel *k, uint32_t step, int *out_dispatch
     asx_lab_drain_deferred_cancels();
     if (asx_lab_handle_cancels_pending() || asx_lab_deferred_cancels_pending()) return ASX_OK;
     r = asx_lab_step_draw_internal();
-    if (sched_timers_pending()) (void)timers_fire(k, sched_now());
+    if (sched_timers_pending(k)) (void)timers_fire(k, sched_now(k));
     (void)sched_drain_wakers();
     (void)asx_region_admit_finalizers_internal(k); /* schedule_async_finalizers, LR:4513 */
     if (asx_lab_dispatch_overflowed()) return ASX_E_RESOURCE_EXHAUSTED;
@@ -1256,7 +1261,7 @@ static asx_status sched_lab_step(asx_kernel *k, uint32_t step, int *out_dispatch
         /* A recorded schedule names the task (run_forced_schedule,
          * LR:4540-4605); the draw above is made but not consulted. */
         int picked = 0;
-        st = asx_lab_forced_pick(lab_step, sched_now(), &slot, &task_gen, &cancel_lane, &picked);
+        st = asx_lab_forced_pick(lab_step, sched_now(k), &slot, &task_gen, &cancel_lane, &picked);
         if (st != ASX_OK) return st;
         if (!picked) return ASX_OK;
     } else if (!asx_lab_pick(r, &slot, &task_gen, &cancel_lane)) {
@@ -1264,7 +1269,7 @@ static asx_status sched_lab_step(asx_kernel *k, uint32_t step, int *out_dispatch
     }
     *out_dispatched = 1;
     /* Recorded at the pick, before the poll (LR:4627-4644). */
-    asx_lab_record_dispatch_internal(slot, task_gen, cancel_lane, lab_step, sched_now());
+    asx_lab_record_dispatch_internal(slot, task_gen, cancel_lane, lab_step, sched_now(k));
     t = &k->tasks[slot];
     /* A retired task a cancel waker scheduled: a dispatch that polls
      * nothing (LR:4772-4790). */
@@ -1328,18 +1333,18 @@ static asx_status sched_lab_run(asx_kernel *k, asx_budget *budget, int advance_c
             asx_trace_emit(ASX_TRACE_SCHED_QUIESCENT, ASX_INVALID_ID, step);
             return ASX_OK;
         }
-        has_timer = asx_scheduler_next_timer_internal(&next);
+        has_timer = asx_scheduler_next_timer_internal(k, &next);
         if (!advance_clock) {
             /* ASX_ANALYZER_WAIVER("config-dependent: 0 without blocking pool/native I/O") */
             return (has_timer || sched_external_pending()) ? ASX_E_PENDING : ASX_E_WOULD_BLOCK;
         }
         if (has_timer) {
-            if (next > sched_now() && asx_runtime_clock_is_virtual()) {
-                asx_runtime_virtual_advance(next);
+            if (next > sched_now(k) && asx_runtime_clock_is_virtual()) {
+                asx_kernel_virtual_advance(k, next);
             } else if (++stuck > 1000u) {
                 return ASX_E_WOULD_BLOCK;
             }
-            (void)timers_fire(k, sched_now());
+            (void)timers_fire(k, sched_now(k));
             continue;
         }
         /* Live tasks, nothing scheduled, no timer: Rust keeps stepping
@@ -1564,7 +1569,7 @@ static asx_status sched_run(asx_region_id region, asx_budget *budget, int advanc
         }
 
         /* The run budget's deadline bounds the whole run, reactor waits included. */
-        if (asx_budget_is_past_deadline(budget, sched_now())) {
+        if (asx_budget_is_past_deadline(budget, sched_now(k))) {
             sched_emit(ASX_SCHED_EVENT_BUDGET, ASX_INVALID_ID, round);
             asx_trace_emit(ASX_TRACE_SCHED_BUDGET, ASX_INVALID_ID, round);
             return ASX_E_TIMED_OUT;
@@ -1576,8 +1581,8 @@ static asx_status sched_run(asx_region_id region, asx_budget *budget, int advanc
         /* Due timers and budget deadlines fire at the start of a round, before any
          * task polls, as in a lab step; run-until-idle fires none with nothing runnable. */
         if (advance_clock || sched_any_runnable(k)) {
-            if (sched_timers_pending()) (void)timers_fire(k, sched_now());
-            sched_fire_budget_deadlines(k, sched_now());
+            if (sched_timers_pending(k)) (void)timers_fire(k, sched_now(k));
+            sched_fire_budget_deadlines(k, sched_now(k));
         }
 
         sweep_build(k);

@@ -38,95 +38,19 @@
 #include <asx/time/timer_wheel.h>
 #include <string.h>
 
-/* -------------------------------------------------------------------
- * Geometry (wheel.rs:46-57)
- * ------------------------------------------------------------------- */
-
-#define TW_LEVELS 4u
-#define TW_SLOTS 256u
-#define TW_BITMAP_WORDS (TW_SLOTS / 64u)
-#define TW_TICK_NS ((uint64_t)1000000u) /* level 0 resolution: 1 ms */
-#define TW_NIL 0xFFFFu
-
-/* Arena indices are 16-bit. */
-#if (ASX_MAX_TIMERS) > 65534
-#error "ASX_MAX_TIMERS must be at most 65534"
-#endif
-#if (2 * (ASX_MAX_TASKS)) > 65534
-#error "twice ASX_MAX_TASKS must be at most 65534 (the runtime wheel holds two timers per task)"
-#endif
-
-#define TW_APP_CAPACITY ((uint32_t)(ASX_MAX_TIMERS))
-#define TW_RUNTIME_CAPACITY (2u * (uint32_t)(ASX_MAX_TASKS))
-
-/* Where a timer is stored. */
-#define TW_FREE 0u
-#define TW_READY 1u
-#define TW_BUCKET 2u
-#define TW_OVERFLOW 3u
-
-/* -------------------------------------------------------------------
- * Wheel state
- * ------------------------------------------------------------------- */
-
-typedef struct {
-    /* When this timer fires (clamped to the maximum duration). */
-    asx_time deadline;
-    /* Opaque callback data. */
-    void *waker_data;
-    /* Registration order: the overflow heap's tie-break. */
-    uint64_t seq;
-    /* For stale-handle detection. */
-    uint32_t generation;
-    /* List links; `next` is also the free-list link. */
-    uint16_t prev;
-    uint16_t next;
-    /* Position in the overflow heap. */
-    uint16_t heap_pos;
-    /* TW_FREE, TW_READY, TW_BUCKET or TW_OVERFLOW; for TW_BUCKET, the
-     * wheel level and the slot within it. */
-    uint8_t where;
-    uint8_t level;
-    uint8_t slot;
-} tw_entry;
-
-typedef struct {
-    uint16_t head;
-    uint16_t tail;
-} tw_list;
-
-struct asx_timer_wheel {
-    tw_entry *entries;
-    uint16_t *overflow; /* binary min-heap of entry indices by (deadline, seq) */
-    uint32_t capacity;
-    uint32_t slot_count; /* arena high-water mark */
-    uint32_t free_head;  /* LIFO list of released slots, as Rust's slab */
-    uint32_t active_count;
-    uint32_t overflow_len;
-    uint64_t next_seq;
-    uint64_t current_tick; /* current time in 1 ms ticks */
-    uint32_t cursor[TW_LEVELS];
-    uint64_t occupied[TW_LEVELS][TW_BITMAP_WORDS];
-    tw_list bucket[TW_LEVELS][TW_SLOTS];
-    tw_list ready;
-    uint64_t max_timer_duration_ns; /* longer registrations are clamped (wheel.rs:98-104) */
-    uint64_t max_wheel_duration_ns; /* longer ones wait in the overflow heap */
-    int traced;                     /* emit TIMER_SET / TIMER_FIRE / TIMER_CANCEL */
-};
+/* The wheel's layout (geometry wheel.rs:46-57, entries, lists) is in
+ * asx/time/timer_wheel.h under the internal access macro, so the runtime
+ * kernel can embed the scheduler's wheel. */
 
 /* Application-facing wheel (asx_timer_wheel_global) and the scheduler's own
- * (asx_timer_wheel_runtime): one implementation, two instances. The runtime
- * never collects the application wheel, and the scheduler's timers must not
- * be visible to application code. */
+ * (one per runtime kernel, set up by asx_timer_wheel_setup_scheduler): one
+ * implementation, two kinds of instance. The runtime never collects the
+ * application wheel, and the scheduler's timers must not be visible to
+ * application code. */
 static tw_entry g_app_entries[ASX_MAX_TIMERS];
 static uint16_t g_app_overflow[ASX_MAX_TIMERS];
 static asx_timer_wheel g_app_wheel;
 static int g_app_ready = 0;
-
-static tw_entry g_runtime_entries[2u * (ASX_MAX_TASKS)];
-static uint16_t g_runtime_overflow[2u * (ASX_MAX_TASKS)];
-static asx_timer_wheel g_runtime_wheel;
-static int g_runtime_ready = 0;
 
 static uint32_t tw_next_generation(uint32_t current) {
     current++;
@@ -663,12 +587,9 @@ asx_timer_wheel *asx_timer_wheel_global(void) {
     return &g_app_wheel;
 }
 
-asx_timer_wheel *asx_timer_wheel_runtime(void) {
-    if (!g_runtime_ready) {
-        tw_setup(&g_runtime_wheel, g_runtime_entries, g_runtime_overflow, TW_RUNTIME_CAPACITY, 0);
-        g_runtime_ready = 1;
-    }
-    return &g_runtime_wheel;
+void asx_timer_wheel_setup_scheduler(asx_timer_wheel *wheel, tw_entry *entries,
+                                     uint16_t *overflow) {
+    tw_setup(wheel, entries, overflow, TW_RUNTIME_CAPACITY, 0);
 }
 
 void asx_timer_wheel_init(asx_timer_wheel *wheel) {
