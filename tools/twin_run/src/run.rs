@@ -536,10 +536,10 @@ struct Local {
     /// by name.
     monitors: BTreeMap<String, (Monitor, String)>,
     server_monitors: BTreeMap<String, MonitorRef>,
-    /// Links this task holds by name, with the peer's name, and the
-    /// references of the links a server holds for it (DSL §3.10). Dropping a
-    /// `Link` does not remove it: only `unlink` does.
-    links: BTreeMap<String, (Link, String)>,
+    /// Links this task holds by name, with the peer's name and whether the
+    /// link traps, and the references of the links a server holds for it
+    /// (DSL §3.11). Dropping a `Link` does not remove it: only `unlink` does.
+    links: BTreeMap<String, (Link, String, bool)>,
     server_links: BTreeMap<String, LinkRef>,
     /// GenServers this task spawned, by name (DSL §3.8).
     servers: BTreeMap<String, Server>,
@@ -2057,11 +2057,11 @@ fn exec_sync(
             }
             observe(&ctx.shared, me, idx, label, "ASX_OK", Value::Null);
         }
-        // Link::unlink(self) (link.rs:889): an Unlink command; the Link is
-        // consumed.
+        // Link::unlink(self) (link.rs:891, DSL §3.11): an Unlink command; the
+        // Link is consumed.
         "unlink" => {
             let name = str_field(step, "link")?;
-            let (link, _) = local
+            let (link, _, _) = local
                 .links
                 .remove(name)
                 .ok_or_else(|| format!("this task holds no link {name:?}"))?;
@@ -2415,9 +2415,10 @@ async fn exec_step(
                 Err(e) => observe(&ctx.shared, me, idx, op, watch_error_status(e), Value::Null),
             }
         }
-        // Cx::link(peer).await / Cx::link_trapping(peer).await (link.rs:824,
-        // DSL §3.10): through the region-command lane like a monitor. The
-        // reference is a process-wide counter in Rust, so it is not observed.
+        // Cx::link(peer).await / Cx::link_trapping(peer).await (link.rs:915,
+        // :923, DSL §3.11): through the region-command lane like a monitor.
+        // The reference is a process-wide counter in Rust, so it is not
+        // observed.
         "link" | "link_trapping" => {
             let peer = str_field(step, "task")?.to_string();
             let name = str_field(step, "as")?.to_string();
@@ -2432,20 +2433,29 @@ async fn exec_step(
             };
             match opening.await {
                 Ok(link) => {
-                    local.links.insert(name, (link, peer));
+                    local
+                        .links
+                        .insert(name, (link, peer, op == "link_trapping"));
                     observe(&ctx.shared, me, idx, op, "ASX_OK", Value::Null);
                 }
                 Err(e) => observe(&ctx.shared, me, idx, op, watch_error_status(e), Value::Null),
             }
         }
-        // Link::exit(&cx).await (link.rs:864): the exit signal of a
-        // trapping link, as the peer's name and the reason kind.
+        // Link::exit(&cx).await (link.rs:882): the exit signal of a
+        // trapping link, as the peer's name and the reason kind. On a
+        // propagating link Rust's wait ends in the holder's own
+        // cancellation, which C does not model: a harness error.
         "await_exit" => {
             let name = str_field(step, "link")?;
-            let (link, peer) = local
+            let (link, peer, trapping) = local
                 .links
                 .get(name)
                 .ok_or_else(|| format!("this task holds no link {name:?}"))?;
+            if !trapping {
+                return Err(format!(
+                    "await_exit of the link {name:?}, which does not trap"
+                ));
+            }
             match link.exit(cx).await {
                 Ok(signal) => {
                     let value = json!({
