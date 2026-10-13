@@ -72,6 +72,10 @@ struct Shared {
     /// The mpsc channels declared `"unbounded": true` (DSL §3.6): Rust's
     /// `UnboundedSender` has no `send_evict_oldest` and no `closed`.
     unbounded_channels: HashSet<String>,
+    /// The scenario declares `lab.futurelock_max_idle_steps` (DSL §1): the
+    /// run has `panic_on_futurelock` off and `FuturelockDetected` is
+    /// projected as `futurelock.detected` instead of failing the harness.
+    futurelock_declared: bool,
     /// Weak references only: the destination future owns incoming tokens,
     /// including before its first poll, and drops them with its body.
     obligation_tokens: HashMap<String, Weak<Mutex<HashMap<String, ObligationToken>>>>,
@@ -3576,7 +3580,7 @@ pub fn run_scenario_with(scenario: &Value, raw: Option<&mut Vec<String>>) -> Run
         return Err("not an asx.scenario.v2 document".to_string());
     }
     let lab_cfg = scenario.get("lab").ok_or("missing lab")?;
-    let config = LabConfig::new(u64_field(scenario, "seed")?)
+    let mut config = LabConfig::new(u64_field(scenario, "seed")?)
         .worker_count(1)
         .trace_capacity(1 << 20)
         .max_steps(u64_field(lab_cfg, "max_steps")?)
@@ -3586,10 +3590,26 @@ pub fn run_scenario_with(scenario: &Value, raw: Option<&mut Vec<String>>) -> Run
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
         );
+    // DSL §1: a declared futurelock threshold runs with the panic off, so the
+    // FuturelockDetected events are the run's report; without it the lab
+    // keeps its defaults (10000, panic on) and a futurelock fails the run.
+    let futurelock_max_idle_steps = match lab_cfg.get("futurelock_max_idle_steps") {
+        None => None,
+        Some(v) => match v.as_u64() {
+            Some(n) if n >= 1 => Some(n),
+            _ => return Err("lab.futurelock_max_idle_steps must be an integer >= 1".to_string()),
+        },
+    };
+    if let Some(n) = futurelock_max_idle_steps {
+        config = config
+            .futurelock_max_idle_steps(n)
+            .panic_on_futurelock(false);
+    }
     let mut lab = LabRuntime::new(config);
     lab.start_forced_schedule_recording(1 << 20)
         .map_err(|e| format!("{e:?}"))?;
     let shared: SharedRef = Arc::new(Mutex::new(Shared::default()));
+    lock(&shared).futurelock_declared = futurelock_max_idle_steps.is_some();
     // Only a handoff's destination needs its Cx held (to try_transfer to
     // it). Holding any other task's would keep its CxInner alive after it
     // completes, so an abort of the finished task would still queue a
@@ -4020,7 +4040,7 @@ pub fn run_scenario_with(scenario: &Value, raw: Option<&mut Vec<String>>) -> Run
         };
         key(a).cmp(&key(b))
     });
-    check_expectation(scenario, &observations)?;
+    check_expectation(scenario, &observations, &events.events)?;
 
     let trace_value = serde_json::to_value(&trace).map_err(|e| e.to_string())?;
     let semantic = json!({
@@ -5012,6 +5032,32 @@ fn project_trace(lab: &LabRuntime, shared: &SharedRef) -> RunResult<Projected> {
                 | K::BudgetConsumed,
                 _,
             ) => continue,
+            // A declared futurelock (DSL §1): the check runs at every step
+            // with panic off, and each report is a vocabulary event
+            // (docs/CANONICAL_VOCABULARY_V2.md §3). Its held list keeps
+            // Rust's obligation order; the names are the reserves' own.
+            (
+                K::FuturelockDetected,
+                TraceData::Futurelock {
+                    task,
+                    region,
+                    idle_steps,
+                    held,
+                },
+            ) if s.futurelock_declared => {
+                let mut items = Vec::with_capacity(held.len());
+                for (oid, kind) in held {
+                    let name = obligation_names.get(oid).ok_or_else(|| {
+                        format!("futurelock names an obligation never reserved: {oid:?}")
+                    })?;
+                    items.push(json!({"obligation": name, "kind": format!("{kind:?}")}));
+                }
+                json!({
+                    "k": "futurelock.detected", "task": task_name(&s, *task)?,
+                    "region": region_name(&s, *region)?, "idle_steps": idle_steps,
+                    "held": items,
+                })
+            }
             (K::FuturelockDetected | K::ChaosInjection, _) => {
                 return Err(format!(
                     "{:?} in a conformance run (harness failure)",
@@ -5124,8 +5170,33 @@ fn build_snapshot(lab: &LabRuntime, shared: &SharedRef, projected: &Projected) -
     }))
 }
 
-fn check_expectation(scenario: &Value, observations: &[Value]) -> RunResult<()> {
+fn check_expectation(scenario: &Value, observations: &[Value], events: &[Value]) -> RunResult<()> {
     let expect = scenario.get("expect").ok_or("missing expect")?;
+    let declared = scenario
+        .get("lab")
+        .and_then(|l| l.get("futurelock_max_idle_steps"))
+        .is_some();
+    let reports = events
+        .iter()
+        .filter(|e| e["k"] == "futurelock.detected")
+        .count();
+    match str_field(expect, "kind")? {
+        // DSL §5: the run reports at least one futurelock, and the scenario
+        // declared the threshold that makes it a report.
+        "futurelock" => {
+            if !declared {
+                return Err("expect futurelock needs lab.futurelock_max_idle_steps".to_string());
+            }
+            if reports == 0 {
+                return Err("futurelock expected, none reported".to_string());
+            }
+            return Ok(());
+        }
+        "ok" if reports != 0 => {
+            return Err("a futurelock was reported in a scenario that expects ok".to_string());
+        }
+        _ => {}
+    }
     if str_field(expect, "kind")? != "must_fail" {
         return Ok(());
     }
@@ -5144,4 +5215,36 @@ fn check_expectation(scenario: &Value, observations: &[Value]) -> RunResult<()> 
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scenario(lab: Value, expect: Value) -> Value {
+        json!({"lab": lab, "expect": expect})
+    }
+
+    /// DSL §5: `futurelock` needs the knob and a report, and `ok` with the
+    /// knob needs none (bd-9kll.9.6).
+    #[test]
+    fn futurelock_expectation_is_checked_both_ways() {
+        let report = json!({
+            "k": "futurelock.detected", "task": "t.holder", "region": "r.main",
+            "idle_steps": 4, "held": [{"obligation": "t.holder/o1", "kind": "Lease"}],
+        });
+        let knob = json!({"max_steps": 100, "futurelock_max_idle_steps": 3});
+        let no_knob = json!({"max_steps": 100});
+
+        let expects = scenario(knob.clone(), json!({"kind": "futurelock"}));
+        assert!(check_expectation(&expects, &[], std::slice::from_ref(&report)).is_ok());
+        assert!(check_expectation(&expects, &[], &[]).is_err());
+
+        let undeclared = scenario(no_knob, json!({"kind": "futurelock"}));
+        assert!(check_expectation(&undeclared, &[], std::slice::from_ref(&report)).is_err());
+
+        let ok = scenario(knob, json!({"kind": "ok"}));
+        assert!(check_expectation(&ok, &[], &[]).is_ok());
+        assert!(check_expectation(&ok, &[], std::slice::from_ref(&report)).is_err());
+    }
 }
