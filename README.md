@@ -41,7 +41,7 @@ make test
 The port targets asupersync commit `5e60b1c4c` (2026-10).
 
 - **Compared with the Rust runtime, and matching:**
-  - `make conformance` runs <!-- fact:rust_fixtures -->315<!-- /fact --> scenarios captured from asupersync's `LabRuntime` (`fixtures/rust_reference_v2`) through the C runtime. Each must match the capture's trace class, final snapshot, step observations and lab dispatch order. Checked obligation handoff is included: same-region quota reuse, cross-region ownership changes, chained transfers, refusals and destination-body token drop.
+  - `make conformance` runs <!-- fact:rust_fixtures -->316<!-- /fact --> scenarios captured from asupersync's `LabRuntime` (`fixtures/rust_reference_v2`) through the C runtime. Each must match the capture's trace class, final snapshot, step observations and lab dispatch order. Checked obligation handoff is included: same-region quota reuse, cross-region ownership changes, chained transfers, refusals and destination-body token drop.
   - CI also generates 200 scenarios on every push and compares the two runtimes live (`make fuzz-differential`, seed 9).
   - It checks that the two trace canonicalizers agree on 100,000 random traces (`make canon-differential`).
   - It compares the kernel constants and defaults no scenario observes, such as cancel-kind tables, budgets, the timer limit, supervision defaults and lab batch sizes, with Rust's (`make check-rust-constants`). `twin_run` reads Rust's values from the pinned crate into `schemas/rust_kernel_constants.json`. Each value matches or is declared n/a with a reason; the gate keeps no list of accepted differences.
@@ -2352,6 +2352,15 @@ leaves `make conformance` red until it is fixed. Afterwards update the README
 files with the divergence's bead. `tests/gates/test_fuzz_promotion.sh` plants
 each refusal (an existing file, a bad name, an invalid scenario, a failed or
 foreign capture, a failing C runtime) against stub tools.
+
+The step has been run on a real divergence: `make fuzz-differential
+FUZZ_V2_SEED=16 FUZZ_V2_COUNT=200` against the runner built from `73681a0`
+(a past commit, before `2c1ac9d`) fails 10 of its 199 captures, the same
+captures pass on the current runner, `fuzz-minimize` reduces `gen-16-10-001`
+from 34 elements to 3, and `fuzz-promote` installed it as
+`gen-16-10-001-min-001`. That fixture fails the `73681a0` runner (its
+`obligation.leaked` lacked the `duration_ns` Rust emits) and passes the
+current one.
 
 Resource-pressure scenarios live in `fixtures/resource_pressure/` with schema
 `asx.resource_pressure.failure_atomic_scenarios.v1`. Each listed scenario must
