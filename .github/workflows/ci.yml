@@ -1240,6 +1240,35 @@ jobs:
           retention-days: 7
 
   # ---------------------------------------------------------------------------
+  # gcc-analyzer — GCC -fanalyzer over src/, CORE and POSIX live (bd-9kll.16.4,
+  # plan 10.7.2). The analyzer's findings change between GCC releases, so the
+  # lane runs in the gcc:15.2.0 image the waivers were triaged with
+  # (docs/STATIC_ANALYSIS_TRIAGE.md) instead of whatever gcc ubuntu-latest
+  # ships. A diagnostic without an ASX_ANALYZER_WAIVER fails the job; a unit
+  # that does not compile fails it too (nothing is silently skipped).
+  # ---------------------------------------------------------------------------
+  gcc-analyzer:
+    name: "gcc -fanalyzer (gcc 15.2, CORE + POSIX live)"
+    runs-on: ubuntu-latest
+    container: gcc:15.2.0
+    needs: [check]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: GCC -fanalyzer (section 10.7.2)
+        id: gcc_analyzer
+        run: make lint-gcc-analyzer
+
+      - name: Upload analyzer report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gcc-analyzer-${{ env.ASX_CI_RUN_TAG }}
+          path: build/gcc-analyzer/report.txt
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # ---------------------------------------------------------------------------
   # size-report — the release library and the kernel-only footprint
   # (bd-9kll.13.3, DEC-011/D6). No other lane builds BUILD_TYPE=release; only
   # release.yml does, at tag time, so the release library did not compile for

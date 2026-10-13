@@ -771,6 +771,17 @@ lint-static-analysis:
 		FAIL_ON_MISSING_LINTER="$(FAIL_ON_MISSING_LINTER)" tools/ci/run_static_analysis.sh
 
 # ---------------------------------------------------------------------------
+# lint-gcc-analyzer — GCC -fanalyzer over src/ in CORE and POSIX live
+# (bd-9kll.16.4, plan 10.7.2). Not part of `check`: its waivers were triaged
+# with GCC 15.2 (docs/STATIC_ANALYSIS_TRIAGE.md), so CI runs it in the
+# gcc:15.2.0 image (ci.yml, job gcc-analyzer); another GCC warns locally and
+# fails under STRICT_GATES=1. Needs GCC with -fanalyzer (10+).
+# ---------------------------------------------------------------------------
+.PHONY: lint-gcc-analyzer
+lint-gcc-analyzer:
+	@STRICT_GATES="$(STRICT_GATES)" tools/ci/run_gcc_analyzer.sh
+
+# ---------------------------------------------------------------------------
 # lint-semantic-delta — semantic delta budget gate (bd-66l.3)
 # ---------------------------------------------------------------------------
 lint-semantic-delta:
