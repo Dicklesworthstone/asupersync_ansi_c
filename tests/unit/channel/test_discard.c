@@ -57,9 +57,9 @@ static asx_region_id g_rid;
 static void setup(void) {
     asx_runtime_reset(test_runtime());
     asx_channel_reset(test_runtime());
-    asx_oneshot_reset();
+    asx_oneshot_reset(test_runtime());
     asx_broadcast_reset();
-    asx_watch_reset();
+    asx_watch_reset(test_runtime());
     rec_reset();
     MUST_OK(asx_region_open(test_runtime(), &g_rid));
 }
@@ -263,7 +263,7 @@ TEST(oneshot_receiver_drop_discards_a_sent_unreceived_value) {
     asx_oneshot_sender tx;
     asx_oneshot_receiver rx;
     setup();
-    MUST_OK(asx_oneshot_create(&tx, &rx));
+    MUST_OK(asx_oneshot_create(test_runtime(), &tx, &rx));
     MUST_OK(asx_oneshot_set_discard(&tx, rec_fn, &g_rec));
     MUST_OK(asx_oneshot_try_send(&tx, 401));
     ASSERT_EQ(g_rec.n, 0u);
@@ -281,13 +281,13 @@ TEST(oneshot_received_or_unsent_values_are_not_discarded) {
     asx_oneshot_receiver rx2;
     uint64_t v = 0;
     setup();
-    MUST_OK(asx_oneshot_create(&tx, &rx));
+    MUST_OK(asx_oneshot_create(test_runtime(), &tx, &rx));
     MUST_OK(asx_oneshot_set_discard(&tx, rec_fn, &g_rec));
     MUST_OK(asx_oneshot_try_send(&tx, 411));
     ASSERT_EQ(asx_oneshot_try_recv(&rx, &v), ASX_OK);
     ASSERT_EQ(v, (uint64_t)411);
     asx_oneshot_receiver_drop(&rx);
-    MUST_OK(asx_oneshot_create(&tx2, &rx2));
+    MUST_OK(asx_oneshot_create(test_runtime(), &tx2, &rx2));
     MUST_OK(asx_oneshot_set_discard(&tx2, rec_fn, &g_rec));
     asx_oneshot_sender_drop(&tx2); /* nothing was ever sent */
     asx_oneshot_receiver_drop(&rx2);
@@ -298,7 +298,7 @@ TEST(oneshot_send_to_a_dropped_receiver_keeps_the_value_with_the_caller) {
     asx_oneshot_sender tx;
     asx_oneshot_receiver rx;
     setup();
-    MUST_OK(asx_oneshot_create(&tx, &rx));
+    MUST_OK(asx_oneshot_create(test_runtime(), &tx, &rx));
     MUST_OK(asx_oneshot_set_discard(&tx, rec_fn, &g_rec));
     asx_oneshot_receiver_drop(&rx);
     ASSERT_EQ(asx_oneshot_try_send(&tx, 421), ASX_E_DISCONNECTED);
@@ -309,10 +309,10 @@ TEST(oneshot_reset_drops_a_value_a_live_channel_still_holds) {
     asx_oneshot_sender tx;
     asx_oneshot_receiver rx;
     setup();
-    MUST_OK(asx_oneshot_create(&tx, &rx));
+    MUST_OK(asx_oneshot_create(test_runtime(), &tx, &rx));
     MUST_OK(asx_oneshot_set_discard(&tx, rec_fn, &g_rec));
     MUST_OK(asx_oneshot_try_send(&tx, 431));
-    asx_oneshot_reset();
+    asx_oneshot_reset(test_runtime());
     ASSERT_EQ(g_rec.n, 1u);
     ASSERT_EQ(g_rec.seen[0], (uint64_t)431);
 }
@@ -433,7 +433,7 @@ TEST(watch_send_drops_the_value_it_replaces) {
     asx_watch_sender tx;
     asx_watch_receiver rx;
     setup();
-    MUST_OK(asx_watch_create(10, &tx, &rx));
+    MUST_OK(asx_watch_create(test_runtime(), 10, &tx, &rx));
     MUST_OK(asx_watch_set_discard(&tx, rec_fn, &g_rec));
     MUST_OK(asx_watch_send(&tx, 20));
     MUST_OK(asx_watch_send(&tx, 30));
@@ -446,7 +446,7 @@ TEST(watch_send_modify_drops_the_old_value_unless_the_token_is_unchanged) {
     asx_watch_sender tx;
     asx_watch_receiver rx;
     setup();
-    MUST_OK(asx_watch_create(40, &tx, &rx));
+    MUST_OK(asx_watch_create(test_runtime(), 40, &tx, &rx));
     MUST_OK(asx_watch_set_discard(&tx, rec_fn, &g_rec));
     MUST_OK(asx_watch_send_modify(&tx, bump, NULL));
     ASSERT_EQ(g_rec.n, 1u);
@@ -461,7 +461,7 @@ TEST(watch_last_value_is_dropped_when_no_sender_and_no_receiver_is_left) {
     asx_watch_receiver rx;
     asx_watch_receiver clone;
     setup();
-    MUST_OK(asx_watch_create(50, &tx, &rx));
+    MUST_OK(asx_watch_create(test_runtime(), 50, &tx, &rx));
     MUST_OK(asx_watch_receiver_clone(&rx, &clone));
     MUST_OK(asx_watch_set_discard(&tx, rec_fn, &g_rec));
     asx_watch_sender_drop(&tx);
@@ -479,7 +479,7 @@ TEST(watch_with_no_receiver_keeps_its_value_while_the_sender_lives) {
     asx_watch_sender tx;
     asx_watch_receiver rx;
     setup();
-    MUST_OK(asx_watch_create(60, &tx, &rx));
+    MUST_OK(asx_watch_create(test_runtime(), 60, &tx, &rx));
     MUST_OK(asx_watch_set_discard(&tx, rec_fn, &g_rec));
     asx_watch_receiver_drop(&rx);
     ASSERT_EQ(g_rec.n, 0u);
@@ -494,14 +494,14 @@ TEST(watch_reset_drops_the_value_a_live_channel_holds_once) {
     asx_watch_sender tx2;
     asx_watch_receiver rx2;
     setup();
-    MUST_OK(asx_watch_create(70, &tx, &rx));
+    MUST_OK(asx_watch_create(test_runtime(), 70, &tx, &rx));
     MUST_OK(asx_watch_set_discard(&tx, rec_fn, &g_rec));
-    MUST_OK(asx_watch_create(80, &tx2, &rx2));
+    MUST_OK(asx_watch_create(test_runtime(), 80, &tx2, &rx2));
     MUST_OK(asx_watch_set_discard(&tx2, rec_fn, &g_rec));
     asx_watch_sender_drop(&tx2);
     asx_watch_receiver_drop(&rx2); /* 80 is dropped here, with its channel */
     ASSERT_EQ(g_rec.n, 1u);
-    asx_watch_reset();
+    asx_watch_reset(test_runtime());
     ASSERT_EQ(g_rec.n, 2u); /* 70 only */
     ASSERT_EQ(g_rec.seen[1], (uint64_t)70);
 }
@@ -510,9 +510,9 @@ TEST(watch_set_discard_argument_errors) {
     asx_watch_sender tx;
     asx_watch_receiver rx;
     setup();
-    MUST_OK(asx_watch_create(0, &tx, &rx));
+    MUST_OK(asx_watch_create(test_runtime(), 0, &tx, &rx));
     ASSERT_EQ(asx_watch_set_discard(NULL, rec_fn, &g_rec), ASX_E_INVALID_ARGUMENT);
-    asx_watch_reset();
+    asx_watch_reset(test_runtime());
     ASSERT_EQ(asx_watch_set_discard(&tx, rec_fn, &g_rec), ASX_E_NOT_FOUND);
 }
 

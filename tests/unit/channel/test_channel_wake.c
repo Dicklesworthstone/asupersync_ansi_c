@@ -852,8 +852,8 @@ TEST(oneshot_receiver_parks_until_send_or_drop) {
     ASSERT_TRUE(setup());
     memset(&a, 0, sizeof(a));
     memset(&b, 0, sizeof(b));
-    ASSERT_EQ(asx_oneshot_create(&tx1, &a.rx), ASX_OK);
-    ASSERT_EQ(asx_oneshot_create(&tx2, &b.rx), ASX_OK);
+    ASSERT_EQ(asx_oneshot_create(&g_rt, &tx1, &a.rx), ASX_OK);
+    ASSERT_EQ(asx_oneshot_create(&g_rt, &tx2, &b.rx), ASX_OK);
     ASSERT_EQ(asx_task_spawn(g_region, poll_oneshot_rx, &a, &t), ASX_OK);
     ASSERT_EQ(asx_task_spawn(g_region, poll_oneshot_rx, &b, &t), ASX_OK);
 
@@ -975,7 +975,7 @@ TEST(watch_publish_wakes_receivers) {
 
     ASSERT_TRUE(setup());
     memset(r, 0, sizeof(r));
-    ASSERT_EQ(asx_watch_create(1u, &tx, &r[0].rx), ASX_OK);
+    ASSERT_EQ(asx_watch_create(&g_rt, 1u, &tx, &r[0].rx), ASX_OK);
     ASSERT_EQ(asx_watch_subscribe(&tx, &r[1].rx), ASX_OK);
     for (i = 0; i < 2u; i++) {
         ASSERT_EQ(asx_task_spawn(g_region, poll_watch_rx, &r[i], &t), ASX_OK);
@@ -1018,7 +1018,7 @@ TEST(watch_receivers_see_each_burst_once_and_no_phantom_change) {
 
     ASSERT_TRUE(setup());
     memset(r, 0, sizeof(r));
-    ASSERT_EQ(asx_watch_create(0u, &tx, &r[0].rx), ASX_OK);
+    ASSERT_EQ(asx_watch_create(&g_rt, 0u, &tx, &r[0].rx), ASX_OK);
     for (i = 1; i < ASX_WATCH_MAX_RECEIVERS; i++) {
         ASSERT_EQ(asx_watch_subscribe(&tx, &r[i].rx), ASX_OK);
     }
@@ -1057,7 +1057,7 @@ TEST(watch_poll_changed_outside_scheduler) {
     asx_watch_receiver rx;
 
     ASSERT_TRUE(setup());
-    ASSERT_EQ(asx_watch_create(5u, &tx, &rx), ASX_OK);
+    ASSERT_EQ(asx_watch_create(&g_rt, 5u, &tx, &rx), ASX_OK);
     ASSERT_EQ(asx_watch_poll_changed(&rx, NULL), ASX_E_PENDING); /* initial value is not a change */
     ASSERT_FALSE(asx_watch_has_changed(&rx));
     ASSERT_EQ(asx_watch_poll_changed(&rx, NULL), ASX_E_PENDING);
@@ -1250,7 +1250,7 @@ TEST(oneshot_send_with_cx_traces_and_commits_a_send_permit) {
     ASSERT_TRUE(setup());
     ta = cx_task(&a);
     tb = cx_task(&b);
-    ASSERT_EQ(asx_oneshot_create(&tx, &rx), ASX_OK);
+    ASSERT_EQ(asx_oneshot_create(&g_rt, &tx, &rx), ASX_OK);
     capture(1);
     ASSERT_EQ(asx_oneshot_recv(&rx, &b, &v), ASX_E_PENDING); /* nothing traced */
     ASSERT_EQ(asx_oneshot_send(&tx, &a, 6u), ASX_OK);
@@ -1278,8 +1278,8 @@ TEST(oneshot_cancelled_send_closes_and_value_beats_cancel_on_recv) {
     ASSERT_TRUE(setup());
     ta = cx_task(&a);
     tb = cx_task(&b);
-    ASSERT_EQ(asx_oneshot_create(&tx, &rx), ASX_OK);
-    ASSERT_EQ(asx_oneshot_create(&tx2, &rx2), ASX_OK);
+    ASSERT_EQ(asx_oneshot_create(&g_rt, &tx, &rx), ASX_OK);
+    ASSERT_EQ(asx_oneshot_create(&g_rt, &tx2, &rx2), ASX_OK);
     ASSERT_EQ(asx_task_cancel(ta, ASX_CANCEL_USER), ASX_OK);
     ASSERT_EQ(asx_task_cancel(tb, ASX_CANCEL_USER), ASX_OK);
     capture(1);
@@ -1308,7 +1308,7 @@ TEST(oneshot_send_to_dropped_receiver_aborts_the_permit_with_error) {
 
     ASSERT_TRUE(setup());
     ta = cx_task(&a);
-    ASSERT_EQ(asx_oneshot_create(&tx, &rx), ASX_OK);
+    ASSERT_EQ(asx_oneshot_create(&g_rt, &tx, &rx), ASX_OK);
     asx_oneshot_receiver_drop(&rx);
     capture(1);
     ASSERT_EQ(asx_oneshot_send(&tx, &a, 1u), ASX_E_DISCONNECTED);
@@ -1427,7 +1427,7 @@ TEST(watch_changed_traces_each_rust_outcome) {
     ASSERT_TRUE(setup());
     tb = cx_task(&b);
     tc = cx_task(&c);
-    ASSERT_EQ(asx_watch_create(0u, &tx, &rx), ASX_OK);
+    ASSERT_EQ(asx_watch_create(&g_rt, 0u, &tx, &rx), ASX_OK);
     ASSERT_EQ(asx_watch_subscribe(&tx, &rc), ASX_OK);
     ASSERT_EQ(asx_task_cancel(tc, ASX_CANCEL_USER), ASX_OK);
     capture(1);
@@ -1477,7 +1477,7 @@ TEST(watch_wait_for_traces_each_rust_outcome) {
     tb = cx_task(&b);
     tc = cx_task(&c);
     td = cx_task(&d);
-    ASSERT_EQ(asx_watch_create(0u, &tx, &rb), ASX_OK);
+    ASSERT_EQ(asx_watch_create(&g_rt, 0u, &tx, &rb), ASX_OK);
     ASSERT_EQ(asx_watch_subscribe(&tx, &rc), ASX_OK);
     ASSERT_EQ(asx_watch_subscribe(&tx, &rd), ASX_OK);
     memset(&wb, 0, sizeof(wb));
@@ -1629,7 +1629,7 @@ TEST(oneshot_permit_held_at_completion_is_dropped_with_its_task) {
     ASSERT_TRUE(setup());
     memset(&h, 0, sizeof(h));
     leaks_before = asx_obligation_leak_count(&g_rt);
-    ASSERT_EQ(asx_oneshot_create(&h.tx, &rx), ASX_OK);
+    ASSERT_EQ(asx_oneshot_create(&g_rt, &h.tx, &rx), ASX_OK);
     h.oneshot = 1;
     ASSERT_EQ(asx_task_spawn(g_region, poll_permit_holder, &h, &t), ASX_OK);
     budget = asx_budget_from_polls(10);

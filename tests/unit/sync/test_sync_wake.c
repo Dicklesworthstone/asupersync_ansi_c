@@ -1669,7 +1669,7 @@ TEST(once_async_init_parks_other_callers) {
     memset(o, 0, sizeof(o));
     g_init_calls = 0;
     ASSERT_EQ(asx_once_create(&g_rt, &h), ASX_OK);
-    ASSERT_EQ(asx_oneshot_create(&tx, &rx), ASX_OK);
+    ASSERT_EQ(asx_oneshot_create(&g_rt, &tx, &rx), ASX_OK);
     for (i = 0; i < 3u; i++) {
         o[i].h = h;
         o[i].rx = &rx;
@@ -1707,7 +1707,7 @@ TEST(once_abandoned_init_passes_turn_to_next_waiter) {
     memset(o, 0, sizeof(o));
     g_init_calls = 0;
     ASSERT_EQ(asx_once_create(&g_rt, &h), ASX_OK);
-    ASSERT_EQ(asx_oneshot_create(&tx, &rx), ASX_OK);
+    ASSERT_EQ(asx_oneshot_create(&g_rt, &tx, &rx), ASX_OK);
     for (i = 0; i < 2u; i++) {
         o[i].h = h;
         o[i].rx = &rx;

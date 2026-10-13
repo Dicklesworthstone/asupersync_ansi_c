@@ -14,7 +14,7 @@
 /* Helpers                                                             */
 /* ------------------------------------------------------------------ */
 
-static void setup(void) { asx_oneshot_reset(); }
+static void setup(void) { asx_oneshot_reset(test_runtime()); }
 
 /* Suppress warn_unused_result */
 static asx_status st_sink_;
@@ -28,21 +28,27 @@ static asx_status st_sink_;
 /* Create tests                                                        */
 /* ------------------------------------------------------------------ */
 
+TEST(create_null_runtime_fails) {
+    asx_oneshot_sender tx;
+    asx_oneshot_receiver rx;
+    ASSERT_EQ(asx_oneshot_create(NULL, &tx, &rx), ASX_E_INVALID_ARGUMENT);
+}
+
 TEST(create_null_sender_fails) {
     asx_oneshot_receiver rx;
-    ASSERT_EQ(asx_oneshot_create(NULL, &rx), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_oneshot_create(test_runtime(), NULL, &rx), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(create_null_receiver_fails) {
     asx_oneshot_sender tx;
-    ASSERT_EQ(asx_oneshot_create(&tx, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_oneshot_create(test_runtime(), &tx, NULL), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(create_success) {
     asx_oneshot_sender tx;
     asx_oneshot_receiver rx;
     setup();
-    ASSERT_EQ(asx_oneshot_create(&tx, &rx), ASX_OK);
+    ASSERT_EQ(asx_oneshot_create(test_runtime(), &tx, &rx), ASX_OK);
     ASSERT_EQ(tx.slot, rx.slot);
     ASSERT_EQ(tx.generation, rx.generation);
 }
@@ -56,7 +62,7 @@ TEST(send_and_recv) {
     asx_oneshot_receiver rx;
     uint64_t val;
     setup();
-    MUST_OK(asx_oneshot_create(&tx, &rx));
+    MUST_OK(asx_oneshot_create(test_runtime(), &tx, &rx));
     ASSERT_EQ(asx_oneshot_try_send(&tx, 42), ASX_OK);
     ASSERT_EQ(asx_oneshot_try_recv(&rx, &val), ASX_OK);
     ASSERT_EQ(val, (uint64_t)42);
@@ -67,7 +73,7 @@ TEST(recv_before_send_returns_would_block) {
     asx_oneshot_receiver rx;
     uint64_t val;
     setup();
-    MUST_OK(asx_oneshot_create(&tx, &rx));
+    MUST_OK(asx_oneshot_create(test_runtime(), &tx, &rx));
     ASSERT_EQ(asx_oneshot_try_recv(&rx, &val), ASX_E_WOULD_BLOCK);
 }
 
@@ -75,7 +81,7 @@ TEST(double_send_fails) {
     asx_oneshot_sender tx;
     asx_oneshot_receiver rx;
     setup();
-    MUST_OK(asx_oneshot_create(&tx, &rx));
+    MUST_OK(asx_oneshot_create(test_runtime(), &tx, &rx));
     MUST_OK(asx_oneshot_try_send(&tx, 1));
     /* Sender is consumed after first send */
     ASSERT_EQ(asx_oneshot_try_send(&tx, 2), ASX_E_INVALID_STATE);
@@ -86,7 +92,7 @@ TEST(double_recv_fails) {
     asx_oneshot_receiver rx;
     uint64_t val;
     setup();
-    MUST_OK(asx_oneshot_create(&tx, &rx));
+    MUST_OK(asx_oneshot_create(test_runtime(), &tx, &rx));
     MUST_OK(asx_oneshot_try_send(&tx, 99));
     MUST_OK(asx_oneshot_try_recv(&rx, &val));
     /* Receiver is consumed after first recv */
@@ -102,7 +108,7 @@ TEST(sender_drop_gives_disconnected_recv) {
     asx_oneshot_receiver rx;
     uint64_t val;
     setup();
-    MUST_OK(asx_oneshot_create(&tx, &rx));
+    MUST_OK(asx_oneshot_create(test_runtime(), &tx, &rx));
     asx_oneshot_sender_drop(&tx);
     ASSERT_EQ(asx_oneshot_try_recv(&rx, &val), ASX_E_DISCONNECTED);
 }
@@ -111,7 +117,7 @@ TEST(receiver_drop_gives_disconnected_send) {
     asx_oneshot_sender tx;
     asx_oneshot_receiver rx;
     setup();
-    MUST_OK(asx_oneshot_create(&tx, &rx));
+    MUST_OK(asx_oneshot_create(test_runtime(), &tx, &rx));
     asx_oneshot_receiver_drop(&rx);
     ASSERT_EQ(asx_oneshot_try_send(&tx, 1), ASX_E_DISCONNECTED);
 }
@@ -131,7 +137,7 @@ TEST(recv_null_out_fails) {
     asx_oneshot_sender tx;
     asx_oneshot_receiver rx;
     setup();
-    MUST_OK(asx_oneshot_create(&tx, &rx));
+    MUST_OK(asx_oneshot_create(test_runtime(), &tx, &rx));
     ASSERT_EQ(asx_oneshot_try_recv(&rx, NULL), ASX_E_INVALID_ARGUMENT);
 }
 
@@ -143,7 +149,7 @@ TEST(state_empty_after_create) {
     asx_oneshot_sender tx;
     asx_oneshot_receiver rx;
     setup();
-    MUST_OK(asx_oneshot_create(&tx, &rx));
+    MUST_OK(asx_oneshot_create(test_runtime(), &tx, &rx));
     ASSERT_EQ(asx_oneshot_get_state(tx.slot, tx.generation), ASX_ONESHOT_EMPTY);
 }
 
@@ -151,7 +157,7 @@ TEST(state_filled_after_send) {
     asx_oneshot_sender tx;
     asx_oneshot_receiver rx;
     setup();
-    MUST_OK(asx_oneshot_create(&tx, &rx));
+    MUST_OK(asx_oneshot_create(test_runtime(), &tx, &rx));
     MUST_OK(asx_oneshot_try_send(&tx, 1));
     ASSERT_EQ(asx_oneshot_get_state(rx.slot, rx.generation), ASX_ONESHOT_FILLED);
 }
@@ -161,7 +167,7 @@ TEST(state_consumed_after_recv) {
     asx_oneshot_receiver rx;
     uint64_t val;
     setup();
-    MUST_OK(asx_oneshot_create(&tx, &rx));
+    MUST_OK(asx_oneshot_create(test_runtime(), &tx, &rx));
     MUST_OK(asx_oneshot_try_send(&tx, 1));
     MUST_OK(asx_oneshot_try_recv(&rx, &val));
     ASSERT_EQ(asx_oneshot_get_state(rx.slot, rx.generation), ASX_ONESHOT_CONSUMED);
@@ -171,7 +177,7 @@ TEST(state_sender_dropped) {
     asx_oneshot_sender tx;
     asx_oneshot_receiver rx;
     setup();
-    MUST_OK(asx_oneshot_create(&tx, &rx));
+    MUST_OK(asx_oneshot_create(test_runtime(), &tx, &rx));
     asx_oneshot_sender_drop(&tx);
     ASSERT_EQ(asx_oneshot_get_state(tx.slot, tx.generation), ASX_ONESHOT_SENDER_DROPPED);
 }
@@ -187,10 +193,10 @@ TEST(arena_exhaustion) {
     asx_status st;
     setup();
     for (i = 0; i < ASX_MAX_ONESHOTS; i++) {
-        st = asx_oneshot_create(&tx, &rx);
+        st = asx_oneshot_create(test_runtime(), &tx, &rx);
         ASSERT_EQ(st, ASX_OK);
     }
-    st = asx_oneshot_create(&tx, &rx);
+    st = asx_oneshot_create(test_runtime(), &tx, &rx);
     ASSERT_EQ(st, ASX_E_RESOURCE_EXHAUSTED);
 }
 
@@ -205,7 +211,7 @@ TEST(reserve_consumes_the_sender_until_the_permit_sends) {
     asx_oneshot_permit again;
     uint64_t val = 0;
     setup();
-    MUST_OK(asx_oneshot_create(&tx, &rx));
+    MUST_OK(asx_oneshot_create(test_runtime(), &tx, &rx));
     ASSERT_EQ(asx_oneshot_reserve(&tx, NULL, &p), ASX_OK);
     ASSERT_EQ(p.obligation, ASX_INVALID_ID); /* no Cx: untracked */
     ASSERT_EQ(asx_oneshot_try_send(&tx, 1), ASX_E_INVALID_STATE);
@@ -226,7 +232,7 @@ TEST(permit_abort_closes_the_channel) {
     asx_oneshot_permit p;
     uint64_t val = 0;
     setup();
-    MUST_OK(asx_oneshot_create(&tx, &rx));
+    MUST_OK(asx_oneshot_create(test_runtime(), &tx, &rx));
     MUST_OK(asx_oneshot_reserve(&tx, NULL, &p));
     asx_oneshot_permit_abort(&p);
     ASSERT_EQ(asx_oneshot_try_recv(&rx, &val), ASX_E_DISCONNECTED);
@@ -276,7 +282,7 @@ static void check_tracked_permit_resolution(asx_region_id region, asx_task_id se
     uint64_t value = 0u;
     ASSERT_EQ(asx_cx_init(&cx, region, self, ASX_CAP_NONE), ASX_OK);
 
-    ASSERT_EQ(asx_oneshot_create(&tx, &rx), ASX_OK);
+    ASSERT_EQ(asx_oneshot_create(test_runtime(), &tx, &rx), ASX_OK);
     ASSERT_EQ(asx_oneshot_reserve(&tx, &cx, &p), ASX_OK);
     ob = p.obligation;
     ASSERT_TRUE(obligation_is(ob, ASX_OBLIGATION_RESERVED, ASX_OBLIGATION_ABORT_NONE));
@@ -285,14 +291,14 @@ static void check_tracked_permit_resolution(asx_region_id region, asx_task_id se
     ASSERT_EQ(asx_oneshot_try_recv(&rx, &value), ASX_OK);
     ASSERT_EQ(value, 1u);
 
-    ASSERT_EQ(asx_oneshot_create(&tx, &rx), ASX_OK);
+    ASSERT_EQ(asx_oneshot_create(test_runtime(), &tx, &rx), ASX_OK);
     ASSERT_EQ(asx_oneshot_reserve(&tx, &cx, &p), ASX_OK);
     ob = p.obligation;
     asx_oneshot_receiver_drop(&rx);
     ASSERT_EQ(asx_oneshot_permit_send(&p, 2), ASX_E_DISCONNECTED);
     ASSERT_TRUE(obligation_is(ob, ASX_OBLIGATION_ABORTED, ASX_OBLIGATION_ABORT_ERROR));
 
-    ASSERT_EQ(asx_oneshot_create(&tx, &rx), ASX_OK);
+    ASSERT_EQ(asx_oneshot_create(test_runtime(), &tx, &rx), ASX_OK);
     ASSERT_EQ(asx_oneshot_reserve(&tx, &cx, &p), ASX_OK);
     ob = p.obligation;
     asx_oneshot_permit_abort(&p);
@@ -384,7 +390,7 @@ static void check_forged_tracked_oneshot_binding(tracked_oneshot_misuse *ctx) {
     memset(&sender, 0, sizeof(sender));
     memset(&receiver, 0, sizeof(receiver));
     memset(&forged, 0, sizeof(forged));
-    ASSERT_EQ(asx_oneshot_create(&sender, &receiver), ASX_OK);
+    ASSERT_EQ(asx_oneshot_create(test_runtime(), &sender, &receiver), ASX_OK);
     ASSERT_EQ(asx_oneshot_reserve(&sender, NULL, &forged), ASX_OK);
     forged.obligation = ctx->obligation;
     memcpy(&before, &forged, sizeof(before));
@@ -480,7 +486,7 @@ static void run_tracked_oneshot_misuse(int abort_after_rejection, int settle_in_
     ctx.abort_after_rejection = abort_after_rejection;
     ctx.settle_in_other_task = settle_in_other_task;
     ASSERT_EQ(asx_region_open(test_runtime(), &ctx.region), ASX_OK);
-    ASSERT_EQ(asx_oneshot_create(&ctx.sender, &ctx.receiver), ASX_OK);
+    ASSERT_EQ(asx_oneshot_create(test_runtime(), &ctx.sender, &ctx.receiver), ASX_OK);
     ASSERT_EQ(asx_task_spawn(ctx.region, poll_tracked_oneshot_holder, &ctx, &ctx.holder), ASX_OK);
     ASSERT_EQ(asx_task_spawn(ctx.region, poll_wrong_task_oneshot_attempts, &ctx, &other), ASX_OK);
     ASSERT_EQ(asx_scheduler_run(ctx.region, &budget), ASX_OK);
@@ -519,7 +525,7 @@ TEST(cancelled_reserve_closes_the_channel) {
     asx_oneshot_receiver rx;
     asx_oneshot_permit p;
     uint64_t val = 0;
-    MUST_OK(asx_oneshot_create(&tx, &rx));
+    MUST_OK(asx_oneshot_create(test_runtime(), &tx, &rx));
     MUST_OK(asx_task_cancel(t, ASX_CANCEL_USER));
     ASSERT_EQ(asx_oneshot_reserve(&tx, &cx, &p), ASX_E_CANCELLED);
     ASSERT_EQ(p.live, 0);
@@ -541,7 +547,7 @@ TEST(closed_predicates_follow_rust) {
     uint64_t val = 0;
 
     setup();
-    MUST_OK(asx_oneshot_create(&tx, &rx));
+    MUST_OK(asx_oneshot_create(test_runtime(), &tx, &rx));
     ASSERT_FALSE(asx_oneshot_sender_is_closed(&tx));
     ASSERT_FALSE(asx_oneshot_receiver_is_ready(&rx));
     ASSERT_FALSE(asx_oneshot_receiver_is_closed(&rx));
@@ -552,18 +558,18 @@ TEST(closed_predicates_follow_rust) {
     ASSERT_FALSE(asx_oneshot_receiver_is_ready(&rx));
     ASSERT_TRUE(asx_oneshot_receiver_is_closed(&rx));
 
-    MUST_OK(asx_oneshot_create(&tx, &rx));
+    MUST_OK(asx_oneshot_create(test_runtime(), &tx, &rx));
     asx_oneshot_receiver_drop(&rx);
     ASSERT_TRUE(asx_oneshot_sender_is_closed(&tx));
 
-    MUST_OK(asx_oneshot_create(&tx, &rx));
+    MUST_OK(asx_oneshot_create(test_runtime(), &tx, &rx));
     ASSERT_EQ(asx_oneshot_reserve(&tx, NULL, &p), ASX_OK);
     ASSERT_FALSE(asx_oneshot_receiver_is_closed(&rx)); /* permit outstanding */
     ASSERT_FALSE(asx_oneshot_permit_is_closed(&p));
     asx_oneshot_receiver_drop(&rx);
     ASSERT_TRUE(asx_oneshot_permit_is_closed(&p));
 
-    MUST_OK(asx_oneshot_create(&tx, &rx));
+    MUST_OK(asx_oneshot_create(test_runtime(), &tx, &rx));
     asx_oneshot_sender_drop(&tx);
     ASSERT_TRUE(asx_oneshot_receiver_is_closed(&rx));
 }
@@ -573,14 +579,14 @@ TEST(poll_closed_outside_a_task) {
     asx_oneshot_receiver rx;
 
     setup();
-    MUST_OK(asx_oneshot_create(&tx, &rx));
+    MUST_OK(asx_oneshot_create(test_runtime(), &tx, &rx));
     ASSERT_EQ(asx_oneshot_poll_closed(&tx), ASX_E_PENDING);
     ASSERT_EQ(asx_oneshot_receiver_poll_closed(&rx), ASX_E_PENDING);
     asx_oneshot_receiver_drop(&rx);
     ASSERT_EQ(asx_oneshot_poll_closed(&tx), ASX_OK);
     ASSERT_EQ(asx_oneshot_receiver_poll_closed(&rx), ASX_E_INVALID_STATE);
 
-    MUST_OK(asx_oneshot_create(&tx, &rx));
+    MUST_OK(asx_oneshot_create(test_runtime(), &tx, &rx));
     asx_oneshot_sender_drop(&tx);
     ASSERT_EQ(asx_oneshot_receiver_poll_closed(&rx), ASX_OK);
     ASSERT_EQ(asx_oneshot_poll_closed(&tx), ASX_E_INVALID_STATE); /* consumed */
@@ -622,8 +628,8 @@ TEST(closed_waiters_wake_as_rust_wakers_do) {
     setup();
     memset(w, 0, sizeof(w));
     MUST_OK(asx_region_open(test_runtime(), &r));
-    MUST_OK(asx_oneshot_create(&tx_a, &rx_a));
-    MUST_OK(asx_oneshot_create(&tx_b, &rx_b));
+    MUST_OK(asx_oneshot_create(test_runtime(), &tx_a, &rx_a));
+    MUST_OK(asx_oneshot_create(test_runtime(), &tx_b, &rx_b));
     w[0].tx = tx_a;
     w[1].rx = rx_b;
     w[1].receiver_side = 1;
@@ -668,8 +674,8 @@ TEST(receiver_closed_waiter_wakes_on_sender_drop_and_abort) {
     setup();
     memset(w, 0, sizeof(w));
     MUST_OK(asx_region_open(test_runtime(), &r));
-    MUST_OK(asx_oneshot_create(&tx_a, &rx_a));
-    MUST_OK(asx_oneshot_create(&tx_b, &rx_b));
+    MUST_OK(asx_oneshot_create(test_runtime(), &tx_a, &rx_a));
+    MUST_OK(asx_oneshot_create(test_runtime(), &tx_b, &rx_b));
     w[0].rx = rx_a;
     w[0].receiver_side = 1;
     w[1].rx = rx_b;
@@ -700,6 +706,7 @@ TEST(receiver_closed_waiter_wakes_on_sender_drop_and_abort) {
 int main(void) {
     fprintf(stderr, "=== test_oneshot ===\n");
 
+    RUN_TEST(create_null_runtime_fails);
     RUN_TEST(create_null_sender_fails);
     RUN_TEST(create_null_receiver_fails);
     RUN_TEST(create_success);

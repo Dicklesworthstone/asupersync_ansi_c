@@ -1712,7 +1712,7 @@ static void check_quota_channel(int kind) {
         if (kind == 0) {
             ASSERT_EQ(asx_channel_create(p.region, 1u, &p.channel), ASX_OK);
         } else if (kind == 1) {
-            ASSERT_EQ(asx_oneshot_create(&p.sender, &p.receiver), ASX_OK);
+            ASSERT_EQ(asx_oneshot_create(&g_rt, &p.sender, &p.receiver), ASX_OK);
         } else {
             ASSERT_EQ(asx_broadcast_create(1u, &p.broadcast_sender, &p.broadcast_receiver), ASX_OK);
         }

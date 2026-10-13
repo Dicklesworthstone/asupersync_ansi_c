@@ -1188,8 +1188,8 @@ TEST(watch_stream_yields_initial_then_changes) {
     uint64_t buf = 0;
     void *item = NULL;
 
-    asx_watch_reset();
-    ASSERT_EQ(asx_watch_create(5u, &tx, &rx), ASX_OK);
+    asx_watch_reset(test_runtime());
+    ASSERT_EQ(asx_watch_create(test_runtime(), 5u, &tx, &rx), ASX_OK);
     asx_stream_from_watch(&s, &ws, &rx, &buf);
 
     ASSERT_EQ(asx_stream_poll_next(&s, NULL, &item), ASX_STREAM_READY);
@@ -1212,8 +1212,8 @@ TEST(watch_stream_from_changes_skips_initial) {
     uint64_t buf = 0;
     void *item = NULL;
 
-    asx_watch_reset();
-    ASSERT_EQ(asx_watch_create(5u, &tx, &rx), ASX_OK);
+    asx_watch_reset(test_runtime());
+    ASSERT_EQ(asx_watch_create(test_runtime(), 5u, &tx, &rx), ASX_OK);
     asx_stream_from_watch_changes(&s, &ws, &rx, &buf);
 
     ASSERT_EQ(asx_stream_poll_next(&s, NULL, &item), ASX_STREAM_PENDING);

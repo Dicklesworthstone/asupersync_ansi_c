@@ -15,8 +15,8 @@
 #include <stdint.h>
 
 /* Reset stubs for subsystems not yet implemented */
-void asx_oneshot_reset(void) {}
-void asx_watch_reset(void) {}
+void asx_oneshot_reset(const asx_runtime *rt) { (void)rt; }
+void asx_watch_reset(const asx_runtime *rt) { (void)rt; }
 void asx_broadcast_reset(void) {}
 void asx_session_reset(void) {}
 void asx_waker_reset(const asx_runtime *rt) { (void)rt; }

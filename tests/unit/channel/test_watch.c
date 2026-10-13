@@ -5,6 +5,7 @@
  */
 
 #include "../../test_harness.h"
+#include "../../test_runtime.h"
 #include <asx/core/watch.h>
 
 static asx_status st_sink_;
@@ -14,7 +15,7 @@ static asx_status st_sink_;
         (void)st_sink_;                                                                            \
     } while (0)
 
-static void setup(void) { asx_watch_reset(); }
+static void setup(void) { asx_watch_reset(test_runtime()); }
 
 /* ------------------------------------------------------------------ */
 /* Create tests                                                        */
@@ -22,19 +23,25 @@ static void setup(void) { asx_watch_reset(); }
 
 TEST(create_null_sender_fails) {
     asx_watch_receiver rx;
-    ASSERT_EQ(asx_watch_create(0, NULL, &rx), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_watch_create(test_runtime(), 0, NULL, &rx), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(create_null_receiver_fails) {
     asx_watch_sender tx;
-    ASSERT_EQ(asx_watch_create(0, &tx, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_watch_create(test_runtime(), 0, &tx, NULL), ASX_E_INVALID_ARGUMENT);
+}
+
+TEST(create_null_runtime_fails) {
+    asx_watch_sender tx;
+    asx_watch_receiver rx;
+    ASSERT_EQ(asx_watch_create(NULL, 0, &tx, &rx), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(create_success) {
     asx_watch_sender tx;
     asx_watch_receiver rx;
     setup();
-    ASSERT_EQ(asx_watch_create(42, &tx, &rx), ASX_OK);
+    ASSERT_EQ(asx_watch_create(test_runtime(), 42, &tx, &rx), ASX_OK);
     ASSERT_EQ(tx.slot, rx.slot);
     ASSERT_EQ(asx_watch_receiver_count(&tx), 1u);
 }
@@ -48,7 +55,7 @@ TEST(read_initial_value) {
     asx_watch_receiver rx;
     uint64_t val;
     setup();
-    MUST_OK(asx_watch_create(100, &tx, &rx));
+    MUST_OK(asx_watch_create(test_runtime(), 100, &tx, &rx));
     MUST_OK(asx_watch_recv(&rx, &val));
     ASSERT_EQ(val, (uint64_t)100);
 }
@@ -61,7 +68,7 @@ TEST(has_changed_initially_false) {
     asx_watch_sender tx;
     asx_watch_receiver rx;
     setup();
-    MUST_OK(asx_watch_create(1, &tx, &rx));
+    MUST_OK(asx_watch_create(test_runtime(), 1, &tx, &rx));
     ASSERT_FALSE(asx_watch_has_changed(&rx));
     ASSERT_EQ(asx_watch_poll_changed(&rx, NULL), ASX_E_PENDING);
     MUST_OK(asx_watch_send(&tx, 2));
@@ -73,7 +80,7 @@ TEST(subscribe_sees_only_later_changes) {
     asx_watch_receiver rx1, rx2;
     uint64_t val;
     setup();
-    MUST_OK(asx_watch_create(0, &tx, &rx1));
+    MUST_OK(asx_watch_create(test_runtime(), 0, &tx, &rx1));
     MUST_OK(asx_watch_send(&tx, 1));
     MUST_OK(asx_watch_send(&tx, 2));
     MUST_OK(asx_watch_send(&tx, 3));
@@ -93,7 +100,7 @@ TEST(has_changed_false_after_read) {
     asx_watch_receiver rx;
     uint64_t val;
     setup();
-    MUST_OK(asx_watch_create(1, &tx, &rx));
+    MUST_OK(asx_watch_create(test_runtime(), 1, &tx, &rx));
     MUST_OK(asx_watch_recv(&rx, &val));
     ASSERT_FALSE(asx_watch_has_changed(&rx));
 }
@@ -107,7 +114,7 @@ TEST(send_updates_value) {
     asx_watch_receiver rx;
     uint64_t val;
     setup();
-    MUST_OK(asx_watch_create(0, &tx, &rx));
+    MUST_OK(asx_watch_create(test_runtime(), 0, &tx, &rx));
     MUST_OK(asx_watch_recv(&rx, &val)); /* read initial */
     MUST_OK(asx_watch_send(&tx, 77));
     ASSERT_TRUE(asx_watch_has_changed(&rx));
@@ -121,7 +128,7 @@ TEST(latest_value_wins) {
     asx_watch_receiver rx;
     uint64_t val;
     setup();
-    MUST_OK(asx_watch_create(0, &tx, &rx));
+    MUST_OK(asx_watch_create(test_runtime(), 0, &tx, &rx));
     MUST_OK(asx_watch_send(&tx, 1));
     MUST_OK(asx_watch_send(&tx, 2));
     MUST_OK(asx_watch_send(&tx, 3));
@@ -137,7 +144,7 @@ TEST(subscribe_creates_receiver) {
     asx_watch_sender tx;
     asx_watch_receiver rx1, rx2;
     setup();
-    MUST_OK(asx_watch_create(0, &tx, &rx1));
+    MUST_OK(asx_watch_create(test_runtime(), 0, &tx, &rx1));
     MUST_OK(asx_watch_subscribe(&tx, &rx2));
     ASSERT_EQ(asx_watch_receiver_count(&tx), 2u);
 }
@@ -147,7 +154,7 @@ TEST(multiple_receivers_see_same_value) {
     asx_watch_receiver rx1, rx2;
     uint64_t v1, v2;
     setup();
-    MUST_OK(asx_watch_create(0, &tx, &rx1));
+    MUST_OK(asx_watch_create(test_runtime(), 0, &tx, &rx1));
     MUST_OK(asx_watch_subscribe(&tx, &rx2));
     MUST_OK(asx_watch_send(&tx, 55));
     MUST_OK(asx_watch_recv(&rx1, &v1));
@@ -161,7 +168,7 @@ TEST(independent_changed_tracking) {
     asx_watch_receiver rx1, rx2;
     uint64_t val;
     setup();
-    MUST_OK(asx_watch_create(0, &tx, &rx1));
+    MUST_OK(asx_watch_create(test_runtime(), 0, &tx, &rx1));
     MUST_OK(asx_watch_subscribe(&tx, &rx2));
     MUST_OK(asx_watch_send(&tx, 10));
     MUST_OK(asx_watch_recv(&rx1, &val)); /* rx1 reads */
@@ -178,7 +185,7 @@ TEST(sender_drop_allows_last_read) {
     asx_watch_receiver rx;
     uint64_t val;
     setup();
-    MUST_OK(asx_watch_create(42, &tx, &rx));
+    MUST_OK(asx_watch_create(test_runtime(), 42, &tx, &rx));
     asx_watch_sender_drop(&tx);
     /* Receiver can still read the last value */
     MUST_OK(asx_watch_recv(&rx, &val));
@@ -189,7 +196,7 @@ TEST(subscribe_after_sender_drop_fails) {
     asx_watch_sender tx;
     asx_watch_receiver rx, rx2;
     setup();
-    MUST_OK(asx_watch_create(0, &tx, &rx));
+    MUST_OK(asx_watch_create(test_runtime(), 0, &tx, &rx));
     asx_watch_sender_drop(&tx);
     ASSERT_EQ(asx_watch_subscribe(&tx, &rx2), ASX_E_DISCONNECTED);
 }
@@ -198,7 +205,7 @@ TEST(send_after_drop_fails) {
     asx_watch_sender tx;
     asx_watch_receiver rx;
     setup();
-    MUST_OK(asx_watch_create(0, &tx, &rx));
+    MUST_OK(asx_watch_create(test_runtime(), 0, &tx, &rx));
     asx_watch_sender_drop(&tx);
     ASSERT_EQ(asx_watch_send(&tx, 1), ASX_E_INVALID_STATE);
 }
@@ -207,7 +214,7 @@ TEST(receiver_drop_decrements_count) {
     asx_watch_sender tx;
     asx_watch_receiver rx;
     setup();
-    MUST_OK(asx_watch_create(0, &tx, &rx));
+    MUST_OK(asx_watch_create(test_runtime(), 0, &tx, &rx));
     ASSERT_EQ(asx_watch_receiver_count(&tx), 1u);
     asx_watch_receiver_drop(&rx);
     ASSERT_EQ(asx_watch_receiver_count(&tx), 0u);
@@ -222,7 +229,7 @@ TEST(borrow_reads_without_marking_the_value_seen) {
     asx_watch_receiver rx;
     uint64_t val = 0;
     setup();
-    MUST_OK(asx_watch_create(1, &tx, &rx));
+    MUST_OK(asx_watch_create(test_runtime(), 1, &tx, &rx));
     MUST_OK(asx_watch_send(&tx, 2));
     MUST_OK(asx_watch_borrow(&rx, &val));
     ASSERT_EQ(val, (uint64_t)2);
@@ -236,7 +243,7 @@ TEST(borrow_and_update_marks_the_value_seen) {
     asx_watch_receiver rx;
     uint64_t val = 0;
     setup();
-    MUST_OK(asx_watch_create(1, &tx, &rx));
+    MUST_OK(asx_watch_create(test_runtime(), 1, &tx, &rx));
     MUST_OK(asx_watch_send(&tx, 2));
     MUST_OK(asx_watch_recv(&rx, &val));
     ASSERT_EQ(val, (uint64_t)2);
@@ -249,7 +256,7 @@ TEST(mark_seen_acknowledges_the_latest_version_not_the_borrowed_one) {
     asx_watch_receiver rx;
     uint64_t val = 0;
     setup();
-    MUST_OK(asx_watch_create(0, &tx, &rx));
+    MUST_OK(asx_watch_create(test_runtime(), 0, &tx, &rx));
     MUST_OK(asx_watch_send(&tx, 1));
     MUST_OK(asx_watch_borrow(&rx, &val)); /* sees 1 */
     MUST_OK(asx_watch_send(&tx, 2));      /* arrives after the borrow */
@@ -265,11 +272,11 @@ TEST(borrow_and_mark_seen_argument_errors) {
     asx_watch_receiver rx;
     uint64_t val = 0;
     setup();
-    MUST_OK(asx_watch_create(0, &tx, &rx));
+    MUST_OK(asx_watch_create(test_runtime(), 0, &tx, &rx));
     ASSERT_EQ(asx_watch_borrow(NULL, &val), ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_watch_borrow(&rx, NULL), ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_watch_mark_seen(NULL), ASX_E_INVALID_ARGUMENT);
-    asx_watch_reset();
+    asx_watch_reset(test_runtime());
     ASSERT_EQ(asx_watch_borrow(&rx, &val), ASX_E_NOT_FOUND);
     ASSERT_EQ(asx_watch_mark_seen(&rx), ASX_E_NOT_FOUND);
 }
@@ -293,7 +300,7 @@ TEST(send_modify_applies_in_place_as_one_version) {
     asx_watch_receiver rx;
     uint64_t val = 0;
     setup();
-    MUST_OK(asx_watch_create(10, &tx, &rx));
+    MUST_OK(asx_watch_create(test_runtime(), 10, &tx, &rx));
     MUST_OK(asx_watch_send_modify(&tx, add_five, NULL));
     MUST_OK(asx_watch_send_modify(&tx, add_five, NULL));
     ASSERT_TRUE(asx_watch_has_changed(&rx));
@@ -308,7 +315,7 @@ TEST(send_modify_that_changes_nothing_still_publishes_a_version) {
     int calls = 0;
     uint64_t val = 0;
     setup();
-    MUST_OK(asx_watch_create(7, &tx, &rx));
+    MUST_OK(asx_watch_create(test_runtime(), 7, &tx, &rx));
     MUST_OK(asx_watch_send_modify(&tx, leave_alone, &calls));
     ASSERT_EQ(calls, 1);
     ASSERT_TRUE(asx_watch_has_changed(&rx));
@@ -323,7 +330,7 @@ TEST(send_modify_after_the_sender_dropped_is_refused) {
     asx_watch_receiver rx;
     int calls = 0;
     setup();
-    MUST_OK(asx_watch_create(7, &tx, &rx));
+    MUST_OK(asx_watch_create(test_runtime(), 7, &tx, &rx));
     stale = tx;
     asx_watch_sender_drop(&tx);
     ASSERT_EQ(asx_watch_send_modify(&stale, leave_alone, &calls), ASX_E_INVALID_STATE);
@@ -335,7 +342,7 @@ TEST(send_modify_argument_errors) {
     asx_watch_sender tx;
     asx_watch_receiver rx;
     setup();
-    MUST_OK(asx_watch_create(0, &tx, &rx));
+    MUST_OK(asx_watch_create(test_runtime(), 0, &tx, &rx));
     ASSERT_EQ(asx_watch_send_modify(NULL, add_five, NULL), ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_watch_send_modify(&tx, NULL, NULL), ASX_E_INVALID_ARGUMENT);
     ASSERT_FALSE(asx_watch_has_changed(&rx));
@@ -350,7 +357,7 @@ TEST(receiver_clone_continues_from_the_same_version) {
     asx_watch_receiver rx1, clone, fresh;
     uint64_t val = 0;
     setup();
-    MUST_OK(asx_watch_create(0, &tx, &rx1));
+    MUST_OK(asx_watch_create(test_runtime(), 0, &tx, &rx1));
     MUST_OK(asx_watch_send(&tx, 1));
     MUST_OK(asx_watch_recv(&rx1, &val)); /* rx1 has seen version 1 */
     MUST_OK(asx_watch_send(&tx, 2));
@@ -368,7 +375,7 @@ TEST(receiver_clone_of_an_unread_receiver_has_the_same_unread_change) {
     asx_watch_sender tx;
     asx_watch_receiver rx, clone;
     setup();
-    MUST_OK(asx_watch_create(0, &tx, &rx));
+    MUST_OK(asx_watch_create(test_runtime(), 0, &tx, &rx));
     MUST_OK(asx_watch_send(&tx, 9));
     MUST_OK(asx_watch_receiver_clone(&rx, &clone));
     ASSERT_TRUE(asx_watch_has_changed(&rx));
@@ -380,7 +387,7 @@ TEST(receiver_clone_survives_the_sender_and_obeys_the_limit) {
     asx_watch_receiver rx, clone, more[ASX_WATCH_MAX_RECEIVERS];
     uint32_t i;
     setup();
-    MUST_OK(asx_watch_create(0, &tx, &rx));
+    MUST_OK(asx_watch_create(test_runtime(), 0, &tx, &rx));
     asx_watch_sender_drop(&tx);
     MUST_OK(asx_watch_receiver_clone(&rx, &clone)); /* allowed: Receiver::clone needs no sender */
     ASSERT_TRUE(asx_watch_receiver_is_closed(&clone));
@@ -390,7 +397,7 @@ TEST(receiver_clone_survives_the_sender_and_obeys_the_limit) {
     ASSERT_EQ(asx_watch_receiver_clone(&rx, &more[0]), ASX_E_RESOURCE_EXHAUSTED);
     ASSERT_EQ(asx_watch_receiver_clone(NULL, &more[0]), ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_watch_receiver_clone(&rx, NULL), ASX_E_INVALID_ARGUMENT);
-    asx_watch_reset();
+    asx_watch_reset(test_runtime());
     ASSERT_EQ(asx_watch_receiver_clone(&rx, &more[0]), ASX_E_NOT_FOUND);
 }
 
@@ -402,7 +409,7 @@ TEST(is_closed_reports_the_other_end_gone) {
     asx_watch_sender tx;
     asx_watch_receiver rx, rx2;
     setup();
-    MUST_OK(asx_watch_create(0, &tx, &rx));
+    MUST_OK(asx_watch_create(test_runtime(), 0, &tx, &rx));
     MUST_OK(asx_watch_subscribe(&tx, &rx2));
     ASSERT_FALSE(asx_watch_sender_is_closed(&tx));
     ASSERT_FALSE(asx_watch_receiver_is_closed(&rx));
@@ -419,10 +426,10 @@ TEST(is_closed_of_a_null_or_stale_handle_reads_as_closed) {
     asx_watch_sender tx;
     asx_watch_receiver rx;
     setup();
-    MUST_OK(asx_watch_create(0, &tx, &rx));
+    MUST_OK(asx_watch_create(test_runtime(), 0, &tx, &rx));
     ASSERT_TRUE(asx_watch_receiver_is_closed(NULL));
     ASSERT_TRUE(asx_watch_sender_is_closed(NULL));
-    asx_watch_reset();
+    asx_watch_reset(test_runtime());
     ASSERT_TRUE(asx_watch_receiver_is_closed(&rx));
     ASSERT_TRUE(asx_watch_sender_is_closed(&tx));
 }
@@ -440,7 +447,7 @@ TEST(wait_for_returns_at_once_when_the_value_already_matches) {
     uint64_t want = 5u;
     uint64_t val = 0;
     setup();
-    MUST_OK(asx_watch_create(0, &tx, &rx));
+    MUST_OK(asx_watch_create(test_runtime(), 0, &tx, &rx));
     MUST_OK(asx_watch_send(&tx, 6));
     memset(&w, 0, sizeof(w));
     ASSERT_EQ(asx_watch_poll_wait_for(&rx, NULL, &w, at_least, &want, &val), ASX_OK);
@@ -456,7 +463,7 @@ TEST(wait_for_waits_through_rejected_versions_on_a_clone) {
     uint64_t want = 3u;
     uint64_t val = 0;
     setup();
-    MUST_OK(asx_watch_create(0, &tx, &rx));
+    MUST_OK(asx_watch_create(test_runtime(), 0, &tx, &rx));
     memset(&w, 0, sizeof(w));
     ASSERT_EQ(asx_watch_poll_wait_for(&rx, NULL, &w, at_least, &want, &val), ASX_E_PENDING);
     ASSERT_EQ(asx_watch_receiver_count(&tx), 2u); /* Rust waits on self.clone() */
@@ -479,7 +486,7 @@ TEST(wait_for_checks_the_value_current_when_it_wakes_not_each_send) {
     uint64_t want = 4u;
     uint64_t val = 0;
     setup();
-    MUST_OK(asx_watch_create(0, &tx, &rx));
+    MUST_OK(asx_watch_create(test_runtime(), 0, &tx, &rx));
     memset(&w, 0, sizeof(w));
     ASSERT_EQ(asx_watch_poll_wait_for(&rx, NULL, &w, at_least, &want, &val), ASX_E_PENDING);
     MUST_OK(asx_watch_send(&tx, 4)); /* matches, but replaced before the next poll */
@@ -499,7 +506,7 @@ TEST(wait_for_sender_drop_reports_a_final_match_first_then_disconnects) {
     uint64_t want = 3u;
     uint64_t val = 0;
     setup();
-    MUST_OK(asx_watch_create(0, &tx, &rx));
+    MUST_OK(asx_watch_create(test_runtime(), 0, &tx, &rx));
     MUST_OK(asx_watch_subscribe(&tx, &rx2));
     memset(&w, 0, sizeof(w));
     memset(&w2, 0, sizeof(w2));
@@ -521,7 +528,7 @@ TEST(wait_for_argument_errors) {
     uint64_t want = 0u;
     uint64_t val = 0;
     setup();
-    MUST_OK(asx_watch_create(0, &tx, &rx));
+    MUST_OK(asx_watch_create(test_runtime(), 0, &tx, &rx));
     memset(&w, 0, sizeof(w));
     ASSERT_EQ(asx_watch_poll_wait_for(NULL, NULL, &w, at_least, &want, &val),
               ASX_E_INVALID_ARGUMENT);
@@ -554,6 +561,7 @@ int main(void) {
 
     RUN_TEST(create_null_sender_fails);
     RUN_TEST(create_null_receiver_fails);
+    RUN_TEST(create_null_runtime_fails);
     RUN_TEST(create_success);
 
     RUN_TEST(read_initial_value);

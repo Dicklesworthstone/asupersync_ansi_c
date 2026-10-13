@@ -156,6 +156,15 @@ TEST(two_runtimes_have_independent_regions_tasks_and_quiescence) {
     asx_channel_id chb;
     asx_send_permit chpermit;
     uint64_t chval;
+    asx_oneshot_sender osa_tx;
+    asx_oneshot_sender osb_tx;
+    asx_oneshot_receiver osa_rx;
+    asx_oneshot_receiver osb_rx;
+    asx_watch_sender wa_tx;
+    asx_watch_sender wb_tx;
+    asx_watch_receiver wa_rx;
+    asx_watch_receiver wb_rx;
+    uint64_t chan_val;
 
     memset(&a, 0, sizeof(a));
     memset(&b, 0, sizeof(b));
@@ -325,6 +334,37 @@ TEST(two_runtimes_have_independent_regions_tasks_and_quiescence) {
     ASSERT_EQ(asx_channel_try_recv(chb, &chval), ASX_OK);
     ASSERT_EQ(chval, 41u);
 
+    /* Oneshot and watch channels name the runtime they were created on: the
+     * same index, told apart by the tag, each its own runtime's state. */
+    ASSERT_EQ(asx_oneshot_create(&a, &osa_tx, &osa_rx), ASX_OK);
+    ASSERT_EQ(asx_oneshot_create(&b, &osb_tx, &osb_rx), ASX_OK);
+    ASSERT_EQ(osa_tx.slot, 0u);
+    ASSERT_EQ(osb_tx.slot, 1u << 16);
+    ASSERT_EQ(asx_oneshot_try_send(&osb_tx, 7u), ASX_OK);
+    ASSERT_EQ(asx_oneshot_try_recv(&osa_rx, &chan_val), ASX_E_WOULD_BLOCK);
+    ASSERT_EQ(asx_oneshot_get_state(osb_tx.slot, osb_tx.generation), ASX_ONESHOT_FILLED);
+    ASSERT_EQ(asx_oneshot_get_state(osa_tx.slot, osa_tx.generation), ASX_ONESHOT_EMPTY);
+    ASSERT_EQ(asx_oneshot_try_recv(&osb_rx, &chan_val), ASX_OK);
+    ASSERT_EQ(chan_val, 7u);
+    ASSERT_EQ(asx_watch_create(&a, 10u, &wa_tx, &wa_rx), ASX_OK);
+    ASSERT_EQ(asx_watch_create(&b, 20u, &wb_tx, &wb_rx), ASX_OK);
+    ASSERT_EQ(wa_tx.slot, 0u);
+    ASSERT_EQ(wb_tx.slot, 1u << 16);
+    ASSERT_EQ(asx_watch_send(&wb_tx, 21u), ASX_OK);
+    ASSERT_FALSE(asx_watch_has_changed(&wa_rx));
+    ASSERT_TRUE(asx_watch_has_changed(&wb_rx));
+    ASSERT_EQ(asx_watch_recv(&wa_rx, &chan_val), ASX_OK);
+    ASSERT_EQ(chan_val, 10u);
+    ASSERT_EQ(asx_watch_recv(&wb_rx, &chan_val), ASX_OK);
+    ASSERT_EQ(chan_val, 21u);
+    asx_oneshot_sender_drop(&osa_tx);
+    asx_oneshot_receiver_drop(&osa_rx);
+    asx_watch_sender_drop(&wa_tx);
+    asx_watch_receiver_drop(&wa_rx);
+    asx_watch_sender_drop(&wb_tx);
+    asx_watch_receiver_drop(&wb_rx);
+    ASSERT_EQ(asx_oneshot_create(NULL, &osa_tx, &osa_rx), ASX_E_INVALID_ARGUMENT);
+
     /* A handle of the other runtime is no member of this one's world. */
     ASSERT_EQ(asx_task_watch(ta, tb), ASX_E_NOT_FOUND);
     ASSERT_EQ(asx_obligation_reserve_ex(ra, ASX_OBLIGATION_KIND_GENERIC, tb, &ob), ASX_E_NOT_FOUND);
@@ -374,8 +414,8 @@ TEST(a_second_runtime_is_refused_by_name_while_a_shared_subsystem_is_in_use) {
     asx_semaphore_handle sem;
     asx_rwlock_handle rw;
     asx_contended_mutex_handle cm;
-    asx_watch_sender wtx;
-    asx_watch_receiver wrx;
+    asx_broadcast_sender btx;
+    asx_broadcast_receiver brx;
     asx_task_id tid;
 
     memset(&a, 0, sizeof(a));
@@ -388,12 +428,12 @@ TEST(a_second_runtime_is_refused_by_name_while_a_shared_subsystem_is_in_use) {
     cfg_b.storage = blk.block;
     cfg_b.storage_size = blk.size;
 
-    /* A watch channel is in use: a second runtime would share the table. */
+    /* A broadcast channel is in use: a second runtime would share the table. */
     ASSERT_EQ(asx_runtime_init(&a, &cfg_a, &hooks), ASX_OK);
     ASSERT_EQ(asx_region_open(&a, &ra), ASX_OK);
-    ASSERT_EQ(asx_watch_create(0u, &wtx, &wrx), ASX_OK);
+    ASSERT_EQ(asx_broadcast_create(2u, &btx, &brx), ASX_OK);
     ASSERT_EQ(asx_runtime_init(&b, &cfg_b, &hooks), ASX_E_INVALID_STATE);
-    ASSERT_TRUE(reason_names("watches"));
+    ASSERT_TRUE(reason_names("broadcasts"));
     ASSERT_FALSE(asx_runtime_is_initialized(&b));
     ASSERT_TRUE(g_kernels[1] == NULL);
 
@@ -415,8 +455,8 @@ TEST(a_second_runtime_is_refused_by_name_while_a_shared_subsystem_is_in_use) {
     ASSERT_EQ(asx_runtime_init(&b, &cfg_b, &hooks), ASX_OK);
     ASSERT_EQ(asx_region_open(&a, &ra), ASX_OK);
     ASSERT_EQ(asx_channel_create(ra, 4u, &ch), ASX_OK);
-    ASSERT_EQ(asx_watch_create(0u, &wtx, &wrx), ASX_E_INVALID_STATE);
-    ASSERT_TRUE(reason_names("watches"));
+    ASSERT_EQ(asx_broadcast_create(2u, &btx, &brx), ASX_E_INVALID_STATE);
+    ASSERT_TRUE(reason_names("broadcasts"));
     ASSERT_EQ(asx_contended_mutex_create(&a, &cm), ASX_OK);
     ASSERT_EQ(asx_contended_mutex_close(cm), ASX_OK);
     ASSERT_EQ(asx_semaphore_create(&a, 1u, &sem), ASX_OK);
@@ -427,7 +467,7 @@ TEST(a_second_runtime_is_refused_by_name_while_a_shared_subsystem_is_in_use) {
 
     /* One runtime again: the subsystem takes state, as before. */
     asx_runtime_shutdown(&b);
-    ASSERT_EQ(asx_watch_create(0u, &wtx, &wrx), ASX_OK);
+    ASSERT_EQ(asx_broadcast_create(2u, &btx, &brx), ASX_OK);
     asx_runtime_shutdown(&a);
     two_block_free(&blk);
 }
