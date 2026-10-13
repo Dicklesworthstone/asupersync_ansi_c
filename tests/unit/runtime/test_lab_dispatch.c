@@ -2026,6 +2026,68 @@ TEST(schedule_certificate_folds_without_a_recorder) {
     ASSERT_EQ(asx_scheduler_schedule_decisions(), (uint64_t)0u);
 }
 
+#ifdef ASX_DEBUG_GHOST
+/* fs_scene_build on `seed`. */
+static asx_status ghost_scene(uint64_t seed, fs_scene *sc) {
+    asx_status st = setup();
+
+    if (st == ASX_OK) st = asx_scheduler_use_lab_dispatch(seed);
+    order_reset();
+    memset(sc, 0, sizeof(*sc));
+    sc->a.name = 'A';
+    sc->b.name = 'B';
+    sc->b.yields = 1u;
+    sc->c.name = 'C';
+    if (st == ASX_OK) st = asx_region_open(&sc->region);
+    if (st == ASX_OK) st = asx_task_spawn(sc->region, poll_probe, &sc->a, &sc->ta);
+    if (st == ASX_OK) st = asx_task_spawn(sc->region, poll_probe, &sc->b, &sc->tb);
+    if (st == ASX_OK) st = asx_task_spawn(sc->region, poll_probe, &sc->c, &sc->tc);
+    return st;
+}
+
+/* The ghost determinism monitor takes the schedule certificate at every pick
+ * (bd-flkg). Sealed after one run, it finds a rerun of the same program on
+ * the same seed repeating the picks and one that picks another order
+ * drifting; the runtime's reset between the runs keeps the reference. */
+TEST(the_ghost_determinism_monitor_sees_every_pick_and_a_rerun_repeats_them) {
+    fs_scene sc;
+    asx_budget budget = asx_budget_from_polls(100);
+    uint64_t seed;
+    int reordered = 0;
+
+    ASSERT_EQ(ghost_scene(42u, &sc), ASX_OK);
+    asx_ghost_determinism_reset();
+    ASSERT_EQ(asx_scheduler_run(sc.region, &budget), ASX_OK);
+    ASSERT_EQ(strcmp(g_order, "BCAB"), 0);
+    ASSERT_EQ(asx_scheduler_schedule_decisions(), (uint64_t)4u);
+    ASSERT_EQ(asx_ghost_determinism_event_count(), 4u);
+    asx_ghost_determinism_seal();
+
+    /* Same program, same seed: the new runtime cleared the run, not the
+     * reference, and the picks repeat. */
+    ASSERT_EQ(ghost_scene(42u, &sc), ASX_OK);
+    ASSERT_EQ(asx_ghost_determinism_event_count(), 0u);
+    ASSERT_EQ(asx_scheduler_run(sc.region, &budget), ASX_OK);
+    ASSERT_EQ(asx_ghost_determinism_event_count(), 4u);
+    ASSERT_EQ(asx_ghost_determinism_check(), 0u);
+    ASSERT_EQ(asx_ghost_violation_count(), 0u);
+
+    /* A seed that picks another order does not. */
+    for (seed = 1u; seed <= 32u && !reordered; seed++) {
+        ASSERT_EQ(ghost_scene(seed, &sc), ASX_OK);
+        ASSERT_EQ(asx_scheduler_run(sc.region, &budget), ASX_OK);
+        if (strcmp(g_order, "BCAB") != 0) {
+            reordered = 1;
+            ASSERT_TRUE(asx_ghost_determinism_check() > 0u);
+        } else {
+            ASSERT_EQ(asx_ghost_determinism_check(), 0u);
+        }
+    }
+    ASSERT_TRUE(reordered);
+    asx_ghost_determinism_reset();
+}
+#endif
+
 /* Rust's arena hands a completed task's index to the next task with the
  * generation advanced; the recorded id carries that, not the C slot's. */
 TEST(forced_schedule_recording_follows_rust_arena_index_reuse) {
@@ -3084,6 +3146,9 @@ int main(void) {
     RUN_TEST(forced_schedule_encode_refuses_partial_and_bad_input_and_sizes_its_output);
     RUN_TEST(forced_schedule_recording_captures_rust_arena_ids_and_the_running_certificate);
     RUN_TEST(schedule_certificate_folds_without_a_recorder);
+#ifdef ASX_DEBUG_GHOST
+    RUN_TEST(the_ghost_determinism_monitor_sees_every_pick_and_a_rerun_repeats_them);
+#endif
     RUN_TEST(forced_schedule_recording_follows_rust_arena_index_reuse);
     RUN_TEST(forced_schedule_recording_refuses_misuse_and_overflow);
     RUN_TEST(forced_schedule_replays_the_recorded_run_exactly);

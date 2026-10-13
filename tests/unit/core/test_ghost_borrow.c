@@ -330,6 +330,55 @@ TEST(determinism_check_without_seal) {
 }
 
 /* ================================================================== */
+/* Determinism monitor — reset between runs (bd-flkg)                  */
+/* ================================================================== */
+
+TEST(reset_run_clears_the_run_and_keeps_the_sealed_reference) {
+    uint64_t eid = 0x0001000100010001ULL;
+
+    asx_ghost_reset();
+    asx_ghost_determinism_record(10);
+    asx_ghost_determinism_record(20);
+    asx_ghost_determinism_seal();
+
+    /* What a finished run leaves behind: events, a borrow, a violation. */
+    asx_ghost_determinism_record(99);
+    ASSERT_TRUE(asx_ghost_borrow_exclusive(eid));
+    ASSERT_TRUE(!asx_ghost_borrow_exclusive(eid));
+    ASSERT_TRUE(asx_ghost_violation_count() > 0u);
+
+    asx_ghost_reset_run();
+    ASSERT_EQ(asx_ghost_violation_count(), 0u);
+    ASSERT_EQ(asx_ghost_determinism_event_count(), 0u);
+    ASSERT_TRUE(!asx_ghost_borrow_is_exclusive(eid));
+
+    /* The rerun is checked against the run that was sealed. */
+    asx_ghost_determinism_record(10);
+    asx_ghost_determinism_record(20);
+    ASSERT_EQ(asx_ghost_determinism_check(), 0u);
+
+    asx_ghost_reset_run();
+    asx_ghost_determinism_record(10);
+    asx_ghost_determinism_record(30);
+    ASSERT_TRUE(asx_ghost_determinism_check() > 0u);
+}
+
+TEST(reset_and_determinism_reset_forget_the_reference) {
+    asx_ghost_reset();
+    asx_ghost_determinism_record(10);
+    asx_ghost_determinism_seal();
+    asx_ghost_reset();
+    asx_ghost_determinism_record(11);
+    ASSERT_EQ(asx_ghost_determinism_check(), 0u);
+
+    asx_ghost_determinism_record(10);
+    asx_ghost_determinism_seal();
+    asx_ghost_determinism_reset();
+    asx_ghost_determinism_record(11);
+    ASSERT_EQ(asx_ghost_determinism_check(), 0u);
+}
+
+/* ================================================================== */
 /* Borrow Ledger — Slot Reclamation                                    */
 /* ================================================================== */
 
@@ -402,6 +451,10 @@ int main(void) {
     RUN_TEST(determinism_seal_and_replay_drift);
     RUN_TEST(determinism_length_mismatch_detected);
     RUN_TEST(determinism_check_without_seal);
+
+    /* Determinism: the reset between runs of the same program */
+    RUN_TEST(reset_run_clears_the_run_and_keeps_the_sealed_reference);
+    RUN_TEST(reset_and_determinism_reset_forget_the_reference);
 
     /* Slot reclamation */
     RUN_TEST(borrow_slot_reclaimed_after_release);

@@ -432,6 +432,72 @@ TEST(a_reordered_call_diverges_at_the_seq_of_the_record_it_met) {
     ASSERT_EQ(asx_replay_served(&rp), (uint64_t)0u);
 }
 
+/* A fresh replay of the recorded script whose first call (an entropy draw
+ * where the stream has a clock read) diverges, then its report. */
+static asx_replay_error diverge_at_the_first_call(asx_replay_report *rep) {
+    asx_replay rp;
+    asx_runtime_hooks hooks;
+    uint64_t v = 0u;
+
+    if (!open_replay(&rp, rep)) return ASX_REPLAY_E_RUNTIME;
+    memset(&hooks, 0, sizeof(hooks));
+    if (asx_replay_hooks(&rp, &hooks) != ASX_OK) return ASX_REPLAY_E_RUNTIME;
+    if (hooks.entropy.try_u64_fn(hooks.entropy.ctx, &v) != ASX_E_REPLAY_MISMATCH) {
+        return ASX_REPLAY_E_RUNTIME;
+    }
+    return asx_replay_finish(&rp, rep);
+}
+
+/* A divergence's report carries the hindsight ring (bd-flkg): the values the
+ * run observed, as the ring's JSON, when the ring holds events and the flush
+ * policy allows it; a replay that is accepted, or whose ring is empty, has
+ * none. */
+TEST(a_divergence_carries_the_hindsight_ring_when_it_holds_events) {
+    script_obs rec;
+    script_obs got;
+    asx_replay rp;
+    asx_replay_report rep;
+    asx_runtime_hooks hooks;
+    asx_hindsight_policy saved = asx_hindsight_policy_active();
+    asx_hindsight_policy off = saved;
+
+    ASSERT_TRUE(record_script(0u, &rec));
+
+    /* An empty ring: nothing to attach. */
+    asx_hindsight_reset();
+    memset(&rep, 0xA5, sizeof(rep));
+    ASSERT_EQ((int)diverge_at_the_first_call(&rep), (int)ASX_REPLAY_E_DIVERGED);
+    ASSERT_TRUE(rep.hindsight == NULL);
+
+    /* Events in it: attached, with what was logged. */
+    asx_hindsight_reset();
+    asx_hindsight_log(ASX_ND_CLOCK_READ, 0u, 1234u);
+    memset(&rep, 0xA5, sizeof(rep));
+    ASSERT_EQ((int)diverge_at_the_first_call(&rep), (int)ASX_REPLAY_E_DIVERGED);
+    ASSERT_TRUE(rep.hindsight != NULL);
+    ASSERT_TRUE(strstr(rep.hindsight, "\"kind\":\"clock_read\"") != NULL);
+    ASSERT_TRUE(strstr(rep.hindsight, "\"observed_value\":1234") != NULL);
+
+    /* The policy says no. */
+    off.flush_on_divergence = 0;
+    asx_hindsight_set_policy(&off);
+    memset(&rep, 0xA5, sizeof(rep));
+    ASSERT_EQ((int)diverge_at_the_first_call(&rep), (int)ASX_REPLAY_E_DIVERGED);
+    ASSERT_TRUE(rep.hindsight == NULL);
+    asx_hindsight_set_policy(&saved);
+
+    /* An accepted replay has none, ring or no ring. */
+    memset(&rep, 0xA5, sizeof(rep));
+    ASSERT_TRUE(open_replay(&rp, &rep));
+    memset(&hooks, 0, sizeof(hooks));
+    ASSERT_EQ(asx_replay_hooks(&rp, &hooks), ASX_OK);
+    script(&hooks, &got);
+    memset(&rep, 0xA5, sizeof(rep));
+    ASSERT_EQ((int)asx_replay_finish(&rp, &rep), (int)ASX_REPLAY_OK);
+    ASSERT_TRUE(rep.hindsight == NULL);
+    asx_hindsight_reset();
+}
+
 /* A fresh replay of the recorded script with its clock read and entropy draw
  * already served: the next record is the wait (seq 2). */
 static int replay_to_wait(asx_replay *rp, asx_runtime_hooks *hooks) {
@@ -1928,6 +1994,49 @@ TEST(asx_journal_replay_runs_a_program_against_a_stream_in_one_call) {
     ASSERT_EQ(ps, ASX_E_INVALID_ARGUMENT);
 }
 
+/* Two clock reads; and one clock read followed by an entropy draw. */
+static asx_status clock_twice_program(void *obs) {
+    asx_time t = 0u;
+    (void)obs;
+    (void)asx_runtime_now_ns(&t);
+    (void)asx_runtime_now_ns(&t);
+    return ASX_OK;
+}
+
+static asx_status clock_then_entropy_program(void *obs) {
+    asx_time t = 0u;
+    uint64_t v = 0u;
+    (void)obs;
+    (void)asx_runtime_now_ns(&t);
+    (void)asx_runtime_random_u64(&v);
+    return ASX_OK;
+}
+
+/* A divergence the program meets while the runtime is up carries the
+ * hindsight ring read before its shutdown clears it (bd-flkg): here the
+ * clock read the replay served before the draw the stream does not have. */
+TEST(a_diverged_one_call_replay_reports_the_hindsight_it_was_served) {
+    asx_replay_report rep;
+    asx_replay_identity id = ours();
+    asx_status ps = ASX_E_INVALID_STATE;
+
+    ASSERT_TRUE(record_program(clock_twice_program, NULL));
+
+    memset(&rep, 0xA5, sizeof(rep));
+    ASSERT_EQ((int)asx_journal_replay(g_out, g_out_len, &id, NULL, clock_twice_program, NULL, &ps,
+                                      &rep),
+              (int)ASX_REPLAY_OK);
+    ASSERT_TRUE(rep.hindsight == NULL);
+
+    memset(&rep, 0xA5, sizeof(rep));
+    ASSERT_EQ((int)asx_journal_replay(g_out, g_out_len, &id, NULL, clock_then_entropy_program, NULL,
+                                      &ps, &rep),
+              (int)ASX_REPLAY_E_DIVERGED);
+    ASSERT_EQ(rep.actual_kind, (uint8_t)ASX_JOURNAL_KIND_ENTROPY);
+    ASSERT_TRUE(rep.hindsight != NULL);
+    ASSERT_TRUE(strstr(rep.hindsight, "\"kind\":\"clock_read\"") != NULL);
+}
+
 TEST(a_blocking_result_that_differs_from_the_recorded_one_is_reported_at_its_seq) {
     asx_replay rp;
     asx_replay_report rep;
@@ -2110,6 +2219,7 @@ int main(void) {
     RUN_TEST(a_tampered_record_breaks_the_chain_and_is_reported_with_its_seq);
     RUN_TEST(open_refuses_records_the_replay_cannot_serve_naming_the_first);
     RUN_TEST(a_reordered_call_diverges_at_the_seq_of_the_record_it_met);
+    RUN_TEST(a_divergence_carries_the_hindsight_ring_when_it_holds_events);
     RUN_TEST(a_changed_argument_diverges_with_the_field_named);
     RUN_TEST(a_request_after_the_last_record_is_exhausted_at_the_end_seq);
     RUN_TEST(records_the_program_never_asked_for_are_reported_at_finish);
@@ -2134,6 +2244,7 @@ int main(void) {
     RUN_TEST(a_tcp_round_trip_replays_with_no_socket_opened);
     RUN_TEST(a_blocking_job_is_run_again_where_its_completion_was_recorded);
     RUN_TEST(asx_journal_replay_runs_a_program_against_a_stream_in_one_call);
+    RUN_TEST(a_diverged_one_call_replay_reports_the_hindsight_it_was_served);
     RUN_TEST(a_blocking_result_that_differs_from_the_recorded_one_is_reported_at_its_seq);
     RUN_TEST(a_cut_live_run_replays_its_committed_prefix_and_ends_at_the_cut);
     RUN_TEST(a_failed_replay_ends_the_scheduler_run_it_is_driving);

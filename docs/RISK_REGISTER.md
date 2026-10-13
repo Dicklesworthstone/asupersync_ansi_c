@@ -120,9 +120,9 @@ build/
     exhaustion_*.json
     failure_atomic_*.json
   test-logs/             # Ghost monitors, counterfactual logs, hindsight rings
-    ghost_*.json
+    ghost_*.json           # not written: ghost results are the FAIL lines of `make conformance-ghost`
     counterfactual_*.json
-    hindsight_nondet_*.json
+    hindsight_nondet_*.json  # not written: the ring is printed after a ghost FAIL and carried by a diverged replay's report
     fallback_exercise_*.json
   conformance/           # Rust parity, codec, profile, semantic delta
     rust_parity_*.json
@@ -181,7 +181,7 @@ All risk escalation paths follow this hierarchy:
 
 | Breach Type | First Action | Artifact to Check | Escalation Trigger |
 |-------------|-------------|-------------------|-------------------|
-| Ghost monitor violation | Check `ghost_*.json` | `ghost_borrow_violation_count` | Fix requires semantic change |
+| Ghost monitor violation | Read the `FAIL` line and the `hindsight:` line after it in the `make conformance-ghost` output | The first violation's kind, entity and state change | Fix requires semantic change |
 | Sanitizer finding | Check `sanitizer-reports/*.log` | Finding location and type | Fix is non-obvious |
 | Digest mismatch | Check `conformance/*.json` | `diffs` array in report | Mismatch is intentional |
 | Profile parity failure | Check `profile_parity_*.json` | Per-profile digests | Semantic divergence desired |

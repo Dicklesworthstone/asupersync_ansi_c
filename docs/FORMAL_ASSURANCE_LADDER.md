@@ -337,7 +337,8 @@ formal models of the asx runtime.
 ### Phase 1: Immediate (L0-L1 hardening)
 - [x] Conformance runner operational (3 modes)
 - [x] Bounded model checker (22 tests, 10 invariants)
-- [x] Ghost monitors (protocol, linearity, borrow, determinism)
+- [x] Ghost monitors: protocol, linearity (called by the lifecycle) and determinism (the lab dispatch records every pick; `make conformance-ghost` reruns each scenario against the sealed first run)
+- [ ] Ghost borrow ledger: implemented and unit-tested, but nothing in the runtime acquires a borrow, so it records nothing in a run
 - [ ] Add schema drift gate to CI (hash check on `invariant_schema.json`)
 
 ### Phase 2: Pilot (L2-L4, this bead)

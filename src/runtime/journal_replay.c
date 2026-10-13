@@ -15,6 +15,7 @@
 
 #include "runtime_internal.h"
 #include <asx/runtime/blocking.h>
+#include <asx/runtime/hindsight.h>
 #include <asx/runtime/journal_replay.h>
 #include <asx/runtime/rt.h>
 #define ASX_INTERNAL_TRACE_FAMILY_ACCESS 1
@@ -45,6 +46,27 @@ static void report_set(asx_replay_report *rep, asx_replay_error error, uint64_t 
     rep->expected_kind = expected;
     rep->actual_kind = actual;
     rep->what = what;
+    rep->hindsight = NULL;
+}
+
+/* The hindsight ring as it stood when a diverged replay's program returned
+ * (bd-flkg): what the replay served the run, for telling a recorded value the
+ * program no longer asks for from a runtime that changed. One buffer, for the
+ * one replay that can be active; asx_replay_report.hindsight points here. */
+static asx_hindsight_flush_buffer g_replay_hindsight;
+
+/* Flush the ring into the report of a failed replay that diverged. Called
+ * on the thread that ran the program, while the runtime is up (its shutdown
+ * clears the ring); a ring with nothing in it or a flush policy that says no
+ * leaves the report without one. */
+static void capture_hindsight(asx_replay *r) {
+    if (!r->failed || r->failure.hindsight != NULL) return;
+    if (r->failure.error != ASX_REPLAY_E_DIVERGED && r->failure.error != ASX_REPLAY_E_EXHAUSTED) {
+        return;
+    }
+    if (asx_hindsight_flush_on_divergence(NULL, &g_replay_hindsight) == ASX_OK) {
+        r->failure.hindsight = g_replay_hindsight.data;
+    }
 }
 
 /* Record the first failure; later ones are consequences. */
@@ -650,6 +672,7 @@ asx_replay_error asx_replay_finish(asx_replay *r, asx_replay_report *report) {
              "the program ended inside the committed prefix");
     }
     if (r->failed) {
+        capture_hindsight(r);
         if (report != NULL) *report = r->failure;
         return r->failure.error;
     }
@@ -1132,6 +1155,8 @@ static asx_replay_error replay_run(const uint8_t *bytes, size_t len,
     }
 
     st = program(user);
+    /* The shutdown clears the hindsight ring: read a divergence's now. */
+    capture_hindsight(&r);
     /* Shutdown still makes boundary calls the recording made: serve them. */
     asx_runtime_shutdown(&rt);
     asx_replay_deactivate();

@@ -37,6 +37,16 @@
 #                             the kernel-state oracles (CONFORMANCE_ORACLES),
 #                             fails naming arena_counters; the same lane with
 #                             CONFORMANCE_ORACLES empty passes it.
+#   GHOST_DETERMINISM_DRIFT   logging a spawn also feeds the determinism
+#                             monitor a key that changes from run to run
+#                             -> the ghost-checked runner reruns each
+#                             scenario and FAILs the ones whose second run
+#                             drifted from the first, printing the hindsight
+#                             ring; the results parity compares stay equal.
+#   GHOST_DETERMINISM_LOST    logging an event clears the determinism monitor
+#                             -> the ghost-checked runner FAILs each scenario
+#                             whose monitor saw fewer dispatch decisions than
+#                             the run's schedule certificate folded.
 #
 # Builds under build/mutants/<case>-<lane>/ (the normal build is untouched)
 # and logs JSONL to build/test-logs/gates.jsonl. Nothing is deleted.
@@ -275,6 +285,61 @@ else
     log_case "ORACLE_LIVE_COUNT_DRIFT" "lane-without-oracles-passes" "exit$o2_rc" "fail" "$O_DIR/conformance-no-oracles.log"
     failures=$((failures + 1))
 fi
+
+# --- GHOST_DETERMINISM_DRIFT, GHOST_DETERMINISM_LOST ---------------------------
+# The ghost-checked runner reruns every compared scenario and has the
+# determinism monitor check the rerun against the first run's dispatch
+# decisions (bd-flkg). Each mutant leaves everything parity compares as it was
+# (the plain runner passes) and must fail the ghost lane with its own line on
+# every FAIL and nothing else.
+for det in DRIFT LOST; do
+    d_name="GHOST_DETERMINISM_$det"
+    d_plain="$MUTANT_BUILD_ROOT/$d_name-plain"
+    d_ghost="$MUTANT_BUILD_ROOT/$d_name-ghost"
+    if [ "$det" = "DRIFT" ]; then
+        d_pattern='^FAIL [^ ]+: ghost determinism monitor: the second run of the scenario drifted from the first at [0-9]+ point\(s\) \([0-9]+ dispatch decisions against [0-9]+\)$'
+    else
+        d_pattern='^FAIL [^ ]+: ghost determinism monitor saw [0-9]+ of the run.s [0-9]+ dispatch decisions$'
+    fi
+    if ! build_runner "$d_plain" "-DASX_MUTANT_$d_name"; then
+        echo "  FAIL: $d_name plain runner does not build (log $d_plain/build.log)"
+        log_case "$d_name" "build" "build-failed" "fail" "$d_plain/build.log"
+        failures=$((failures + 1))
+    elif ! plain_passes "$d_name" "$d_plain"; then
+        failures=$((failures + 1))
+    fi
+    if ! build_runner "$d_ghost" \
+        "-DASX_DEBUG_GHOST=1 -DASX_CONFORMANCE_GHOST_CHECK=1 -DASX_MUTANT_$d_name"; then
+        echo "  FAIL: $d_name ghost-checked runner does not build (log $d_ghost/build.log)"
+        log_case "$d_name" "build" "build-failed" "fail" "$d_ghost/build.log"
+        failures=$((failures + 1))
+        continue
+    fi
+    d_out="$(cd "$REPO_ROOT" && "$d_ghost/bin/asx-conformance" compare fixtures/rust_reference_v2/*.json 2>&1)"
+    d_rc=$?
+    printf '%s\n' "$d_out" >"$d_ghost/compare.log"
+    d_fails="$(grep -cE '^FAIL ' <<<"$d_out")"
+    d_named="$(grep -cE "$d_pattern" <<<"$d_out")"
+    d_monitor="$(grep -cE '^FAIL [^ ]+: ghost determinism monitor' <<<"$d_out")"
+    d_hind="$(grep -cE '^      hindsight: \{"total_count":' <<<"$d_out")"
+    d_status="pass"
+    # Nonzero, the planted bug's own line present, and every FAIL line one of
+    # the determinism monitor's (the DRIFT key is also a decision the
+    # certificate never folded, which the runner names as well); a drift
+    # prints the hindsight ring once.
+    if [ "$d_rc" -eq 0 ] || [ "$d_named" -eq 0 ] || [ "$d_monitor" -ne "$d_fails" ]; then
+        d_status="fail"
+    fi
+    if [ "$det" = "LOST" ] && [ "$d_named" -ne "$d_fails" ]; then d_status="fail"; fi
+    if [ "$det" = "DRIFT" ] && [ "$d_hind" -ne "$d_named" ]; then d_status="fail"; fi
+    if [ "$d_status" = "pass" ]; then
+        echo "  PASS: $d_name caught by the ghost-checked runner ($d_named scenario(s) fail, each naming the monitor)"
+    else
+        echo "  FAIL: $d_name not caught as expected (exit$d_rc; fail=$d_fails named=$d_named hindsight=$d_hind; log $d_ghost/compare.log)"
+        failures=$((failures + 1))
+    fi
+    log_case "$d_name" "ghost-runner-fails" "exit$d_rc fail=$d_fails named=$d_named hindsight=$d_hind" "$d_status" "$d_ghost/compare.log"
+done
 
 if [ "$failures" -eq 0 ]; then
     echo "test_conformance_monitors: every planted bug caught by its lane and invisible to parity"

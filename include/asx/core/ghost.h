@@ -128,6 +128,9 @@ ASX_API ASX_MUST_USE const char *asx_ghost_violation_kind_str(asx_ghost_violatio
 
 /* --- Borrow ledger --- */
 
+/* Nothing in the runtime acquires a borrow yet (bd-flkg): only tests call
+ * these, so the ledger records nothing in a run of the runtime. */
+
 /* Maximum number of handles tracked simultaneously. */
 #if (ASX_GHOST_BORROW_TABLE_CAPACITY) < 1
 #error "ASX_GHOST_BORROW_TABLE_CAPACITY must be at least 1"

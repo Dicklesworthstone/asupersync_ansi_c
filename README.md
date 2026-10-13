@@ -1312,9 +1312,9 @@ Ghost monitors are compile-time gated behind `ASX_DEBUG_GHOST`, with zero overhe
 
 **Linearity Monitor**: Tracks obligation reserve/commit/abort lifecycle and detects double-resolution (calling both commit and abort on the same obligation) and leaks (reserved but never resolved). Each obligation gets exactly one resolution in a valid program; the linearity monitor enforces this at runtime in debug builds.
 
-**Borrow Ledger**: Emulates Rust's borrow checker rules in C. Tracks shared and exclusive borrows per entity and enforces "multiple shared XOR one exclusive, never both." A borrow table of 128 entries records active borrows. `asx_ghost_borrow_shared()` checks for conflicting exclusive borrows; `asx_ghost_borrow_exclusive()` checks for any existing borrow. Violations are recorded with the conflicting entity and borrow type.
+**Borrow Ledger**: Emulates Rust's borrow checker rules in C. Tracks shared and exclusive borrows per entity and enforces "multiple shared XOR one exclusive, never both." A borrow table of 128 entries records active borrows. `asx_ghost_borrow_shared()` checks for conflicting exclusive borrows; `asx_ghost_borrow_exclusive()` checks for any existing borrow. Violations are recorded with the conflicting entity and borrow type. Nothing in the runtime acquires a borrow yet: only the unit tests do, so the ledger holds nothing in a run and detects no misuse of the runtime today.
 
-**Determinism Monitor**: Records scheduler event keys and flags ordering drift between runs (`asx_ghost_determinism_*`).
+**Determinism Monitor**: Records scheduler event keys and flags ordering drift between runs (`asx_ghost_determinism_*`). The lab dispatch records its running schedule certificate at every pick; the runtime's reset between runs keeps a sealed reference (`asx_ghost_reset_run`), and `make conformance-ghost` seals each compared scenario's decisions, runs the scenario again and fails it if the second run's decisions drift, if the monitor saw fewer decisions than the certificate folded, or if the two runs' certificates or semantic digests differ. It sees lab-dispatch decisions only, and compares the first 256 of them one by one.
 
 ### Error Taxonomy and Recovery Guidance
 
@@ -1712,6 +1712,8 @@ This narrows a digest mismatch from "something changed somewhere" to "the schedu
 The hindsight ring buffer (256 entries) records the runtime's nondeterministic inputs: clock reads, entropy draws, and reactor wait/poll results (ready or timed out). Each entry carries the trace sequence number at which it occurred and the observed value. (Event kinds for timers, signals and tie-breaks exist in the enum but nothing logs them yet.)
 
 When a replay diverges from the expected path, the hindsight log shows where nondeterminism entered. `asx_hindsight_check_divergence()` compares the log's digest with an expected one; flush the log (`asx_hindsight_flush_json()`) and compare it with the baseline run's to read something like "at trace sequence 847 the entropy draw returned 0x1f3a, where the baseline shows 0x7c2b."
+
+The ring is flushed on two failures. A ghost FAIL in `make conformance-ghost` prints it as a `hindsight:` line after the FAIL line. A diverged `asx_journal_replay` (`DIVERGED` or `EXHAUSTED`) carries it in `asx_replay_report.hindsight` as JSON, read when the program returns and before the runtime's shutdown clears it: a divergence found after that (a recorded request the program never made) has none, and neither does a replay whose ring is empty.
 
 The log has its own digest (FNV-1a mixing from the asx digest seed) for that comparison. Like the trace digest it is rolling: each entry is folded in when it is logged, so the digest covers every entry since the last reset, including those the 256-entry ring has already overwritten.
 

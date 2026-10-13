@@ -40,9 +40,9 @@ Escalation: project owner.
 
 | Indicator | Measurement | Threshold |
 |-----------|-------------|-----------|
-| Ghost borrow-ledger violations per CI run | `ghost_borrow_violation_count` in test log JSON | Must be 0 |
-| Ghost protocol-monitor violations per CI run | `ghost_protocol_violation_count` in test log JSON | Must be 0 |
-| Ghost linearity-monitor violations per CI run | `ghost_linearity_violation_count` in test log JSON | Must be 0 |
+| Ghost borrow-ledger violations per CI run | not measured: no runtime path acquires a borrow (`asx_ghost_borrow_*` are called only by `tests/unit/core/test_ghost_borrow.c`), so the ledger holds nothing in a run | n/a |
+| Ghost protocol-monitor violations per CI run | a `FAIL <id>: ghost monitor recorded N violation(s)` line in `make conformance-ghost` (`tools/conformance/runner.c::ghost_clean`) | Must be none |
+| Ghost linearity-monitor violations per CI run | the same lane; a `linearity_leak` of an obligation whose Rust trace has `obligation.leaked` is accepted and noted | Must be none |
 | ASan/MSan/UBSan findings | sanitizer exit codes in CI | Must be 0 |
 | Handle-generation reuse collision rate | `handle_generation_collision_count` in stress test output | Must be 0 |
 | Invariant test pass rate | `tests/invariant/` suite exit code | 100% pass |
@@ -51,7 +51,7 @@ Escalation: project owner.
 
 | Artifact | Path/Query | Format |
 |----------|-----------|--------|
-| Ghost monitor logs | `build/test-logs/ghost_*.json` | JSON, structured per `ghost_log_schema.json` |
+| Ghost monitor results | the output of `make conformance-ghost` (`build/conformance-ghost/`): `FAIL`/`NOTE` lines, each FAIL followed by the hindsight ring. No `ghost_*.json` log is written | Text |
 | Sanitizer reports | `build/sanitizer-reports/*.log` | Text, sanitizer standard format |
 | Invariant test results | `build/test-results/invariant_*.json` | JSON, structured per `test_log_schema.json` |
 | Handle stress test output | `build/test-results/handle_stress_*.json` | JSON |
@@ -61,8 +61,8 @@ Escalation: project owner.
 
 | Control | Type | Enforcement |
 |---------|------|-------------|
-| Generation-safe handles with validation on every dereference | Preventive | Code review + ghost borrow-ledger in debug builds |
-| Debug ghost monitors compiled into all CI builds (`ASX_DEBUG_GHOST=1`) | Detective | CI build flag, test runner checks |
+| Generation-safe handles with validation on every dereference | Preventive | Code review (the ghost borrow ledger exists, but nothing in the runtime calls it) |
+| Ghost monitors on in every debug build (`ASX_DEBUG=1` enables `ASX_DEBUG_GHOST`); only the conformance lane asserts on them: `make conformance-ghost` fails a scenario whose run recorded a violation | Detective | CI step `make conformance-ghost` in `.github/workflows/ci.yml` |
 | Sanitizer CI jobs (ASan + UBSan minimum, MSan where feasible) | Detective | CI workflow `check` job, blocking merge |
 | Cleanup-stack + poison-pill pattern for resource lifecycle | Preventive | Invariant tests + code review |
 | Transition-authority tables reject illegal state moves at runtime in debug | Detective | Ghost protocol monitor |
@@ -111,8 +111,8 @@ Escalation: project owner.
 | Digest stability across repeated runs | `digest_match_rate` in conformance output | Must be 100% |
 | Cross-codec digest match | `codec_equivalence_pass` in conformance output | Must be true |
 | Cross-profile digest match (shared fixtures) | `profile_parity_pass` in conformance output | Must be true |
-| Ghost determinism-monitor violations | `ghost_determinism_violation_count` in test log JSON | Must be 0 |
-| Hindsight nondeterminism log entries | `hindsight_nondet_event_count` in replay output | Must be 0 for deterministic mode |
+| Ghost determinism-monitor drift | a `FAIL <id>: ghost determinism monitor ...` line in `make conformance-ghost`: the rerun of a scenario drifted from the first run's dispatch decisions, or the monitor saw fewer decisions than the run's schedule certificate folded (`tools/conformance/runner.c::ghost_rerun_stable`) | Must be none |
+| Hindsight ring | the `hindsight:` line printed after a ghost FAIL; `asx_replay_report.hindsight` of a diverged replay. The ring logs clock, entropy and readiness reads in every run, deterministic ones included, so its length is not a metric | Read for diagnosis; no threshold |
 
 ### Evidence Artifacts
 
@@ -122,17 +122,17 @@ Escalation: project owner.
 | Codec equivalence report | `build/conformance/codec_equiv_*.json` | JSON |
 | Profile parity report | `build/conformance/profile_parity_*.json` | JSON |
 | Semantic digest per run | `build/traces/*.digest` | Text (sha256 hex) |
-| Hindsight nondeterminism ring dump | `build/test-logs/hindsight_nondet_*.json` | JSON |
-| Ghost determinism monitor log | `build/test-logs/ghost_determinism_*.json` | JSON |
+| Hindsight nondeterminism ring dump | the `hindsight:` JSON line after a `FAIL` in the `make conformance-ghost` output; `asx_replay_report.hindsight` of a diverged `asx_journal_replay`. No `hindsight_nondet_*.json` file is written | JSON on a text line |
+| Ghost determinism monitor result | the `FAIL ... ghost determinism monitor ...` lines of the same output. No `ghost_determinism_*.json` file is written | Text |
 
 ### Controls
 
 | Control | Type | Enforcement |
 |---------|------|-------------|
 | Deterministic tie-break key in scheduler (stable sort, explicit ordering) | Preventive | Design + unit tests |
-| Seeded PRNG only in deterministic mode; no system entropy in hot paths | Preventive | Code review + ghost determinism monitor |
-| Ghost determinism monitor detects nondeterministic event ordering | Detective | CI with `ASX_DEBUG_GHOST=1` |
-| Hindsight nondeterminism logging ring captures suspect events for replay analysis | Detective | Enabled in CI/debug builds |
+| Seeded PRNG only in deterministic mode; no system entropy in hot paths | Preventive | Code review + the `make conformance-ghost` rerun (a run that draws differently on its second pass changes the schedule certificate) |
+| Ghost determinism monitor: the lab dispatch records its schedule certificate at every pick (`src/runtime/lab_dispatch.c:442`); the conformance-ghost runner seals a compared scenario's decisions, runs it again and fails on drift. It sees lab-dispatch decisions only, compares the first `ASX_GHOST_DETERMINISM_CAPACITY` (256) one by one and the rest by count, certificate hash and semantic digest, and nothing else records into it | Detective | `make conformance-ghost`; plant-tested by `GHOST_DETERMINISM_DRIFT` and `GHOST_DETERMINISM_LOST` in `tests/gates/test_conformance_monitors.sh` |
+| Hindsight nondeterminism logging ring captures the values a run observed; a ghost FAIL prints it and a diverged replay's report carries it (only when the program met the divergence, before the runtime's shutdown clears the ring) | Detective | `tools/conformance/runner.c::ghost_hindsight`, `asx_replay_report.hindsight` |
 | Conformance digest stability gate: repeated runs must produce identical digests | Detective | `make conformance` in CI, blocking |
 | Codec equivalence gate: JSON vs BIN must produce identical semantic digests | Detective | `make codec-equivalence` in CI, blocking |
 | Profile parity gate: shared fixtures must produce identical digests across profiles | Detective | `make profile-parity` in CI, blocking |
@@ -151,7 +151,7 @@ Escalation: project owner.
 - `make codec-equivalence` runs JSON-vs-BIN digest comparison.
 - `make profile-parity` runs cross-profile digest comparison for shared fixtures.
 - All three are blocking PR checks.
-- Ghost determinism monitor violation count extracted and asserted == 0.
+- `make conformance-ghost` (a CI step) fails on any ghost violation, including determinism drift, and prints the hindsight ring after the FAIL line; no violation count is extracted to JSON.
 
 ---
 

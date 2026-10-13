@@ -131,6 +131,14 @@ typedef struct {
     uint8_t expected_kind; /* the record's kind (an asx_journal_kind), 0 if none */
     uint8_t actual_kind;   /* the kind the program asked for, 0 if none */
     const char *what;      /* the field or reason, a static string */
+    /* DIVERGED and EXHAUSTED only: the hindsight ring (asx/runtime/hindsight.h)
+     * as JSON, the clock, entropy and readiness values the run was served up
+     * to the end of the program, or NULL when the ring was empty or the
+     * divergence was found after the runtime shut down (a record never
+     * requested). It is read when the program returns, before the runtime
+     * shuts down, and kept in static storage the next diverging replay
+     * overwrites. */
+    const char *hindsight;
 } asx_replay_report;
 
 /* What the caller's build is, to compare with the stream's header; 0 in a

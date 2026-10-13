@@ -48,6 +48,7 @@
 #include <asx/core/cancel.h>
 #include <asx/core/ghost.h>
 #include <asx/core/transition.h>
+#include <asx/runtime/hindsight.h>
 #include <asx/runtime/lab.h>
 #include <asx/runtime/runtime.h>
 #include <asx/time/timer_wheel.h>
@@ -118,7 +119,16 @@ static void show(const char *label, const char *bytes) {
  * nothing about memory safety (the sanitizer lane, bd-9kll.2.22, covers
  * that). The runtime of a run is still alive when asx_conformance_run
  * returns and the next run's init resets the monitors, so the violations
- * read here are that run's own. */
+ * read here are that run's own.
+ *
+ * Two more things ride on the same lane (bd-flkg). The lab dispatch records
+ * its schedule certificate at every pick into the determinism monitor;
+ * ghost_rerun_stable seals a compared scenario's decisions as the reference,
+ * runs the scenario again and has the monitor check the second run against
+ * it. And every FAIL the monitors cause also prints the hindsight ring
+ * (asx_hindsight_flush_on_invariant): the clock, entropy and I/O readiness
+ * the run observed, for telling a nondeterministic input from a runtime
+ * bug. */
 #ifdef ASX_CONFORMANCE_GHOST_CHECK
 #if !(defined(ASX_DEBUG_GHOST) && ASX_DEBUG_GHOST)
 #error "ASX_CONFORMANCE_GHOST_CHECK needs the ghost monitors: build with -DASX_DEBUG_GHOST=1"
@@ -152,6 +162,17 @@ static int fixture_expects_leak(uint32_t want_trace, const char *name) {
         }
     }
     return 0;
+}
+
+static asx_hindsight_flush_buffer g_hindsight;
+
+/* Print the hindsight ring to `out` after a FAIL line. The flush happens
+ * only when the monitors hold a violation and the flush policy allows it,
+ * which every caller's FAIL satisfies. */
+static void ghost_hindsight(FILE *out) {
+    if (asx_hindsight_flush_on_invariant(&g_hindsight) == ASX_OK) {
+        fprintf(out, "      hindsight: %s\n", g_hindsight.data);
+    }
 }
 
 /* 1 when every violation the monitors recorded since the run began is a
@@ -208,6 +229,7 @@ static int ghost_clean(FILE *out, const char *id, const char *where, uint32_t wa
                 "FAIL %s: ghost monitor recorded %u violation(s) in %s beyond what its ring "
                 "holds, %u not examined%s\n",
                 id, (unsigned)total, where, (unsigned)unexpected, note);
+        ghost_hindsight(out);
         return 0;
     }
     fprintf(out,
@@ -220,11 +242,82 @@ static int ghost_clean(FILE *out, const char *id, const char *where, uint32_t wa
             first.kind == ASX_GHOST_LINEARITY_LEAK ? (first_name != NULL ? first_name : "?") : "",
             ghost_state_name(first.kind, first.from_state),
             ghost_state_name(first.kind, first.to_state), (unsigned)first.sequence, note);
+    ghost_hindsight(out);
     return 0;
+}
+
+/* The determinism monitor across a rerun. The lab dispatch recorded its
+ * schedule certificate at every pick of the run just compared (`run`, in
+ * g_run): seal those decisions as the reference, run `scenario` again and
+ * have the monitor check the second run's decisions against it. The monitor
+ * keeps ASX_GHOST_DETERMINISM_CAPACITY decisions (a longer run is compared
+ * by length past that), so the two runs' schedule certificates, which fold
+ * every decision, and semantic digests are compared too.
+ * The second run replaces the runtime and `g_digest`: call this after
+ * everything that reads the first. Returns 1 when the rerun repeated the
+ * first; otherwise prints a FAIL line for scenario `id` (then the hindsight
+ * ring, when the monitors hold a violation) and returns 0. */
+static int ghost_rerun_stable(const char *id, uint32_t scenario, uint32_t want_trace,
+                              uint32_t run) {
+    uint32_t again = ASX_JSON_NONE;
+    uint32_t first_picks = asx_ghost_determinism_event_count();
+    uint32_t second_picks;
+    uint32_t drift;
+    uint64_t decisions = 0u;
+    size_t k;
+    const char *want;
+    const char *got;
+    asx_status st;
+    int ok = 1;
+    static const char *const keys[] = {"certificate_hash", "semantic_digest"};
+
+    /* The monitor must have seen every pick the run's certificate folded;
+     * a monitor nothing reaches would pass any rerun. */
+    if (asx_json_u64(&g_run, asx_json_get(&g_run, run, "decisions"), &decisions) &&
+        decisions != (uint64_t)first_picks) {
+        fprintf(stdout,
+                "FAIL %s: ghost determinism monitor saw %u of the run's %llu dispatch decisions\n",
+                id, (unsigned)first_picks, (unsigned long long)decisions);
+        ok = 0;
+    }
+    asx_ghost_determinism_seal();
+    asx_json_doc_init(&g_digest);
+    st = asx_conformance_run(&g_fixture, scenario, &g_digest, &again, g_error, sizeof(g_error));
+    if (st != ASX_OK) {
+        fprintf(stdout, "FAIL %s: the second run of the scenario failed: %s\n", id,
+                g_error[0] != '\0' ? g_error : "?");
+        asx_ghost_determinism_reset();
+        return 0;
+    }
+    if (!ghost_clean(stdout, id, "the second run", want_trace)) ok = 0;
+    second_picks = asx_ghost_determinism_event_count();
+    drift = asx_ghost_determinism_check();
+    if (drift > 0u) {
+        fprintf(stdout,
+                "FAIL %s: ghost determinism monitor: the second run of the scenario drifted from "
+                "the first at %u point(s) (%u dispatch decisions against %u)\n",
+                id, (unsigned)drift, (unsigned)second_picks, (unsigned)first_picks);
+        ghost_hindsight(stdout);
+        ok = 0;
+    }
+    for (k = 0u; k < sizeof(keys) / sizeof(keys[0]); k++) {
+        want = asx_json_get_string(&g_run, run, keys[k]);
+        got = asx_json_get_string(&g_digest, again, keys[k]);
+        if (want == NULL || got == NULL || strcmp(want, got) != 0) {
+            fprintf(stdout,
+                    "FAIL %s: the second run of the scenario has %s %s against %s in the first\n",
+                    id, keys[k], got != NULL ? got : "?", want != NULL ? want : "?");
+            ok = 0;
+        }
+    }
+    asx_ghost_determinism_reset();
+    return ok;
 }
 #else
 #define ghost_clean(out, id, where, want_trace)                                                    \
     ((void)(out), (void)(id), (void)(where), (void)(want_trace), 1)
+#define ghost_rerun_stable(id, scenario, want_trace, run)                                          \
+    ((void)(id), (void)(scenario), (void)(want_trace), (void)(run), 1)
 #endif
 
 /* Compare the members of two objects; report the differing ones. */
@@ -915,6 +1008,9 @@ static cmp_result compare_one(const char *path, int mutate) {
         diff_dispatches(want_dispatches, asx_json_get(&g_run, run, "dispatches"));
     }
     if (!certificate_matches(id, schedule, run)) ok = 0;
+    /* Not under the self-test, like the ghost check above. It replaces the
+     * runtime, so it follows everything that reads the first run. */
+    if (!mutate && !ghost_rerun_stable(id, scenario, want_trace, run)) ok = 0;
     if (!mutate) {
         /* Rust's own schedule, replayed in C (bd-9kll.9.3). It runs last:
          * it replaces the runtime and `g_digest`, not `g_run`. */

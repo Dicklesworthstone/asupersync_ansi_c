@@ -660,7 +660,7 @@ The Expected Result column gives C's current status (checked directly against `s
 | FB-012 | Close region with active child tasks | The region stays `Closing` (or `Draining` if it has child regions) until its tasks complete. Fixtures: `region-lifecycle-close-cancels-children-001`, `region-lifecycle-draining-with-child-region-001` | region-drain |
 | FB-013 | Cancel already-completed task | Idempotent no-op returning OK (Rust `src/record/task.rs:705`; C `src/runtime/cancellation.c:164`). C's handle abort (`asx_task_abort_request`) of a task that ended `Cancelled` and is not yet joined strengthens its stored reason, following Rust's handle-side reason cache (`apply_or_defer_cancel_reason`, `src/runtime/task_handle.rs:470`; the terminal case is unverified) | cancel-idempotent |
 | FB-014 | Access region arena after `Closed` | C `ASX_E_REGION_CLOSED` from both captured spawn entries (`task_spawn_captured_impl` (`src/runtime/lifecycle.c:1466`), gate at `src/runtime/lifecycle.c:1482-1485`) | region-access |
-| FB-015 | Non-deterministic behavior in deterministic mode | Detected by the conformance oracle: every fixture compares the Foata-canonical trace and the exact lab dispatch order with Rust's (C_REFINEMENT_MAP row `inv.determinism.replayable`). The ghost determinism monitor (`src/core/ghost.c`) has no runtime call site | determinism |
+| FB-015 | Non-deterministic behavior in deterministic mode | Detected by the conformance oracle: every fixture compares the Foata-canonical trace and the exact lab dispatch order with Rust's (C_REFINEMENT_MAP row `inv.determinism.replayable`). The ghost determinism monitor (`src/core/ghost.c`) takes the lab dispatch's schedule certificate at every pick (`src/runtime/lab_dispatch.c`), and `make conformance-ghost` reruns each scenario against its sealed first run | determinism |
 
 ### 8.2 Resource Exhaustion Forbidden Behaviors
 
@@ -680,8 +680,8 @@ C-only debug monitors (`src/core/ghost.c`, `src/core/affinity.c`); Rust enforces
 
 | ID | Forbidden Behavior | Expected Result | Fixture Category |
 |----|-------------------|-----------------|------------------|
-| FB-200 | Yield across obligation boundary without copy | Ghost borrow ledger violation (debug) | protocol-safety |
-| FB-201 | Mutable access during shared borrow epoch | Ghost borrow ledger violation (debug) | protocol-safety |
+| FB-200 | Yield across obligation boundary without copy | Ghost borrow ledger violation (debug); not detected today: the ledger (`asx_ghost_borrow_*`) has no runtime call site | protocol-safety |
+| FB-201 | Mutable access during shared borrow epoch | Ghost borrow ledger violation (debug); not detected today: the ledger has no runtime call site | protocol-safety |
 | FB-202 | Cross-thread access without transfer certificate | Ghost affinity violation (debug) | thread-safety |
 | FB-203 | Non-checkpoint long-running loop in cancel path | CI lint/static analysis flag | checkpoint-coverage |
 

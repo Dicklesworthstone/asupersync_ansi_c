@@ -1303,7 +1303,7 @@ The Expected Result column gives C's actual status (and Rust's where it differs 
 | FB-012 | Close region with active child tasks | Region stays `Closing` (`Draining` only with child regions) until they complete | region-drain |
 | FB-013 | Cancel already-completed task | Idempotent no-op (not error) | cancel-idempotent |
 | FB-014 | Access region arena after `Closed` | `ASX_E_REGION_CLOSED` | region-access |
-| FB-015 | Non-deterministic behavior in deterministic mode | Detected by the conformance oracle's trace and dispatch-order comparison with Rust; the ghost determinism monitor has no runtime call site | determinism |
+| FB-015 | Non-deterministic behavior in deterministic mode | Detected by the conformance oracle's trace and dispatch-order comparison with Rust; the ghost determinism monitor takes the lab dispatch's schedule certificate at every pick, and `make conformance-ghost` reruns each scenario against its sealed first run | determinism |
 
 ### 15.2 Resource Exhaustion Forbidden Behaviors
 
@@ -1323,8 +1323,8 @@ C-only debug monitors; Rust enforces these by types. Not re-verified in this pas
 
 | ID | Behavior | Expected Result |
 |----|---------|-----------------|
-| FB-200 | Yield across obligation boundary without copy | Ghost borrow ledger violation (debug) |
-| FB-201 | Mutable access during shared borrow epoch | Ghost borrow ledger violation (debug) |
+| FB-200 | Yield across obligation boundary without copy | Ghost borrow ledger violation (debug); not detected today: the ledger has no runtime call site |
+| FB-201 | Mutable access during shared borrow epoch | Ghost borrow ledger violation (debug); not detected today: the ledger has no runtime call site |
 | FB-202 | Cross-thread access without transfer certificate | Ghost affinity violation (debug) |
 | FB-203 | Non-checkpoint long-running loop in cancel path | CI lint flag |
 

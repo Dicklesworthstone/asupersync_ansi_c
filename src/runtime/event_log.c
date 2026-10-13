@@ -73,6 +73,20 @@ static uint32_t g_mutant_spawns;
 #include "runtime_internal.h"
 #endif
 
+/* Planted determinism bugs (bd-flkg), compiled only in the gate build
+ * tests/gates/test_conformance_monitors.sh. DRIFT: logging a spawn also
+ * feeds the ghost determinism monitor a key that differs from one run to
+ * the next in a process, so a scenario's rerun does not repeat the
+ * monitor's sequence while its trace, certificate and digests stay equal
+ * (the extra key is also a decision the certificate never folded, which
+ * the runner names too). LOST: logging an event clears the monitor, so the
+ * run ends with fewer decisions seen than its schedule certificate folded.
+ * The plain runner has no monitor and passes both; the ghost-checked
+ * runner must not. */
+#ifdef ASX_MUTANT_GHOST_DETERMINISM_DRIFT
+static uint64_t g_mutant_det_runs;
+#endif
+
 /* ------------------------------------------------------------------ */
 /* Internal: fold events into the chain                                */
 /* ------------------------------------------------------------------ */
@@ -111,6 +125,9 @@ void asx_event_log_reset(void) {
     g_hash_folded = 0u;
 #ifdef ASX_MUTANT_SPAWN_ORDINAL_CANCEL
     g_mutant_spawns = 0u;
+#endif
+#ifdef ASX_MUTANT_GHOST_DETERMINISM_DRIFT
+    g_mutant_det_runs++;
 #endif
 }
 
@@ -162,6 +179,12 @@ uint32_t asx_event_emit(asx_event_kind kind, uint64_t entity_id, uint64_t parent
     if (kind == ASX_EVENT_OBLIGATION_CREATE) {
         (void)asx_ghost_check_obligation_leaks((asx_region_id)parent_id);
     }
+#endif
+#ifdef ASX_MUTANT_GHOST_DETERMINISM_DRIFT
+    if (kind == ASX_EVENT_TASK_SPAWN) asx_ghost_determinism_record(g_mutant_det_runs);
+#endif
+#ifdef ASX_MUTANT_GHOST_DETERMINISM_LOST
+    asx_ghost_determinism_reset();
 #endif
 
     if (g_event_count < ASX_EVENT_LOG_CAPACITY) {
