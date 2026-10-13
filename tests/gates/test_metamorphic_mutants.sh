@@ -2,19 +2,28 @@
 # test_metamorphic_mutants.sh — the metamorphic relations must catch a
 # planted order dependence (bd-9kll.12.1).
 #
-# tests/unit/conformance/test_metamorphic.c checks M1 (permuting independent
-# tasks keeps the projection) and M2 (adding a no-op task changes no other
-# entity) on the C interpreter. A relation test that never fails proves
-# nothing, so this gate builds the same test against a runtime with one
-# deliberate bug, compiled only here (src/runtime/event_log.c):
+# tests/unit/conformance/test_metamorphic.c checks four relations on the C
+# interpreter: M1 (permuting independent tasks keeps the projection), M2
+# (adding a no-op task changes no other entity), M3 (nested region budgets a
+# then b equal one region with meet(a, b)) and M4 (a weaker cancel request
+# after a stronger one changes nothing). A relation test that never fails
+# proves nothing, so this gate builds the same test against a runtime with
+# one deliberate bug per relation, each compiled only here:
 #
-#   SPAWN_ORDINAL_CANCEL   the third task a run spawns cancels the first, so
-#                          a task's outcome depends on how many tasks were
-#                          spawned before it and in what order
+#   SPAWN_ORDINAL_CANCEL  the third task a run spawns cancels the first, so a
+#                         task's outcome depends on how many tasks were
+#                         spawned before it and in what order  (M1 and M2;
+#                         src/runtime/event_log.c)
+#   BUDGET_CHILD_WINS     a later deadline replaces the earlier in a budget
+#                         meet instead of meeting it: a child region ignores
+#                         its ancestors' deadlines  (M3; src/core/budget.c)
+#   CANCEL_LAST_WINS      the later cancel request always replaces the
+#                         current reason, however weak  (M4;
+#                         src/core/cancel.c)
 #
-# and expects, for the mutant, a nonzero exit with at least one M1 VIOLATION
-# and one M2 VIOLATION line, and, for the clean build of the same test, a
-# zero exit with none, so the bug and not the corpus makes the relations
+# and expects, for each mutant, a nonzero exit with at least one VIOLATION
+# line of the relation it breaks, and, for the clean build of the same test,
+# a zero exit with none, so the bug and not the corpus makes the relations
 # fail.
 #
 # Builds under build/mutants/METAMORPHIC_*/ (the normal build is untouched)
@@ -74,29 +83,48 @@ else
     fi
 fi
 
-# --- the mutant is caught by both relations ------------------------------------
-MACRO=SPAWN_ORDINAL_CANCEL
-M_DIR="$MUTANT_BUILD_ROOT/METAMORPHIC_$MACRO"
-if ! build_test "$M_DIR" "-DASX_MUTANT_$MACRO"; then
-    echo "  FAIL: $MACRO (the mutant does not build; log $M_DIR/build.log)"
-    log_case "$MACRO" "build" "build-failed" "fail" "$M_DIR/build.log"
-    failures=$((failures + 1))
-else
-    m_out="$(cd "$REPO_ROOT" && "$M_DIR/$TEST_REL" 2>&1)"
-    m_rc=$?
-    printf '%s\n' "$m_out" >"$M_DIR/run.log"
-    m1="$(grep -cE ' M1 VIOLATION ' <<<"$m_out")"
-    m2="$(grep -cE ' M2 VIOLATION ' <<<"$m_out")"
-    status="pass"
-    if [ "$m_rc" -eq 0 ] || [ "$m1" -eq 0 ] || [ "$m2" -eq 0 ]; then status="fail"; fi
+# --- each mutant is caught by the relation it breaks --------------------------
+# run_mutant <macro> <relation>...: build the test with ASX_MUTANT_<macro>;
+# it must exit nonzero with at least one <relation> VIOLATION line for each
+# relation named, and the others are free (a mutant may break several).
+run_mutant() {
+    local macro="$1"
+    shift
+    local dir="$MUTANT_BUILD_ROOT/METAMORPHIC_$macro"
+    local out rc status="pass" counts="" rel n
+    if ! build_test "$dir" "-DASX_MUTANT_$macro"; then
+        echo "  FAIL: $macro (the mutant does not build; log $dir/build.log)"
+        log_case "$macro" "build" "build-failed" "fail" "$dir/build.log"
+        failures=$((failures + 1))
+        return
+    fi
+    out="$(cd "$REPO_ROOT" && "$dir/$TEST_REL" 2>&1)"
+    rc=$?
+    printf '%s\n' "$out" >"$dir/run.log"
+    if [ "$rc" -eq 0 ]; then status="fail"; fi
+    for rel in "$@"; do
+        n="$(grep -cE " $rel VIOLATION " <<<"$out")"
+        counts="$counts $rel=$n"
+        if [ "$n" -eq 0 ]; then status="fail"; fi
+    done
     if [ "$status" = "pass" ]; then
-        echo "  PASS: $MACRO caught (M1: $m1 violation(s), M2: $m2 violation(s))"
+        echo "  PASS: $macro caught (${counts# } violation line(s))"
     else
-        echo "  FAIL: $MACRO not caught by both relations (exit$m_rc; M1 $m1, M2 $m2; log $M_DIR/run.log)"
+        echo "  FAIL: $macro not caught by $* (exit$rc;$counts; log $dir/run.log)"
         failures=$((failures + 1))
     fi
-    log_case "$MACRO" "nonzero M1>0 M2>0" "exit$m_rc M1=$m1 M2=$m2" "$status" "$M_DIR/run.log"
-fi
+    log_case "$macro" "nonzero $*" "exit$rc$counts" "$status" "$dir/run.log"
+}
+
+# The third spawned task cancels the first: a task's outcome depends on how
+# many tasks came before it and in what order (M1 and M2).
+run_mutant SPAWN_ORDINAL_CANCEL M1 M2
+# A later deadline replaces the earlier in a budget meet instead of meeting
+# it: a child region's budget ignores its ancestors' (M3).
+run_mutant BUDGET_CHILD_WINS M3
+# The later cancel request always replaces the current reason: a weaker
+# request after a stronger one weakens it (M4).
+run_mutant CANCEL_LAST_WINS M4
 
 if [ "$failures" -eq 0 ]; then
     echo "test_metamorphic_mutants: all cases passed"

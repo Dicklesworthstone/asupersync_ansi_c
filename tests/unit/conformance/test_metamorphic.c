@@ -1,5 +1,5 @@
 /*
- * test_metamorphic.c — metamorphic relations M1 and M2 on the C interpreter
+ * test_metamorphic.c — metamorphic relations M1 to M4 on the C interpreter
  * (bd-9kll.12.1).
  *
  * A metamorphic relation needs no Rust capture: it takes a scenario, applies
@@ -15,6 +15,15 @@
  *   M2  Inserting an independent no-op task (a task with an empty program)
  *       changes no other entity: the projection without the no-op's own
  *       task, region and events is the original.
+ *   M3  A region with budget b opened inside one with budget a is the one
+ *       region with budget meet(a, b): generated scenarios, a task spawned
+ *       into each form, same outcome, observations and dispatch order.
+ *   M4  A weaker cancel request (kind User) after a stronger one changes
+ *       nothing: the reasons strengthen monotonically and the cleanup
+ *       budgets meet. Corpus scenarios whose driver script cancels, with
+ *       the weaker request inserted after each; the converse (a stronger
+ *       one after a weaker) must be seen to change the reason.
+ *   M5 (a profile substitution keeps the digest) is `make profile-parity`.
  *
  * Which tasks are independent is read from the scenario text alone. A
  * name a task's program mentions that is declared at the top level (a
@@ -26,18 +35,23 @@
  * conservative: a pair it cannot prove disjoint is dependent, and M1
  * permutes only isolated tasks among their own positions.
  *
- * Both relations hold only where the scenario's outcome does not depend on
+ * M1, M2 and M4 hold only where the scenario's outcome does not depend on
  * how the lab breaks ties: adding or reordering tasks legitimately changes
  * which of two contenders the seeded pick serves first. A scenario whose
  * semantic digest changes with the seed alone is skipped as schedule
  * sensitive (counted, never passed), and so is one the C runtime does not
- * run at all or one its profile forbids. The test fails closed on a
- * corpus that exercises neither relation.
+ * run at all or one its profile forbids. M4 is also out of scope where a
+ * scenario sets a deadline or a quota: a budget cancel a task raises itself
+ * lives in its Cx ahead of its record, a second request folds it in, and
+ * the extra poll spends quota. The test fails closed on a corpus that
+ * exercises none of the relations.
  *
  * The negative controls: the comparator must see a planted difference in
- * each projection part, and tests/gates/test_metamorphic_mutants.sh builds
- * this test against a runtime with an order-dependent bug and expects both
- * relations to report it.
+ * each projection part, the converse of M4 must be seen, and
+ * tests/gates/test_metamorphic_mutants.sh builds this test against one
+ * runtime bug per relation (an order dependence for M1 and M2, a budget
+ * meet where the child replaces the parent for M3, a cancel where the last
+ * request wins for M4) and expects the relation to report it.
  *
  * Run from the repository root; with paths as arguments it checks those
  * scenarios instead of every .json file of tests/conformance/scenarios_v2.
@@ -84,6 +98,7 @@
  * 786b3a6); these leave room for the corpus to move. */
 #define MM_M1_MIN 15u
 #define MM_M2_MIN 100u
+#define MM_M4_MIN 10u
 
 static asx_json_doc g_scn; /* the scenario under test, as read */
 static asx_json_doc g_var; /* the variant built from it */
@@ -235,6 +250,30 @@ static int has_op(const asx_json_doc *d, uint32_t node, const char *op) {
         if (has_op(d, m, op)) return 1;
     }
     return 0;
+}
+
+/* Whether any object under `node` has a member named `key`. */
+static int has_key(const asx_json_doc *d, uint32_t node, const char *key) {
+    asx_json_type ty = asx_json_type_of(d, node);
+    uint32_t i;
+    if (ty != ASX_JSON_ARRAY && ty != ASX_JSON_OBJECT) return 0;
+    for (i = 0; i < asx_json_count(d, node); i++) {
+        uint32_t m = asx_json_item(d, node, i);
+        const char *k = ty == ASX_JSON_OBJECT ? asx_json_key(d, m) : NULL;
+        if (k != NULL && strcmp(k, key) == 0) return 1;
+        if (has_key(d, m, key)) return 1;
+    }
+    return 0;
+}
+
+/* Whether the scenario sets a budget with a deadline or a quota anywhere
+ * (a task's, a region's, a spawn's, an open_region's). */
+static int has_budget_limit(const asx_json_doc *d, uint32_t sc) {
+    uint32_t tasks = asx_json_get(d, sc, "tasks");
+    uint32_t regions = asx_json_get(d, sc, "regions");
+    return has_key(d, tasks, "deadline_ns") || has_key(d, tasks, "poll_quota") ||
+           has_key(d, tasks, "cost_quota") || has_key(d, regions, "deadline_ns") ||
+           has_key(d, regions, "poll_quota") || has_key(d, regions, "cost_quota");
 }
 
 typedef struct {
@@ -550,9 +589,10 @@ static int cmp_str(const void *a, const void *b) {
 }
 
 /* The canonical text of every event of the trace (layers flattened),
- * without those that contain `skip1` or `skip2`, sorted. 0 on overflow. */
+ * without those that contain `skip0`, `skip1` or `skip2`, sorted. 0 on
+ * overflow. */
 static int flatten_trace(const asx_json_doc *d, uint32_t trace, char *pool, const char **ev,
-                         const char *skip1, const char *skip2, uint32_t *out_n) {
+                         const char *skip0, const char *skip1, const char *skip2, uint32_t *out_n) {
     uint32_t used = 0;
     uint32_t n = 0;
     uint32_t l;
@@ -563,6 +603,7 @@ static int flatten_trace(const asx_json_doc *d, uint32_t trace, char *pool, cons
             const char *txt = canon_into(d, asx_json_item(d, layer, e), g_canon);
             size_t len;
             if (txt == NULL) return 0;
+            if (skip0 != NULL && strstr(txt, skip0) != NULL) continue;
             if (skip1 != NULL && strstr(txt, skip1) != NULL) continue;
             if (skip2 != NULL && strstr(txt, skip2) != NULL) continue;
             len = strlen(txt) + 1u;
@@ -577,13 +618,16 @@ static int flatten_trace(const asx_json_doc *d, uint32_t trace, char *pool, cons
     return 1;
 }
 
+/* The events of the two traces as sorted multisets: `skip0` leaves events
+ * out of both, `skip1` and `skip2` out of the variant's only. */
 static const char *trace_difference(const asx_json_doc *da, uint32_t ta, const asx_json_doc *db,
-                                    uint32_t tb, const char *skip1, const char *skip2) {
+                                    uint32_t tb, const char *skip0, const char *skip1,
+                                    const char *skip2) {
     uint32_t na = 0;
     uint32_t nb = 0;
     uint32_t i;
-    if (!flatten_trace(da, ta, g_pool_a, g_ev_a, NULL, NULL, &na) ||
-        !flatten_trace(db, tb, g_pool_b, g_ev_b, skip1, skip2, &nb)) {
+    if (!flatten_trace(da, ta, g_pool_a, g_ev_a, skip0, NULL, NULL, &na) ||
+        !flatten_trace(db, tb, g_pool_b, g_ev_b, skip0, skip1, skip2, &nb)) {
         return "trace: too large for the comparison pools";
     }
     if (na != nb) {
@@ -601,13 +645,22 @@ static const char *trace_difference(const asx_json_doc *da, uint32_t ta, const a
     return NULL;
 }
 
+/* What a comparison allows the variant to differ in. All NULL: nothing (M1). */
+typedef struct {
+    const char *noop_task;   /* M2: the variant holds this task more, and it completed */
+    const char *noop_region; /* M2: and this region more */
+    const char *skip_event;  /* M4: events whose canonical text holds this, in both traces */
+} mm_cmp;
+
 /* How the variant's projection `rb` differs from the baseline's `ra`, or
- * NULL when it does not. With no no-op named the two must be identical
- * (M1). With one, the variant may hold exactly that task (and region, when
- * `noop_region` is set) and the events naming them, and nothing else may
- * differ, the no-op itself must have completed ok (M2). */
-static const char *mm_difference(const asx_json_doc *da, uint32_t ra, const asx_json_doc *db,
-                                 uint32_t rb, const char *noop_task, const char *noop_region) {
+ * NULL when it does not. With nothing allowed the two must be identical
+ * (M1). With a no-op named, the variant may hold exactly that task (and
+ * region, when named) and the events naming them, and nothing else may
+ * differ; the no-op itself must have completed (M2). */
+static const char *mm_compare(const asx_json_doc *da, uint32_t ra, const asx_json_doc *db,
+                              uint32_t rb, const mm_cmp *cmp) {
+    const char *noop_task = cmp->noop_task;
+    const char *noop_region = cmp->noop_region;
     uint32_t sa = asx_json_get(da, ra, "snapshot");
     uint32_t sb = asx_json_get(db, rb, "snapshot");
     uint32_t oa = asx_json_get(da, ra, "observations");
@@ -670,8 +723,17 @@ static const char *mm_difference(const asx_json_doc *da, uint32_t ra, const asx_
     if (noop_region != NULL) {
         (void)snprintf(skip_region, sizeof(skip_region), "\"%s\"", noop_region);
     }
-    return trace_difference(da, ta, db, tb, noop_task != NULL ? skip_task : NULL,
+    return trace_difference(da, ta, db, tb, cmp->skip_event, noop_task != NULL ? skip_task : NULL,
                             noop_region != NULL ? skip_region : NULL);
+}
+
+static const char *mm_difference(const asx_json_doc *da, uint32_t ra, const asx_json_doc *db,
+                                 uint32_t rb, const char *noop_task, const char *noop_region) {
+    mm_cmp cmp;
+    memset(&cmp, 0, sizeof(cmp));
+    cmp.noop_task = noop_task;
+    cmp.noop_region = noop_region;
+    return mm_compare(da, ra, db, rb, &cmp);
 }
 
 /* ---- one scenario ------------------------------------------------------ */
@@ -690,6 +752,11 @@ typedef struct {
     uint32_t m2_variants;
     uint32_t m2_capacity; /* variants skipped: a capacity limit, not compared */
     uint32_t m2_violations;
+    uint32_t m3_pairs;
+    uint32_t m3_violations;
+    uint32_t m4_applied;
+    uint32_t m4_variants;
+    uint32_t m4_violations;
 } mm_report;
 
 static uint64_t alt_seed(uint64_t seed, uint32_t k) {
@@ -832,7 +899,95 @@ static void m2_variant(const char *label, const asx_json_doc *d, uint32_t sc, ui
     }
 }
 
-/* Classify scenario `sc` of `d` and, where it qualifies, check M1 and M2. */
+/* M4's transform. The scenario's "script" with, after each driver
+ * cancel_task / cancel_region, a second request for the same target at the
+ * same instant: of kind User after one of a stronger kind (`weaker`), or of
+ * kind Shutdown after one of kind User (the converse, which must change
+ * something). *n_added is how many were inserted. */
+static int build_cancel_duplicates(const asx_json_doc *d, uint32_t sc, int weaker,
+                                   uint32_t *out_root, uint32_t *n_added) {
+    uint32_t script = asx_json_get(d, sc, "script");
+    mm_override over[1];
+    uint32_t arr;
+    uint32_t i;
+    *n_added = 0;
+    asx_json_doc_init(&g_var);
+    arr = asx_json_new_array(&g_var);
+    for (i = 0; i < asx_json_count(d, script); i++) {
+        uint32_t entry = asx_json_item(d, script, i);
+        uint32_t op = asx_json_get(d, entry, "op");
+        const char *name = asx_json_get_string(d, op, "op");
+        const char *kind = asx_json_get_string(d, op, "kind");
+        asx_json_push(&g_var, arr, asx_json_copy(&g_var, d, entry));
+        if (name == NULL || kind == NULL) continue;
+        if (strcmp(name, "cancel_task") != 0 && strcmp(name, "cancel_region") != 0) continue;
+        if (weaker ? strcmp(kind, "User") == 0 : strcmp(kind, "User") != 0) continue;
+        {
+            uint32_t dup = asx_json_copy(&g_var, d, entry);
+            uint32_t dup_op = asx_json_get(&g_var, dup, "op");
+            asx_json_set(&g_var, dup_op, "kind",
+                         asx_json_new_string(&g_var, weaker ? "User" : "Shutdown"));
+            asx_json_push(&g_var, arr, dup);
+            (*n_added)++;
+        }
+    }
+    over[0].key = "script";
+    over[0].node = arr;
+    *out_root = copy_with(&g_var, d, sc, over, 1u);
+    return variant_ok(*out_root);
+}
+
+/* The events a repeated region cancel emits again (vocabulary section 3:
+ * region.cancelled on every call, for the whole subtree). */
+#define MM_REGION_CANCELLED "\"k\":\"region.cancelled\""
+
+/* M4: a weaker cancel request after a stronger one changes nothing: the
+ * reasons strengthen monotonically and the cleanup budgets meet. Only the
+ * region.cancelled events of the repeated request are new. */
+static void m4_check(const char *label, const asx_json_doc *d, uint32_t sc, uint32_t ra,
+                     mm_report *rep) {
+    uint32_t vr = 0;
+    uint32_t rb = 0;
+    uint32_t added = 0;
+    mm_cmp cmp;
+    const char *diff;
+    /* A budget cancel the task raises itself (a spent poll quota, a passed
+     * deadline) lives in its Cx ahead of its record, and a second request
+     * folds the Cx's reason into the request (record/task.rs:716-722, mirrored
+     * by asx_task_cancel_reason_internal): the record then takes it, however
+     * weak the request. Such a scenario is out of M4's scope; it is also one
+     * where the repeated request's extra poll spends quota. */
+    if (has_budget_limit(d, sc)) {
+        note_skip(label, "M4 does not apply: the scenario sets a deadline or quota", NULL);
+        return;
+    }
+    if (!build_cancel_duplicates(d, sc, 1, &vr, &added)) {
+        rep->m4_violations++;
+        fprintf(stderr, "  M4 VIOLATION %s: the variant could not be built\n", label);
+        return;
+    }
+    if (added == 0u) return;
+    rep->m4_applied++;
+    if (run_scn(&g_var, vr, &g_b, &rb) != ASX_OK) {
+        rep->m4_violations++;
+        fprintf(stderr, "  M4 VIOLATION %s: the scenario with a weaker cancel does not run: %s\n",
+                label, g_err);
+        return;
+    }
+    rep->m4_variants++;
+    memset(&cmp, 0, sizeof(cmp));
+    cmp.skip_event = MM_REGION_CANCELLED;
+    diff = mm_compare(&g_a, ra, &g_b, rb, &cmp);
+    if (diff != NULL) {
+        rep->m4_violations++;
+        fprintf(stderr, "  M4 VIOLATION %s (%u weaker cancel(s) added): %s\n", label,
+                (unsigned)added, diff);
+        dump_parts(ra, rb);
+    }
+}
+
+/* Classify scenario `sc` of `d` and, where it qualifies, check M1, M2 and
+ * M4. */
 static void check_scenario(const char *label, const asx_json_doc *d, uint32_t sc, mm_report *rep) {
     uint64_t seed = 0;
     uint32_t ra = 0;
@@ -889,6 +1044,8 @@ static void check_scenario(const char *label, const asx_json_doc *d, uint32_t sc
         }
     }
 
+    m4_check(label, d, sc, ra, rep);
+
     /* region_limits caps a region's tasks or children, which a no-op uses
      * up: the limit would legitimately refuse something else. */
     if (info.uses_region_limits) {
@@ -910,6 +1067,301 @@ static void print_report(const char *what, const mm_report *r) {
             (unsigned)r->skipped_analysis, (unsigned)r->m1_applied, (unsigned)r->m1_variants,
             (unsigned)r->m1_violations, (unsigned)r->m2_applied, (unsigned)r->m2_variants,
             (unsigned)r->m2_capacity, (unsigned)r->m2_violations);
+    fprintf(stderr,
+            "  %s: M3 %u budget pairs %u violations; M4 %u scenarios %u variants %u violations\n",
+            what, (unsigned)r->m3_pairs, (unsigned)r->m3_violations, (unsigned)r->m4_applied,
+            (unsigned)r->m4_variants, (unsigned)r->m4_violations);
+}
+
+/* ---- M3: budgets meet through nested regions -------------------------- */
+
+/* A budget as the DSL writes it (docs/SCENARIO_DSL_V2.md, Budgets): the
+ * fields present, a priority that meets by maximum, or null (INFINITE). */
+typedef struct {
+    int infinite;
+    int has_deadline;
+    uint64_t deadline;
+    int has_poll;
+    uint64_t poll;
+    int has_cost;
+    uint64_t cost;
+    unsigned priority;
+} mm_budget;
+
+/* The edge budgets of the unit-level M3 (test_budget_obligation.c,
+ * nested_region_budgets_equal_their_meet) but ZERO: INFINITE, NEW, quotas,
+ * deadlines, priorities. A zero poll quota would stop the helper tasks
+ * that open the regions from running at all. */
+static const mm_budget g_budgets[] = {
+    {1, 0, 0, 0, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0, 0, 128},   {0, 0, 0, 1, 7, 0, 0, 128},
+    {0, 1, 0, 0, 0, 0, 0, 3}, {0, 1, 500, 0, 0, 1, 9, 250}, {0, 1, 1000, 1, 3, 0, 0, 128},
+};
+#define MM_BUDGETS (sizeof(g_budgets) / sizeof(g_budgets[0]))
+
+/* The budgets of the regions above the innermost one: deadlines and
+ * priorities only. A task spawned into a region has its quotas clamped to
+ * its spawner's remaining quotas (cx.rs:4547-4586), and the spawner of the
+ * innermost region's task sits in the outer ones, one poll further in the
+ * nested form than in the single one: a quota out there would differ for
+ * that reason alone. */
+static const mm_budget g_outer_budgets[] = {
+    {1, 0, 0, 0, 0, 0, 0, 0},     {0, 0, 0, 0, 0, 0, 0, 128},    {0, 1, 0, 0, 0, 0, 0, 3},
+    {0, 1, 500, 0, 0, 0, 0, 250}, {0, 1, 1000, 0, 0, 0, 0, 128},
+};
+#define MM_OUTER_BUDGETS (sizeof(g_outer_budgets) / sizeof(g_outer_budgets[0]))
+
+static uint64_t u64_min(uint64_t a, uint64_t b) { return a < b ? a : b; }
+
+/* meet: the earlier deadline, the smaller quotas, the higher priority; a
+ * field only one side constrains stays; two nulls stay null. */
+static mm_budget budget_meet(const mm_budget *x, const mm_budget *y) {
+    mm_budget m;
+    memset(&m, 0, sizeof(m));
+    if (x->infinite && y->infinite) {
+        m.infinite = 1;
+        return m;
+    }
+    m.has_deadline = x->has_deadline || y->has_deadline;
+    m.deadline = (x->has_deadline && y->has_deadline) ? u64_min(x->deadline, y->deadline)
+                 : x->has_deadline                    ? x->deadline
+                                                      : y->deadline;
+    m.has_poll = x->has_poll || y->has_poll;
+    m.poll = (x->has_poll && y->has_poll) ? u64_min(x->poll, y->poll)
+             : x->has_poll                ? x->poll
+                                          : y->poll;
+    m.has_cost = x->has_cost || y->has_cost;
+    m.cost = (x->has_cost && y->has_cost) ? u64_min(x->cost, y->cost)
+             : x->has_cost                ? x->cost
+                                          : y->cost;
+    m.priority = x->priority > y->priority ? x->priority : y->priority;
+    return m;
+}
+
+static void budget_json(const mm_budget *b, char *out, size_t cap) {
+    size_t n;
+    if (b->infinite) {
+        (void)snprintf(out, cap, "null");
+        return;
+    }
+    n = (size_t)snprintf(out, cap, "{\"priority\":%u", b->priority);
+    if (b->has_deadline && n < cap) {
+        n += (size_t)snprintf(out + n, cap - n, ",\"deadline_ns\":%llu",
+                              (unsigned long long)b->deadline);
+    }
+    if (b->has_poll && n < cap) {
+        n +=
+            (size_t)snprintf(out + n, cap - n, ",\"poll_quota\":%llu", (unsigned long long)b->poll);
+    }
+    if (b->has_cost && n < cap) {
+        n +=
+            (size_t)snprintf(out + n, cap - n, ",\"cost_quota\":%llu", (unsigned long long)b->cost);
+    }
+    if (n < cap) (void)snprintf(out + n, cap - n, "}");
+}
+
+/* t.g polls a checkpoint between yields, then sleeps past 500 and
+ * checkpoints again: a poll quota or a deadline of its region's budget ends
+ * it early (cancelled, Deadline, PollQuota), and its priority (the
+ * region's) against t.peer's puts it before or after t.peer in the
+ * dispatch order. */
+#define MM_M3_PROGRAM                                                                              \
+    "[{\"op\":\"checkpoint\",\"on_cancel\":\"return\"},{\"op\":\"yield\"},"                        \
+    "{\"op\":\"checkpoint\",\"on_cancel\":\"return\"},{\"op\":\"yield\"},"                         \
+    "{\"op\":\"checkpoint\",\"on_cancel\":\"return\"},{\"op\":\"yield\"},"                         \
+    "{\"op\":\"checkpoint\",\"on_cancel\":\"return\"},{\"op\":\"yield\"},"                         \
+    "{\"op\":\"checkpoint\",\"on_cancel\":\"return\"},{\"op\":\"sleep\",\"ns\":600},"              \
+    "{\"op\":\"checkpoint\",\"on_cancel\":\"return\"},{\"op\":\"trace\",\"message\":\"x end\"}]"
+
+/* The scenario text. Budgets bind a task only through the region it is
+ * spawned into by another task (`child.cx().spawn`, DSL 3.2): t.0 opens
+ * r.1 with budget `top` and spawns t.c into it, and t.c reaches t.g's
+ * region r.3 either in two steps, r.2 with `a` (spawning t.d) and r.3 with
+ * `b` inside it (`nested`), or in one, r.3 with `met`. t.g runs the
+ * program above in r.3; t.peer is a top-level task of priority 100. */
+static int m3_text(char *buf, size_t cap, const char *top, const char *a, const char *b,
+                   const char *met, int nested) {
+    char chain[1400];
+    if (nested) {
+        (void)snprintf(
+            chain, sizeof(chain),
+            "{\"op\":\"open_region\",\"as\":\"r.2\",\"budget\":%s},"
+            "{\"op\":\"spawn\",\"as\":\"t.d\",\"region\":\"r.2\",\"program\":["
+            "{\"op\":\"open_region\",\"as\":\"r.3\",\"budget\":%s},"
+            "{\"op\":\"spawn\",\"as\":\"t.g\",\"region\":\"r.3\",\"program\":" MM_M3_PROGRAM "},"
+            "{\"op\":\"join\",\"task\":\"t.g\"}]},{\"op\":\"join\",\"task\":\"t.d\"}",
+            a, b);
+    } else {
+        (void)snprintf(
+            chain, sizeof(chain),
+            "{\"op\":\"open_region\",\"as\":\"r.3\",\"budget\":%s},"
+            "{\"op\":\"spawn\",\"as\":\"t.g\",\"region\":\"r.3\",\"program\":" MM_M3_PROGRAM "},"
+            "{\"op\":\"join\",\"task\":\"t.g\"}",
+            met);
+    }
+    return snprintf(buf, cap,
+                    "{\"schema\":\"asx.scenario.v2\",\"id\":\"mm-m3-001\",\"description\":\"d\","
+                    "\"unit\":\"budget\",\"rules\":[\"inv.determinism.replayable\"],\"seed\":42,"
+                    "\"lab\":{\"max_steps\":4000},"
+                    "\"regions\":[{\"name\":\"r.main\",\"parent\":\"root\",\"budget\":null}],"
+                    "\"channels\":[],\"sync\":[],"
+                    "\"tasks\":[{\"name\":\"t.0\",\"region\":\"r.main\",\"budget\":null,"
+                    "\"program\":[{\"op\":\"open_region\",\"as\":\"r.1\",\"budget\":%s},"
+                    "{\"op\":\"spawn\",\"as\":\"t.c\",\"region\":\"r.1\",\"program\":[%s]},"
+                    "{\"op\":\"join\",\"task\":\"t.c\"}]},"
+                    "{\"name\":\"t.peer\",\"region\":\"r.main\",\"budget\":{\"priority\":100},"
+                    "\"program\":[{\"op\":\"yield\"},{\"op\":\"yield\"},{\"op\":\"yield\"}]}],"
+                    "\"script\":[],\"expect\":{\"kind\":\"ok\"}}",
+                    top, chain);
+}
+
+/* Run one scenario text through g_scn / g_a (as the nested form) or g_var /
+ * g_b (as the single one). 0 with g_why set when it does not run. */
+static int m3_run(const char *text, asx_json_doc *doc, asx_json_doc *out, uint32_t *rout) {
+    uint32_t sc = 0;
+    asx_json_doc_init(doc);
+    if (asx_json_parse(doc, text, strlen(text), &sc) != ASX_OK) {
+        (void)snprintf(g_why, sizeof(g_why), "the scenario text does not parse");
+        return 0;
+    }
+    if (run_scn(doc, sc, out, rout) != ASX_OK) {
+        (void)snprintf(g_why, sizeof(g_why), "does not run: %.200s", g_err);
+        return 0;
+    }
+    return 1;
+}
+
+/* The observations of task `name`, canonical, one per line (their step
+ * numbers are the task's own, so they are the same in both forms). 0 when
+ * `cap` is too small. */
+static int obs_text(const asx_json_doc *d, uint32_t obs, const char *name, char *out, size_t cap) {
+    size_t used = 0;
+    uint32_t i;
+    out[0] = '\0';
+    for (i = 0; i < asx_json_count(d, obs); i++) {
+        uint32_t o = asx_json_item(d, obs, i);
+        const char *task = asx_json_get_string(d, o, "task");
+        const char *txt;
+        size_t len;
+        if (task == NULL || strcmp(task, name) != 0) continue;
+        txt = canon_into(d, o, g_canon);
+        if (txt == NULL) return 0;
+        len = strlen(txt);
+        if (len + 2u > cap - used) return 0;
+        memcpy(out + used, txt, len);
+        used += len;
+        out[used++] = '\n';
+        out[used] = '\0';
+    }
+    return 1;
+}
+
+/* The dispatches of t.g and t.peer as "<ns> <task> <lane>", in order: their
+ * step numbers count the helper tasks too, which the two forms differ in. */
+static int dispatch_text(const asx_json_doc *d, uint32_t disp, char *out, size_t cap) {
+    size_t used = 0;
+    uint32_t i;
+    out[0] = '\0';
+    for (i = 0; i < asx_json_count(d, disp); i++) {
+        const char *s = asx_json_string(d, asx_json_item(d, disp, i));
+        const char *at;
+        size_t len;
+        if (s == NULL || (strstr(s, " t.g ") == NULL && strstr(s, " t.peer ") == NULL)) continue;
+        at = strchr(s, '@');
+        if (at == NULL) return 0;
+        len = strlen(at + 1);
+        if (len + 2u > cap - used) return 0;
+        memcpy(out + used, at + 1, len);
+        used += len;
+        out[used++] = '\n';
+        out[used] = '\0';
+    }
+    return 1;
+}
+
+/* What M3 compares: t.g's and t.peer's snapshot entries, t.g's
+ * observations and t.g's place among t.peer's dispatches. The helper tasks
+ * and regions the nesting adds are not compared. */
+static const char *m3_compare(const asx_json_doc *da, uint32_t ra, const asx_json_doc *db,
+                              uint32_t rb) {
+    static char xa[4096];
+    static char xb[4096];
+    uint32_t ta = asx_json_get(da, asx_json_get(da, ra, "snapshot"), "tasks");
+    uint32_t tb = asx_json_get(db, asx_json_get(db, rb, "snapshot"), "tasks");
+    static const char *const names[] = {"t.g", "t.peer"};
+    size_t i;
+    for (i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        if (!same_node(da, asx_json_get(da, ta, names[i]), db, asx_json_get(db, tb, names[i]))) {
+            (void)snprintf(g_why, sizeof(g_why), "snapshot.tasks.%s", names[i]);
+            return g_why;
+        }
+    }
+    if (!obs_text(da, asx_json_get(da, ra, "observations"), "t.g", xa, sizeof(xa)) ||
+        !obs_text(db, asx_json_get(db, rb, "observations"), "t.g", xb, sizeof(xb))) {
+        return "observations of t.g: too long to compare";
+    }
+    if (strcmp(xa, xb) != 0) return "observations of t.g";
+    if (!dispatch_text(da, asx_json_get(da, ra, "dispatches"), xa, sizeof(xa)) ||
+        !dispatch_text(db, asx_json_get(db, rb, "dispatches"), xb, sizeof(xb))) {
+        return "dispatches: too long to compare";
+    }
+    if (strcmp(xa, xb) != 0) return "the dispatch order of t.g and t.peer";
+    return NULL;
+}
+
+/* M3: a region with budget b opened inside one with budget a is the budget
+ * of one region opened with meet(a, b) (Rust's region table meets a child's
+ * budget with its parent's, runtime/region_table.rs:314): the task spawned
+ * into it has the same effective budget, so the same outcome, observations
+ * and place in the dispatch order. Both forms sit under a common ancestor
+ * with budget `top`: a meet that is not associative, or that lets the
+ * child replace the parent, then comes out different, which a parent with
+ * no budget would absorb. */
+static void m3_check(mm_report *rep) {
+    uint32_t t;
+    uint32_t i;
+    uint32_t j;
+    for (t = 0; t < MM_OUTER_BUDGETS; t++) {
+        for (i = 0; i < MM_OUTER_BUDGETS; i++) {
+            for (j = 0; j < MM_BUDGETS; j++) {
+                mm_budget met = budget_meet(&g_outer_budgets[i], &g_budgets[j]);
+                char jt[128];
+                char ja[128];
+                char jb[128];
+                char jm[128];
+                char text[4096];
+                char what[600];
+                uint32_t ra = 0;
+                uint32_t rb = 0;
+                const char *diff;
+                budget_json(&g_outer_budgets[t], jt, sizeof(jt));
+                budget_json(&g_outer_budgets[i], ja, sizeof(ja));
+                budget_json(&g_budgets[j], jb, sizeof(jb));
+                budget_json(&met, jm, sizeof(jm));
+                (void)snprintf(what, sizeof(what), "top %s, nested %s then %s, single %s", jt, ja,
+                               jb, jm);
+                rep->m3_pairs++;
+
+                (void)m3_text(text, sizeof(text), jt, ja, jb, jm, 1);
+                if (!m3_run(text, &g_scn, &g_a, &ra)) {
+                    rep->m3_violations++;
+                    fprintf(stderr, "  M3 VIOLATION (%s): nested %s\n", what, g_why);
+                    continue;
+                }
+                (void)m3_text(text, sizeof(text), jt, ja, jb, jm, 0);
+                if (!m3_run(text, &g_var, &g_b, &rb)) {
+                    rep->m3_violations++;
+                    fprintf(stderr, "  M3 VIOLATION (%s): single %s\n", what, g_why);
+                    continue;
+                }
+                diff = m3_compare(&g_a, ra, &g_b, rb);
+                if (diff != NULL) {
+                    rep->m3_violations++;
+                    fprintf(stderr, "  M3 VIOLATION (%s): %s\n", what, diff);
+                    dump_parts(ra, rb);
+                }
+            }
+        }
+    }
 }
 
 /* ---- the corpus sweep, run once ---------------------------------------- */
@@ -1143,12 +1595,59 @@ TEST(m2_a_no_op_task_changes_no_other_entity) {
     ASSERT_EQ(g_rep.m2_violations, 0u);
 }
 
+TEST(m3_nested_region_budgets_equal_their_meet) {
+    mm_report rep;
+    memset(&rep, 0, sizeof(rep));
+    m3_check(&rep);
+    print_report("m3", &rep);
+    ASSERT_EQ(rep.m3_pairs, (uint32_t)(MM_OUTER_BUDGETS * MM_OUTER_BUDGETS * MM_BUDGETS));
+    ASSERT_EQ(rep.m3_violations, 0u);
+}
+
+TEST(m4_a_weaker_cancel_after_a_stronger_one_changes_nothing) {
+    sweep();
+    ASSERT_EQ(g_rep.load_failures, 0u);
+    ASSERT_EQ(g_rep.m4_violations, 0u);
+}
+
+/* The converse of M4 is not a relation: a Shutdown cancel after a User one
+ * strengthens the reason. At least one scenario of the corpus must show it,
+ * through the same transform and comparator, so M4 is not holding because
+ * a duplicate cancel is invisible to them. */
+TEST(m4_a_stronger_cancel_after_a_weaker_one_is_seen) {
+    uint32_t seen = 0;
+    uint32_t i;
+    for (i = 0; i < g_n_paths; i++) {
+        uint32_t sc = 0;
+        uint32_t ra = 0;
+        uint32_t vr = 0;
+        uint32_t rb = 0;
+        uint32_t added = 0;
+        const char *base;
+        const char *var;
+        int had_shutdown;
+        if (!load_scenario(g_paths[i], &g_scn, &sc)) continue;
+        if (run_scn(&g_scn, sc, &g_a, &ra) != ASX_OK) continue;
+        base = canon_into(&g_a, asx_json_get(&g_a, ra, "snapshot"), g_canon);
+        if (base == NULL) continue;
+        had_shutdown = strstr(base, "\"kind\":\"Shutdown\"") != NULL;
+        if (!build_cancel_duplicates(&g_scn, sc, 0, &vr, &added) || added == 0u) continue;
+        if (run_scn(&g_var, vr, &g_b, &rb) != ASX_OK) continue;
+        var = canon_into(&g_b, asx_json_get(&g_b, rb, "snapshot"), g_canon);
+        if (var != NULL && !had_shutdown && strstr(var, "\"kind\":\"Shutdown\"") != NULL) seen++;
+    }
+    fprintf(stderr, "  M4 converse: %u scenario(s) end with a Shutdown reason they lacked\n",
+            (unsigned)seen);
+    ASSERT_TRUE(seen >= 1u);
+}
+
 /* Fails closed: a corpus that skips almost everything proves nothing. Only
  * the default resource class has room for the larger scenarios. */
-TEST(the_corpus_exercises_both_relations) {
+TEST(the_corpus_exercises_the_relations) {
     sweep();
     ASSERT_TRUE(g_rep.m1_variants >= MM_M1_MIN);
     ASSERT_TRUE(g_rep.m2_variants >= MM_M2_MIN);
+    ASSERT_TRUE(g_rep.m4_variants >= MM_M4_MIN);
 }
 
 int main(int argc, char **argv) {
@@ -1164,7 +1663,10 @@ int main(int argc, char **argv) {
     RUN_TEST(the_no_op_filter_hides_the_no_op_and_nothing_else);
     RUN_TEST(m1_permuting_independent_tasks_keeps_the_projection);
     RUN_TEST(m2_a_no_op_task_changes_no_other_entity);
-    RUN_TEST_IF(ASX_MAX_TASKS >= 64, the_corpus_exercises_both_relations,
+    RUN_TEST(m3_nested_region_budgets_equal_their_meet);
+    RUN_TEST(m4_a_weaker_cancel_after_a_stronger_one_changes_nothing);
+    RUN_TEST(m4_a_stronger_cancel_after_a_weaker_one_is_seen);
+    RUN_TEST_IF(ASX_MAX_TASKS >= 64, the_corpus_exercises_the_relations,
                 "this resource class is too small to run most of the corpus");
     TEST_REPORT();
     return test_failures;

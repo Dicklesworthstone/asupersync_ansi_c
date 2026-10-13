@@ -70,24 +70,24 @@ asx_cancel_reason asx_cancel_strengthen(const asx_cancel_reason *a, const asx_ca
     }
     if (!a) return *b;
     if (!b) return *a;
-#ifdef ASX_MUTANT_CANCEL_NO_STRENGTHEN
-    /* Oracle self-test mutant (tests/gates/test_oracle_mutants.sh): the
-     * current reason is never replaced. Never in a release build. */
+#if defined(ASX_MUTANT_CANCEL_NO_STRENGTHEN) || defined(ASX_MUTANT_CANCEL_LAST_WINS)
+    /* Self-test mutants, never in a release build (test_oracle_mutants.sh: the current reason
+     * is never replaced; test_metamorphic_mutants.sh: the later request always wins). */
     (void)strengthen_replaces(a, b);
+#ifdef ASX_MUTANT_CANCEL_LAST_WINS
+    return *b;
+#else
     return *a;
+#endif
 #else
     return strengthen_replaces(a, b) ? *b : *a;
 #endif
 }
 
 /* -------------------------------------------------------------------
- * Cancel witness protocol (walking skeleton)
- *
- * The walking skeleton provides slot-based witness tracking
- * for validation purposes. Full multi-threaded witness protocol
- * is deferred to Phase 4.
+ * Cancel witness protocol (walking skeleton): slot-based witness
+ * tracking for validation; the multi-threaded protocol is deferred to Phase 4.
  * ------------------------------------------------------------------- */
-
 #if (ASX_MAX_CANCEL_WITNESSES) < 1
 #error "ASX_MAX_CANCEL_WITNESSES must be at least 1"
 #endif

@@ -639,11 +639,11 @@ Consumption is **failure-atomic**:
 Rust Budget::consume_poll(&mut self) -> Option<u32>    // src/types/budget.rs:447
   if poll_quota > 0: old = poll_quota; poll_quota -= 1; return Some(old)
   else: return None                                    // no mutation
-C asx_budget_consume_poll(asx_budget *b) -> uint32_t   // src/core/budget.c:61
+C asx_budget_consume_poll(asx_budget *b) -> uint32_t   // src/core/budget.c:64
   returns the old quota, or 0 (no mutation) when it is already 0
 ```
 
-**Cost consume:** Rust `consume_cost(cost) -> bool` (`src/types/budget.rs:613`) and C `asx_budget_consume_cost` (`src/core/budget.c:66`) both return failure without mutation when the remainder is smaller than the charge, and success with no change when there is no cost quota.
+**Cost consume:** Rust `consume_cost(cost) -> bool` (`src/types/budget.rs:613`) and C `asx_budget_consume_cost` (`src/core/budget.c:69`) both return failure without mutation when the remainder is smaller than the charge, and success with no change when there is no cost quota.
 
 ---
 

@@ -413,7 +413,7 @@ Neither raw sequence is the parity key. The conformance runner compares the Foat
 effective_deadline = min(existing_deadline, new_deadline)
 ```
 
-Superseded by asupersync_v4_formal_semantics.md §5 INV-DEADLINE-MONOTONE (children's deadlines are tighter or equal); C status: see C_REFINEMENT_MAP.md row "§5 INV-DEADLINE-MONOTONE". The combine rule itself is v4 §1.4, which the spec marks [Explanatory]: componentwise min, except priority, which takes the max. Rust `Budget::combine` / `meet` (`src/types/budget.rs:502`, `:556-570`, `:592-594`); C `asx_budget_meet` (`src/core/budget.c:42-59`). It applies to region and task budgets; timers carry no budget.
+Superseded by asupersync_v4_formal_semantics.md §5 INV-DEADLINE-MONOTONE (children's deadlines are tighter or equal); C status: see C_REFINEMENT_MAP.md row "§5 INV-DEADLINE-MONOTONE". The combine rule itself is v4 §1.4, which the spec marks [Explanatory]: componentwise min, except priority, which takes the max. Rust `Budget::combine` / `meet` (`src/types/budget.rs:502`, `:556-570`, `:592-594`); C `asx_budget_meet` (`src/core/budget.c:42-62`). It applies to region and task budgets; timers carry no budget.
 
 ### 4.2 Budget-Timer Interaction
 

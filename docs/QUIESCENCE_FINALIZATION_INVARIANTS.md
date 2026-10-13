@@ -464,7 +464,7 @@ Rust source: `CancelReason::cleanup_budget` (`src/types/cancel.rs:1027-1043`). I
 
 Rust `Budget::combine_untraced` (`src/types/budget.rs:556-570`); `meet` is `combine` (`:592-594`).
 
-**C status:** `asx_budget_meet` (`src/core/budget.c:42-59`): earliest deadline (no deadline is `ASX_TIME_INFINITE`, so a plain min; 0 is a deadline, as Rust's `Some(Time::ZERO)`), min quotas, max priority.
+**C status:** `asx_budget_meet` (`src/core/budget.c:42-62`): earliest deadline (no deadline is `ASX_TIME_INFINITE`, so a plain min; 0 is a deadline, as Rust's `Some(Time::ZERO)`), min quotas, max priority.
 
 ### 7.3 Cleanup Stack
 
@@ -486,7 +486,7 @@ Correction to the earlier version: Rust never force-completes a task whose clean
 | Exhaustion Type | Rust | C |
 |-----------------|------|---|
 | Poll quota exhausted | Lab: the cancel reason is strengthened to `PollQuota` at the next poll (`src/lab/runtime.rs:4663-4671`); parity `budget-poll-quota-exhaustion-001` | Same observable result in that fixture |
-| Cost quota exhausted | `Budget::consume_cost` returns `false` and leaves the quota unchanged (`src/types/budget.rs:613`) | `asx_budget_consume_cost` returns 0 without mutation (`src/core/budget.c:66-72`) |
+| Cost quota exhausted | `Budget::consume_cost` returns `false` and leaves the quota unchanged (`src/types/budget.rs:613`) | `asx_budget_consume_cost` returns 0 without mutation (`src/core/budget.c:69-75`) |
 | Deadline exceeded | The task is cancelled with `Deadline` through its budget deadline (not a region `Timeout` as v4 §3.6 TICK says) | Same: see `C_REFINEMENT_MAP.md` supplementary row "§3.6 TICK"; parity `budget-deadline-sleep-checkpoint-001` |
 
 ---
