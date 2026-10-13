@@ -600,7 +600,7 @@ static uint32_t status_node(asx_status st) {
 
 static uint32_t text_store(const char *s, size_t len) {
     uint32_t off;
-    if (len >= IT_TEXT_CAP || (size_t)g_text_used + len + 1u > IT_TEXT_CAP) {
+    if (len >= (size_t)IT_TEXT_CAP || (size_t)g_text_used + len + 1u > (size_t)IT_TEXT_CAP) {
         it_fail("trace text arena exhausted", NULL);
         return IT_NO_TEXT;
     }
@@ -828,6 +828,7 @@ static int scope_is_local(const it_scope *sc, const char *name) {
  * programs, masked steps and spawned children's programs included, but not
  * those of a nested supervisor's children, which run generations of their
  * own and are scoped by them. 0 when there are too many. */
+/* ASX_ANALYZER_WAIVER("bounded recursion: step nesting is capped by ASX_JSON_MAX_DEPTH") */
 static int scope_collect(uint32_t program, it_scope *sc) {
     uint32_t count = asx_json_count(g_in, program);
     uint32_t i;
@@ -867,6 +868,7 @@ static uint32_t scope_name(const it_scope *sc, const char *name) {
 }
 
 /* A copy of one step with its names scoped. */
+/* ASX_ANALYZER_WAIVER("bounded recursion: step nesting is capped by ASX_JSON_MAX_DEPTH") */
 static uint32_t scope_step(uint32_t step, const it_scope *sc) {
     uint32_t out = asx_json_new_object(&g_work);
     const char *op = it_str(step, "op");
@@ -900,6 +902,7 @@ static uint32_t scope_step(uint32_t step, const it_scope *sc) {
 }
 
 /* A copy of an array of steps with its names scoped. */
+/* ASX_ANALYZER_WAIVER("bounded recursion: step nesting is capped by ASX_JSON_MAX_DEPTH") */
 static uint32_t scope_steps(uint32_t program, const it_scope *sc) {
     uint32_t out = asx_json_new_array(&g_work);
     uint32_t count = asx_json_count(g_in, program);
@@ -912,6 +915,7 @@ static uint32_t scope_steps(uint32_t program, const it_scope *sc) {
 
 /* A supervised child's start function: its generation runs the child's
  * program, with the names it creates scoped under the generation's. */
+/* ASX_ANALYZER_WAIVER("callback signature: const user_data would need a function-pointer cast") */
 static asx_status it_start_generation(void *user_data, const asx_supervisor_generation *gen,
                                       asx_task_poll_fn *out_poll, void **out_data) {
     const it_sup_child *c = (const it_sup_child *)user_data;
@@ -951,6 +955,7 @@ typedef struct {
 
 static int parse_sup_trace(const char *text, it_sup_trace *out) {
     if (strncmp(text, "managed_supervisor_v1 ", 22u) != 0) return 0;
+    /* ASX_ANALYZER_WAIVER("trusted input: the supervisor's own trace line, bounded fields") */
     return sscanf(text,
                   "managed_supervisor_v1 action=%39s supervisor=\"%63[^\"]\" child=\"%63[^\"]\" "
                   "generation=%llu region=0x%llx task=0x%llx outcome=%15s",
@@ -1581,6 +1586,7 @@ static int watch_cmp_known(const char *cmp) {
     return 0;
 }
 
+/* ASX_ANALYZER_WAIVER("callback signature: a const ctx would need a function-pointer cast") */
 static int watch_pred_fn(void *ctx, uint64_t value) {
     const it_watch_pred *p = (const it_watch_pred *)ctx;
     if (strcmp(p->cmp, "eq") == 0) return value == p->than;
@@ -2776,6 +2782,7 @@ static int exec_time_op(it_task *t, uint32_t step, uint32_t idx, const char *lab
     return 1;
 }
 
+/* ASX_ANALYZER_WAIVER("callback signature: a const ctx would need a function-pointer cast") */
 static void watch_add_fn(void *ctx, uint64_t *value) { *value += *(const uint64_t *)ctx; }
 
 /* The watch steps that never suspend (DSL §3.6). Returns 1 when `op` is one
@@ -3490,6 +3497,7 @@ static asx_status counter_cast(void *state, uint64_t msg, asx_actor_handle self)
     return ASX_OK;
 }
 
+/* ASX_ANALYZER_WAIVER("callback signature: a const state would need a function-pointer cast") */
 static asx_status counter_call(void *state, uint64_t request, uint64_t *reply,
                                asx_actor_handle self) {
     (void)request;
