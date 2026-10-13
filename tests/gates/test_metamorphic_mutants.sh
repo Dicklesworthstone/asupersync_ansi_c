@@ -41,6 +41,12 @@ if [[ "$MUTANT_BUILD_ROOT" != /* ]]; then
     MUTANT_BUILD_ROOT="$REPO_ROOT/$MUTANT_BUILD_ROOT"
 fi
 TEST_REL="tests/unit/conformance/test_metamorphic"
+# The --fuzz mode's seed stream: 48 scenarios of `twin_run generate --seed
+# 12100 --count 48 --shape meta --jsonl` (half M3 cases, the rest for M1, M2
+# and M4), so this gate needs no Rust. 15 compared cases per relation are
+# enough for each planted bug to show; the clean runtime passes them.
+FUZZ_SEED="tests/metamorphic/fuzz_seed.jsonl"
+FUZZ_CASES=15
 mkdir -p "$LOG_DIR"
 
 failures=0
@@ -81,6 +87,21 @@ else
         log_case "clean" "exit0 no-violations" "exit$c_rc violations=$c_violations" "fail" "$CLEAN_DIR/run.log"
         failures=$((failures + 1))
     fi
+    # ... and over the generated seed stream (--fuzz).
+    mkdir -p "$CLEAN_DIR/fuzz-out"
+    f_out="$(cd "$REPO_ROOT" && ASX_METAMORPHIC_CASES=$FUZZ_CASES ASX_METAMORPHIC_OUT="$CLEAN_DIR/fuzz-out" \
+        "$CLEAN_DIR/$TEST_REL" --fuzz "$FUZZ_SEED" 2>&1)"
+    f_rc=$?
+    printf '%s\n' "$f_out" >"$CLEAN_DIR/fuzz.log"
+    f_violations="$(grep -cE ' VIOLATION ' <<<"$f_out")"
+    if [ "$f_rc" -eq 0 ] && [ "$f_violations" -eq 0 ]; then
+        echo "  PASS: the clean runtime satisfies M1 to M4 over the generated seed stream"
+        log_case "clean-fuzz" "exit0 no-violations" "exit$f_rc" "pass" "$CLEAN_DIR/fuzz.log"
+    else
+        echo "  FAIL: the clean runtime fails the generated seed stream (exit$f_rc; $f_violations violation(s); log $CLEAN_DIR/fuzz.log)"
+        log_case "clean-fuzz" "exit0 no-violations" "exit$f_rc violations=$f_violations" "fail" "$CLEAN_DIR/fuzz.log"
+        failures=$((failures + 1))
+    fi
 fi
 
 # --- each mutant is caught by the relation it breaks --------------------------
@@ -114,6 +135,35 @@ run_mutant() {
         failures=$((failures + 1))
     fi
     log_case "$macro" "nonzero $*" "exit$rc$counts" "$status" "$dir/run.log"
+
+    # The same bug over the generated seed stream: nonzero exit, a VIOLATION
+    # line of each relation, and a minimized scenario of each in the out dir
+    # (ddmin ran and wrote its reduction).
+    local fout frc fstatus="pass" fcounts="" lower
+    mkdir -p "$dir/fuzz-out"
+    fout="$(cd "$REPO_ROOT" && ASX_METAMORPHIC_CASES=$FUZZ_CASES ASX_METAMORPHIC_OUT="$dir/fuzz-out" \
+        "$dir/$TEST_REL" --fuzz "$FUZZ_SEED" 2>&1)"
+    frc=$?
+    printf '%s\n' "$fout" >"$dir/fuzz.log"
+    if [ "$frc" -ne 1 ]; then fstatus="fail"; fi
+    for rel in "$@"; do
+        n="$(grep -cE " $rel VIOLATION " <<<"$fout")"
+        lower="$(tr 'A-Z' 'a-z' <<<"$rel")"
+        if ! ls "$dir/fuzz-out"/mm-"$lower"-min-*.json >/dev/null 2>&1; then
+            fcounts="$fcounts $rel=$n,no-minimized-scenario"
+            fstatus="fail"
+        else
+            fcounts="$fcounts $rel=$n"
+        fi
+        if [ "$n" -eq 0 ]; then fstatus="fail"; fi
+    done
+    if [ "$fstatus" = "pass" ]; then
+        echo "  PASS: $macro caught over the generated seed stream (${fcounts# }, minimized)"
+    else
+        echo "  FAIL: $macro not caught and minimized over the generated seed stream (exit$frc;$fcounts; log $dir/fuzz.log)"
+        failures=$((failures + 1))
+    fi
+    log_case "$macro-fuzz" "exit1 $*" "exit$frc$fcounts" "$fstatus" "$dir/fuzz.log"
 }
 
 # The third spawned task cancels the first: a task's outcome depends on how

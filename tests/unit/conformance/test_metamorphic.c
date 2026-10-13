@@ -57,6 +57,14 @@
  * scenarios instead of every .json file of tests/conformance/scenarios_v2.
  * Setting ASX_METAMORPHIC_VERBOSE prints every skip with its reason.
  *
+ * `--fuzz [FILE|-]` checks scenarios read as JSON lines instead (make
+ * fuzz-metamorphic: twin_run generate --shape meta --jsonl): until every
+ * relation has ASX_METAMORPHIC_CASES compared cases (10000), each `mm-m3-*`
+ * line an M3 case whose budgets are read back, the rest through M1, M2 and
+ * M4. The first violation of a relation is reduced by ddmin and written to
+ * ASX_METAMORPHIC_OUT as a scenario. ASX_METAMORPHIC_SEEDS sets the seeds a
+ * baseline is probed with (default 32).
+ *
  * SPDX-License-Identifier: MIT
  */
 
@@ -68,6 +76,7 @@
 #include <asx/asx_config.h>
 
 #include <dirent.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -110,6 +119,20 @@ static char g_why[320];
 static char g_paths[MM_MAX_SCENARIOS][MM_PATH_CAP];
 static uint32_t g_n_paths;
 static int g_verbose;
+/* While a violation is being minimized the relations run over candidate
+ * reductions and report nothing. */
+static int g_quiet;
+/* The seeds a baseline is probed with: MM_SEEDS unless ASX_METAMORPHIC_SEEDS
+ * (a --fuzz run, whose shapes are built not to need 32) says otherwise. */
+static uint32_t g_seeds = MM_SEEDS;
+
+static void mm_say(const char *fmt, ...) {
+    va_list ap;
+    if (g_quiet) return;
+    va_start(ap, fmt);
+    (void)vfprintf(stderr, fmt, ap);
+    va_end(ap);
+}
 
 /* ---- reading the corpus ------------------------------------------------ */
 
@@ -782,7 +805,7 @@ static int seed_insensitive(const asx_json_doc *d, uint32_t sc, uint64_t seed, u
                             const char *base_digest) {
     uint32_t k;
     g_sens[0] = '\0';
-    for (k = 0; k < MM_SEEDS; k++) {
+    for (k = 0; k < g_seeds; k++) {
         uint32_t vr = 0;
         uint32_t rb = 0;
         const char *digest;
@@ -830,19 +853,19 @@ static void m1_variant(const char *label, const asx_json_doc *d, uint32_t sc, ui
     rep->m1_variants++;
     if (!build_permuted(d, sc, perm, n, &vr)) {
         rep->m1_violations++;
-        fprintf(stderr, "  M1 VIOLATION %s (%s): the variant could not be built\n", label, how);
+        mm_say("  M1 VIOLATION %s (%s): the variant could not be built\n", label, how);
         return;
     }
     if (run_scn(&g_var, vr, &g_b, &rb) != ASX_OK) {
         rep->m1_violations++;
-        fprintf(stderr, "  M1 VIOLATION %s (%s): the permuted scenario does not run: %s\n", label,
-                how, g_err);
+        mm_say("  M1 VIOLATION %s (%s): the permuted scenario does not run: %s\n", label, how,
+               g_err);
         return;
     }
     diff = mm_difference(&g_a, ra, &g_b, rb, NULL, NULL);
     if (diff != NULL) {
         rep->m1_violations++;
-        fprintf(stderr, "  M1 VIOLATION %s (%s): %s\n", label, how, diff);
+        mm_say("  M1 VIOLATION %s (%s): %s\n", label, how, diff);
         dump_parts(ra, rb);
     }
 }
@@ -894,7 +917,7 @@ static void m2_variant(const char *label, const asx_json_doc *d, uint32_t sc, ui
     diff = mm_difference(&g_a, ra, &g_b, rb, MM_NOOP_TASK, fresh_region ? MM_NOOP_REGION : NULL);
     if (diff != NULL) {
         rep->m2_violations++;
-        fprintf(stderr, "  M2 VIOLATION %s (%s): %s\n", label, how, diff);
+        mm_say("  M2 VIOLATION %s (%s): %s\n", label, how, diff);
         dump_parts(ra, rb);
     }
 }
@@ -963,15 +986,15 @@ static void m4_check(const char *label, const asx_json_doc *d, uint32_t sc, uint
     }
     if (!build_cancel_duplicates(d, sc, 1, &vr, &added)) {
         rep->m4_violations++;
-        fprintf(stderr, "  M4 VIOLATION %s: the variant could not be built\n", label);
+        mm_say("  M4 VIOLATION %s: the variant could not be built\n", label);
         return;
     }
     if (added == 0u) return;
     rep->m4_applied++;
     if (run_scn(&g_var, vr, &g_b, &rb) != ASX_OK) {
         rep->m4_violations++;
-        fprintf(stderr, "  M4 VIOLATION %s: the scenario with a weaker cancel does not run: %s\n",
-                label, g_err);
+        mm_say("  M4 VIOLATION %s: the scenario with a weaker cancel does not run: %s\n", label,
+               g_err);
         return;
     }
     rep->m4_variants++;
@@ -980,8 +1003,7 @@ static void m4_check(const char *label, const asx_json_doc *d, uint32_t sc, uint
     diff = mm_compare(&g_a, ra, &g_b, rb, &cmp);
     if (diff != NULL) {
         rep->m4_violations++;
-        fprintf(stderr, "  M4 VIOLATION %s (%u weaker cancel(s) added): %s\n", label,
-                (unsigned)added, diff);
+        mm_say("  M4 VIOLATION %s (%u weaker cancel(s) added): %s\n", label, (unsigned)added, diff);
         dump_parts(ra, rb);
     }
 }
@@ -1316,6 +1338,48 @@ static const char *m3_compare(const asx_json_doc *da, uint32_t ra, const asx_jso
  * with budget `top`: a meet that is not associative, or that lets the
  * child replace the parent, then comes out different, which a parent with
  * no budget would absorb. */
+/* One M3 case: the nested form of budgets (top, a, b) against the single
+ * region with meet(a, b). 1 when the relation is violated. */
+static int m3_case(const mm_budget *top, const mm_budget *a, const mm_budget *b, mm_report *rep) {
+    mm_budget met = budget_meet(a, b);
+    char jt[128];
+    char ja[128];
+    char jb[128];
+    char jm[128];
+    char text[4096];
+    char what[600];
+    uint32_t ra = 0;
+    uint32_t rb = 0;
+    const char *diff;
+    budget_json(top, jt, sizeof(jt));
+    budget_json(a, ja, sizeof(ja));
+    budget_json(b, jb, sizeof(jb));
+    budget_json(&met, jm, sizeof(jm));
+    (void)snprintf(what, sizeof(what), "top %s, nested %s then %s, single %s", jt, ja, jb, jm);
+    rep->m3_pairs++;
+
+    (void)m3_text(text, sizeof(text), jt, ja, jb, jm, 1);
+    if (!m3_run(text, &g_scn, &g_a, &ra)) {
+        rep->m3_violations++;
+        mm_say("  M3 VIOLATION (%s): nested %s\n", what, g_why);
+        return 1;
+    }
+    (void)m3_text(text, sizeof(text), jt, ja, jb, jm, 0);
+    if (!m3_run(text, &g_var, &g_b, &rb)) {
+        rep->m3_violations++;
+        mm_say("  M3 VIOLATION (%s): single %s\n", what, g_why);
+        return 1;
+    }
+    diff = m3_compare(&g_a, ra, &g_b, rb);
+    if (diff != NULL) {
+        rep->m3_violations++;
+        mm_say("  M3 VIOLATION (%s): %s\n", what, diff);
+        dump_parts(ra, rb);
+        return 1;
+    }
+    return 0;
+}
+
 static void m3_check(mm_report *rep) {
     uint32_t t;
     uint32_t i;
@@ -1323,42 +1387,7 @@ static void m3_check(mm_report *rep) {
     for (t = 0; t < MM_OUTER_BUDGETS; t++) {
         for (i = 0; i < MM_OUTER_BUDGETS; i++) {
             for (j = 0; j < MM_BUDGETS; j++) {
-                mm_budget met = budget_meet(&g_outer_budgets[i], &g_budgets[j]);
-                char jt[128];
-                char ja[128];
-                char jb[128];
-                char jm[128];
-                char text[4096];
-                char what[600];
-                uint32_t ra = 0;
-                uint32_t rb = 0;
-                const char *diff;
-                budget_json(&g_outer_budgets[t], jt, sizeof(jt));
-                budget_json(&g_outer_budgets[i], ja, sizeof(ja));
-                budget_json(&g_budgets[j], jb, sizeof(jb));
-                budget_json(&met, jm, sizeof(jm));
-                (void)snprintf(what, sizeof(what), "top %s, nested %s then %s, single %s", jt, ja,
-                               jb, jm);
-                rep->m3_pairs++;
-
-                (void)m3_text(text, sizeof(text), jt, ja, jb, jm, 1);
-                if (!m3_run(text, &g_scn, &g_a, &ra)) {
-                    rep->m3_violations++;
-                    fprintf(stderr, "  M3 VIOLATION (%s): nested %s\n", what, g_why);
-                    continue;
-                }
-                (void)m3_text(text, sizeof(text), jt, ja, jb, jm, 0);
-                if (!m3_run(text, &g_var, &g_b, &rb)) {
-                    rep->m3_violations++;
-                    fprintf(stderr, "  M3 VIOLATION (%s): single %s\n", what, g_why);
-                    continue;
-                }
-                diff = m3_compare(&g_a, ra, &g_b, rb);
-                if (diff != NULL) {
-                    rep->m3_violations++;
-                    fprintf(stderr, "  M3 VIOLATION (%s): %s\n", what, diff);
-                    dump_parts(ra, rb);
-                }
+                (void)m3_case(&g_outer_budgets[t], &g_outer_budgets[i], &g_budgets[j], rep);
             }
         }
     }
@@ -1384,6 +1413,492 @@ static void sweep(void) {
         check_scenario(g_paths[i], &g_scn, sc, &g_rep);
     }
     print_report("corpus", &g_rep);
+}
+
+/* ---- --fuzz: generated scenarios, and the smallest that still violates ---- */
+
+#define MM_REL_COUNT 4u
+#define MM_FUZZ_CASES 10000u
+/* Elements of one scenario a reduction can delete, and evaluations it may
+ * spend (each runs the relations over a candidate). */
+#define MM_DEL_CAP 4096u
+#define MM_DDMIN_EVALS 4000u
+
+static const char *const g_rel_name[MM_REL_COUNT] = {"M1", "M2", "M3", "M4"};
+
+static asx_json_doc g_cand; /* a candidate reduction */
+static asx_json_doc g_best; /* the smallest reproduction so far */
+static uint8_t g_drop[MM_DEL_CAP];
+
+static uint32_t rel_violations(const mm_report *r, uint32_t rel) {
+    switch (rel) {
+    case 0u: return r->m1_violations;
+    case 1u: return r->m2_violations;
+    case 2u: return r->m3_violations;
+    default: return r->m4_violations;
+    }
+}
+
+static uint32_t rel_cases(const mm_report *r, uint32_t rel) {
+    switch (rel) {
+    case 0u: return r->m1_variants;
+    case 1u: return r->m2_variants;
+    case 2u: return r->m3_pairs;
+    default: return r->m4_variants;
+    }
+}
+
+/* Arrays a reduction may delete elements of: the same as twin_run's
+ * minimizer (tools/twin_run/src/minimize.rs). */
+static int reducible_key(const char *key) {
+    static const char *const keys[] = {"tasks", "script",  "regions", "channels",
+                                       "sync",  "program", "steps",   "members"};
+    size_t i;
+    for (i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
+        if (strcmp(key, keys[i]) == 0) return 1;
+    }
+    return 0;
+}
+
+/* A copy of `node` of `src` in `dst` without the deletable elements that
+ * `drop` marks, numbered in preorder: a dropped element's descendants are
+ * still counted, so a number means the same element in every candidate. An
+ * array's elements are deletable when `reducible`, which an object's members
+ * set by their key; the arrays under "members" are programs, whose own
+ * elements are deletable too (`members`). With `dst` NULL it only counts:
+ * *idx ends as the number of deletable elements. */
+static uint32_t del_copy(asx_json_doc *dst, const asx_json_doc *src, uint32_t node, int reducible,
+                         int members, const uint8_t *drop, uint32_t *idx) {
+    asx_json_type ty = asx_json_type_of(src, node);
+    uint32_t out = ASX_JSON_NONE;
+    uint32_t i;
+    if (ty == ASX_JSON_OBJECT) {
+        if (dst != NULL) out = asx_json_new_object(dst);
+        for (i = 0; i < asx_json_count(src, node); i++) {
+            uint32_t m = asx_json_item(src, node, i);
+            const char *key = asx_json_key(src, m);
+            uint32_t child;
+            if (key == NULL) continue;
+            child =
+                del_copy(dst, src, m, reducible_key(key), strcmp(key, "members") == 0, drop, idx);
+            if (dst != NULL) asx_json_set(dst, out, key, child);
+        }
+        return out;
+    }
+    if (ty == ASX_JSON_ARRAY) {
+        if (dst != NULL) out = asx_json_new_array(dst);
+        for (i = 0; i < asx_json_count(src, node); i++) {
+            uint32_t e = asx_json_item(src, node, i);
+            int dropped = 0;
+            uint32_t child;
+            if (reducible) {
+                uint32_t me = (*idx)++;
+                dropped = drop != NULL && me < MM_DEL_CAP && drop[me];
+            }
+            child = del_copy(dropped ? NULL : dst, src, e, members, 0, drop, idx);
+            if (dst != NULL && !dropped) asx_json_push(dst, out, child);
+        }
+        return out;
+    }
+    return dst != NULL ? asx_json_copy(dst, src, node) : ASX_JSON_NONE;
+}
+
+typedef int (*mm_pred)(const asx_json_doc *d, uint32_t sc, void *ctx);
+
+/* Delta debugging (ddmin) of scenario `sc` of `src` into g_best: chunks of
+ * deletable elements, halving down to single ones, repeated at that size
+ * until none can go, so the result is 1-minimal for deletions. `pred` says
+ * whether a candidate still reproduces. *best_root is the result's root in
+ * g_best; *evals is how many candidates were tried. 0 when `src` cannot be
+ * copied. */
+static int ddmin(const asx_json_doc *src, uint32_t sc, mm_pred pred, void *ctx, uint32_t *best_root,
+                 uint32_t *evals) {
+    uint32_t n = 0;
+    uint32_t chunk;
+    *evals = 0;
+    asx_json_doc_init(&g_best);
+    *best_root = asx_json_copy(&g_best, src, sc);
+    if (*best_root == ASX_JSON_NONE || !asx_json_doc_ok(&g_best)) return 0;
+    (void)del_copy(NULL, &g_best, *best_root, 0, 0, NULL, &n);
+    if (n > MM_DEL_CAP) n = MM_DEL_CAP;
+    chunk = n;
+    while (chunk >= 1u && n > 0u && *evals < MM_DDMIN_EVALS) {
+        int changed = 0;
+        uint32_t start = 0;
+        while (start < n && *evals < MM_DDMIN_EVALS) {
+            uint32_t end = start + chunk < n ? start + chunk : n;
+            uint32_t k;
+            uint32_t idx = 0;
+            uint32_t cr;
+            memset(g_drop, 0, sizeof(g_drop));
+            for (k = start; k < end; k++) g_drop[k] = 1;
+            asx_json_doc_init(&g_cand);
+            cr = del_copy(&g_cand, &g_best, *best_root, 0, 0, g_drop, &idx);
+            (*evals)++;
+            if (cr != ASX_JSON_NONE && asx_json_doc_ok(&g_cand) && pred(&g_cand, cr, ctx)) {
+                asx_json_doc_init(&g_best);
+                *best_root = asx_json_copy(&g_best, &g_cand, cr);
+                n = 0;
+                (void)del_copy(NULL, &g_best, *best_root, 0, 0, NULL, &n);
+                if (n > MM_DEL_CAP) n = MM_DEL_CAP;
+                changed = 1;
+            } else {
+                start = end;
+            }
+        }
+        if (chunk == 1u) {
+            if (!changed) break;
+        } else {
+            chunk = (chunk + 1u) / 2u;
+        }
+    }
+    return 1;
+}
+
+/* Whether relation `*ctx` (0 to 3 for M1, M2, M3 and M4) is violated by
+ * the scenario: it must still run, be schedule insensitive and be one the
+ * relation applies to, as the original was. */
+static int pred_relation(const asx_json_doc *d, uint32_t sc, void *ctx) {
+    mm_report rep;
+    int saved = g_quiet;
+    uint32_t rel = *(const uint32_t *)ctx;
+    memset(&rep, 0, sizeof(rep));
+    g_quiet = 1;
+    check_scenario("candidate", d, sc, &rep);
+    g_quiet = saved;
+    return rel_violations(&rep, rel) > 0u;
+}
+
+static uint32_t count_deletable(const asx_json_doc *d, uint32_t root) {
+    uint32_t n = 0;
+    (void)del_copy(NULL, d, root, 0, 0, NULL, &n);
+    return n;
+}
+
+static int write_file(const char *dir, const char *name, const char *text) {
+    char path[512];
+    FILE *f;
+    if (snprintf(path, sizeof(path), "%s/%s.json", dir, name) >= (int)sizeof(path)) return 0;
+    f = fopen(path, "wb");
+    if (f == NULL) return 0;
+    (void)fputs(text, f);
+    (void)fputc('\n', f);
+    return fclose(f) == 0;
+}
+
+/* The reduction of scenario `sc` of `d`, which violates relation `rel`, as a
+ * scenario file in `dir`: the fixture candidate. */
+static void minimize_and_write(const char *dir, uint32_t ordinal, uint32_t rel,
+                               const asx_json_doc *d, uint32_t sc) {
+    uint32_t root = 0;
+    uint32_t evals = 0;
+    uint32_t before = count_deletable(d, sc);
+    uint32_t after;
+    uint32_t id_node;
+    uint32_t desc_node;
+    uint32_t out;
+    const char *orig = asx_json_get_string(d, sc, "id");
+    char id[96];
+    char desc[400];
+    const char *text;
+    mm_override over[2];
+    int saved = g_quiet;
+    g_quiet = 1;
+    if (!ddmin(d, sc, pred_relation, &rel, &root, &evals)) {
+        g_quiet = saved;
+        fprintf(stderr, "  %s: the violating scenario could not be copied to minimize it\n",
+                g_rel_name[rel]);
+        return;
+    }
+    g_quiet = saved;
+    after = count_deletable(&g_best, root);
+    (void)snprintf(id, sizeof(id), "mm-%c%c-min-%03u-001", 'm' + 0, g_rel_name[rel][1],
+                   (unsigned)ordinal);
+    (void)snprintf(desc, sizeof(desc),
+                   "%s violated: minimized by ddmin from %s (%u deletable elements to %u in %u "
+                   "tries; bd-9kll.12.1). Run test_metamorphic on this file to see it.",
+                   g_rel_name[rel], orig != NULL ? orig : "?", (unsigned)before, (unsigned)after,
+                   (unsigned)evals);
+    asx_json_doc_init(&g_cand);
+    id_node = asx_json_new_string(&g_cand, id);
+    desc_node = asx_json_new_string(&g_cand, desc);
+    over[0].key = "id";
+    over[0].node = id_node;
+    over[1].key = "description";
+    over[1].node = desc_node;
+    out = copy_with(&g_cand, &g_best, root, over, 2u);
+    text = canon_into(&g_cand, out, g_canon);
+    if (text == NULL || !write_file(dir, id, text)) {
+        fprintf(stderr, "  %s: cannot write the minimized scenario to %s\n", g_rel_name[rel], dir);
+        return;
+    }
+    fprintf(stderr, "  %s: minimized %s from %u to %u deletable elements (%u tries): %s/%s.json\n",
+            g_rel_name[rel], orig != NULL ? orig : "?", (unsigned)before, (unsigned)after,
+            (unsigned)evals, dir, id);
+}
+
+/* Read the three budgets back from an M3 case (generate --shape meta): the
+ * budgets of the open_region steps that name r.1, r.2 and r.3. A missing
+ * budget is null. 0 when a region is not opened. */
+static int find_open_region(const asx_json_doc *d, uint32_t node, const char *name,
+                            uint32_t *budget) {
+    asx_json_type ty = asx_json_type_of(d, node);
+    uint32_t i;
+    if (ty == ASX_JSON_OBJECT) {
+        const char *op = asx_json_get_string(d, node, "op");
+        const char *as = asx_json_get_string(d, node, "as");
+        if (op != NULL && as != NULL && strcmp(op, "open_region") == 0 && strcmp(as, name) == 0) {
+            *budget = asx_json_get(d, node, "budget");
+            return 1;
+        }
+    }
+    if (ty != ASX_JSON_ARRAY && ty != ASX_JSON_OBJECT) return 0;
+    for (i = 0; i < asx_json_count(d, node); i++) {
+        if (find_open_region(d, asx_json_item(d, node, i), name, budget)) return 1;
+    }
+    return 0;
+}
+
+static void budget_read(const asx_json_doc *d, uint32_t node, mm_budget *b) {
+    uint64_t v = 0;
+    memset(b, 0, sizeof(*b));
+    if (node == ASX_JSON_NONE || asx_json_is_null(d, node)) {
+        b->infinite = 1;
+        return;
+    }
+    b->priority = 128u;
+    if (asx_json_u64(d, asx_json_get(d, node, "priority"), &v)) b->priority = (unsigned)v;
+    if (asx_json_u64(d, asx_json_get(d, node, "deadline_ns"), &v)) {
+        b->has_deadline = 1;
+        b->deadline = v;
+    }
+    if (asx_json_u64(d, asx_json_get(d, node, "poll_quota"), &v)) {
+        b->has_poll = 1;
+        b->poll = v;
+    }
+    if (asx_json_u64(d, asx_json_get(d, node, "cost_quota"), &v)) {
+        b->has_cost = 1;
+        b->cost = v;
+    }
+}
+
+static int m3_read(const asx_json_doc *d, uint32_t sc, mm_budget *top, mm_budget *a, mm_budget *b) {
+    uint32_t tasks = asx_json_get(d, sc, "tasks");
+    uint32_t nt = 0;
+    uint32_t na = 0;
+    uint32_t nb = 0;
+    if (!find_open_region(d, tasks, "r.1", &nt) || !find_open_region(d, tasks, "r.2", &na) ||
+        !find_open_region(d, tasks, "r.3", &nb)) {
+        return 0;
+    }
+    budget_read(d, nt, top);
+    budget_read(d, na, a);
+    budget_read(d, nb, b);
+    return 1;
+}
+
+static int m3_violates(const mm_budget *t, const mm_budget *a, const mm_budget *b) {
+    mm_report rep;
+    int saved = g_quiet;
+    memset(&rep, 0, sizeof(rep));
+    g_quiet = 1;
+    (void)m3_case(t, a, b, &rep);
+    g_quiet = saved;
+    return rep.m3_violations > 0u;
+}
+
+/* Reduce the three budgets of a violating M3 case: each to null, else
+ * field by field, while it still violates. */
+static void m3_minimize(mm_budget *t, mm_budget *a, mm_budget *b) {
+    mm_budget *all[3];
+    int changed;
+    all[0] = t;
+    all[1] = a;
+    all[2] = b;
+    do {
+        uint32_t i;
+        changed = 0;
+        for (i = 0; i < 3u; i++) {
+            mm_budget *x = all[i];
+            mm_budget keep = *x;
+            mm_budget none;
+            memset(&none, 0, sizeof(none));
+            none.infinite = 1;
+            if (!x->infinite) {
+                *x = none;
+                if (m3_violates(t, a, b)) {
+                    changed = 1;
+                    continue;
+                }
+                *x = keep;
+            }
+            if (x->has_deadline) {
+                x->has_deadline = 0;
+                x->deadline = 0;
+                if (m3_violates(t, a, b)) {
+                    changed = 1;
+                } else {
+                    x->has_deadline = 1;
+                    x->deadline = keep.deadline;
+                }
+            }
+            if (x->has_poll) {
+                x->has_poll = 0;
+                x->poll = 0;
+                if (m3_violates(t, a, b)) {
+                    changed = 1;
+                } else {
+                    x->has_poll = 1;
+                    x->poll = keep.poll;
+                }
+            }
+            if (x->has_cost) {
+                x->has_cost = 0;
+                x->cost = 0;
+                if (m3_violates(t, a, b)) {
+                    changed = 1;
+                } else {
+                    x->has_cost = 1;
+                    x->cost = keep.cost;
+                }
+            }
+            if (!x->infinite && x->priority != 128u) {
+                unsigned p = x->priority;
+                x->priority = 128u;
+                if (m3_violates(t, a, b)) {
+                    changed = 1;
+                } else {
+                    x->priority = p;
+                }
+            }
+        }
+    } while (changed);
+}
+
+/* The two forms of a reduced M3 case, as scenario files in `dir`. */
+static void m3_write(const char *dir, uint32_t ordinal, const mm_budget *t, const mm_budget *a,
+                     const mm_budget *b) {
+    mm_budget met = budget_meet(a, b);
+    char jt[128];
+    char ja[128];
+    char jb[128];
+    char jm[128];
+    char text[4096];
+    char name[96];
+    int nested;
+    budget_json(t, jt, sizeof(jt));
+    budget_json(a, ja, sizeof(ja));
+    budget_json(b, jb, sizeof(jb));
+    budget_json(&met, jm, sizeof(jm));
+    for (nested = 1; nested >= 0; nested--) {
+        (void)m3_text(text, sizeof(text), jt, ja, jb, jm, nested);
+        (void)snprintf(name, sizeof(name), "mm-m3-min-%03u-%s-001", (unsigned)ordinal,
+                       nested ? "nested" : "single");
+        if (!write_file(dir, name, text)) {
+            fprintf(stderr, "  M3: cannot write %s/%s.json\n", dir, name);
+        }
+    }
+    fprintf(stderr,
+            "  M3: minimized to top %s, nested %s then %s, single %s: %s/mm-m3-min-%03u-*\n", jt,
+            ja, jb, jm, dir, (unsigned)ordinal);
+}
+
+/* `--fuzz [FILE|-]`: scenarios, one canonical JSON per line (twin_run
+ * generate --shape meta --jsonl), checked until each relation has
+ * ASX_METAMORPHIC_CASES (default 10000) compared cases. The scenarios named
+ * `mm-m3-*` are M3 cases (their three budgets are read back); the rest go
+ * through M1, M2 and M4. The first violation of a relation is reduced by
+ * ddmin and written to ASX_METAMORPHIC_OUT (default .). Exit 0 when every
+ * relation held over its cases, 1 on a violation, 2 when the stream ended
+ * short of the cases (a run that checked nothing is no proof). */
+static int fuzz_main(const char *src) {
+    FILE *in = strcmp(src, "-") == 0 ? stdin : fopen(src, "rb");
+    const char *env;
+    const char *dir;
+    uint32_t cases = MM_FUZZ_CASES;
+    uint32_t minimized = 0;
+    uint32_t seen[MM_REL_COUNT];
+    uint32_t k;
+    uint32_t lines = 0;
+    mm_report rep;
+    int violated = 0;
+    int short_of = 0;
+    if (in == NULL) {
+        fprintf(stderr, "  fuzz: cannot open %s\n", src);
+        return 2;
+    }
+    env = getenv("ASX_METAMORPHIC_CASES");
+    if (env != NULL && atoi(env) > 0) cases = (uint32_t)atoi(env);
+    dir = getenv("ASX_METAMORPHIC_OUT");
+    if (dir == NULL || dir[0] == '\0') dir = ".";
+    memset(&rep, 0, sizeof(rep));
+    memset(seen, 0, sizeof(seen));
+    while (fgets(g_file, sizeof(g_file), in) != NULL) {
+        size_t len = strlen(g_file);
+        uint32_t sc = 0;
+        uint32_t before[MM_REL_COUNT];
+        const char *id;
+        int all = 1;
+        if (len + 1u >= sizeof(g_file)) {
+            fprintf(stderr, "  fuzz: a scenario line is longer than %u bytes\n",
+                    (unsigned)sizeof(g_file));
+            return 2;
+        }
+        asx_json_doc_init(&g_scn);
+        if (len == 0u || asx_json_parse(&g_scn, g_file, len, &sc) != ASX_OK) {
+            rep.load_failures++;
+            fprintf(stderr, "  fuzz: line %u is not a scenario (%u bytes): %.80s\n",
+                    (unsigned)(lines + rep.load_failures), (unsigned)len, g_file);
+            continue;
+        }
+        lines++;
+        id = asx_json_get_string(&g_scn, sc, "id");
+        if (id == NULL) id = "?";
+        for (k = 0; k < MM_REL_COUNT; k++) before[k] = rel_violations(&rep, k);
+        if (strncmp(id, "mm-m3-", 6u) == 0) {
+            mm_budget t;
+            mm_budget a;
+            mm_budget b;
+            if (rep.m3_pairs < cases) {
+                if (!m3_read(&g_scn, sc, &t, &a, &b)) {
+                    rep.load_failures++;
+                    fprintf(stderr, "  fuzz: %s does not hold the three nested regions\n", id);
+                } else if (m3_case(&t, &a, &b, &rep) && seen[2] == 0u) {
+                    seen[2] = 1u;
+                    m3_minimize(&t, &a, &b);
+                    m3_write(dir, ++minimized, &t, &a, &b);
+                }
+            }
+        } else {
+            check_scenario(id, &g_scn, sc, &rep);
+            for (k = 0; k < MM_REL_COUNT; k++) {
+                if (k == 2u || rel_violations(&rep, k) <= before[k] || seen[k] != 0u) continue;
+                seen[k] = 1u;
+                minimize_and_write(dir, ++minimized, k, &g_scn, sc);
+            }
+        }
+        for (k = 0; k < MM_REL_COUNT; k++) {
+            if (rel_cases(&rep, k) < cases) all = 0;
+        }
+        if (all) break;
+    }
+    if (in != stdin) (void)fclose(in);
+    fprintf(stderr,
+            "  fuzz: %u scenarios read; skipped %u (not run) %u (schedule sensitive) %u "
+            "(analysis) %u (unreadable)\n",
+            (unsigned)lines, (unsigned)rep.skipped_baseline, (unsigned)rep.skipped_sensitive,
+            (unsigned)rep.skipped_analysis, (unsigned)rep.load_failures);
+    for (k = 0; k < MM_REL_COUNT; k++) {
+        fprintf(stderr, "  fuzz: %s %u cases, %u violation(s)%s\n", g_rel_name[k],
+                (unsigned)rel_cases(&rep, k), (unsigned)rel_violations(&rep, k),
+                rel_cases(&rep, k) < cases ? "  (SHORT of the cases asked for)" : "");
+        if (rel_violations(&rep, k) > 0u) violated = 1;
+        if (rel_cases(&rep, k) < cases) short_of = 1;
+    }
+    fprintf(stderr, "  fuzz: M2 skipped %u variant(s) at a capacity limit\n",
+            (unsigned)rep.m2_capacity);
+    if (violated) return 1;
+    return short_of ? 2 : 0;
 }
 
 /* ---- tests ------------------------------------------------------------- */
@@ -1650,7 +2165,94 @@ TEST(the_corpus_exercises_the_relations) {
     ASSERT_TRUE(g_rep.m4_variants >= MM_M4_MIN);
 }
 
+/* ---- the fuzz mode's own parts ------------------------------------------ */
+
+static int pred_has_needle(const asx_json_doc *d, uint32_t sc, void *ctx) {
+    const char *text = canon_into(d, sc, g_canon);
+    (void)ctx;
+    return text != NULL && strstr(text, "\"needle\"") != NULL;
+}
+
+/* ddmin keeps what the predicate needs and deletes the rest: tasks, steps
+ * (also inside a spawned program), regions, sync declarations and script
+ * entries, down to the one step the predicate looks for. */
+TEST(the_minimizer_deletes_everything_the_predicate_does_not_need) {
+    static const char text[] =
+        "{\"schema\":\"asx.scenario.v2\",\"id\":\"mm-ddmin-001\",\"description\":\"d\","
+        "\"unit\":\"scheduler\",\"rules\":[\"inv.determinism.replayable\"],\"seed\":42,"
+        "\"lab\":{\"max_steps\":600},"
+        "\"regions\":[{\"name\":\"r.main\",\"parent\":\"root\",\"budget\":null},"
+        "{\"name\":\"r.x\",\"parent\":\"r.main\",\"budget\":null}],"
+        "\"channels\":[],\"sync\":[{\"name\":\"m\",\"type\":\"mutex\"}],"
+        "\"tasks\":["
+        "{\"name\":\"t.a\",\"region\":\"r.main\",\"budget\":null,\"program\":["
+        "{\"op\":\"yield\"},{\"op\":\"trace\",\"message\":\"a1\"},{\"op\":\"sleep\",\"ns\":50}]},"
+        "{\"name\":\"t.b\",\"region\":\"r.main\",\"budget\":null,\"program\":["
+        "{\"op\":\"trace\",\"message\":\"b1\"},"
+        "{\"op\":\"spawn\",\"as\":\"t.b.c\",\"program\":[{\"op\":\"yield\"},"
+        "{\"op\":\"trace\",\"message\":\"needle\"},{\"op\":\"yield\"}]},"
+        "{\"op\":\"join\",\"task\":\"t.b.c\"}]},"
+        "{\"name\":\"t.c\",\"region\":\"r.x\",\"budget\":null,\"program\":["
+        "{\"op\":\"checkpoint\"}]}],"
+        "\"script\":[{\"at_ns\":10,\"op\":{\"op\":\"advance\",\"ns\":5}}],"
+        "\"expect\":{\"kind\":\"ok\"}}";
+    uint32_t sc = 0;
+    uint32_t root = 0;
+    uint32_t evals = 0;
+    uint32_t tasks;
+    uint32_t spawn;
+    asx_json_doc_init(&g_scn);
+    ASSERT_EQ(asx_json_parse(&g_scn, text, strlen(text), &sc), ASX_OK);
+    ASSERT_TRUE(count_deletable(&g_scn, sc) > 10u);
+    ASSERT_TRUE(ddmin(&g_scn, sc, pred_has_needle, NULL, &root, &evals));
+    ASSERT_TRUE(evals > 0u);
+    tasks = asx_json_get(&g_best, root, "tasks");
+    ASSERT_EQ(asx_json_count(&g_best, tasks), 1u);
+    ASSERT_EQ(asx_json_count(&g_best, asx_json_get(&g_best, root, "script")), 0u);
+    ASSERT_EQ(asx_json_count(&g_best, asx_json_get(&g_best, root, "regions")), 0u);
+    ASSERT_EQ(asx_json_count(&g_best, asx_json_get(&g_best, root, "sync")), 0u);
+    spawn = asx_json_item(&g_best,
+                          asx_json_get(&g_best, asx_json_item(&g_best, tasks, 0), "program"), 0);
+    ASSERT_EQ(asx_json_count(&g_best,
+                             asx_json_get(&g_best, asx_json_item(&g_best, tasks, 0), "program")),
+              1u);
+    ASSERT_EQ(asx_json_count(&g_best, asx_json_get(&g_best, spawn, "program")), 1u);
+    /* 1-minimal: nothing is left to delete but what the predicate needs
+     * (the task, its spawn, the one step). */
+    ASSERT_EQ(count_deletable(&g_best, root), 3u);
+}
+
+/* The scenario `generate --shape meta` writes for an M3 case carries the
+ * three budgets; the driver reads them back and builds both forms itself. */
+TEST(the_budgets_of_an_m3_case_are_read_back_from_its_scenario) {
+    static const char *const jt = "null";
+    static const char *const ja = "{\"priority\":7,\"deadline_ns\":300}";
+    static const char *const jb = "{\"priority\":200,\"poll_quota\":5,\"cost_quota\":9}";
+    char text[4096];
+    uint32_t sc = 0;
+    mm_budget t;
+    mm_budget a;
+    mm_budget b;
+    (void)m3_text(text, sizeof(text), jt, ja, jb, "null", 1);
+    asx_json_doc_init(&g_scn);
+    ASSERT_EQ(asx_json_parse(&g_scn, text, strlen(text), &sc), ASX_OK);
+    ASSERT_TRUE(m3_read(&g_scn, sc, &t, &a, &b));
+    ASSERT_TRUE(t.infinite);
+    ASSERT_TRUE(!a.infinite && a.priority == 7u && a.has_deadline && a.deadline == 300u);
+    ASSERT_TRUE(!a.has_poll && !a.has_cost);
+    ASSERT_TRUE(b.priority == 200u && b.has_poll && b.poll == 5u && b.has_cost && b.cost == 9u);
+    ASSERT_TRUE(!b.has_deadline);
+    /* A scenario with no such regions is not an M3 case. */
+    ASSERT_EQ(asx_json_parse(&g_scn, g_inline, strlen(g_inline), &sc), ASX_OK);
+    ASSERT_TRUE(!m3_read(&g_scn, sc, &t, &a, &b));
+}
+
 int main(int argc, char **argv) {
+    const char *seeds = getenv("ASX_METAMORPHIC_SEEDS");
+    if (seeds != NULL && atoi(seeds) > 0) g_seeds = (uint32_t)atoi(seeds);
+    if (argc >= 2 && strcmp(argv[1], "--fuzz") == 0) {
+        return fuzz_main(argc >= 3 ? argv[2] : "-");
+    }
     fprintf(stderr, "=== test_metamorphic ===\n");
     g_verbose = getenv("ASX_METAMORPHIC_VERBOSE") != NULL;
     if (!collect_corpus(argc, argv)) {
@@ -1661,6 +2263,8 @@ int main(int argc, char **argv) {
     RUN_TEST(the_analysis_keeps_tasks_that_share_a_name_in_place);
     RUN_TEST(the_comparator_reports_a_planted_difference_in_each_part);
     RUN_TEST(the_no_op_filter_hides_the_no_op_and_nothing_else);
+    RUN_TEST(the_minimizer_deletes_everything_the_predicate_does_not_need);
+    RUN_TEST(the_budgets_of_an_m3_case_are_read_back_from_its_scenario);
     RUN_TEST(m1_permuting_independent_tasks_keeps_the_projection);
     /* The no-op takes a task and a region, and M3's nested form four regions
      * and the root: in a class with fewer, a scenario at the edge has a

@@ -17,6 +17,7 @@ mod run;
 #[path = "gen.rs"]
 mod scenario_gen;
 
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -27,11 +28,13 @@ fn usage() -> ExitCode {
     eprintln!(
         "usage: twin_run capture <scenario.json>... --out <dir>\n       \
          twin_run forced-replay --schedules <dir> --out <dir> <scenario.json>...\n       \
-         twin_run generate --seed <u64> --count <n> [--shape mixed|timers] --out <dir>\n       \
+         twin_run generate --seed <u64> --count <n> [--shape mixed|timers|meta] \
+         (--out <dir> | --jsonl)\n       \
          twin_run canon-fuzz --seed <u64> --count <n> --out <file.jsonl>\n       \
          twin_run minimize <scenario.json> --runner <asx-conformance> --out <dir>\n       \
          twin_run trace <scenario.json>   (raw lab trace, for diagnosis)\n       \
          twin_run constants --source <asupersync crate dir> --out <file.json>\n       \
+         twin_run rng --out <file.json>   (DetRng outputs, for the lab's picker)\n       \
          twin_run parse-fuzz (http-request|http-response|ws-frame|raptorq) --seed <u64> \
          --count <n> --out <dir>\n       \
          twin_run parse-diff (http-request|http-response|ws-frame|raptorq) <input>..."
@@ -39,19 +42,49 @@ fn usage() -> ExitCode {
     ExitCode::from(2)
 }
 
-/// Write `count` generated scenarios (gen.rs) for batch `seed` to `out`:
-/// the default mix, or with `timers` (`--shape timers`, bd-9kll.7.1) the
-/// timer-heavy shape of the same-tick ordering differential.
-fn generate(seed: u64, count: u64, out: &PathBuf, timers: bool) -> ExitCode {
-    if let Err(err) = std::fs::create_dir_all(out) {
+/// What `generate --shape` draws every scenario of a batch from.
+#[derive(Clone, Copy, PartialEq)]
+enum Shape {
+    /// The default mix.
+    Mixed,
+    /// The timer-heavy shape of the same-tick ordering differential
+    /// (bd-9kll.7.1).
+    Timers,
+    /// The scenarios the metamorphic relations M1 to M4 are driven with
+    /// (bd-9kll.12.1).
+    Meta,
+}
+
+/// Write `count` generated scenarios (gen.rs) for batch `seed` to `out`, or
+/// with `out` None (`--jsonl`) one canonical scenario per line to stdout,
+/// where a reader that has had enough (a closed pipe) ends the batch quietly.
+fn generate(seed: u64, count: u64, out: Option<&PathBuf>, shape: Shape) -> ExitCode {
+    if let Some(out) = out
+        && let Err(err) = std::fs::create_dir_all(out)
+    {
         eprintln!("twin_run: cannot create {}: {err}", out.display());
         return ExitCode::from(1);
     }
+    let stdout = std::io::stdout();
+    let mut lines = std::io::BufWriter::new(stdout.lock());
     for index in 0..count {
-        let scenario = if timers {
-            scenario_gen::timer_scenario(seed, index)
-        } else {
-            scenario_gen::scenario(seed, index)
+        let scenario = match shape {
+            Shape::Mixed => scenario_gen::scenario(seed, index),
+            Shape::Timers => scenario_gen::timer_scenario(seed, index),
+            Shape::Meta => scenario_gen::meta_scenario(seed, index),
+        };
+        let Some(out) = out else {
+            let text = match canon::canonical_json(&scenario) {
+                Ok(t) => t,
+                Err(err) => {
+                    eprintln!("twin_run: scenario {index}: {err}");
+                    return ExitCode::from(1);
+                }
+            };
+            if writeln!(lines, "{text}").is_err() {
+                return ExitCode::SUCCESS;
+            }
+            continue;
         };
         let Some(id) = scenario["id"].as_str() else {
             eprintln!("twin_run: generated scenario {index} lacks a string ID");
@@ -69,6 +102,14 @@ fn generate(seed: u64, count: u64, out: &PathBuf, timers: bool) -> ExitCode {
             eprintln!("twin_run: cannot write {}: {err}", file.display());
             return ExitCode::from(1);
         }
+    }
+    if out.is_none() {
+        // The stream is the output: nothing else goes to stdout.
+        return if lines.flush().is_ok() {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::from(1)
+        };
     }
     println!("twin_run generate: {count} scenario(s) for seed {seed}");
     ExitCode::SUCCESS
@@ -438,29 +479,42 @@ fn main() -> ExitCode {
             let mut seed = None;
             let mut count = None;
             let mut out = None;
-            let mut timers = false;
+            let mut shape = Shape::Mixed;
+            let mut jsonl = false;
             let mut rest = args[1..].iter();
             while let Some(arg) = rest.next() {
+                // `generate` only, no value: one scenario per line on
+                // stdout instead of files in --out.
+                if arg == "--jsonl" && cmd == "generate" {
+                    jsonl = true;
+                    continue;
+                }
                 let value = rest.next();
                 match arg.as_str() {
                     "--seed" => seed = value.and_then(|v| v.parse::<u64>().ok()),
                     "--count" => count = value.and_then(|v| v.parse::<u64>().ok()),
                     "--out" => out = value.map(PathBuf::from),
-                    // `generate` only: the default mix, or every scenario
-                    // timer-heavy.
+                    // `generate` only: the default mix, every scenario
+                    // timer-heavy, or the metamorphic relations' shape.
                     "--shape" if cmd == "generate" => match value.map(String::as_str) {
-                        Some("mixed") => timers = false,
-                        Some("timers") => timers = true,
+                        Some("mixed") => shape = Shape::Mixed,
+                        Some("timers") => shape = Shape::Timers,
+                        Some("meta") => shape = Shape::Meta,
                         _ => return usage(),
                     },
                     _ => return usage(),
                 }
             }
             match (seed, count, out) {
-                (Some(seed), Some(count), Some(out)) if cmd == "generate" => {
-                    generate(seed, count, &out, timers)
+                (Some(seed), Some(count), None) if cmd == "generate" && jsonl => {
+                    generate(seed, count, None, shape)
                 }
-                (Some(seed), Some(count), Some(out)) => canon_fuzz(seed, count, &out),
+                (Some(seed), Some(count), Some(out)) if cmd == "generate" && !jsonl => {
+                    generate(seed, count, Some(&out), shape)
+                }
+                (Some(seed), Some(count), Some(out)) if cmd == "canon-fuzz" => {
+                    canon_fuzz(seed, count, &out)
+                }
                 _ => usage(),
             }
         }

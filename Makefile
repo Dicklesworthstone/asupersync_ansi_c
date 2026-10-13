@@ -927,6 +927,34 @@ metamorphic: $(TEST_DIR)/unit/conformance/test_metamorphic
 	@$(TEST_EXEC) $(TEST_DIR)/unit/conformance/test_metamorphic
 	@echo "[asx] metamorphic: PASS"
 
+# fuzz-metamorphic — M1 to M4 over scenarios generated now (bd-9kll.12.1):
+# `twin_run generate --shape meta --jsonl` streams scenarios (half are M3
+# cases, a nested-region budget triple; the rest are for M1, M2 and M4) into
+# `test_metamorphic --fuzz`, which checks each until every relation has
+# MM_FUZZ_CASES compared cases (10000 by default; MM_FUZZ_COUNT scenarios are
+# offered, enough for them). A violation is reduced by ddmin (delete tasks,
+# steps, regions, script entries, ... while the relation still fails) and
+# written to $(MM_FUZZ_DIR)/mm-<relation>-min-NNN-001.json, a scenario ready
+# to become a regression fixture once the drift is understood. Exit 1 on a
+# violation, 2 when the stream ended short of the cases (a generator that did
+# not run proves nothing). Needs cargo and the pinned asupersync like
+# fuzz-differential; no Rust capture is involved, only the C interpreter.
+MM_FUZZ_SEED ?= 12100
+MM_FUZZ_CASES ?= 10000
+MM_FUZZ_COUNT ?= $(shell expr $(MM_FUZZ_CASES) \* 3 + 200)
+MM_FUZZ_DIR := $(BUILD_DIR)/metamorphic
+
+.PHONY: fuzz-metamorphic
+fuzz-metamorphic: $(TEST_DIR)/unit/conformance/test_metamorphic
+	@mkdir -p $(MM_FUZZ_DIR)
+	@echo "[asx] fuzz-metamorphic: seed=$(MM_FUZZ_SEED) cases=$(MM_FUZZ_CASES) per relation ($(MM_FUZZ_COUNT) scenarios offered)"
+	@$(TWIN_RUN) generate --seed $(MM_FUZZ_SEED) --count $(MM_FUZZ_COUNT) --shape meta --jsonl | \
+		ASX_METAMORPHIC_CASES=$(MM_FUZZ_CASES) ASX_METAMORPHIC_OUT=$(MM_FUZZ_DIR) \
+		$(TEST_EXEC) $(TEST_DIR)/unit/conformance/test_metamorphic --fuzz -; rc=$$?; \
+		if [ $$rc -eq 0 ]; then echo "[asx] fuzz-metamorphic: PASS"; \
+		else echo "[asx] fuzz-metamorphic: FAIL (exit $$rc; minimized scenarios in $(MM_FUZZ_DIR))"; fi; \
+		exit $$rc
+
 COMBINATOR_CONTRACT_TEST_BIN := \
 	$(TEST_DIR)/unit/core/test_combinator \
 	$(TEST_DIR)/unit/core/test_combinator2 \
@@ -3327,6 +3355,7 @@ help:
 	@echo "  fuzz-smoke         C determinism and mutation smoke test"
 	@echo "  fuzz-differential  Live Rust/C scenario comparison"
 	@echo "  fuzz-timers        1000 timer-heavy scenarios (seed 7100) Rust vs C"
+	@echo "  fuzz-metamorphic   M1-M4 over generated scenarios, 10000 cases each, ddmin on a violation"
 	@echo "  test-fuzz-differential Detect and minimize a runtime mutation"
 	@echo "  fuzz-counterexample-replay Replay C determinism/crash counterexamples"
 	@echo "  minimize-selftest  Counterexample minimizer self-test"

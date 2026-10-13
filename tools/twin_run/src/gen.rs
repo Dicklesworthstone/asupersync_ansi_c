@@ -1079,6 +1079,286 @@ pub fn timer_scenario(seed: u64, index: u64) -> Value {
     })
 }
 
+/// Salt of the metamorphic shape's stream (`--shape meta`, bd-9kll.12.1).
+const META_SALT: u64 = 0x4D45_5441_0000_0012;
+
+/// One scenario in this many of the metamorphic shape is an M3 case (a
+/// nested-region budget triple), the rest are for M1, M2 and M4. Half: a
+/// relation scenario yields about 0.85 M4 cases and 2 M1 and M2 cases, an M3
+/// scenario one, so 10000 cases of each take about 12000 scenarios of each
+/// kind.
+const META_M3_ONE_IN: u64 = 2;
+
+/// A task program that names nothing but its own: obligations, children and
+/// regions are named after the task, so the task shares nothing with any
+/// other (the isolation M1 permutes). It ends with every obligation it
+/// reserved resolved and every child joined.
+fn meta_private_program(rng: &mut Rng, me: &str, opens_region: bool) -> Vec<Value> {
+    let mut steps = Vec::new();
+    let mut open: Vec<String> = Vec::new();
+    let mut children: Vec<String> = Vec::new();
+    let (mut reserves, mut messages) = (0_u32, 0_u32);
+    let mut region_open = false;
+    for _ in 0..2 + rng.below(7) {
+        match rng.below(13) {
+            0 | 1 => steps.push(json!({"op": "yield"})),
+            2 | 3 => steps.push(sleep_step(rng)),
+            4 => steps.push(checkpoint_step(rng)),
+            5 => {
+                messages += 1;
+                steps.push(json!({"op": "trace", "message": format!("{me}:m{messages}")}));
+            }
+            6 | 7 if open.len() < 2 => {
+                reserves += 1;
+                let name = format!("{me}.o{reserves}");
+                open.push(name.clone());
+                steps.push(
+                    json!({"op": "reserve", "kind": *rng.pick(&OBLIGATION_KINDS), "as": name}),
+                );
+            }
+            8 if !open.is_empty() => {
+                let name = open.remove(0);
+                steps.push(match rng.below(3) {
+                    0 => json!({"op": "commit", "obligation": name}),
+                    1 => json!({"op": "abort", "obligation": name,
+                                "reason": *rng.pick(&ABORT_REASONS)}),
+                    _ => json!({"op": "leak", "obligation": name}),
+                });
+            }
+            9 if children.len() < 2 => {
+                let name = format!("{me}.c{}", children.len() + 1);
+                children.push(name.clone());
+                steps.push(json!({"op": "spawn", "as": name, "program": child_program(rng)}));
+            }
+            10 => steps.push(json!({"op": "masked", "steps": [
+                {"op": "is_cancel_requested"},
+                {"op": "checkpoint", "on_cancel": "continue"},
+                {"op": "trace", "message": format!("{me}:masked")},
+            ]})),
+            11 if opens_region && !region_open => {
+                region_open = true;
+                steps.push(json!({"op": "open_region", "as": format!("{me}.r1")}));
+            }
+            _ => steps.push(json!({"op": "is_cancel_requested"})),
+        }
+    }
+    for name in open {
+        steps.push(json!({"op": "commit", "obligation": name}));
+    }
+    for name in children {
+        steps.push(json!({"op": "join", "task": name}));
+    }
+    if region_open {
+        steps.push(json!({"op": "close_region", "region": format!("{me}.r1")}));
+    }
+    if rng.chance(15) {
+        steps.push(
+            json!({"op": "return", "outcome": {"tag": "err", "status": *rng.pick(&ERR_STATUSES)}}),
+        );
+    }
+    steps
+}
+
+/// A budget of the outer regions of an M3 case (deadline and priority only:
+/// a quota out there clamps the spawned task's own, which the two forms
+/// reach in a different number of polls) or, with `quotas`, of the
+/// innermost one.
+fn meta_budget(rng: &mut Rng, quotas: bool) -> Value {
+    if rng.chance(15) {
+        return Value::Null;
+    }
+    let mut b = json!({"priority": rng.below(256)});
+    if rng.chance(50) {
+        b["deadline_ns"] = json!(50 * (1 + rng.below(40)));
+    }
+    if quotas && rng.chance(40) {
+        b["poll_quota"] = json!(1 + rng.below(12));
+    }
+    if quotas && rng.chance(15) {
+        b["cost_quota"] = json!(1 + rng.below(12));
+    }
+    b
+}
+
+/// The program of M3's `t.g`: the same text as test_metamorphic.c's
+/// MM_M3_PROGRAM.
+fn meta_m3_program() -> Value {
+    let check = json!({"op": "checkpoint", "on_cancel": "return"});
+    let y = json!({"op": "yield"});
+    json!([
+        check, y, check, y, check, y, check, y, check,
+        {"op": "sleep", "ns": 600},
+        check,
+        {"op": "trace", "message": "x end"},
+    ])
+}
+
+/// An M3 case: the nested form (a region with budget `a`, a region with
+/// budget `b` inside it, a task in the inner one) under a region with budget
+/// `top`. test_metamorphic.c reads the three budgets back and builds the
+/// single-region form with `meet(a, b)` itself.
+fn meta_m3_scenario(rng: &mut Rng, seed: u64, index: u64) -> Value {
+    let top = meta_budget(rng, false);
+    let a = meta_budget(rng, false);
+    let b = meta_budget(rng, true);
+    json!({
+        "schema": "asx.scenario.v2",
+        "id": format!("mm-m3-{seed}-{index}-001"),
+        "description": "generated nested-region budget case (twin_run generate --shape meta, bd-9kll.12.1)",
+        "unit": "budget",
+        "rules": ["inv.determinism.replayable"],
+        "seed": 42,
+        "lab": {"max_steps": 4000},
+        "regions": [{"name": "r.main", "parent": "root", "budget": null}],
+        "channels": [],
+        "sync": [],
+        "tasks": [
+            {"name": "t.0", "region": "r.main", "budget": null, "program": [
+                {"op": "open_region", "as": "r.1", "budget": top},
+                {"op": "spawn", "as": "t.c", "region": "r.1", "program": [
+                    {"op": "open_region", "as": "r.2", "budget": a},
+                    {"op": "spawn", "as": "t.d", "region": "r.2", "program": [
+                        {"op": "open_region", "as": "r.3", "budget": b},
+                        {"op": "spawn", "as": "t.g", "region": "r.3", "program": meta_m3_program()},
+                        {"op": "join", "task": "t.g"},
+                    ]},
+                    {"op": "join", "task": "t.d"},
+                ]},
+                {"op": "join", "task": "t.c"},
+            ]},
+            {"name": "t.peer", "region": "r.main", "budget": {"priority": 100},
+             "program": [{"op": "yield"}, {"op": "yield"}, {"op": "yield"}]},
+        ],
+        "script": [],
+        "expect": {"kind": "ok"},
+    })
+}
+
+/// A scenario for the metamorphic relations M1, M2 and M4 (bd-9kll.12.1):
+/// 3 to 6 tasks in `r.main` whose programs name nothing but their own
+/// obligations, children and regions (M1 permutes them, M2 adds a no-op
+/// beside them), 0 or 2 tasks that share an mpsc channel (dependent: they
+/// stay where they are), 1 to 3 tasks in each of `r.a` and `r.b`, and a
+/// driver script of 1 to 3 cancels and advances of kinds other than User
+/// (M4 repeats each with a weaker User request). No budget has a limit and
+/// no region has limits, so the three relations apply.
+fn meta_relation_scenario(rng: &mut Rng, seed: u64, index: u64) -> Value {
+    let mut tasks = Vec::new();
+    let private = 3 + rng.below(4);
+    let mut opened = false;
+    for i in 0..private {
+        let me = format!("t.i{i}");
+        let opens = !opened && rng.chance(25);
+        opened |= opens;
+        tasks.push(json!({
+            "name": me,
+            "region": "r.main",
+            "budget": if rng.chance(15) { json!({"priority": *rng.pick(&STORM_PRIORITIES)}) } else { Value::Null },
+            "program": meta_private_program(rng, &me, opens),
+        }));
+    }
+    let mut channels = Vec::new();
+    if rng.chance(50) {
+        let values = 1 + rng.below(3);
+        channels.push(
+            json!({"name": "ch", "type": "mpsc", "capacity": 1 + rng.below(2),
+                             "sender": "t.p", "receiver": "t.q"}),
+        );
+        let mut send = vec![json!({"op": "yield"})];
+        let mut recv = Vec::new();
+        for v in 0..values {
+            send.push(json!({"op": "send", "channel": "ch", "value": v}));
+            recv.push(json!({"op": "recv", "channel": "ch"}));
+        }
+        send.push(json!({"op": "close_sender", "channel": "ch"}));
+        tasks.push(json!({"name": "t.p", "region": "r.main", "budget": null, "program": send}));
+        tasks.push(json!({"name": "t.q", "region": "r.main", "budget": null, "program": recv}));
+    }
+    let mut names: Vec<String> = Vec::new();
+    for region in ["r.a", "r.b"] {
+        for i in 0..rng.below(4) {
+            let me = format!("t.{}{i}", &region[2..]);
+            let mut program = vec![
+                sleep_step(rng),
+                checkpoint_step(rng),
+                json!({"op": "trace", "message": format!("{me}:woke")}),
+            ];
+            if rng.chance(50) {
+                program.push(sleep_step(rng));
+                program.push(checkpoint_step(rng));
+            }
+            names.push(me.clone());
+            tasks.push(json!({"name": me, "region": region, "budget": null, "program": program}));
+        }
+    }
+    // A task parked on a notify nobody signals keeps its region (r.a) from
+    // closing after the cancel below, so the region's cancel reason, which
+    // a weaker second request must leave alone (M4), is still in the
+    // snapshot: a closed region carries none.
+    let mut sync = Vec::new();
+    let mut script = Vec::new();
+    let mut at = 0;
+    if rng.chance(35) {
+        sync.push(json!({"name": "n", "type": "notify"}));
+        tasks.push(
+            json!({"name": "t.stuck", "region": "r.a", "budget": null, "program": [
+                sleep_step(rng),
+                {"op": "notify_wait", "notify": "n"},
+            ]}),
+        );
+        at += rng.quantum * rng.below(4);
+        script.push(
+            json!({"at_ns": at, "op": {"op": "cancel_region", "region": "r.a",
+            "kind": *rng.pick(&["Shutdown", "Timeout", "Deadline"])}}),
+        );
+    }
+    for _ in 0..1 + rng.below(3) {
+        at += rng.quantum * rng.below(6);
+        let kind = *rng.pick(&["Shutdown", "Timeout", "Deadline", "User"]);
+        let op = match rng.below(4) {
+            0 => json!({"op": "cancel_region", "region": "r.a", "kind": kind}),
+            1 => json!({"op": "cancel_region", "region": "r.b", "kind": kind}),
+            2 if !names.is_empty() => {
+                json!({"op": "cancel_task", "task": *rng.pick(&names), "kind": kind})
+            }
+            _ => json!({"op": "advance", "ns": rng.quantum * (1 + rng.below(4))}),
+        };
+        script.push(json!({"at_ns": at, "op": op}));
+    }
+    json!({
+        "schema": "asx.scenario.v2",
+        "id": format!("mm-rel-{seed}-{index}-001"),
+        "description": "generated metamorphic-relation scenario (twin_run generate --shape meta, bd-9kll.12.1)",
+        "unit": "scheduler",
+        "rules": ["inv.determinism.replayable"],
+        "seed": rng.next_u64() % 1_000_000,
+        "lab": {"max_steps": 3000},
+        "regions": [
+            {"name": "r.main", "parent": "root", "budget": null},
+            {"name": "r.a", "parent": "r.main", "budget": null},
+            {"name": "r.b", "parent": "r.main", "budget": null},
+        ],
+        "channels": channels,
+        "sync": sync,
+        "tasks": tasks,
+        "script": script,
+        "expect": {"kind": "ok"},
+    })
+}
+
+/// Scenario `index` of the metamorphic batch seeded `seed` (`--shape
+/// meta`): one in [`META_M3_ONE_IN`] is an M3 case, the rest are
+/// scenarios for M1, M2 and M4. test_metamorphic.c's `--fuzz` mode reads
+/// them from stdin (`generate --jsonl`).
+pub fn meta_scenario(seed: u64, index: u64) -> Value {
+    let mut rng = Rng::new(seed ^ index.wrapping_mul(0xA24B_AED4_963E_E407) ^ META_SALT);
+    if rng.below(META_M3_ONE_IN) == 0 {
+        meta_m3_scenario(&mut rng, seed, index)
+    } else {
+        meta_relation_scenario(&mut rng, seed, index)
+    }
+}
+
 /// Scenario `index` of the batch seeded `seed`.
 pub fn scenario(seed: u64, index: u64) -> Value {
     if is_storm(seed, index) {
@@ -1625,5 +1905,77 @@ mod tests {
         ] {
             assert!(n >= 100, "{what}: {n} in {BATCH} scenarios");
         }
+    }
+
+    /// bd-9kll.12.1: the metamorphic shape is a pure function of its seed and
+    /// index, and half of the scenarios are M3 cases.
+    #[test]
+    fn a_metamorphic_scenario_is_a_pure_function_and_half_are_m3_cases() {
+        let mut m3 = 0;
+        for index in 0..600 {
+            let value = meta_scenario(12100, index);
+            assert_eq!(value, meta_scenario(12100, index), "scenario {index}");
+            let id = value["id"].as_str().expect("an id");
+            if id.starts_with("mm-m3-") {
+                m3 += 1;
+            } else {
+                assert!(id.starts_with("mm-rel-"), "scenario {index}: {id}");
+            }
+        }
+        assert!((250..=350).contains(&m3), "{m3} M3 cases in 600");
+    }
+
+    /// The relation scenarios give M1 and M4 something to work on: at least
+    /// two tasks that name only their own obligations, children and regions
+    /// (so isolated), and a driver cancel of a kind other than User. No
+    /// budget has a limit and no region has limits, so M2 and M4 apply.
+    #[test]
+    fn a_relation_scenario_has_isolated_tasks_and_cancels_no_budget_limits() {
+        let mut with_weaker_target = 0;
+        let mut with_pair = 0;
+        for index in 0..400 {
+            let value = meta_scenario(12100, index);
+            if value["id"]
+                .as_str()
+                .is_some_and(|i| i.starts_with("mm-m3-"))
+            {
+                continue;
+            }
+            let text = value.to_string();
+            for forbidden in ["region_limits", "poll_quota", "cost_quota", "deadline_ns"] {
+                assert!(!text.contains(forbidden), "scenario {index}: {forbidden}");
+            }
+            let private = value["tasks"]
+                .as_array()
+                .expect("tasks")
+                .iter()
+                .filter(|t| t["name"].as_str().is_some_and(|n| n.starts_with("t.i")))
+                .count();
+            assert!(
+                (3..=6).contains(&private),
+                "scenario {index}: {private} private tasks"
+            );
+            let script = value["script"].as_array().expect("script");
+            assert!(!script.is_empty() && script.len() <= 4, "scenario {index}");
+            if script.iter().any(|e| {
+                matches!(
+                    e["op"]["kind"].as_str(),
+                    Some("Shutdown" | "Timeout" | "Deadline")
+                )
+            }) {
+                with_weaker_target += 1;
+            }
+            if value["channels"].as_array().is_some_and(|c| !c.is_empty()) {
+                with_pair += 1;
+            }
+        }
+        assert!(
+            with_weaker_target >= 100,
+            "{with_weaker_target} scenarios M4 applies to"
+        );
+        assert!(
+            with_pair >= 50,
+            "{with_pair} scenarios with a dependent pair"
+        );
     }
 }

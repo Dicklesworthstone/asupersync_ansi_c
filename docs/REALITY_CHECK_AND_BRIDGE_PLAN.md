@@ -1860,7 +1860,12 @@ These complement the twin-run oracle. They run in plain C CI on every profile.
 | M10 | Cancelling before the first poll, and cancelling at the first checkpoint, both yield Cancelled with the same reason kind | completion-policy drift (K3) |
 
 Each relation is a test generator run under the fuzzer's scenario grammar, with ddmin
-minimization of violations.
+minimization of violations. M1 to M4 run over fresh scenarios with `make fuzz-metamorphic`:
+`twin_run generate --shape meta --jsonl` (gen.rs, a stream of its own) feeds
+`test_metamorphic --fuzz`, 10000 compared cases per relation by default, and a violation is
+reduced by ddmin to a scenario written to `build/metamorphic/` (bd-9kll.12.1). The planted
+mutants of `tests/gates/test_metamorphic_mutants.sh` are caught by that mode too
+(SPAWN_ORDINAL_CANCEL by M1 and M2, BUDGET_CHILD_WINS by M3, CANCEL_LAST_WINS by M4).
 
 ### Governance and process (G)
 
