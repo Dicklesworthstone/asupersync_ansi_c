@@ -42,9 +42,6 @@ static int setup_with_leak_response(asx_leak_response leak_response) {
     cfg.leak_response = leak_response;
     st = asx_runtime_hooks_init(&hooks);
     if (st == ASX_OK) st = asx_runtime_init(&g_rt, &cfg, &hooks);
-    asx_rwlock_reset();
-    asx_pool_reset();
-    asx_contended_mutex_reset();
     if (st == ASX_OK) st = asx_region_open(&g_region);
     return st == ASX_OK;
 }

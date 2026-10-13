@@ -1131,9 +1131,7 @@ TEST(e2e_client_server_over_tcp_loopback) {
     uint32_t len = 0u;
     unsigned i;
 
-    asx_net_reset();
-    asx_ws_reset();
-    install_entropy();
+    install_entropy(); /* a runtime reset: the network and the connections go with it */
     ASSERT_TRUE(tcp_pair_open(&tp, 13100u));
 
     asx_ws_config_init(&ccfg, ASX_WS_ROLE_CLIENT);
@@ -1213,9 +1211,7 @@ TEST(e2e_server_rejects_plain_http_client) {
     unsigned i;
     asx_status st = ASX_OK;
 
-    asx_net_reset();
-    asx_ws_reset();
-    install_entropy();
+    install_entropy(); /* a runtime reset: the network and the connections go with it */
     ASSERT_TRUE(tcp_pair_open(&tp, 13101u));
     ASSERT_EQ(asx_ws_accept(&server, tp.server_tcp, NULL), ASX_OK);
 
@@ -1239,9 +1235,7 @@ TEST(e2e_stream_closed_underneath_is_abnormal) {
     asx_ws_conn client;
     asx_ws_conn server;
 
-    asx_net_reset();
-    asx_ws_reset();
-    install_entropy();
+    install_entropy(); /* a runtime reset: the network and the connections go with it */
     ASSERT_TRUE(tcp_pair_open(&tp, 13103u));
     asx_ws_config_init(&ccfg, ASX_WS_ROLE_CLIENT);
     ccfg.host = "localhost";
@@ -1269,9 +1263,7 @@ TEST(conn_slots_exhaust_and_validate_args) {
     asx_ws_config ccfg;
     uint32_t i;
 
-    asx_net_reset();
-    asx_ws_reset();
-    install_entropy();
+    install_entropy(); /* a runtime reset: the network and the connections go with it */
     ASSERT_TRUE(tcp_pair_open(&tp, 13102u));
     for (i = 0u; i < ASX_MAX_WS_CONNECTIONS; i++) {
         ASSERT_EQ(asx_ws_accept(&conns[i], tp.server_tcp, NULL), ASX_OK);

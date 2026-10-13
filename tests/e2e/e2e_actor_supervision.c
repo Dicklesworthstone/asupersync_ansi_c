@@ -293,7 +293,7 @@ static int run_gen_server(unsigned long long *digest) {
     asx_gen_server_ref ref;
     uint64_t reply = 0u;
 
-    asx_gen_server_reset();
+    asx_runtime_reset();
     if (asx_gen_server_start_named(&ref, "counter", &callbacks, NULL) != ASX_OK) {
         scenario_line("gen_server.request_reply", 0, "start_failed");
         return 0;
