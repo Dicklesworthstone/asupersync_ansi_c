@@ -1006,4 +1006,32 @@ ASX_MUST_USE asx_status asx_task_spawn_finalizer_internal(asx_region_id region,
  * next round with ASX_E_REPLAY_MISMATCH. 0 with no replay active. */
 int asx_replay_stop_run_internal(void);
 
+/* What one live channel's counters say (src/channel/mpsc.c), read-only, so
+ * the channel_atomicity oracle (oracle.c, bd-9kll.9.2) is a pure function of
+ * a value a test can make. `queued` is the committed messages whichever
+ * backend holds them, `permit_tokens` the permit table's entries in use,
+ * `sender_tokens` the live clone identities; `in_use` is the lock-free
+ * backend's committed-plus-reserved counter (has_in_use 0 elsewhere). */
+typedef struct {
+    asx_region_id region;
+    uint32_t capacity;
+    uint32_t queued;
+    uint32_t reserved;
+    uint32_t permit_tokens;
+    uint32_t sender_count;
+    uint32_t sender_tokens;
+    uint32_t primary_dropped;
+    uint32_t in_use;
+    uint32_t has_in_use;
+} asx_channel_accounting;
+
+/* One past the highest channel slot created since the last reset. */
+uint32_t asx_channel_slot_count_internal(void);
+/* The accounting of live channel slot `index`: 1 and *out filled, or 0 for a
+ * slot that is not alive or past the high-water mark. */
+int asx_channel_accounting_get_internal(uint32_t index, asx_channel_accounting *out);
+/* The first way `a` is inconsistent as a static message, or NULL when its
+ * counters agree (oracle.c). */
+const char *asx_channel_accounting_defect_internal(const asx_channel_accounting *a);
+
 #endif /* ASX_RUNTIME_INTERNAL_H */

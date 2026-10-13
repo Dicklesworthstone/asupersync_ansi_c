@@ -585,6 +585,55 @@ static asx_oracle_result check_cancel_signal_ordering(const asx_kernel *k) {
                           "every propagated cancel followed its parent's", 0u);
 }
 
+/* Rust's channel_atomicity oracle follows reserve, send and abort events and
+ * fails a reservation that was not atomic with its capacity claim. The
+ * channel's counters show the same thing as state: a message and a permit
+ * each hold one slot of the capacity, a permit is a token in the permit
+ * table, and the sender count is the creator's sender (until dropped) plus
+ * the live clones. A mailbox is a bounded channel, so its capacity and
+ * backpressure accounting is this one's. */
+const char *asx_channel_accounting_defect_internal(const asx_channel_accounting *a) {
+    if (a->queued > a->capacity) return "a channel holds more messages than its capacity";
+    if (a->queued + a->reserved > a->capacity) {
+        return "a channel's queued messages and reserved permits exceed its capacity";
+    }
+    if (a->reserved != a->permit_tokens) {
+        return "a channel's reserved count disagrees with its live permit tokens";
+    }
+    if (a->sender_count != a->sender_tokens + (a->primary_dropped != 0u ? 0u : 1u)) {
+        return "a channel's sender count disagrees with its live sender identities";
+    }
+    if (a->has_in_use != 0u && a->in_use != a->queued + a->reserved) {
+        return "a channel's in-use count is not its messages plus its permits";
+    }
+    return NULL;
+}
+
+/* The channels of this kernel's runtime (the channel table is the channel
+ * module's, process-wide; a channel names the region it was made in, and a
+ * region handle carries its runtime's tag). */
+static asx_oracle_result check_channel_atomicity(const asx_kernel *k) {
+    const char *first = NULL;
+    uint32_t bad = 0;
+    uint32_t n = asx_channel_slot_count_internal();
+    uint32_t i;
+    for (i = 0; i < n; i++) {
+        asx_channel_accounting a;
+        const char *why;
+        /* ASX_CHECKPOINT_WAIVER("bounded: the channel table's high-water mark") */
+        if (!asx_channel_accounting_get_internal(i, &a)) continue;
+        if (a.region != ASX_INVALID_ID && asx_handle_runtime_tag(a.region) != k->tag) continue;
+        why = asx_channel_accounting_defect_internal(&a);
+        if (why != NULL) {
+            bad++;
+            if (first == NULL) first = why;
+        }
+    }
+    if (bad != 0u) return oracle_verdict(ASX_ORACLE_FAIL, "channel_atomicity", first, bad);
+    return oracle_verdict(ASX_ORACLE_PASS, "channel_atomicity",
+                          "every channel's permits, messages and senders are accounted for", 0u);
+}
+
 typedef asx_oracle_result (*oracle_check_fn)(const asx_kernel *k);
 
 /* The lab contract the older oracles have: NULL fails, an uninitialized lab
@@ -657,6 +706,11 @@ asx_oracle_result asx_oracle_arena_counters(const asx_lab *lab, void *ctx) {
     return lab_oracle(lab, "arena_counters", check_arena_counters);
 }
 
+asx_oracle_result asx_oracle_channel_atomicity(const asx_lab *lab, void *ctx) {
+    (void)ctx;
+    return lab_oracle(lab, "channel_atomicity", check_channel_atomicity);
+}
+
 asx_oracle_result asx_oracle_region_leak(const asx_lab *lab, void *ctx) {
     (void)ctx;
     return lab_oracle(lab, "region_leak", check_region_leak);
@@ -686,6 +740,7 @@ static const oracle_entry g_oracle_table[] = {
     {"arena_counters", check_arena_counters},
     {"region_leak", check_region_leak},
     {"cancel_signal_ordering", check_cancel_signal_ordering},
+    {"channel_atomicity", check_channel_atomicity},
 };
 
 #define ORACLE_TABLE_COUNT (sizeof(g_oracle_table) / sizeof(g_oracle_table[0]))

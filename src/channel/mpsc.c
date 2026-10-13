@@ -1464,3 +1464,39 @@ static void channel_run_discard(asx_channel_slot *s, const uint64_t *values, uin
         fn(ctx, values[i]);
     }
 }
+
+/* ------------------------------------------------------------------ */
+/* Accounting view (bd-9kll.9.2, the channel_atomicity oracle)         */
+/* ------------------------------------------------------------------ */
+
+uint32_t asx_channel_slot_count_internal(void) { return g_channel_hwm; }
+
+int asx_channel_accounting_get_internal(uint32_t index, asx_channel_accounting *out) {
+    asx_channel_slot *s;
+    uint32_t i;
+
+    if (out == NULL || index >= g_channel_hwm || index >= (uint32_t)ASX_MAX_CHANNELS) { return 0; }
+    s = &g_channels[index];
+    if (!s->alive) return 0;
+
+    memset(out, 0, sizeof(*out));
+    out->region = s->region;
+    out->capacity = s->capacity;
+    out->queued = channel_message_count(s);
+    out->reserved = channel_atomic_load(&s->reserved);
+    for (i = 0; i < ASX_CHANNEL_MAX_CAPACITY; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: ASX_CHANNEL_MAX_CAPACITY constant");
+        if (channel_atomic_load(&s->permit_tokens[i]) != 0u) out->permit_tokens++;
+    }
+    out->sender_count = s->sender_count;
+    for (i = 0; i < ASX_CHANNEL_MAX_SENDERS; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: ASX_CHANNEL_MAX_SENDERS constant");
+        if (s->sender_tokens[i] != 0u) out->sender_tokens++;
+    }
+    out->primary_dropped = s->primary_dropped != 0 ? 1u : 0u;
+#if ASX_CHANNEL_BACKEND_LOCKFREE
+    out->has_in_use = 1u;
+    out->in_use = channel_atomic_load(&s->lf_queue.in_use);
+#endif
+    return 1;
+}

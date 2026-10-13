@@ -152,6 +152,13 @@ ASX_API asx_oracle_result asx_oracle_task_counters(const asx_lab *lab, void *ctx
  * lists hold exactly the released slots. */
 ASX_API asx_oracle_result asx_oracle_arena_counters(const asx_lab *lab, void *ctx);
 
+/* channel_atomicity: every channel's counters agree: queued messages plus
+ * reserved permits within its capacity, the reserved count equal to the live
+ * permit tokens, the sender count equal to the creator's sender (until
+ * dropped) plus the live clones. A mailbox is a bounded channel, so this is
+ * also its capacity accounting. */
+ASX_API asx_oracle_result asx_oracle_channel_atomicity(const asx_lab *lab, void *ctx);
+
 /* region_leak: no region is stuck closing: one in CLOSING, DRAINING or
  * FINALIZING with no live task, no child not closed, no cleanup pending or
  * running and no reserved obligation would never close. (Rust's version is
@@ -176,8 +183,8 @@ ASX_API const char *asx_oracle_kernel_name(uint32_t index);
 /* Run the named kernel-state oracle (task_leak, obligation_leak, quiescence,
  * finalizer, region_tree, deadline_monotone, cancellation_protocol,
  * cancel_correctness, cancel_debt, task_counters, arena_counters,
- * region_leak, cancel_signal_ordering). An unknown or NULL name fails with
- * the oracle name "unknown". */
+ * region_leak, cancel_signal_ordering, channel_atomicity). An unknown or
+ * NULL name fails with the oracle name "unknown". */
 ASX_API asx_oracle_result asx_oracle_check_named(const char *name);
 
 /* Render a replay result as JSON for retained diagnostics/artifacts. */

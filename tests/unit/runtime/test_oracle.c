@@ -65,12 +65,13 @@ TEST(kernel_oracles_carry_rusts_registry_names_and_unknown_names_fail) {
                                        "task_counters",
                                        "arena_counters",
                                        "region_leak",
-                                       "cancel_signal_ordering"};
+                                       "cancel_signal_ordering",
+                                       "channel_atomicity"};
     uint32_t i;
     asx_oracle_result r;
-    ASSERT_EQ(asx_oracle_kernel_count(), 13u);
-    for (i = 0; i < 13u; i++) { ASSERT_STR_EQ(asx_oracle_kernel_name(i), want[i]); }
-    ASSERT_TRUE(asx_oracle_kernel_name(13u) == NULL);
+    ASSERT_EQ(asx_oracle_kernel_count(), 14u);
+    for (i = 0; i < 14u; i++) { ASSERT_STR_EQ(asx_oracle_kernel_name(i), want[i]); }
+    ASSERT_TRUE(asx_oracle_kernel_name(14u) == NULL);
     r = check("no_such_oracle");
     ASSERT_EQ((int)r.verdict, (int)ASX_ORACLE_FAIL);
     ASSERT_STR_EQ(r.oracle_name, "unknown");
@@ -627,6 +628,79 @@ TEST(cancel_signal_ordering_names_a_child_cancelled_by_a_parent_that_was_not) {
     ASSERT_STR_EQ(r.message, "a region's cancel was recorded before its parent's");
 }
 
+TEST(channel_atomicity_names_counters_that_disagree_with_a_channels_permits_and_senders) {
+    asx_channel_accounting a;
+    asx_region_id rid;
+    asx_channel_id ch;
+    asx_send_permit permit;
+    asx_channel_sender sender;
+    uint32_t i;
+    uint32_t n;
+    int found = 0;
+
+    /* A channel the kernel made and used: one message queued, one permit
+     * outstanding, one cloned sender. */
+    fresh();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_channel_create(rid, 4u, &ch), ASX_OK);
+    ASSERT_EQ(asx_channel_try_reserve(ch, &permit), ASX_OK);
+    ASSERT_EQ(asx_send_permit_send(&permit, 7u), ASX_OK);
+    ASSERT_EQ(asx_channel_try_reserve(ch, &permit), ASX_OK);
+    ASSERT_EQ(asx_channel_sender_clone(ch, &sender), ASX_OK);
+    ASSERT_TRUE(all_pass());
+    ASSERT_EQ((int)check("channel_atomicity").verdict, (int)ASX_ORACLE_PASS);
+
+    n = asx_channel_slot_count_internal();
+    for (i = 0; i < n && !found; i++) { found = asx_channel_accounting_get_internal(i, &a); }
+    ASSERT_TRUE(found);
+    ASSERT_EQ(a.capacity, 4u);
+    ASSERT_EQ(a.queued, 1u);
+    ASSERT_EQ(a.reserved, 1u);
+    ASSERT_EQ(a.permit_tokens, 1u);
+    ASSERT_EQ(a.sender_count, 2u);
+    ASSERT_EQ(a.sender_tokens, 1u);
+    ASSERT_EQ(a.primary_dropped, 0u);
+    ASSERT_TRUE(asx_channel_accounting_defect_internal(&a) == NULL);
+
+    /* Each counter, planted one at a time on a copy of the real view. */
+    {
+        asx_channel_accounting b = a;
+        b.queued = 5u;
+        ASSERT_STR_EQ(asx_channel_accounting_defect_internal(&b),
+                      "a channel holds more messages than its capacity");
+        b = a;
+        b.queued = 4u;
+        ASSERT_STR_EQ(asx_channel_accounting_defect_internal(&b),
+                      "a channel's queued messages and reserved permits exceed its capacity");
+        b = a;
+        b.reserved = 2u;
+        ASSERT_STR_EQ(asx_channel_accounting_defect_internal(&b),
+                      "a channel's reserved count disagrees with its live permit tokens");
+        b = a;
+        b.sender_count = 3u;
+        ASSERT_STR_EQ(asx_channel_accounting_defect_internal(&b),
+                      "a channel's sender count disagrees with its live sender identities");
+        b = a;
+        b.primary_dropped = 1u;
+        ASSERT_STR_EQ(asx_channel_accounting_defect_internal(&b),
+                      "a channel's sender count disagrees with its live sender identities");
+        b = a;
+        b.has_in_use = 1u;
+        b.in_use = 3u;
+        ASSERT_STR_EQ(asx_channel_accounting_defect_internal(&b),
+                      "a channel's in-use count is not its messages plus its permits");
+        b.in_use = 2u;
+        ASSERT_TRUE(asx_channel_accounting_defect_internal(&b) == NULL);
+    }
+
+    /* Resolve and drop everything: the counters still agree, with the sender
+     * side closed (count 0, creator's sender dropped). */
+    asx_send_permit_abort(&permit);
+    ASSERT_EQ(asx_channel_sender_drop(&sender), ASX_OK);
+    ASSERT_EQ(asx_channel_close_sender(ch), ASX_OK);
+    ASSERT_EQ((int)check("channel_atomicity").verdict, (int)ASX_ORACLE_PASS);
+}
+
 int main(void) {
     fprintf(stderr, "=== test_oracle ===\n");
     RUN_TEST(kernel_oracles_carry_rusts_registry_names_and_unknown_names_fail);
@@ -646,6 +720,7 @@ int main(void) {
     RUN_TEST(obligation_leak_names_a_reserved_obligation_whose_holder_completed);
     RUN_TEST(region_leak_names_a_closing_region_with_nothing_left_to_wait_for);
     RUN_TEST(cancel_signal_ordering_names_a_child_cancelled_by_a_parent_that_was_not);
+    RUN_TEST(channel_atomicity_names_counters_that_disagree_with_a_channels_permits_and_senders);
     TEST_REPORT();
     return test_failures;
 }
