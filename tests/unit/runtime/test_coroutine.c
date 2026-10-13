@@ -544,24 +544,28 @@ TEST(co_capture_arena_exhaustion) {
     uint32_t i;
     asx_status st = ASX_OK;
     uint32_t spawned;
+    /* The arena is a capacity macro (a resource class and the x4 lane size
+     * it): two more spawns than its 1024-byte states can fill. */
+    const uint32_t bound = (uint32_t)ASX_REGION_CAPTURE_ARENA_BYTES / 1024u + 2u;
 
     asx_runtime_reset();
 
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
 
-    /* Exhaust the capture arena (16384 bytes) by spawning many tasks
-     * with large state. Each state is 1024 bytes + alignment. */
+    /* Exhaust the region's capture arena by spawning many tasks with large
+     * state. Each state is 1024 bytes + alignment. */
     spawned = 0;
-    for (i = 0; i < 20; i++) {
+    for (i = 0; i < bound; i++) {
         st = asx_task_spawn_captured(rid, yield_n_poll, 1024u, NULL, &tid, &state_ptr);
         if (st == ASX_E_RESOURCE_EXHAUSTED) break;
         ASSERT_EQ(st, ASX_OK);
         spawned++;
     }
 
-    /* Should have exhausted before 20 (16384/1024 = 16, minus alignment) */
+    /* Should have exhausted before the bound (arena/1024 states, minus
+     * alignment). */
     ASSERT_TRUE(spawned > 0);
-    ASSERT_TRUE(spawned < 20);
+    ASSERT_TRUE(spawned < bound);
 
     /* Last attempt should have returned RESOURCE_EXHAUSTED */
     ASSERT_EQ(st, ASX_E_RESOURCE_EXHAUSTED);
