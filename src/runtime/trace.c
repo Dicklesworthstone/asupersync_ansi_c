@@ -157,180 +157,229 @@ static uint64_t trace_digest_of(const asx_trace_event *events, uint32_t count) {
  *
  * Events are folded into the digest lazily, in sequence order: when the
  * ring is about to overwrite one, or when the digest is read.
- * g_trace_folded events have been folded, and the events
- * [g_trace_folded, g_trace_emitted) (at most ASX_TRACE_CAPACITY) are still
+ * `folded` events have been folded, and the events
+ * [folded, emitted) (at most ASX_TRACE_CAPACITY) are still
  * in the ring, unfolded. The digest read is the same value an eager fold
  * at emit time gives, so a run shorter than the ring that never reads it
  * does not pay for the fold. For traces that fit in the ring it equals a
  * fold over the stored events.
  * ------------------------------------------------------------------- */
 
-/* Kinds are grouped 0x00-0x60; per-kind totals are exact even after the
- * ring wraps, so callers never need retained events to count them. */
-#define ASX_TRACE_KIND_SLOTS 0x61u
+/* Kinds are grouped 0x00-0x60 (ASX_TRACE_KIND_SLOTS, runtime_internal.h);
+ * per-kind totals are exact even after the ring wraps, so callers never
+ * need retained events to count them.
+ *
+ * The state is the runtime kernel's (asx_trace_state, runtime_internal.h):
+ * every function below works on one runtime's trace, and the public
+ * handle-less API is kernel 0's. */
 
-static asx_trace_event g_trace_ring[ASX_TRACE_CAPACITY];
-static uint64_t g_trace_emitted;
-static uint64_t g_trace_folded;
-/* over [0, g_trace_folded); the multiplies it owes are paid by the read */
-static asx_fnv_fold g_trace_digest = {ASX_TRACE_DIGEST_SEED, 0u};
-static uint64_t g_trace_kind_totals[ASX_TRACE_KIND_SLOTS];
-static asx_trace_observer_fn g_trace_observer;
-static void *g_trace_observer_ctx;
-static int g_trace_observing; /* guards against an observer that emits */
+/* Kernel 0's trace: what the handle-less public API reads and writes. */
+static asx_trace_state *trace_bridge(void) { return &g_kernels[0]->trace; }
+
+/* A zeroed trace is a reset one: the digest is seeded on first use. */
+static void trace_start(asx_trace_state *t) {
+    if (!t->started) {
+        asx_fnv_fold_init(&t->digest, ASX_TRACE_DIGEST_SEED);
+        t->started = 1;
+    }
+}
 
 /* Live builds emit from several threads (channel producers, the blocking
  * pool), while the ring, the digest and the counters form one sequence:
- * a writer holds this lock while it records. Single-thread builds have
- * no other writer, and the lock compiles to nothing. Readers (event get,
- * digest, replay, export) take no lock: read once emitting threads are
- * quiet. */
-#if !ASX_LOCKFREE_SINGLE_THREAD
-static asx_atomic_u32 g_trace_lock;
-#endif
-
-static void trace_lock(void) {
+ * a writer holds the trace's lock while it records. Single-thread builds
+ * have no other writer, and the lock compiles to nothing. Readers (event
+ * get, digest, replay, export) take no lock: read once emitting threads
+ * are quiet. */
+static void trace_lock(asx_trace_state *t) {
 #if !ASX_LOCKFREE_SINGLE_THREAD
     uint32_t expected;
     for (;;) {
         ASX_CHECKPOINT_WAIVER("bounded: the holder releases after recording one event");
         expected = 0u;
-        if (asx_atomic_u32_compare_exchange(&g_trace_lock, &expected, 1u)) return;
+        if (asx_atomic_u32_compare_exchange(&t->lock, &expected, 1u)) return;
     }
+#else
+    (void)t;
 #endif
 }
 
-static void trace_unlock(void) {
+static void trace_unlock(asx_trace_state *t) {
 #if !ASX_LOCKFREE_SINGLE_THREAD
-    asx_atomic_u32_store(&g_trace_lock, 0u);
+    asx_atomic_u32_store(&t->lock, 0u);
+#else
+    (void)t;
 #endif
 }
 
-static void trace_record(asx_trace_event_kind kind, uint64_t entity_id, uint64_t aux,
-                         const asx_trace_payload *payload) {
+static void trace_record(asx_trace_state *t, asx_trace_event_kind kind, uint64_t entity_id,
+                         uint64_t aux, const asx_trace_payload *payload) {
     static const asx_trace_payload none = {0};
     asx_trace_event *e;
     uint32_t slot;
 
-    trace_lock();
-    slot = (uint32_t)(g_trace_emitted % ASX_TRACE_CAPACITY);
-    if (g_trace_emitted - g_trace_folded >= ASX_TRACE_CAPACITY) {
+    trace_lock(t);
+    trace_start(t);
+    slot = (uint32_t)(t->emitted % ASX_TRACE_CAPACITY);
+    if (t->emitted - t->folded >= ASX_TRACE_CAPACITY) {
         /* The ring holds ASX_TRACE_CAPACITY unfolded events, and this slot
          * holds the oldest: fold it before it is overwritten. */
-        trace_digest_fold(&g_trace_digest, &g_trace_ring[slot]);
-        g_trace_folded++;
+        trace_digest_fold(&t->digest, &t->ring[slot]);
+        t->folded++;
     }
-    e = &g_trace_ring[slot];
-    e->sequence = (uint32_t)(g_trace_emitted & 0xFFFFFFFFu);
+    e = &t->ring[slot];
+    e->sequence = (uint32_t)(t->emitted & 0xFFFFFFFFu);
     e->kind = kind;
     e->entity_id = entity_id;
     e->aux = aux;
-    if ((uint32_t)kind < ASX_TRACE_KIND_SLOTS) g_trace_kind_totals[(uint32_t)kind]++;
-    g_trace_emitted++;
-    if (g_trace_observer != NULL && !g_trace_observing) {
+    if ((uint32_t)kind < ASX_TRACE_KIND_SLOTS) t->kind_totals[(uint32_t)kind]++;
+    t->emitted++;
+    if (t->observer != NULL && !t->observing) {
         /* Only an observed event is copied. The observer runs outside the
          * lock: one that emits records its own events. */
         asx_trace_event copy = *e;
-        asx_trace_observer_fn observer = g_trace_observer;
-        void *observer_ctx = g_trace_observer_ctx;
-        g_trace_observing = 1;
-        trace_unlock();
+        asx_trace_observer_fn observer = t->observer;
+        void *observer_ctx = t->observer_ctx;
+        t->observing = 1;
+        trace_unlock(t);
         observer(observer_ctx, &copy, payload != NULL ? payload : &none);
-        trace_lock();
-        g_trace_observing = 0;
+        trace_lock(t);
+        t->observing = 0;
     }
-    trace_unlock();
+    trace_unlock(t);
 }
 
-void asx_trace_emit_payload_internal(asx_trace_event_kind kind, uint64_t entity_id, uint64_t aux,
-                                     const asx_trace_payload *payload) {
-    trace_record(kind, entity_id, aux, payload);
+/* `k` is the kernel of the entity the event is about; NULL (a handle no
+ * runtime holds) records into kernel 0, where the event was recorded before
+ * traces were per runtime. */
+void asx_trace_emit_internal(asx_kernel *k, asx_trace_event_kind kind, uint64_t entity_id,
+                             uint64_t aux) {
+    trace_record(k != NULL ? &k->trace : trace_bridge(), kind, entity_id, aux, NULL);
+}
+
+void asx_trace_emit_payload_internal(asx_kernel *k, asx_trace_event_kind kind, uint64_t entity_id,
+                                     uint64_t aux, const asx_trace_payload *payload) {
+    trace_record(k != NULL ? &k->trace : trace_bridge(), kind, entity_id, aux, payload);
 }
 
 void asx_trace_set_observer(asx_trace_observer_fn fn, void *ctx) {
-    g_trace_observer = fn;
-    g_trace_observer_ctx = ctx;
+    asx_trace_state *t = trace_bridge();
+    t->observer = fn;
+    t->observer_ctx = ctx;
 }
 
+/* A user trace line belongs to the runtime of the task it names (kernel 0
+ * for a handle no runtime holds). */
 void asx_trace_user(asx_task_id task, const char *message) {
+    asx_kernel *k = asx_kernel_of(task);
     asx_trace_payload payload = {0};
     payload.text = message == NULL ? "" : message;
     payload.reason = NULL;
-    trace_record(ASX_TRACE_USER, (uint64_t)task,
+    trace_record(k != NULL ? &k->trace : trace_bridge(), ASX_TRACE_USER, (uint64_t)task,
                  fnv1a_mix(ASX_TRACE_DIGEST_SEED, payload.text, (uint32_t)strlen(payload.text)),
                  &payload);
 }
 
-static uint32_t trace_retained(void) {
-    return g_trace_emitted < ASX_TRACE_CAPACITY ? (uint32_t)g_trace_emitted : ASX_TRACE_CAPACITY;
+static uint32_t trace_retained(const asx_trace_state *t) {
+    return t->emitted < ASX_TRACE_CAPACITY ? (uint32_t)t->emitted : ASX_TRACE_CAPACITY;
 }
 
-static uint64_t trace_first_retained_seq(void) { return g_trace_emitted - trace_retained(); }
+static uint64_t trace_first_retained_seq(const asx_trace_state *t) {
+    return t->emitted - trace_retained(t);
+}
 
 static uint32_t trace_seq_to_u32(uint64_t seq) {
     return seq > (uint64_t)UINT32_MAX ? UINT32_MAX : (uint32_t)seq;
 }
 
 void asx_trace_emit(asx_trace_event_kind kind, uint64_t entity_id, uint64_t aux) {
-    trace_record(kind, entity_id, aux, NULL);
+    trace_record(trace_bridge(), kind, entity_id, aux, NULL);
 }
 
-uint32_t asx_trace_event_count(void) { return trace_retained(); }
+uint32_t asx_trace_event_count_internal(const asx_kernel *k) { return trace_retained(&k->trace); }
 
-uint64_t asx_trace_emitted_total(void) { return g_trace_emitted; }
+uint64_t asx_trace_emitted_total_internal(const asx_kernel *k) { return k->trace.emitted; }
 
-uint64_t asx_trace_dropped(void) { return g_trace_emitted - trace_retained(); }
+uint64_t asx_trace_dropped_internal(const asx_kernel *k) {
+    return k->trace.emitted - trace_retained(&k->trace);
+}
+
+uint64_t asx_trace_kind_total_internal(const asx_kernel *k, asx_trace_event_kind kind) {
+    if ((uint32_t)kind >= ASX_TRACE_KIND_SLOTS) return 0u;
+    return k->trace.kind_totals[(uint32_t)kind];
+}
+
+int asx_trace_event_get_internal(const asx_kernel *k, uint32_t index, asx_trace_event *out) {
+    const asx_trace_state *t = &k->trace;
+    if (out == NULL) return 0;
+    if (index >= trace_retained(t)) return 0;
+    *out = t->ring[(trace_first_retained_seq(t) + index) % ASX_TRACE_CAPACITY];
+    return 1;
+}
+
+int asx_trace_event_get_seq_internal(const asx_kernel *k, uint64_t seq, asx_trace_event *out) {
+    const asx_trace_state *t = &k->trace;
+    if (out == NULL) return 0;
+    if (seq >= t->emitted || seq < trace_first_retained_seq(t)) return 0;
+    *out = t->ring[seq % ASX_TRACE_CAPACITY];
+    return 1;
+}
+
+uint32_t asx_trace_event_count(void) { return asx_trace_event_count_internal(g_kernels[0]); }
+
+uint64_t asx_trace_emitted_total(void) { return asx_trace_emitted_total_internal(g_kernels[0]); }
+
+uint64_t asx_trace_dropped(void) { return asx_trace_dropped_internal(g_kernels[0]); }
 
 uint64_t asx_trace_kind_total(asx_trace_event_kind kind) {
-    if ((uint32_t)kind >= ASX_TRACE_KIND_SLOTS) return 0u;
-    return g_trace_kind_totals[(uint32_t)kind];
+    return asx_trace_kind_total_internal(g_kernels[0], kind);
 }
 
 int asx_trace_event_get(uint32_t index, asx_trace_event *out) {
-    if (out == NULL) return 0;
-    if (index >= trace_retained()) return 0;
-    *out = g_trace_ring[(trace_first_retained_seq() + index) % ASX_TRACE_CAPACITY];
-    return 1;
+    return asx_trace_event_get_internal(g_kernels[0], index, out);
 }
 
 int asx_trace_event_get_seq(uint64_t seq, asx_trace_event *out) {
-    if (out == NULL) return 0;
-    if (seq >= g_trace_emitted || seq < trace_first_retained_seq()) return 0;
-    *out = g_trace_ring[seq % ASX_TRACE_CAPACITY];
-    return 1;
+    return asx_trace_event_get_seq_internal(g_kernels[0], seq, out);
 }
 
-void asx_trace_reset(void) {
-    g_trace_emitted = 0u;
-    g_trace_folded = 0u;
-    asx_fnv_fold_init(&g_trace_digest, ASX_TRACE_DIGEST_SEED);
-    memset(g_trace_kind_totals, 0, sizeof(g_trace_kind_totals));
+void asx_trace_reset_internal(asx_kernel *k) {
+    asx_trace_state *t = &k->trace;
+    t->emitted = 0u;
+    t->folded = 0u;
+    asx_fnv_fold_init(&t->digest, ASX_TRACE_DIGEST_SEED);
+    t->started = 1;
+    memset(t->kind_totals, 0, sizeof(t->kind_totals));
 }
+
+void asx_trace_reset(void) { asx_trace_reset_internal(g_kernels[0]); }
 
 /* Fold the events the ring still holds unfolded, oldest first, and return
  * the digest over every emitted event. Called with the writer lock held
  * (live builds), so no emitter folds or overwrites underneath it. */
-static uint64_t trace_digest_settle(void) {
-    while (g_trace_folded < g_trace_emitted) {
+static uint64_t trace_digest_settle(asx_trace_state *t) {
+    trace_start(t);
+    while (t->folded < t->emitted) {
         /* bounded: at most ASX_TRACE_CAPACITY events are ever unfolded */
-        const asx_trace_event *oldest = &g_trace_ring[g_trace_folded % ASX_TRACE_CAPACITY];
+        const asx_trace_event *oldest = &t->ring[t->folded % ASX_TRACE_CAPACITY];
 
-        trace_digest_fold(&g_trace_digest, oldest);
-        g_trace_folded++;
+        trace_digest_fold(&t->digest, oldest);
+        t->folded++;
     }
-    return asx_fnv_fold_value(&g_trace_digest);
+    return asx_fnv_fold_value(&t->digest);
 }
 
-static uint64_t trace_digest_now(void) {
+static uint64_t trace_digest_now(asx_trace_state *t) {
     uint64_t digest;
 
-    trace_lock();
-    digest = trace_digest_settle();
-    trace_unlock();
+    trace_lock(t);
+    digest = trace_digest_settle(t);
+    trace_unlock(t);
     return digest;
 }
 
-uint64_t asx_trace_digest(void) { return trace_digest_now(); }
+uint64_t asx_trace_digest_internal(asx_kernel *k) { return trace_digest_now(&k->trace); }
+
+uint64_t asx_trace_digest(void) { return trace_digest_now(trace_bridge()); }
 
 /* -------------------------------------------------------------------
  * Replay verification
@@ -369,6 +418,7 @@ void asx_replay_clear_reference(void) {
 }
 
 asx_replay_result asx_replay_verify(void) {
+    asx_trace_state *t = trace_bridge();
     asx_replay_result result;
     uint64_t seq;
     uint64_t start;
@@ -381,21 +431,21 @@ asx_replay_result asx_replay_verify(void) {
     }
 
     /* Both traces must have emitted the same number of events. */
-    if (g_trace_emitted != g_replay_ref_total) {
+    if (t->emitted != g_replay_ref_total) {
         result.result = ASX_REPLAY_LENGTH_MISMATCH;
-        result.divergence_index = trace_seq_to_u32(
-            g_trace_emitted < g_replay_ref_total ? g_trace_emitted : g_replay_ref_total);
+        result.divergence_index =
+            trace_seq_to_u32(t->emitted < g_replay_ref_total ? t->emitted : g_replay_ref_total);
         return result;
     }
 
     /* Compare the events both sides still hold, aligned by sequence.
      * divergence_index is the sequence of the first mismatch. */
-    start = trace_first_retained_seq();
+    start = trace_first_retained_seq(t);
     if (g_replay_ref_first_seq > start) start = g_replay_ref_first_seq;
 
-    for (seq = start; seq < g_trace_emitted; seq++) {
+    for (seq = start; seq < t->emitted; seq++) {
         /* ASX_CHECKPOINT_WAIVER("bounded by ASX_TRACE_CAPACITY retained events") */
-        const asx_trace_event *actual = &g_trace_ring[seq % ASX_TRACE_CAPACITY];
+        const asx_trace_event *actual = &t->ring[seq % ASX_TRACE_CAPACITY];
         const asx_trace_event *expected = &g_replay_ref[seq - g_replay_ref_first_seq];
 
         if (actual->kind != expected->kind) {
@@ -418,7 +468,7 @@ asx_replay_result asx_replay_verify(void) {
     /* The rolling digests cover every event, including any that neither
      * side retained, so they catch divergence outside the window. */
     result.expected_digest = g_replay_ref_digest;
-    result.actual_digest = trace_digest_now();
+    result.actual_digest = trace_digest_now(t);
 
     if (result.actual_digest != result.expected_digest) {
         result.result = ASX_REPLAY_DIGEST_MISMATCH;
@@ -563,7 +613,7 @@ asx_status asx_snapshot_capture(asx_snapshot_buffer *out) {
     }
 
     snap_str(out, "],\"trace_count\":");
-    snap_u32(out, trace_seq_to_u32(g_trace_emitted));
+    snap_u32(out, trace_seq_to_u32(trace_bridge()->emitted));
     snap_str(out, ",\"trace_digest\":");
     {
         uint64_t d = asx_trace_digest();
@@ -660,6 +710,7 @@ static uint64_t read_le64(const uint8_t *p) {
 }
 
 asx_status asx_trace_export_binary(uint8_t *buf, uint32_t capacity, uint32_t *out_len) {
+    asx_trace_state *t = trace_bridge();
     uint32_t count;
     uint32_t needed;
     uint64_t first_seq;
@@ -668,8 +719,8 @@ asx_status asx_trace_export_binary(uint8_t *buf, uint32_t capacity, uint32_t *ou
 
     if (buf == NULL || out_len == NULL) return ASX_E_INVALID_ARGUMENT;
 
-    count = trace_retained();
-    first_seq = trace_first_retained_seq();
+    count = trace_retained(t);
+    first_seq = trace_first_retained_seq(t);
 
     needed = ASX_TRACE_BINARY_HEADER + count * ASX_TRACE_BINARY_EVENT;
     if (capacity < needed) {
@@ -683,14 +734,14 @@ asx_status asx_trace_export_binary(uint8_t *buf, uint32_t capacity, uint32_t *ou
     write_le32(buf + 4, ASX_TRACE_BINARY_VERSION);
     write_le32(buf + 8, count);
     write_le32(buf + 12, first_seq > 0u ? ASX_TRACE_BINARY_FLAG_TRUNCATED : 0u);
-    write_le64(buf + 16, trace_digest_now());
-    write_le64(buf + 24, g_trace_emitted);
+    write_le64(buf + 16, trace_digest_now(t));
+    write_le64(buf + 24, t->emitted);
 
     /* Write events, oldest retained first */
     p = buf + ASX_TRACE_BINARY_HEADER;
     for (i = 0; i < count; i++) {
         /* ASX_CHECKPOINT_WAIVER("bounded by ASX_TRACE_CAPACITY retained events") */
-        const asx_trace_event *e = &g_trace_ring[(first_seq + i) % ASX_TRACE_CAPACITY];
+        const asx_trace_event *e = &t->ring[(first_seq + i) % ASX_TRACE_CAPACITY];
         write_le32(p + 0, e->sequence);
         write_le32(p + 4, (uint32_t)e->kind);
         write_le64(p + 8, e->entity_id);

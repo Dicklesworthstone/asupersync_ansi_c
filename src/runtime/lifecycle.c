@@ -136,8 +136,11 @@ void asx_runtime_clear_internal(asx_kernel *k) {
     asx_scheduler_reset_internal(k);
     asx_cancel_reset_internal(k->tag);
     asx_region_finalizers_reset_internal(k);
-    if (asx_kernel_other_held(k)) return; /* the subsystems below are process-wide */
-    asx_ghost_reset();
+    if (asx_kernel_other_held(k)) { /* the subsystems below are process-wide */
+        asx_trace_reset_internal(k);
+        return;
+    }
+    asx_ghost_reset_run(); /* the sealed determinism reference survives the reset */
     asx_scheduler_event_reset();
     asx_lab_dispatch_reset_internal();
     /* Before the primitives: every wait queue is empty afterwards. */
@@ -156,7 +159,7 @@ void asx_runtime_clear_internal(asx_kernel *k) {
 #if ASX_HAS_BLOCKING_SURFACE
     asx_blocking_pool_reset();
 #endif
-    asx_trace_reset();
+    asx_trace_reset_internal(k);
     asx_telemetry_reset();
     asx_hindsight_reset();
     asx_adapter_reset_all();
@@ -529,11 +532,11 @@ static int obligation_leak_apply(asx_kernel *k, uint32_t idx, asx_leak_response 
         o->abort_reason = ASX_OBLIGATION_ABORT_ERROR;
         asx_ghost_obligation_resolved(oid);
         (void)asx_event_emit(ASX_EVENT_OBLIGATION_ABORT, oid, 0u, ASX_OK);
-        asx_trace_emit(ASX_TRACE_OBLIGATION_ABORT, oid, 0);
+        asx_trace_emit_internal(k, ASX_TRACE_OBLIGATION_ABORT, oid, 0);
         return 0;
     }
     o->state = ASX_OBLIGATION_LEAKED;
-    asx_trace_emit(ASX_TRACE_OBLIGATION_LEAK, oid, 0);
+    asx_trace_emit_internal(k, ASX_TRACE_OBLIGATION_LEAK, oid, 0);
     return policy == ASX_LEAK_PANIC;
 }
 
@@ -915,7 +918,7 @@ static asx_status region_open_with_parent(asx_kernel *k, asx_region_id parent,
                               asx_handle_pack_index(k->regions[idx].generation, (uint16_t)idx));
 
     (void)asx_event_emit(ASX_EVENT_REGION_OPEN, *out_id, 0u, ASX_OK);
-    asx_trace_emit(ASX_TRACE_REGION_OPEN, *out_id, 0);
+    asx_trace_emit_internal(k, ASX_TRACE_REGION_OPEN, *out_id, 0);
     return ASX_OK;
 }
 
@@ -1118,7 +1121,7 @@ asx_status asx_region_close(asx_region_id id) {
 
     r->state = ASX_REGION_CLOSING;
     (void)asx_event_emit(ASX_EVENT_REGION_CLOSE, id, 0u, ASX_OK);
-    asx_trace_emit(ASX_TRACE_REGION_CLOSE, id, 0);
+    asx_trace_emit_internal(asx_kernel_of(id), ASX_TRACE_REGION_CLOSE, id, 0);
     return ASX_OK;
 }
 
@@ -1397,7 +1400,7 @@ static asx_status task_spawn_impl(asx_region_id region, asx_task_poll_fn poll_fn
     /* A deferred spawn is traced when it is admitted, as Rust records its
      * Spawn event at admission (runtime/state.rs:1119); a refused one
      * never is. */
-    if (!deferred) asx_trace_emit(ASX_TRACE_TASK_SPAWN, *out_id, (uint64_t)region);
+    if (!deferred) asx_trace_emit_internal(k, ASX_TRACE_TASK_SPAWN, *out_id, (uint64_t)region);
     return ASX_OK;
 }
 
@@ -1692,7 +1695,8 @@ static void obligation_apply_reserve(asx_kernel *k, uint32_t idx,
     asx_ghost_obligation_reserved(id, region);
     (void)asx_event_emit(ASX_EVENT_OBLIGATION_CREATE, id, (uint64_t)region, ASX_OK);
     payload.obligation = original;
-    asx_trace_emit_payload_internal(ASX_TRACE_OBLIGATION_RESERVE, id, (uint64_t)region, &payload);
+    asx_trace_emit_payload_internal(k, ASX_TRACE_OBLIGATION_RESERVE, id, (uint64_t)region,
+                                    &payload);
 }
 
 static void obligation_apply_resolution(asx_kernel *k, uint32_t idx, asx_obligation_state to) {
@@ -1702,10 +1706,10 @@ static void obligation_apply_resolution(asx_kernel *k, uint32_t idx, asx_obligat
     asx_ghost_obligation_resolved(id);
     if (to == ASX_OBLIGATION_COMMITTED) {
         (void)asx_event_emit(ASX_EVENT_OBLIGATION_COMMIT, id, 0u, ASX_OK);
-        asx_trace_emit(ASX_TRACE_OBLIGATION_COMMIT, id, 0);
+        asx_trace_emit_internal(k, ASX_TRACE_OBLIGATION_COMMIT, id, 0);
     } else {
         (void)asx_event_emit(ASX_EVENT_OBLIGATION_ABORT, id, 0u, ASX_OK);
-        asx_trace_emit(ASX_TRACE_OBLIGATION_ABORT, id, 0);
+        asx_trace_emit_internal(k, ASX_TRACE_OBLIGATION_ABORT, id, 0);
     }
 }
 
@@ -1779,7 +1783,7 @@ void asx_obligation_drain_posts_internal(asx_kernel *k) {
         case OB_POST_HANDOFF: {
             asx_trace_payload payload = {0};
             payload.handoff = &p->handoff;
-            asx_trace_emit_payload_internal(ASX_TRACE_OBLIGATION_HANDOFF,
+            asx_trace_emit_payload_internal(k, ASX_TRACE_OBLIGATION_HANDOFF,
                                             obligation_handle(k, p->idx), p->handoff.to_task,
                                             &payload);
             break;
@@ -2168,7 +2172,7 @@ asx_status asx_obligation_handoff(asx_obligation_id id, asx_task_id destination)
         obligation_post(k, OB_POST_HANDOFF, idx);
         k->ob_posts[k->ob_post_n - 1u].handoff = handoff;
     } else {
-        asx_trace_emit_payload_internal(ASX_TRACE_OBLIGATION_HANDOFF, id, destination, &payload);
+        asx_trace_emit_payload_internal(k, ASX_TRACE_OBLIGATION_HANDOFF, id, destination, &payload);
     }
     /* Releasing a source region's final credit may permit its close. */
     if (asx_handle_index(source_region) != asx_handle_index(o->region) && !obligation_posting()) {

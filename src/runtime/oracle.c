@@ -526,12 +526,13 @@ static asx_oracle_result check_region_leak(const asx_kernel *k) {
 
 /* The retained trace index of the first region.cancelled event of `region`,
  * or UINT32_MAX when the ring holds none. */
-static uint32_t first_region_cancelled_event(uint32_t events, asx_region_id region) {
+static uint32_t first_region_cancelled_event(const asx_kernel *k, uint32_t events,
+                                             asx_region_id region) {
     uint32_t i;
     for (i = 0; i < events; i++) {
         asx_trace_event e;
         /* ASX_CHECKPOINT_WAIVER("bounded: events <= ASX_TRACE_CAPACITY") */
-        if (asx_trace_event_get(i, &e) == 0) break;
+        if (asx_trace_event_get_internal(k, i, &e) == 0) break;
         if (e.kind == ASX_TRACE_REGION_CANCELLED && e.entity_id == region) return i;
     }
     return UINT32_MAX;
@@ -551,8 +552,8 @@ static uint32_t first_region_cancelled_event(uint32_t events, asx_region_id regi
 static asx_oracle_result check_cancel_signal_ordering(const asx_kernel *k) {
     uint32_t orphaned = 0;
     uint32_t reordered = 0;
-    uint32_t events = asx_trace_event_count();
-    int ring_whole = asx_trace_dropped() == 0u;
+    uint32_t events = asx_trace_event_count_internal(k);
+    int ring_whole = asx_trace_dropped_internal(k) == 0u;
     uint32_t i;
     for (i = 0; i < k->region_count; i++) {
         const asx_region_slot *r = &k->regions[i];
@@ -567,8 +568,8 @@ static asx_oracle_result check_cancel_signal_ordering(const asx_kernel *k) {
         }
         if (ring_whole) {
             uint32_t at_child =
-                first_region_cancelled_event(events, asx_region_handle_for_slot(k, i));
-            uint32_t at_parent = first_region_cancelled_event(events, r->parent_id);
+                first_region_cancelled_event(k, events, asx_region_handle_for_slot(k, i));
+            uint32_t at_parent = first_region_cancelled_event(k, events, r->parent_id);
             if (at_child != UINT32_MAX && at_parent > at_child) reordered++;
         }
     }
@@ -691,12 +692,11 @@ static asx_oracle_result check_down_order(const asx_kernel *k) {
 static asx_oracle_result check_reply_linearity(const asx_kernel *k) {
     uint16_t gen[ASX_MAX_OBLIGATIONS];
     uint8_t seen[ASX_MAX_OBLIGATIONS]; /* 0 none, 1 reserved, 2 resolved */
-    uint32_t events = asx_trace_event_count();
-    int ring_whole = asx_trace_dropped() == 0u;
+    uint32_t events = asx_trace_event_count_internal(k);
+    int ring_whole = asx_trace_dropped_internal(k) == 0u;
     uint32_t twice = 0;
     uint32_t unreserved = 0;
     uint32_t i;
-    (void)k;
     memset(gen, 0, sizeof(gen));
     memset(seen, 0, sizeof(seen));
     for (i = 0; i < events; i++) {
@@ -704,7 +704,7 @@ static asx_oracle_result check_reply_linearity(const asx_kernel *k) {
         uint32_t slot;
         uint16_t g;
         /* ASX_CHECKPOINT_WAIVER("bounded: events <= ASX_TRACE_CAPACITY") */
-        if (asx_trace_event_get(i, &e) == 0) break;
+        if (asx_trace_event_get_internal(k, i, &e) == 0) break;
         if (e.kind != ASX_TRACE_OBLIGATION_RESERVE && e.kind != ASX_TRACE_OBLIGATION_COMMIT &&
             e.kind != ASX_TRACE_OBLIGATION_ABORT && e.kind != ASX_TRACE_OBLIGATION_LEAK) {
             continue;

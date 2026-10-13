@@ -905,9 +905,9 @@ asx_status asx_lab_admit_pending(void) {
          * Spawn event (state.rs:1119). */
         t->member_seq = asx_task_next_member_seq_internal(lab_kernel());
         asx_lab_arm_budget_deadline_internal(t);
-        asx_trace_emit(ASX_TRACE_TASK_SPAWN,
-                       (uint64_t)asx_task_handle_for_slot(lab_kernel(), g_lab_admit[i]),
-                       (uint64_t)t->region);
+        asx_trace_emit_internal(lab_kernel(), ASX_TRACE_TASK_SPAWN,
+                                (uint64_t)asx_task_handle_for_slot(lab_kernel(), g_lab_admit[i]),
+                                (uint64_t)t->region);
         {
             /* Aborted before admission: admission hands the first lane
              * publication to one abort command carrying the strongest
@@ -1985,8 +1985,8 @@ static void lab_futurelock_emit_sink(void *ctx, const asx_futurelock *f) {
     asx_trace_payload payload = {0};
     (void)ctx;
     payload.futurelock = f;
-    asx_trace_emit_payload_internal(ASX_TRACE_LAB_FUTURELOCK, (uint64_t)f->task, f->idle_steps,
-                                    &payload);
+    asx_trace_emit_payload_internal(asx_kernel_of(f->task), ASX_TRACE_LAB_FUTURELOCK,
+                                    (uint64_t)f->task, f->idle_steps, &payload);
 }
 
 asx_status asx_lab_set_futurelock_check(uint64_t max_idle_steps) {

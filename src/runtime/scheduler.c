@@ -159,9 +159,9 @@ void asx_task_timer_disarm_internal(asx_task_slot *task) {
     /* A sleep timer that never fired is dropped with its task (Rust: the
      * Sleep future is dropped, TimerCancelled). */
     if (task->traced_deadline != 0u) {
-        asx_trace_emit(ASX_TRACE_TIMER_CANCEL,
-                       (uint64_t)asx_task_handle_for_slot(k, (uint32_t)(task - k->tasks)),
-                       task->traced_deadline);
+        asx_trace_emit_internal(k, ASX_TRACE_TIMER_CANCEL,
+                                (uint64_t)asx_task_handle_for_slot(k, (uint32_t)(task - k->tasks)),
+                                task->traced_deadline);
         task->traced_deadline = 0u;
     }
     wake_timer_disarm(k, task);
@@ -541,11 +541,12 @@ static void sched_trace_sleep_timer(asx_task_id self, asx_task_slot *t, asx_time
      * Rust Sleep does (sleep.rs:985-988). */
     if (t->traced_deadline != deadline) {
         if (t->traced_deadline != 0u) {
-            asx_trace_emit(ASX_TRACE_TIMER_CANCEL, (uint64_t)self, t->traced_deadline);
+            asx_trace_emit_internal(asx_kernel_of(self), ASX_TRACE_TIMER_CANCEL, (uint64_t)self,
+                                    t->traced_deadline);
         }
         t->traced_deadline = deadline;
         t->traced_waker_epoch = t->lab_waker_epoch;
-        asx_trace_emit(ASX_TRACE_TIMER_SET, (uint64_t)self, deadline);
+        asx_trace_emit_internal(asx_kernel_of(self), ASX_TRACE_TIMER_SET, (uint64_t)self, deadline);
     } else if ((t->timer_partial && !t->timer_armed && sched_now(asx_kernel_of(self)) < deadline) ||
                (asx_lab_dispatch_active() && t->traced_waker_epoch != t->lab_waker_epoch)) {
         /* Two cases register the sleep afresh, behind the timers already
@@ -560,8 +561,10 @@ static void sched_trace_sleep_timer(asx_task_id self, asx_task_slot *t, asx_time
         asx_trace_payload rearm = {0};
         rearm.text = "rearm";
         rearm.reason = NULL;
-        asx_trace_emit(ASX_TRACE_TIMER_CANCEL, (uint64_t)self, deadline);
-        asx_trace_emit_payload_internal(ASX_TRACE_TIMER_SET, (uint64_t)self, deadline, &rearm);
+        asx_trace_emit_internal(asx_kernel_of(self), ASX_TRACE_TIMER_CANCEL, (uint64_t)self,
+                                deadline);
+        asx_trace_emit_payload_internal(asx_kernel_of(self), ASX_TRACE_TIMER_SET, (uint64_t)self,
+                                        deadline, &rearm);
         t->traced_waker_epoch = t->lab_waker_epoch;
         t->timer_partial = 0u;
         wake_timer_disarm(asx_kernel_of(self), t);
@@ -603,7 +606,8 @@ asx_status asx_task_cancel_timer(asx_task_id self) {
      * cancel_active_registration, TimerCancelled), whether or not its timer
      * already woke it. */
     if (t->traced_deadline != 0u) {
-        asx_trace_emit(ASX_TRACE_TIMER_CANCEL, (uint64_t)self, t->traced_deadline);
+        asx_trace_emit_internal(asx_kernel_of(self), ASX_TRACE_TIMER_CANCEL, (uint64_t)self,
+                                t->traced_deadline);
         t->traced_deadline = 0u;
     }
     wake_timer_disarm(asx_kernel_of(self), t);
@@ -618,7 +622,8 @@ asx_status asx_task_complete_timer(asx_task_id self) {
      * complete_ready_registration, TimerFired). A sleep that never
      * registered (ready at its first poll) records nothing. */
     if (t->traced_deadline != 0u) {
-        asx_trace_emit(ASX_TRACE_TIMER_FIRE, (uint64_t)self, t->traced_deadline);
+        asx_trace_emit_internal(asx_kernel_of(self), ASX_TRACE_TIMER_FIRE, (uint64_t)self,
+                                t->traced_deadline);
         t->traced_deadline = 0u;
     }
     wake_timer_disarm(asx_kernel_of(self), t);
@@ -759,12 +764,12 @@ static asx_status sched_complete(asx_task_slot *t, asx_task_id tid, asx_region_s
     asx_task_complete_cx_reason_internal(t);
     if (asx_lab_dispatch_active()) asx_lab_task_retired_internal(t);
     if (t->cancel_pending) sched_cancel_phase_complete(t);
-    asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)tid,
-                   asx_trace_task_transition_aux(from, ASX_TASK_COMPLETED));
+    asx_trace_emit_internal(asx_kernel_of(tid), ASX_TRACE_TASK_TRANSITION, (uint64_t)tid,
+                            asx_trace_task_transition_aux(from, ASX_TASK_COMPLETED));
     t->outcome = asx_outcome_make(severity);
     asx_task_on_complete_internal(t, rslot);
     sched_emit(ev, tid, round);
-    asx_trace_emit(ASX_TRACE_SCHED_COMPLETE, (uint64_t)tid, round);
+    asx_trace_emit_internal(asx_kernel_of(tid), ASX_TRACE_SCHED_COMPLETE, (uint64_t)tid, round);
     asx_region_settle_internal(region);
     return asx_runtime_take_pending_fault_internal(asx_kernel_of(region));
 }
@@ -820,8 +825,8 @@ static asx_status sched_transition(asx_task_slot *t, asx_task_id tid, asx_task_s
     t->cancel_phase = phase;
     w_st_ = asx_cancel_witness_advance(t->cancel_witness, phase);
     (void)w_st_;
-    asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)tid,
-                   asx_trace_task_transition_aux(from, to));
+    asx_trace_emit_internal(asx_kernel_of(tid), ASX_TRACE_TASK_TRANSITION, (uint64_t)tid,
+                            asx_trace_task_transition_aux(from, to));
     return ASX_OK;
 }
 
@@ -1069,13 +1074,13 @@ static asx_status sched_poll_slot(asx_kernel *k, uint32_t i, asx_region_slot *rs
         asx_task_state from = t->state;
         st = asx_task_set_state_internal(t, tid, ASX_TASK_RUNNING);
         if (st != ASX_OK) return st;
-        asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)tid,
-                       asx_trace_task_transition_aux(from, ASX_TASK_RUNNING));
+        asx_trace_emit_internal(k, ASX_TRACE_TASK_TRANSITION, (uint64_t)tid,
+                                asx_trace_task_transition_aux(from, ASX_TASK_RUNNING));
     }
 
     /* Emit poll event */
     sched_emit(ASX_SCHED_EVENT_POLL, tid, round);
-    asx_trace_emit(ASX_TRACE_SCHED_POLL, (uint64_t)tid, round);
+    asx_trace_emit_internal(k, ASX_TRACE_SCHED_POLL, (uint64_t)tid, round);
 
     /* The waker of this poll: a new one on the first poll or when the
      * priority changed since the last poll (LR:4686-4692). */
@@ -1316,7 +1321,7 @@ static asx_status sched_lab_run(asx_kernel *k, asx_budget *budget, int advance_c
             asx_lab_deferred_cancels_pending()) {
             if (asx_budget_consume_poll(budget) == 0) {
                 sched_emit(ASX_SCHED_EVENT_BUDGET, ASX_INVALID_ID, step);
-                asx_trace_emit(ASX_TRACE_SCHED_BUDGET, ASX_INVALID_ID, step);
+                asx_trace_emit_internal(k, ASX_TRACE_SCHED_BUDGET, ASX_INVALID_ID, step);
                 return ASX_E_POLL_BUDGET_EXHAUSTED;
             }
             st = sched_lab_step(k, step++, &dispatched);
@@ -1330,7 +1335,7 @@ static asx_status sched_lab_run(asx_kernel *k, asx_budget *budget, int advance_c
         }
         if (sched_live_tasks(k) == 0u && !asx_region_finalizers_pending_internal(k)) {
             sched_emit(ASX_SCHED_EVENT_QUIESCENT, ASX_INVALID_ID, step);
-            asx_trace_emit(ASX_TRACE_SCHED_QUIESCENT, ASX_INVALID_ID, step);
+            asx_trace_emit_internal(k, ASX_TRACE_SCHED_QUIESCENT, ASX_INVALID_ID, step);
             return ASX_OK;
         }
         has_timer = asx_scheduler_next_timer_internal(k, &next);
@@ -1559,19 +1564,19 @@ static asx_status sched_run(asx_region_id region, asx_budget *budget, int advanc
 
         ASX_CHECKPOINT_WAIVER("kernel-scheduler: this IS the scheduler event loop; "
                               "budget exhaustion provides bounded termination");
-        asx_trace_emit(ASX_TRACE_SCHED_ROUND, ASX_INVALID_ID, round);
+        asx_trace_emit_internal(k, ASX_TRACE_SCHED_ROUND, ASX_INVALID_ID, round);
         if (asx_replay_stop_run_internal()) return ASX_E_REPLAY_MISMATCH; /* replay failed */
         /* Check budget exhaustion */
         if (asx_budget_is_exhausted(budget)) {
             sched_emit(ASX_SCHED_EVENT_BUDGET, ASX_INVALID_ID, round);
-            asx_trace_emit(ASX_TRACE_SCHED_BUDGET, ASX_INVALID_ID, round);
+            asx_trace_emit_internal(k, ASX_TRACE_SCHED_BUDGET, ASX_INVALID_ID, round);
             return ASX_E_POLL_BUDGET_EXHAUSTED;
         }
 
         /* The run budget's deadline bounds the whole run, reactor waits included. */
         if (asx_budget_is_past_deadline(budget, sched_now(k))) {
             sched_emit(ASX_SCHED_EVENT_BUDGET, ASX_INVALID_ID, round);
-            asx_trace_emit(ASX_TRACE_SCHED_BUDGET, ASX_INVALID_ID, round);
+            asx_trace_emit_internal(k, ASX_TRACE_SCHED_BUDGET, ASX_INVALID_ID, round);
             return ASX_E_TIMED_OUT;
         }
 
@@ -1654,7 +1659,7 @@ static asx_status sched_run(asx_region_id region, asx_budget *budget, int advanc
             /* Consume one poll unit */
             if (asx_budget_consume_poll(budget) == 0) {
                 sched_emit(ASX_SCHED_EVENT_BUDGET, ASX_INVALID_ID, round);
-                asx_trace_emit(ASX_TRACE_SCHED_BUDGET, ASX_INVALID_ID, round);
+                asx_trace_emit_internal(k, ASX_TRACE_SCHED_BUDGET, ASX_INVALID_ID, round);
                 return ASX_E_POLL_BUDGET_EXHAUSTED;
             }
 
@@ -1678,7 +1683,7 @@ static asx_status sched_run(asx_region_id region, asx_budget *budget, int advanc
         if (active == 0 && asx_region_admit_finalizers_internal(k) > 0u) continue;
         if (active == 0) {
             sched_emit(ASX_SCHED_EVENT_QUIESCENT, ASX_INVALID_ID, round);
-            asx_trace_emit(ASX_TRACE_SCHED_QUIESCENT, ASX_INVALID_ID, round);
+            asx_trace_emit_internal(k, ASX_TRACE_SCHED_QUIESCENT, ASX_INVALID_ID, round);
             return ASX_OK;
         }
 

@@ -28,8 +28,8 @@ static uint64_t splitmix64(uint64_t *state) {
 
 /* Scheduler polls since `polls_before` (an earlier asx_trace_kind_total
  * reading). Exact even when the trace ring has wrapped. */
-static uint32_t lab_trace_count_scheduler_polls(uint64_t polls_before) {
-    uint64_t polls = asx_trace_kind_total(ASX_TRACE_SCHED_POLL);
+static uint32_t lab_trace_count_scheduler_polls(const asx_kernel *k, uint64_t polls_before) {
+    uint64_t polls = asx_trace_kind_total_internal(k, ASX_TRACE_SCHED_POLL);
     if (polls < polls_before) return 0u; /* trace was reset mid-step */
     polls -= polls_before;
     return polls > (uint64_t)UINT32_MAX ? UINT32_MAX : (uint32_t)polls;
@@ -244,9 +244,9 @@ asx_status asx_lab_run_scenario(asx_lab *lab, const asx_lab_scenario *scenario,
             return ASX_E_INVALID_STATE;
         }
 
-        polls_before = asx_trace_kind_total(ASX_TRACE_SCHED_POLL);
+        polls_before = asx_trace_kind_total_internal(lab_runtime_kernel(lab), ASX_TRACE_SCHED_POLL);
         st = scenario->steps[i](lab, scenario->step_data[i]);
-        step_polls = lab_trace_count_scheduler_polls(polls_before);
+        step_polls = lab_trace_count_scheduler_polls(lab_runtime_kernel(lab), polls_before);
         out_result->polls_total += (uint64_t)step_polls;
         out_result->steps_completed++;
         if (st == ASX_OK && step_polls > lab->config.max_polls) {

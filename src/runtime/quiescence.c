@@ -272,7 +272,7 @@ static asx_status asx_region_finalize_one(asx_region_id id, asx_region_slot *r) 
         if (st != ASX_OK) return st;
         asx_region_finalizing_leave_internal(id);
         asx_region_unlink_from_parent(id, r);
-        asx_trace_emit(ASX_TRACE_REGION_CLOSED, id, 0);
+        asx_trace_emit_internal(asx_kernel_of(id), ASX_TRACE_REGION_CLOSED, id, 0);
         asx_region_wake_close_waiters_internal(id);
     }
 

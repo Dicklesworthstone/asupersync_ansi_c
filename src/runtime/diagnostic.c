@@ -133,9 +133,9 @@ asx_status asx_inspect(const asx_runtime *rt, asx_inspection_report *out) {
     out->blocking.peak_count = out->blocking.active_count;
 
     /* Trace */
-    out->trace.event_count = initialized ? asx_trace_event_count() : 0u;
+    out->trace.event_count = initialized ? asx_trace_event_count_internal(k) : 0u;
     out->trace.capacity = ASX_TRACE_CAPACITY;
-    out->trace.digest = initialized ? asx_trace_digest() : 0u;
+    out->trace.digest = initialized ? asx_trace_digest_internal(asx_kernel_for_tag(rt->tag)) : 0u;
 
     /* Error ledger — summarize across all tasks */
     {

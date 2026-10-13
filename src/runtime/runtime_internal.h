@@ -10,12 +10,14 @@
 #ifndef ASX_RUNTIME_INTERNAL_H
 #define ASX_RUNTIME_INTERNAL_H
 
+#include "fnv_fold.h"
 #include <asx/asx_config.h>
 #include <asx/asx_ids.h>
 #include <asx/asx_status.h>
 #include <asx/core/cancel.h>
 #include <asx/core/cleanup.h>
 #include <asx/core/outcome.h>
+#include <asx/platform/atomics.h>
 #define ASX_INTERNAL_TIMER_WHEEL_ACCESS 1
 #include <asx/time/timer_wheel.h>
 #define ASX_INTERNAL_TRACE_FAMILY_ACCESS 1
@@ -338,6 +340,28 @@ typedef struct {
  * slots. *_live counts currently-allocated slots.
  * ------------------------------------------------------------------- */
 
+/* One runtime's trace: the ring of its most recent events, the rolling
+ * digest over every event emitted, the counters and the observer (trace.c
+ * owns the semantics). A zeroed trace is a reset one: `started` is set by
+ * the first record or reset, which seeds the digest. */
+#define ASX_TRACE_KIND_SLOTS 0x61u
+
+typedef struct {
+    asx_trace_event ring[ASX_TRACE_CAPACITY];
+    uint64_t emitted;
+    /* [0, folded) are in the digest; [folded, emitted) are unfolded, in the ring */
+    uint64_t folded;
+    asx_fnv_fold digest;
+    uint64_t kind_totals[ASX_TRACE_KIND_SLOTS];
+    asx_trace_observer_fn observer;
+    void *observer_ctx;
+    int observing; /* guards against an observer that emits */
+    int started;
+#if !ASX_LOCKFREE_SINGLE_THREAD
+    asx_atomic_u32 lock; /* live builds emit from several threads */
+#endif
+} asx_trace_state;
+
 /* Rust's obligation mailbox (bd-2fga): under lab dispatch a Cx's
  * obligation operations made inside a poll are posts, applied in order
  * when the poll returns (lab/runtime.rs:4797-4808). */
@@ -414,6 +438,8 @@ typedef struct asx_kernel {
     asx_timer_wheel wheel;
     tw_entry wheel_entries[TW_RUNTIME_CAPACITY];
     uint16_t wheel_overflow[TW_RUNTIME_CAPACITY];
+    /* The runtime's trace: ring, digest, counters, observer. */
+    asx_trace_state trace;
     uint32_t rt_generation; /* nonzero while an initialized runtime holds it */
     uint16_t tag;           /* its index in g_kernels; stamped on its handles */
 } asx_kernel;
@@ -617,9 +643,24 @@ void asx_kernel_clock_reset_internal(asx_kernel *k);
  * or Closed region. Defined in quiescence.c. */
 void asx_region_advance_internal(asx_region_id id);
 
-/* Emit an event whose observer call carries `payload` (trace.c). */
-void asx_trace_emit_payload_internal(asx_trace_event_kind kind, uint64_t entity_id, uint64_t aux,
-                                     const asx_trace_payload *payload);
+/* The trace of kernel `k` (trace.c). The public handle-less trace API
+ * (asx_trace_emit, asx_trace_digest, the getters, the observer, reset) is
+ * kernel 0's. Emit an event into k's ring (NULL: kernel 0, for an entity
+ * whose handle no runtime holds); the payload variant's observer call
+ * carries `payload`. */
+void asx_trace_emit_internal(asx_kernel *k, asx_trace_event_kind kind, uint64_t entity_id,
+                             uint64_t aux);
+void asx_trace_emit_payload_internal(asx_kernel *k, asx_trace_event_kind kind, uint64_t entity_id,
+                                     uint64_t aux, const asx_trace_payload *payload);
+uint32_t asx_trace_event_count_internal(const asx_kernel *k);
+uint64_t asx_trace_emitted_total_internal(const asx_kernel *k);
+uint64_t asx_trace_dropped_internal(const asx_kernel *k);
+uint64_t asx_trace_kind_total_internal(const asx_kernel *k, asx_trace_event_kind kind);
+int asx_trace_event_get_internal(const asx_kernel *k, uint32_t index, asx_trace_event *out);
+int asx_trace_event_get_seq_internal(const asx_kernel *k, uint64_t seq, asx_trace_event *out);
+uint64_t asx_trace_digest_internal(asx_kernel *k);
+/* Restart k's trace: counters, digest and ring cursor (the observer stays). */
+void asx_trace_reset_internal(asx_kernel *k);
 
 /* The time a cancel reason is stamped with (runtime clock, else virtual). */
 asx_time asx_cancel_now_internal(const asx_kernel *k);

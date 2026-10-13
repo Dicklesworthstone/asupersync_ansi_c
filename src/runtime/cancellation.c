@@ -51,8 +51,8 @@ void asx_region_trace_cancel_of_gone_internal(asx_region_id region,
     asx_trace_payload payload = {0};
     payload.text = NULL;
     payload.reason = reason;
-    asx_trace_emit_payload_internal(ASX_TRACE_REGION_CANCELLED, region, (uint64_t)reason->kind,
-                                    &payload);
+    asx_trace_emit_payload_internal(asx_kernel_of(region), ASX_TRACE_REGION_CANCELLED, region,
+                                    (uint64_t)reason->kind, &payload);
 }
 
 asx_cancel_reason asx_region_close_reason_internal(void) {
@@ -131,8 +131,8 @@ asx_status asx_task_materialize_cancel_internal(asx_task_slot *t) {
         asx_task_state from = t->state;
         asx_status st = asx_task_set_state_internal(t, id, ASX_TASK_CANCEL_REQUESTED);
         if (st != ASX_OK) return st;
-        asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)id,
-                       asx_trace_task_transition_aux(from, ASX_TASK_CANCEL_REQUESTED));
+        asx_trace_emit_internal(asx_kernel_of(id), ASX_TRACE_TASK_TRANSITION, (uint64_t)id,
+                                asx_trace_task_transition_aux(from, ASX_TASK_CANCEL_REQUESTED));
     }
     t->cancel_unmaterialized = 0;
     t->cancel_epoch++;
@@ -290,8 +290,8 @@ asx_status asx_task_cancel_reason_internal(asx_task_id id, const asx_cancel_reas
         asx_task_state from = t->state;
         st = asx_task_set_state_internal(t, id, ASX_TASK_CANCEL_REQUESTED);
         if (st != ASX_OK) return st;
-        asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)id,
-                       asx_trace_task_transition_aux(from, ASX_TASK_CANCEL_REQUESTED));
+        asx_trace_emit_internal(asx_kernel_of(id), ASX_TRACE_TASK_TRANSITION, (uint64_t)id,
+                                asx_trace_task_transition_aux(from, ASX_TASK_CANCEL_REQUESTED));
     }
 
     t->cancel_pending = 1;
@@ -344,7 +344,7 @@ asx_status asx_task_cancel_reason_internal(asx_task_id id, const asx_cancel_reas
         asx_trace_payload payload = {0};
         payload.text = NULL;
         payload.reason = requested;
-        asx_trace_emit_payload_internal(ASX_TRACE_CANCEL_REQUEST, (uint64_t)id,
+        asx_trace_emit_payload_internal(asx_kernel_of(id), ASX_TRACE_CANCEL_REQUEST, (uint64_t)id,
                                         (uint64_t)requested->kind, &payload);
     }
 
@@ -556,7 +556,7 @@ asx_status asx_region_cancel(asx_region_id region, const asx_cancel_reason *reas
         }
         payload.text = NULL;
         payload.reason = &g_propagate_reasons[r];
-        asx_trace_emit_payload_internal(ASX_TRACE_REGION_CANCELLED, rid,
+        asx_trace_emit_payload_internal(k, ASX_TRACE_REGION_CANCELLED, rid,
                                         (uint64_t)g_propagate_reasons[r].kind, &payload);
 
         if (rs->state == ASX_REGION_CLOSED) continue;
@@ -569,7 +569,7 @@ asx_status asx_region_cancel(asx_region_id region, const asx_cancel_reason *reas
         if (rs->state == ASX_REGION_OPEN && !rs->poisoned) {
             (void)asx_ghost_check_region_transition(rid, rs->state, ASX_REGION_CLOSING);
             rs->state = ASX_REGION_CLOSING;
-            asx_trace_emit(ASX_TRACE_REGION_CLOSE, rid, 0);
+            asx_trace_emit_internal(k, ASX_TRACE_REGION_CLOSE, rid, 0);
         }
     }
 
@@ -713,8 +713,8 @@ asx_status asx_checkpoint(asx_task_id self, asx_checkpoint_result *out) {
                 asx_cancel_witness_advance(t->cancel_witness, ASX_CANCEL_PHASE_CANCELLING);
             (void)w_st_;
         }
-        asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)self,
-                       asx_trace_task_transition_aux(from, ASX_TASK_CANCELLING));
+        asx_trace_emit_internal(asx_kernel_of(self), ASX_TRACE_TASK_TRANSITION, (uint64_t)self,
+                                asx_trace_task_transition_aux(from, ASX_TASK_CANCELLING));
     }
 
     out->cancelled = 1;
@@ -806,8 +806,8 @@ asx_status asx_task_finalize(asx_task_id id) {
                 asx_cancel_witness_advance(t->cancel_witness, ASX_CANCEL_PHASE_FINALIZING);
             (void)w_st_;
         }
-        asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)id,
-                       asx_trace_task_transition_aux(from, ASX_TASK_FINALIZING));
+        asx_trace_emit_internal(asx_kernel_of(id), ASX_TRACE_TASK_TRANSITION, (uint64_t)id,
+                                asx_trace_task_transition_aux(from, ASX_TASK_FINALIZING));
     }
 
     return ASX_OK;

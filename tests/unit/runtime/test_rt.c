@@ -733,6 +733,78 @@ TEST(kernel_clock_and_entropy_belong_to_the_kernel) {
     asx_runtime_reset();
 }
 
+/* K18: a runtime's trace (ring, counters, digest) is its kernel's; the
+ * public handle-less trace API is kernel 0's. A zeroed kernel's trace is a
+ * reset one: empty, with the digest at the trace seed. */
+TEST(kernel_trace_belongs_to_the_kernel) {
+    const uint64_t seed = 0x517cc1b727220a95ULL; /* trace.c's digest seed */
+    asx_runtime rt;
+    asx_runtime_config cfg;
+    asx_runtime_hooks hooks;
+    asx_trace_event e;
+    uint64_t d0;
+
+    make_valid_config(&cfg);
+    make_valid_hooks(&hooks);
+    MUST_OK(asx_runtime_init(&rt, &cfg, &hooks));
+    asx_trace_reset_internal(g_kernels[0]);
+    ASSERT_EQ(asx_trace_digest_internal(g_kernels[0]), seed);
+    ASSERT_EQ(asx_trace_digest(), seed);
+
+    asx_trace_emit_internal(g_kernels[0], ASX_TRACE_USER, 11u, 22u);
+    asx_trace_emit(ASX_TRACE_USER, 33u, 44u); /* the public call: kernel 0 */
+    ASSERT_EQ(asx_trace_emitted_total_internal(g_kernels[0]), (uint64_t)2);
+    ASSERT_EQ(asx_trace_emitted_total(), (uint64_t)2);
+    ASSERT_EQ(asx_trace_kind_total_internal(g_kernels[0], ASX_TRACE_USER), (uint64_t)2);
+    ASSERT_EQ(asx_trace_event_get_internal(g_kernels[0], 1u, &e), 1);
+    ASSERT_EQ(e.entity_id, (uint64_t)33);
+    d0 = asx_trace_digest_internal(g_kernels[0]);
+    ASSERT_TRUE(d0 != seed);
+
+#if ASX_MAX_RUNTIMES >= 2u
+    {
+        storage_block blk2;
+        asx_kernel *k2;
+
+        ASSERT_TRUE(storage_block_make(&blk2, 0u));
+        k2 = (asx_kernel *)(void *)blk2.block;
+        k2->tag = 1u;
+        k2->rt_generation = 9u;
+        g_kernels[1] = k2;
+
+        /* A zeroed kernel's trace is empty at the seed. */
+        ASSERT_EQ(asx_trace_emitted_total_internal(k2), (uint64_t)0);
+        ASSERT_EQ(asx_trace_digest_internal(k2), seed);
+
+        /* Events land in the kernel named, and in no other. */
+        asx_trace_emit_internal(k2, ASX_TRACE_USER, 11u, 22u);
+        ASSERT_EQ(asx_trace_emitted_total_internal(k2), (uint64_t)1);
+        ASSERT_EQ(asx_trace_emitted_total_internal(g_kernels[0]), (uint64_t)2);
+        ASSERT_EQ(asx_trace_digest_internal(g_kernels[0]), d0);
+        ASSERT_TRUE(asx_trace_digest_internal(k2) != seed);
+        ASSERT_TRUE(asx_trace_digest_internal(k2) != d0);
+
+        /* The same events in the same order give the same digest in any
+         * kernel: the first event of kernel 0 and kernel 2's agree. */
+        asx_trace_reset_internal(k2);
+        asx_trace_reset_internal(g_kernels[0]);
+        asx_trace_emit_internal(k2, ASX_TRACE_USER, 5u, 6u);
+        asx_trace_emit_internal(g_kernels[0], ASX_TRACE_USER, 5u, 6u);
+        ASSERT_EQ(asx_trace_digest_internal(k2), asx_trace_digest_internal(g_kernels[0]));
+
+        /* Resetting one leaves the other. */
+        asx_trace_reset_internal(k2);
+        ASSERT_EQ(asx_trace_emitted_total_internal(k2), (uint64_t)0);
+        ASSERT_EQ(asx_trace_emitted_total_internal(g_kernels[0]), (uint64_t)1);
+
+        g_kernels[1] = NULL;
+        storage_block_free(&blk2);
+    }
+#endif
+    asx_runtime_shutdown(&rt);
+    asx_runtime_reset();
+}
+
 TEST(runtime_storage_refusals_bind_nothing_and_change_no_byte) {
     asx_runtime rt;
     asx_runtime before;
@@ -1936,6 +2008,7 @@ int main(void) {
     RUN_TEST(kernel_registry_names_only_the_kernels_runtimes_hold);
     RUN_TEST(kernel_clear_leaves_another_held_kernel_and_the_process_state_alone);
     RUN_TEST(kernel_clock_and_entropy_belong_to_the_kernel);
+    RUN_TEST(kernel_trace_belongs_to_the_kernel);
     RUN_TEST(runtime_storage_refusals_bind_nothing_and_change_no_byte);
     RUN_TEST(refused_storage_init_preserves_the_live_runtime_and_the_block);
     RUN_TEST(runtimes_in_turn_in_their_own_blocks_do_not_share_arenas);
