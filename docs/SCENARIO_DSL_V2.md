@@ -655,6 +655,40 @@ event kind is involved. A
 server's handler runs only if the server runs: a cancelled server drops its
 system lane, as it does its mailbox (§3.8).
 
+### 3.11 Links
+
+A task, or a GenServer, links itself with another task (`link.rs`,
+`gen_server.rs`): when either finishes abnormally (a runtime error, a
+cancellation or a panic) the runtime requests cancellation of the other, or,
+on a trapping link, tells the holder and lets it run on. A declared task's or
+a spawned child's `err` return is a value and a normal exit (§3.1, `return`),
+so an abnormal exit here is a panic, a cancellation or a supervised child's
+error. A request is a command
+of the region-command lane like a monitor's (§3.10, `WatchCommand::Link`,
+`monitor.rs:1338`), so a `link` or `server_link` step takes at least one
+scheduler step. The side that makes the link, the holder, propagates
+(`link`) or traps (`link_trapping`); the peer's side always propagates
+(`monitor.rs:1368`). An exit (`TaskWatches::on_task_completed`,
+`monitor.rs:1386`) fires the task's monitors first (§3.10). Then a normal
+exit signals only the trapping holders, and an abnormal one signals each
+trapping holder and cancels each propagating side with a `LinkedExit` reason
+(the message "link exit", with the exiting task's own cancel reason as its
+cause), in the order of the receiver's task identity and then the link
+reference (EXIT-ORDER); signals are delivered before cancels. Then every
+link of the task ends, and the handles it held go with it.
+
+| op | Fields | Rust | C | Observation |
+|---|---|---|---|---|
+| `link`, `link_trapping` | `task` (a task name), `as` (the link's name) | `cx.link(peer).await`, `cx.link_trapping(peer).await` (`link.rs:915`, `:923`): `peer` is the task's handle when the harness holds one, else its id | `asx_link_open_poll` with `ASX_EXIT_PROPAGATE` / `ASX_EXIT_TRAP` until done | `ASX_OK` with no value: Rust's `LinkRef` is a process-wide counter, so its number is not comparable (a monitor's reference is, §3.10); `ASX_E_NOT_FOUND` when the peer is not live when the request is applied. A name is used once per task. |
+| `await_exit` | `link` (a `link_trapping`'s name) | `link.exit(&cx).await` (`link.rs:882`) | `asx_link_exit_poll` until done | until the peer finishes. `ASX_OK` with `{"from": <task name>, "reason": "normal" \| "error" \| "cancelled" \| "panicked"}`; `ASX_E_CANCELLED` when this task is cancelled first, checked after the stored signal. The same signal again on a later call. Only a trapping link can be awaited: on a propagating one Rust's wait ends in the holder's own cancellation, so it is a harness error on both sides. |
+| `unlink` | `link` | `link.unlink()` (`link.rs:891`): an Unlink command; the handle is consumed | `asx_unlink`, then `asx_link_release` | no. `ASX_OK`. The link is gone from the task's names; an exit after the command is applied acts on nothing. |
+| `server_link`, `server_link_trapping` | `server`, `task`, `as` | `handle.link(&cx, peer).await`, `handle.link_trapping(&cx, peer).await` (`gen_server.rs:1991`, `:2003`): the server's task holds the link | `asx_link_open_server_poll` until done | as `link`. A trapped exit reaches the server's `handle_info` through its system lane and is traced as `exit:reason=<kind> vt=<ns>` (§3.10); a propagating link cancels the server's task like any other. |
+| `server_unlink` | `server`, `link` (a `server_link`'s name) | `handle.unlink(&cx, ref)` (`gen_server.rs:2012`): an Unlink command | `asx_unlink` | no. `ASX_OK`. |
+
+`unlink` and `server_unlink` never suspend, so they are allowed inside
+`masked`; the others wait for the lane or for an exit. Linking a task with itself is one
+edge, as in Rust, and is covered by the C unit tests, not by a scenario.
+
 ## 4. Driver operations (`script`)
 
 Each entry is `{"at_ns": t, "op": {...}}`. It is applied after the run goes
