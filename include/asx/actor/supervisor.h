@@ -82,7 +82,13 @@
  * ASX_SUPERVISOR_ERR_REGISTRATION. A generation gives its name up when it
  * has been drained and its region closed, before a successor starts; the
  * name then goes to the first waiter. The registry is not touched by
- * anything else the supervisor does.
+ * anything else the supervisor does. Fail and Replace have Rust fixtures
+ * (DSL 3.8); Wait is covered by unit tests only, because the 1 ms grant
+ * checks are Sleeps made inside Rust's library whose Timer events a capture
+ * cannot attribute to a task. A controller boots its children one by one
+ * and handles a sibling's end only afterwards, so a Wait behind a sibling
+ * waits until the supervisor is cancelled or the name's deadline passes,
+ * as in Rust; it is meant for a name another supervisor or task holds.
  *
  * Not in the C model, with the reason for each:
  *   - shared restart domains: Rust attaches one only from its dynamic

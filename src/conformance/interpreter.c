@@ -286,6 +286,9 @@ typedef struct {
     int dropped;
     int region_named;
     it_sup_child children[ASX_SUPERVISOR_MAX_CHILDREN];
+    /* The registry of its children's names, as twin_run gives each
+     * supervisor one when a child registers (DSL §3.8). */
+    asx_name_registry registry;
 } it_supervisor;
 
 #define IT_MAX_SUPERVISORS ASX_MAX_SUPERVISORS
@@ -4275,6 +4278,29 @@ static int exec_supervisor(it_task *t, asx_task_id self, uint32_t step, uint32_t
             sv->children[i].sup = g_n_sups;
             asx_child_spec_init(&specs[i], sv->children[i].name, restart, it_start_generation,
                                 &sv->children[i]);
+            if (asx_json_get(g_in, c, "registration") != ASX_JSON_NONE) {
+                /* The name each generation takes in the supervisor's
+                 * registry (DSL 3.8); `wait` has no DSL form. */
+                uint32_t reg = asx_json_get(g_in, c, "registration");
+                const char *key = it_str(reg, "name");
+                const char *collision = it_str(reg, "collision");
+                if (key == NULL || collision == NULL ||
+                    (strcmp(collision, "fail") != 0 && strcmp(collision, "replace") != 0)) {
+                    it_fail_task(t, idx, "a registration needs a name and fail or replace");
+                    *out = STEP_END;
+                    return 1;
+                }
+                specs[i].registration_name = key;
+                specs[i].registration_collision = strcmp(collision, "replace") == 0
+                                                      ? ASX_NAME_COLLISION_REPLACE
+                                                      : ASX_NAME_COLLISION_FAIL;
+                if (asx_name_registry_init(&sv->registry) != ASX_OK) {
+                    it_fail_task(t, idx, "the supervisor's registry could not be made");
+                    *out = STEP_END;
+                    return 1;
+                }
+                cfg.registry = &sv->registry;
+            }
         }
         st = asx_supervisor_spawn(&sv->handle, t->region, &cfg, specs, n);
         if (st != ASX_OK) {

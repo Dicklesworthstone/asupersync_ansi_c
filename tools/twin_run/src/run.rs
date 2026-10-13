@@ -31,8 +31,8 @@ use asupersync::runtime::obligation_mailbox::ObligationToken;
 use asupersync::runtime::{JoinError, TaskHandle};
 use asupersync::supervision::{
     ChildSpec, EscalationPolicy, ManagedChildBinding, ManagedGeneration, ManagedRestartMode,
-    ManagedSupervisorError, ManagedSupervisorReport, RestartPolicy, SupervisionConfig,
-    SupervisorBuilder,
+    ManagedSupervisorError, ManagedSupervisorReport, NameCollisionPolicy, NameRegistrationPolicy,
+    RestartPolicy, SupervisionConfig, SupervisorBuilder,
 };
 use asupersync::sync as asx_sync;
 use asupersync::time::delay_queue::Key as DelayKey;
@@ -3060,6 +3060,7 @@ async fn exec_step(
                 .ok_or("supervise without children")?;
             let mut builder = SupervisorBuilder::new(name.clone()).with_restart_policy(policy);
             let mut bindings = Vec::with_capacity(children.len());
+            let mut registered = false;
             for child in children {
                 let child_name = str_field(child, "name")?.to_string();
                 let mode = match str_field(child, "mode")? {
@@ -3073,7 +3074,26 @@ async fn exec_step(
                     .and_then(Value::as_array)
                     .ok_or("supervised child without a program")?
                     .clone();
-                builder = builder.child(ChildSpec::new(child_name.clone(), unused_child_start));
+                let mut spec = ChildSpec::new(child_name.clone(), unused_child_start);
+                // `registration`: the name each of the child's generations
+                // takes in the supervisor's registry before its factory runs
+                // (DSL §3.8). `wait` has no DSL form: its 1 ms grant checks
+                // are Sleeps made inside the library, which this harness
+                // cannot name.
+                if let Some(registration) = child.get("registration") {
+                    let key = str_field(registration, "name")?.to_string();
+                    let collision = match str_field(registration, "collision")? {
+                        "fail" => NameCollisionPolicy::Fail,
+                        "replace" => NameCollisionPolicy::Replace,
+                        other => return Err(format!("unknown collision policy {other:?}")),
+                    };
+                    spec = spec.with_registration(NameRegistrationPolicy::Register {
+                        name: key,
+                        collision,
+                    });
+                    registered = true;
+                }
+                builder = builder.child(spec);
                 bindings.push(generation_binding(
                     &ctx.shared,
                     &name,
@@ -3100,9 +3120,15 @@ async fn exec_step(
                 let threshold = milli as f64 / 1000.0;
                 config = config.with_storm_threshold(threshold);
             }
-            let supervisor = compiled
-                .bind_managed(bindings, config)
-                .map_err(|e| format!("supervise {name:?}: {e:?}"))?;
+            // A supervisor with a registered child gets its own registry
+            // (bind_managed_with_registry, supervision.rs:2117): the
+            // children's names are shared among its generations only.
+            let supervisor = if registered {
+                compiled.bind_managed_with_registry(bindings, config, Arc::new(Default::default()))
+            } else {
+                compiled.bind_managed(bindings, config)
+            }
+            .map_err(|e| format!("supervise {name:?}: {e:?}"))?;
             // ManagedSupervisor::spawn (supervision.rs:3497-3505); NamedTimers
             // only names the controller's backoff timers.
             let report: ReportSlot = Arc::new(Mutex::new(None));
@@ -4553,6 +4579,7 @@ fn project_report(s: &Shared, report: ManagedSupervisorReport<String>) -> RunRes
                     ("DependencyUnavailable", Some(child))
                 }
                 ManagedSupervisorError::RestartLimit { child, .. } => ("RestartLimit", Some(child)),
+                ManagedSupervisorError::Registration { child, .. } => ("Registration", Some(child)),
                 ManagedSupervisorError::GenerationExhausted(child) => {
                     ("GenerationExhausted", Some(child))
                 }
