@@ -29,17 +29,16 @@
 /* Arena                                                               */
 /* ------------------------------------------------------------------ */
 
-typedef struct {
-    uint16_t generation;
-    int alive;
-    int initialized;
-    uint64_t value;
-    asx_task_id initializer; /* task running a pending init, or ASX_INVALID_ID */
-    asx_wait_queue waiters;  /* tasks parked behind the initializer */
-} once_slot;
-
-static once_slot g_slots[ASX_ONCE_MAX];
-static uint32_t g_slot_count;
+/* The arenas are the kernels' (asx_kernel.onces, sync_state.h): the slot
+ * field of a handle holds the index in its low half and the tag of the
+ * runtime that issued it above. NULL when no runtime holds the tag or the
+ * index is out of range. */
+static asx_once_slot *once_slot_at(uint32_t field) {
+    asx_kernel *k = asx_kernel_for_tag((uint16_t)(field >> ASX_SYNC_SLOT_TAG_SHIFT));
+    uint32_t idx = field & ASX_SYNC_SLOT_INDEX_MASK;
+    if (k == NULL || idx >= ASX_ONCE_MAX) return NULL;
+    return &k->onces.slots[idx];
+}
 
 static uint16_t next_gen(uint16_t g) {
     g++;
@@ -49,16 +48,16 @@ static uint16_t next_gen(uint16_t g) {
 
 static void once_reap_queue(asx_wait_queue *q);
 
-static void once_slot_clear(once_slot *s) {
+static void once_slot_clear(asx_once_slot *s, uint16_t tag) {
     s->initialized = 0;
     s->value = 0;
     s->initializer = ASX_INVALID_ID;
-    asx_wait_queue_init(&s->waiters, once_reap_queue, 0u);
+    asx_wait_queue_init(&s->waiters, once_reap_queue, tag);
 }
 
 /* The initialization in progress was abandoned or failed: the cell stays
  * uninitialized and the oldest waiter gets the next turn. */
-static void once_pass_turn(once_slot *s) {
+static void once_pass_turn(asx_once_slot *s) {
     s->initializer = ASX_INVALID_ID;
     if (s->waiters.len > 0u) (void)asx_wait_queue_settle(&s->waiters, 1u);
 }
@@ -67,9 +66,11 @@ static void once_pass_turn(once_slot *s) {
  * while no initialization is in flight, hand the turn it may have held to
  * the next waiter. */
 static void once_reap_queue(asx_wait_queue *q) {
+    asx_kernel *k = asx_kernel_for_tag(q->tag);
     uint32_t i;
+    if (k == NULL) return;
     for (i = 0; i < ASX_ONCE_MAX; i++) {
-        once_slot *s = &g_slots[i];
+        asx_once_slot *s = &k->onces.slots[i];
         ASX_CHECKPOINT_WAIVER("bounded: ASX_ONCE_MAX constant");
         if (q != &s->waiters) continue;
         asx_wait_queue_drop_dead(q);
@@ -82,22 +83,21 @@ static void once_reap_queue(asx_wait_queue *q) {
 /* Lifecycle                                                           */
 /* ------------------------------------------------------------------ */
 
-/* Whether any once cell was created since the last reset. */
-int asx_once_in_use_internal(void) { return g_slot_count != 0u; }
-
-asx_status asx_once_create(asx_once_handle *out) {
+asx_status asx_once_create(const asx_runtime *rt, asx_once_handle *out) {
+    asx_kernel *k = asx_kernel_of_runtime(rt);
     uint32_t i;
-    if (out == NULL) return ASX_E_INVALID_ARGUMENT;
-    if (asx_runtime_shared_state_refused_internal("once cells")) return ASX_E_INVALID_STATE;
+    if (out == NULL || rt == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (k == NULL) return ASX_E_INVALID_STATE;
 
     for (i = 0; i < ASX_ONCE_MAX; i++) {
-        if (!g_slots[i].alive) {
-            g_slots[i].alive = 1;
-            g_slots[i].generation = next_gen(g_slots[i].generation);
-            once_slot_clear(&g_slots[i]);
-            out->slot = i;
-            out->generation = g_slots[i].generation;
-            if (i >= g_slot_count) g_slot_count = i + 1;
+        asx_once_slot *s = &k->onces.slots[i];
+        if (!s->alive) {
+            s->alive = 1;
+            s->generation = next_gen(s->generation);
+            once_slot_clear(s, k->tag);
+            out->slot = ((uint32_t)k->tag << ASX_SYNC_SLOT_TAG_SHIFT) | i;
+            out->generation = s->generation;
+            if (i >= k->onces.slot_count) k->onces.slot_count = i + 1;
             return ASX_OK;
         }
     }
@@ -105,9 +105,8 @@ asx_status asx_once_create(asx_once_handle *out) {
 }
 
 asx_status asx_once_close(asx_once_handle handle) {
-    once_slot *s;
-    if (handle.slot >= ASX_ONCE_MAX) return ASX_E_INVALID_ARGUMENT;
-    s = &g_slots[handle.slot];
+    asx_once_slot *s = once_slot_at(handle.slot);
+    if (s == NULL) return ASX_E_INVALID_ARGUMENT;
     if (!s->alive || s->generation != handle.generation) return ASX_E_STALE_HANDLE;
 
     s->alive = 0;
@@ -125,13 +124,12 @@ asx_status asx_once_close(asx_once_handle handle) {
 
 asx_status asx_once_get_or_init(asx_once_handle handle, asx_once_init_fn init_fn, void *user_data,
                                 uint64_t *out_value) {
-    once_slot *s;
+    asx_once_slot *s = once_slot_at(handle.slot);
     asx_status st;
     asx_task_id self;
 
     if (init_fn == NULL || out_value == NULL) return ASX_E_INVALID_ARGUMENT;
-    if (handle.slot >= ASX_ONCE_MAX) return ASX_E_INVALID_ARGUMENT;
-    s = &g_slots[handle.slot];
+    if (s == NULL) return ASX_E_INVALID_ARGUMENT;
     if (!s->alive || s->generation != handle.generation) return ASX_E_STALE_HANDLE;
 
     if (s->initialized) {
@@ -178,11 +176,10 @@ asx_status asx_once_get_or_init(asx_once_handle handle, asx_once_init_fn init_fn
 }
 
 asx_status asx_once_wait_cancel(asx_once_handle handle, asx_task_id task) {
-    once_slot *s;
+    asx_once_slot *s = once_slot_at(handle.slot);
     int abandoned_init;
     int left_queue;
-    if (handle.slot >= ASX_ONCE_MAX) return ASX_E_INVALID_ARGUMENT;
-    s = &g_slots[handle.slot];
+    if (s == NULL) return ASX_E_INVALID_ARGUMENT;
     if (!s->alive || s->generation != handle.generation) return ASX_E_STALE_HANDLE;
 
     /* An abandoned initialization leaves the cell uninitialized; a waiter
@@ -197,10 +194,9 @@ asx_status asx_once_wait_cancel(asx_once_handle handle, asx_task_id task) {
 }
 
 asx_status asx_once_get(asx_once_handle handle, uint64_t *out_value) {
-    once_slot *s;
+    asx_once_slot *s = once_slot_at(handle.slot);
     if (out_value == NULL) return ASX_E_INVALID_ARGUMENT;
-    if (handle.slot >= ASX_ONCE_MAX) return ASX_E_INVALID_ARGUMENT;
-    s = &g_slots[handle.slot];
+    if (s == NULL) return ASX_E_INVALID_ARGUMENT;
     if (!s->alive || s->generation != handle.generation) return ASX_E_STALE_HANDLE;
 
     if (!s->initialized) return ASX_E_INVALID_STATE;
@@ -210,22 +206,28 @@ asx_status asx_once_get(asx_once_handle handle, uint64_t *out_value) {
 }
 
 int asx_once_is_initialized(asx_once_handle handle) {
-    if (handle.slot >= ASX_ONCE_MAX) return 0;
-    if (!g_slots[handle.slot].alive || g_slots[handle.slot].generation != handle.generation)
-        return 0;
-    return g_slots[handle.slot].initialized;
+    const asx_once_slot *s = once_slot_at(handle.slot);
+    if (s == NULL) return 0;
+    if (!s->alive || s->generation != handle.generation) return 0;
+    return s->initialized;
 }
 
 /* ------------------------------------------------------------------ */
 /* Arena management                                                    */
 /* ------------------------------------------------------------------ */
 
-void asx_once_reset(void) {
+void asx_once_reset_internal(asx_kernel *k) {
+    asx_once_state *st = &k->onces;
     uint32_t i;
-    for (i = 0; i < g_slot_count; i++) {
-        g_slots[i].generation = next_gen(g_slots[i].generation);
-        g_slots[i].alive = 0;
-        once_slot_clear(&g_slots[i]);
+    for (i = 0; i < st->slot_count; i++) {
+        st->slots[i].generation = next_gen(st->slots[i].generation);
+        st->slots[i].alive = 0;
+        once_slot_clear(&st->slots[i], k->tag);
     }
-    g_slot_count = 0;
+    st->slot_count = 0;
+}
+
+void asx_once_reset(const asx_runtime *rt) {
+    asx_kernel *k = asx_kernel_of_runtime(rt);
+    if (k != NULL) asx_once_reset_internal(k);
 }

@@ -53,7 +53,7 @@ typedef struct {
  * ------------------------------------------------------------------- */
 
 /* Create a new notify. */
-ASX_API ASX_MUST_USE asx_status asx_notify_create(asx_notify_handle *out);
+ASX_API ASX_MUST_USE asx_status asx_notify_create(const asx_runtime *rt, asx_notify_handle *out);
 
 /* Close a notify, waking all waiters with ASX_E_DISCONNECTED. */
 ASX_API asx_status asx_notify_close(asx_notify_handle handle);
@@ -106,7 +106,7 @@ ASX_API uint32_t asx_notify_stored_count(asx_notify_handle handle);
  * ------------------------------------------------------------------- */
 
 /* Reset all notify arena state (test support). */
-ASX_API void asx_notify_reset(void);
+ASX_API void asx_notify_reset(const asx_runtime *rt);
 
 #ifdef __cplusplus
 }

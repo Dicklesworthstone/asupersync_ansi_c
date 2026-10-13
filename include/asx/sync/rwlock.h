@@ -65,7 +65,7 @@ typedef struct {
  * ------------------------------------------------------------------- */
 
 /* Create a read-write lock (initially unlocked). */
-ASX_API ASX_MUST_USE asx_status asx_rwlock_create(asx_rwlock_handle *out);
+ASX_API ASX_MUST_USE asx_status asx_rwlock_create(const asx_runtime *rt, asx_rwlock_handle *out);
 
 /* Close a rwlock, waking all waiters with ASX_E_DISCONNECTED. */
 ASX_API asx_status asx_rwlock_close(asx_rwlock_handle handle);
@@ -181,7 +181,7 @@ ASX_API int asx_rwlock_is_poisoned(asx_rwlock_handle handle);
  * ------------------------------------------------------------------- */
 
 /* Reset all rwlock arena state. For tests only. */
-ASX_API void asx_rwlock_reset(void);
+ASX_API void asx_rwlock_reset(const asx_runtime *rt);
 
 #ifdef __cplusplus
 }

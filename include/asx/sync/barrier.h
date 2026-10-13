@@ -51,7 +51,8 @@ typedef struct {
  * ------------------------------------------------------------------- */
 
 /* Create a barrier for N tasks. N must be > 0. */
-ASX_API ASX_MUST_USE asx_status asx_barrier_create(uint32_t count, asx_barrier_handle *out);
+ASX_API ASX_MUST_USE asx_status asx_barrier_create(const asx_runtime *rt, uint32_t count,
+                                                   asx_barrier_handle *out);
 
 /* Close a barrier, waking all waiters with ASX_E_DISCONNECTED. */
 ASX_API asx_status asx_barrier_close(asx_barrier_handle handle);
@@ -91,7 +92,7 @@ ASX_API uint32_t asx_barrier_waiting_count(asx_barrier_handle handle);
  * ------------------------------------------------------------------- */
 
 /* Reset all barrier arena state (test support). */
-ASX_API void asx_barrier_reset(void);
+ASX_API void asx_barrier_reset(const asx_runtime *rt);
 
 #ifdef __cplusplus
 }

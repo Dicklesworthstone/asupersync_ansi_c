@@ -74,19 +74,9 @@
 /* Arena                                                               */
 /* ------------------------------------------------------------------ */
 
-typedef struct {
-    uint16_t generation;
-    int alive;
-    uint32_t readers;         /* readers holding the lock, granted ones included */
-    int write_locked;         /* a writer holds the lock (or was granted it) */
-    uint32_t writers_waiting; /* queued writers plus granted ones not yet polled */
-    uint32_t writer_streak;   /* writer hand-offs in a row while readers were queued */
-    int poisoned;             /* a write guard was dropped while its task panicked */
-    asx_wait_queue waiters;   /* waiter records, arrival order */
-} rw_slot;
-
-static rw_slot g_slots[ASX_RWLOCK_MAX];
-static uint32_t g_slot_count;
+/* The arenas are the kernels' (asx_kernel.rws, sync_state.h): the slot
+ * field of a handle, waiter or guard holds the index in its low half and
+ * the tag of the runtime that issued it above. */
 
 static uint16_t next_gen(uint16_t g) {
     g++;
@@ -94,10 +84,14 @@ static uint16_t next_gen(uint16_t g) {
     return g;
 }
 
-static rw_slot *slot_lookup(uint32_t idx, uint16_t gen) {
-    rw_slot *s;
-    if (idx >= ASX_RWLOCK_MAX) return NULL;
-    s = &g_slots[idx];
+/* The live slot a slot field and generation name, NULL when no runtime
+ * holds the tag, the index is out of range or the handle is stale. */
+static asx_rw_slot *slot_lookup(uint32_t field, uint16_t gen) {
+    asx_kernel *k = asx_kernel_for_tag((uint16_t)(field >> ASX_SYNC_SLOT_TAG_SHIFT));
+    uint32_t idx = field & ASX_SYNC_SLOT_INDEX_MASK;
+    asx_rw_slot *s;
+    if (k == NULL || idx >= ASX_RWLOCK_MAX) return NULL;
+    s = &k->rws.slots[idx];
     if (!s->alive || s->generation != gen) return NULL;
     return s;
 }
@@ -113,7 +107,7 @@ static int rw_is_queued(uint32_t i) { return (rw_node(i)->flags & RW_QUEUED) != 
 static int rw_is_writer(uint32_t i) { return (rw_node(i)->flags & RW_WRITE) != 0u; }
 
 /* The oldest queued writer (want_write 1) or reader (0), or ASX_WAIT_NIL. */
-static uint32_t rw_front(const rw_slot *s, int want_write) {
+static uint32_t rw_front(const asx_rw_slot *s, int want_write) {
     uint32_t i;
     for (i = asx_wait_queue_first(&s->waiters); i != ASX_WAIT_NIL; i = asx_wait_queue_next(i)) {
         ASX_CHECKPOINT_WAIVER("bounded: waiters <= ASX_WAIT_NODE_CAPACITY");
@@ -123,7 +117,7 @@ static uint32_t rw_front(const rw_slot *s, int want_write) {
 }
 
 /* Grant queued waiter i the lock and wake its task. */
-static void rw_grant(rw_slot *s, uint32_t i) {
+static void rw_grant(asx_rw_slot *s, uint32_t i) {
     asx_wait_node *w = rw_node(i);
     w->flags = (uint8_t)((w->flags | RW_ACQUIRED) & ~RW_QUEUED);
     if ((w->flags & RW_WRITE) != 0u) {
@@ -136,7 +130,7 @@ static void rw_grant(rw_slot *s, uint32_t i) {
 
 /* Hand the lock to the oldest queued writer, if any (pop_writer_waiter);
  * the hand-off extends the writer streak while readers are queued. */
-static void rw_grant_front_writer(rw_slot *s) {
+static void rw_grant_front_writer(asx_rw_slot *s) {
     uint32_t i = rw_front(s, 1);
     if (i == ASX_WAIT_NIL) return;
     rw_grant(s, i);
@@ -150,7 +144,7 @@ static void rw_grant_front_writer(rw_slot *s) {
 /* Grant queued readers in arrival order up to the first queued writer
  * (take_eligible_reader_waiters), or all of them when `all` is set
  * (drain_reader_waiters). Returns the number granted. */
-static uint32_t rw_grant_readers(rw_slot *s, int all) {
+static uint32_t rw_grant_readers(asx_rw_slot *s, int all) {
     uint32_t n = 0;
     uint32_t i = asx_wait_queue_first(&s->waiters);
     while (i != ASX_WAIT_NIL) {
@@ -172,7 +166,7 @@ static uint32_t rw_grant_readers(rw_slot *s, int all) {
 /* Poisoned: wake every queued waiter, readers then writers, each in
  * arrival order, granting nothing (queued_waiter_wakers); each fails at
  * its next poll. */
-static void rw_wake_queued(const rw_slot *s) {
+static void rw_wake_queued(const asx_rw_slot *s) {
     int want_write;
     uint32_t i;
     for (want_write = 0; want_write <= 1; want_write++) {
@@ -186,7 +180,7 @@ static void rw_wake_queued(const rw_slot *s) {
 }
 
 /* The lock is no longer write-held: Rust release_writer's policy. */
-static void rw_after_writer(rw_slot *s) {
+static void rw_after_writer(asx_rw_slot *s) {
     uint32_t reader = rw_front(s, 0);
     uint32_t writer = rw_front(s, 1);
     int force = s->writer_streak >= RW_MAX_WRITER_STREAK && reader != ASX_WAIT_NIL &&
@@ -218,7 +212,7 @@ static void rw_after_writer(rw_slot *s) {
 }
 
 /* A reader stopped holding the lock: Rust release_reader. */
-static void rw_after_reader(rw_slot *s) {
+static void rw_after_reader(asx_rw_slot *s) {
     if (s->readers > 0u) s->readers--;
     if (s->readers == 0u && s->writers_waiting > 0u) rw_grant_front_writer(s);
 }
@@ -226,7 +220,7 @@ static void rw_after_reader(rw_slot *s) {
 /* Waiter i gives up (abandon_read_waiter / abandon_write_waiter): a lock
  * it was granted is released, a queued writer stops counting, and the
  * record is released. */
-static void rw_abandon(rw_slot *s, uint32_t i) {
+static void rw_abandon(asx_rw_slot *s, uint32_t i) {
     uint8_t flags = rw_node(i)->flags;
     asx_wait_record_release(&s->waiters, i);
     if ((flags & RW_WRITE) == 0u) {
@@ -245,7 +239,7 @@ static void rw_abandon(rw_slot *s, uint32_t i) {
 
 /* Reclaim parked waiters whose task completed without giving up, as
  * dropping their Rust futures would. */
-static void rw_reap(rw_slot *s) {
+static void rw_reap(asx_rw_slot *s) {
     uint32_t i = asx_wait_queue_first(&s->waiters);
     while (i != ASX_WAIT_NIL) {
         uint32_t next = asx_wait_queue_next(i);
@@ -261,38 +255,37 @@ static void rw_reap(rw_slot *s) {
 
 /* Wait-node pool reclamation: retire this rwlock's dead waiters. */
 static void rw_reap_queue(asx_wait_queue *q) {
-    rw_reap((rw_slot *)((char *)q - offsetof(rw_slot, waiters)));
+    rw_reap((asx_rw_slot *)((char *)q - offsetof(asx_rw_slot, waiters)));
 }
 
 /* ------------------------------------------------------------------ */
 /* Lifecycle                                                           */
 /* ------------------------------------------------------------------ */
 
-static void rw_slot_init(rw_slot *s) {
+static void rw_slot_init(asx_rw_slot *s, uint16_t tag) {
     s->readers = 0;
     s->write_locked = 0;
     s->writers_waiting = 0;
     s->writer_streak = 0;
     s->poisoned = 0;
-    asx_wait_records_init(&s->waiters, rw_reap_queue, 0u);
+    asx_wait_records_init(&s->waiters, rw_reap_queue, tag);
 }
 
-/* Whether any rwlock was created since the last reset. */
-int asx_rwlock_in_use_internal(void) { return g_slot_count != 0u; }
-
-asx_status asx_rwlock_create(asx_rwlock_handle *out) {
+asx_status asx_rwlock_create(const asx_runtime *rt, asx_rwlock_handle *out) {
+    asx_kernel *k = asx_kernel_of_runtime(rt);
     uint32_t i;
-    if (out == NULL) return ASX_E_INVALID_ARGUMENT;
-    if (asx_runtime_shared_state_refused_internal("rwlocks")) return ASX_E_INVALID_STATE;
+    if (out == NULL || rt == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (k == NULL) return ASX_E_INVALID_STATE;
 
     for (i = 0; i < ASX_RWLOCK_MAX; i++) {
-        if (!g_slots[i].alive) {
-            g_slots[i].alive = 1;
-            g_slots[i].generation = next_gen(g_slots[i].generation);
-            rw_slot_init(&g_slots[i]);
-            out->slot = i;
-            out->generation = g_slots[i].generation;
-            if (i >= g_slot_count) g_slot_count = i + 1;
+        asx_rw_slot *s = &k->rws.slots[i];
+        if (!s->alive) {
+            s->alive = 1;
+            s->generation = next_gen(s->generation);
+            rw_slot_init(s, k->tag);
+            out->slot = ((uint32_t)k->tag << ASX_SYNC_SLOT_TAG_SHIFT) | i;
+            out->generation = s->generation;
+            if (i >= k->rws.slot_count) k->rws.slot_count = i + 1;
             return ASX_OK;
         }
     }
@@ -300,7 +293,7 @@ asx_status asx_rwlock_create(asx_rwlock_handle *out) {
 }
 
 asx_status asx_rwlock_close(asx_rwlock_handle handle) {
-    rw_slot *s = slot_lookup(handle.slot, handle.generation);
+    asx_rw_slot *s = slot_lookup(handle.slot, handle.generation);
     uint32_t i;
     if (s == NULL) return ASX_E_STALE_HANDLE;
 
@@ -320,7 +313,7 @@ asx_status asx_rwlock_close(asx_rwlock_handle handle) {
 /* ------------------------------------------------------------------ */
 
 asx_status asx_rwlock_try_read(asx_rwlock_handle handle, asx_rwlock_read_guard *out) {
-    rw_slot *s;
+    asx_rw_slot *s;
     if (out == NULL) return ASX_E_INVALID_ARGUMENT;
     s = slot_lookup(handle.slot, handle.generation);
     if (s == NULL) return ASX_E_STALE_HANDLE;
@@ -336,7 +329,7 @@ asx_status asx_rwlock_try_read(asx_rwlock_handle handle, asx_rwlock_read_guard *
 }
 
 asx_status asx_rwlock_try_write(asx_rwlock_handle handle, asx_rwlock_write_guard *out) {
-    rw_slot *s;
+    asx_rw_slot *s;
     if (out == NULL) return ASX_E_INVALID_ARGUMENT;
     s = slot_lookup(handle.slot, handle.generation);
     if (s == NULL) return ASX_E_STALE_HANDLE;
@@ -355,7 +348,7 @@ asx_status asx_rwlock_try_write(asx_rwlock_handle handle, asx_rwlock_write_guard
 /* ------------------------------------------------------------------ */
 
 static asx_status rw_begin(asx_rwlock_handle handle, asx_rwlock_waiter *out, int is_write) {
-    rw_slot *s;
+    asx_rw_slot *s;
     uint32_t i;
     if (out == NULL) return ASX_E_INVALID_ARGUMENT;
     s = slot_lookup(handle.slot, handle.generation);
@@ -383,7 +376,7 @@ asx_status asx_rwlock_write_begin(asx_rwlock_handle handle, asx_rwlock_waiter *o
 
 /* One poll of a read or write acquire (Rust ReadFuture / WriteFuture). */
 static asx_status rw_poll(asx_rwlock_waiter *waiter, asx_cx *cx, int is_write) {
-    rw_slot *s;
+    asx_rw_slot *s;
     asx_wait_node *w;
     uint32_t i;
 
@@ -470,7 +463,7 @@ asx_status asx_rwlock_poll_write(asx_rwlock_waiter *waiter, asx_rwlock_write_gua
 /* ------------------------------------------------------------------ */
 
 asx_status asx_rwlock_waiter_cancel(asx_rwlock_waiter *waiter) {
-    rw_slot *s;
+    asx_rw_slot *s;
     if (waiter == NULL) return ASX_E_INVALID_ARGUMENT;
     s = slot_lookup(waiter->rw_slot, waiter->generation);
     if (s == NULL) return ASX_OK; /* already closed */
@@ -487,7 +480,7 @@ asx_status asx_rwlock_waiter_cancel(asx_rwlock_waiter *waiter) {
 /* ------------------------------------------------------------------ */
 
 asx_status asx_rwlock_read_unlock(asx_rwlock_read_guard guard) {
-    rw_slot *s = slot_lookup(guard.rw_slot, guard.generation);
+    asx_rw_slot *s = slot_lookup(guard.rw_slot, guard.generation);
     if (s == NULL) return ASX_E_STALE_HANDLE;
     if (s->readers == 0) return ASX_E_INVALID_STATE;
 
@@ -497,7 +490,7 @@ asx_status asx_rwlock_read_unlock(asx_rwlock_read_guard guard) {
 }
 
 asx_status asx_rwlock_write_unlock(asx_rwlock_write_guard guard) {
-    rw_slot *s = slot_lookup(guard.rw_slot, guard.generation);
+    asx_rw_slot *s = slot_lookup(guard.rw_slot, guard.generation);
     if (s == NULL) return ASX_E_STALE_HANDLE;
     if (!s->write_locked) return ASX_E_INVALID_STATE;
 
@@ -508,7 +501,7 @@ asx_status asx_rwlock_write_unlock(asx_rwlock_write_guard guard) {
 }
 
 asx_status asx_rwlock_downgrade(asx_rwlock_write_guard guard, asx_rwlock_read_guard *out_read) {
-    rw_slot *s;
+    asx_rw_slot *s;
     if (out_read == NULL) return ASX_E_INVALID_ARGUMENT;
     s = slot_lookup(guard.rw_slot, guard.generation);
     if (s == NULL) return ASX_E_STALE_HANDLE;
@@ -526,7 +519,7 @@ asx_status asx_rwlock_downgrade(asx_rwlock_write_guard guard, asx_rwlock_read_gu
 }
 
 asx_status asx_rwlock_write_unlock_poisoned(asx_rwlock_write_guard guard) {
-    rw_slot *s = slot_lookup(guard.rw_slot, guard.generation);
+    asx_rw_slot *s = slot_lookup(guard.rw_slot, guard.generation);
     if (s == NULL) return ASX_E_STALE_HANDLE;
     if (!s->write_locked) return ASX_E_INVALID_STATE;
     s->poisoned = 1;
@@ -534,7 +527,7 @@ asx_status asx_rwlock_write_unlock_poisoned(asx_rwlock_write_guard guard) {
 }
 
 int asx_rwlock_is_poisoned(asx_rwlock_handle handle) {
-    rw_slot *s = slot_lookup(handle.slot, handle.generation);
+    asx_rw_slot *s = slot_lookup(handle.slot, handle.generation);
     if (s == NULL) return 0;
     return s->poisoned;
 }
@@ -544,13 +537,13 @@ int asx_rwlock_is_poisoned(asx_rwlock_handle handle) {
 /* ------------------------------------------------------------------ */
 
 uint32_t asx_rwlock_reader_count(asx_rwlock_handle handle) {
-    rw_slot *s = slot_lookup(handle.slot, handle.generation);
+    asx_rw_slot *s = slot_lookup(handle.slot, handle.generation);
     if (s == NULL) return 0;
     return s->readers;
 }
 
 int asx_rwlock_is_write_locked(asx_rwlock_handle handle) {
-    rw_slot *s = slot_lookup(handle.slot, handle.generation);
+    asx_rw_slot *s = slot_lookup(handle.slot, handle.generation);
     if (s == NULL) return 0;
     return s->write_locked;
 }
@@ -559,12 +552,18 @@ int asx_rwlock_is_write_locked(asx_rwlock_handle handle) {
 /* Arena management                                                    */
 /* ------------------------------------------------------------------ */
 
-void asx_rwlock_reset(void) {
+void asx_rwlock_reset_internal(asx_kernel *k) {
+    asx_rw_state *st = &k->rws;
     uint32_t i;
-    for (i = 0; i < g_slot_count; i++) {
-        g_slots[i].generation = next_gen(g_slots[i].generation);
-        g_slots[i].alive = 0;
-        rw_slot_init(&g_slots[i]);
+    for (i = 0; i < st->slot_count; i++) {
+        st->slots[i].generation = next_gen(st->slots[i].generation);
+        st->slots[i].alive = 0;
+        rw_slot_init(&st->slots[i], k->tag);
     }
-    g_slot_count = 0;
+    st->slot_count = 0;
+}
+
+void asx_rwlock_reset(const asx_runtime *rt) {
+    asx_kernel *k = asx_kernel_of_runtime(rt);
+    if (k != NULL) asx_rwlock_reset_internal(k);
 }

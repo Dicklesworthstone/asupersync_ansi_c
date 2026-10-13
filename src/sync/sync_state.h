@@ -56,4 +56,79 @@ typedef struct {
     uint32_t slot_count;
 } asx_sem_state;
 
+/* ------------------------------------------------------------------ */
+/* Read-write locks                                                    */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    uint16_t generation;
+    int alive;
+    uint32_t readers;         /* readers holding the lock, granted ones included */
+    int write_locked;         /* a writer holds the lock (or was granted it) */
+    uint32_t writers_waiting; /* queued writers plus granted ones not yet polled */
+    uint32_t writer_streak;   /* writer hand-offs in a row while readers were queued */
+    int poisoned;             /* a write guard was dropped while its task panicked */
+    asx_wait_queue waiters;   /* waiter records, arrival order */
+} asx_rw_slot;
+
+typedef struct {
+    asx_rw_slot slots[ASX_RWLOCK_MAX];
+    uint32_t slot_count;
+} asx_rw_state;
+
+/* ------------------------------------------------------------------ */
+/* Barriers                                                            */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    uint16_t generation;
+    int alive;
+    uint32_t threshold;     /* N tasks required */
+    uint32_t arrived;       /* tasks currently waiting */
+    int tripped;            /* barrier released */
+    asx_wait_queue waiters; /* waiter records, arrival order */
+} asx_barrier_slot;
+
+typedef struct {
+    asx_barrier_slot slots[ASX_BARRIER_MAX];
+    uint32_t slot_count;
+} asx_barrier_state;
+
+/* ------------------------------------------------------------------ */
+/* Once cells                                                          */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    uint16_t generation;
+    int alive;
+    int initialized;
+    uint64_t value;
+    asx_task_id initializer; /* task running a pending init, or ASX_INVALID_ID */
+    asx_wait_queue waiters;  /* tasks parked behind the initializer */
+} asx_once_slot;
+
+typedef struct {
+    asx_once_slot slots[ASX_ONCE_MAX];
+    uint32_t slot_count;
+} asx_once_state;
+
+/* ------------------------------------------------------------------ */
+/* Notifies                                                            */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    uint16_t generation;
+    int alive;
+    asx_wait_queue waiters; /* waiter records, arrival order */
+    /* notify_one notifications that found no waiter. They accumulate and
+     * each later waiter consumes one (Rust sync/notify.rs
+     * stored_notifications; unlike tokio, which stores at most one). */
+    uint32_t stored;
+} asx_notify_slot;
+
+typedef struct {
+    asx_notify_slot slots[ASX_NOTIFY_MAX];
+    uint32_t slot_count;
+} asx_notify_state;
+
 #endif /* ASX_SYNC_SYNC_STATE_H */

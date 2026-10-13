@@ -39,18 +39,16 @@
 /* Arena                                                               */
 /* ------------------------------------------------------------------ */
 
-typedef struct {
-    uint16_t generation;
-    int alive;
-    asx_wait_queue waiters; /* waiter records, arrival order */
-    /* notify_one notifications that found no waiter. They accumulate and
-     * each later waiter consumes one (Rust sync/notify.rs
-     * stored_notifications; unlike tokio, which stores at most one). */
-    uint32_t stored;
-} notify_slot;
-
-static notify_slot g_slots[ASX_NOTIFY_MAX];
-static uint32_t g_slot_count;
+/* The arenas are the kernels' (asx_kernel.notifies, sync_state.h): the
+ * slot field of a handle or waiter holds the index in its low half and the
+ * tag of the runtime that issued it above. NULL when no runtime holds the
+ * tag or the index is out of range. */
+static asx_notify_slot *notify_slot_at(uint32_t field) {
+    asx_kernel *k = asx_kernel_for_tag((uint16_t)(field >> ASX_SYNC_SLOT_TAG_SHIFT));
+    uint32_t idx = field & ASX_SYNC_SLOT_INDEX_MASK;
+    if (k == NULL || idx >= ASX_NOTIFY_MAX) return NULL;
+    return &k->notifies.slots[idx];
+}
 
 static uint16_t next_gen(uint16_t g) {
     g++;
@@ -75,7 +73,7 @@ static void notify_set_kind(asx_wait_node *w, uint32_t kind) {
  * on its next poll, so it is skipped. A waiter polled without a Cx, like
  * Rust's Notified (sync/notify.rs:347), waits on through a cancel and is
  * notified like any other. */
-static uint32_t notify_first_in_line(const notify_slot *s) {
+static uint32_t notify_first_in_line(const asx_notify_slot *s) {
     uint32_t i;
     for (i = asx_wait_queue_first(&s->waiters); i != ASX_WAIT_NIL; i = asx_wait_queue_next(i)) {
         const asx_wait_node *w = notify_node(i);
@@ -92,7 +90,7 @@ static uint32_t notify_first_in_line(const notify_slot *s) {
 
 /* Deliver one notification to the next waiter in line, or store it when
  * no waiter can take it. Returns 1 if a waiter took it. */
-static int notify_deliver_one(notify_slot *s) {
+static int notify_deliver_one(asx_notify_slot *s) {
     uint32_t i = notify_first_in_line(s);
     if (i == ASX_WAIT_NIL) {
         if (s->stored < UINT32_MAX) s->stored++;
@@ -105,14 +103,14 @@ static int notify_deliver_one(notify_slot *s) {
 
 /* Release a waiter that leaves without consuming its notification. A
  * notify_one notification it held is passed on (or stored again). */
-static void notify_waiter_abandon(notify_slot *s, uint32_t i) {
+static void notify_waiter_abandon(asx_notify_slot *s, uint32_t i) {
     int pass_on = notify_kind(notify_node(i)) == NOTIFY_ONE;
     asx_wait_record_release(&s->waiters, i);
     if (pass_on) (void)notify_deliver_one(s);
 }
 
 /* Reclaim waiters whose parked task completed without cancelling. */
-static void notify_reap(notify_slot *s) {
+static void notify_reap(asx_notify_slot *s) {
     uint32_t i = asx_wait_queue_first(&s->waiters);
     while (i != ASX_WAIT_NIL) {
         uint32_t next = asx_wait_queue_next(i);
@@ -127,7 +125,7 @@ static void notify_reap(notify_slot *s) {
 
 /* Wait-node pool reclamation: retire this notify's dead waiters. */
 static void notify_reap_queue(asx_wait_queue *q) {
-    notify_reap((notify_slot *)((char *)q - offsetof(notify_slot, waiters)));
+    notify_reap((asx_notify_slot *)((char *)q - offsetof(asx_notify_slot, waiters)));
 }
 
 /* ------------------------------------------------------------------ */
@@ -135,23 +133,23 @@ static void notify_reap_queue(asx_wait_queue *q) {
 /* ------------------------------------------------------------------ */
 
 /* Whether any notify was created since the last reset. */
-int asx_notify_in_use_internal(void) { return g_slot_count != 0u; }
-
-asx_status asx_notify_create(asx_notify_handle *out) {
+asx_status asx_notify_create(const asx_runtime *rt, asx_notify_handle *out) {
+    asx_kernel *k = asx_kernel_of_runtime(rt);
     uint32_t i;
-    if (out == NULL) return ASX_E_INVALID_ARGUMENT;
-    if (asx_runtime_shared_state_refused_internal("notifies")) return ASX_E_INVALID_STATE;
+    if (out == NULL || rt == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (k == NULL) return ASX_E_INVALID_STATE;
 
     /* Find free slot */
     for (i = 0; i < ASX_NOTIFY_MAX; i++) {
-        if (!g_slots[i].alive) {
-            g_slots[i].alive = 1;
-            g_slots[i].generation = next_gen(g_slots[i].generation);
-            g_slots[i].stored = 0;
-            asx_wait_records_init(&g_slots[i].waiters, notify_reap_queue, 0u);
-            out->slot = i;
-            out->generation = g_slots[i].generation;
-            if (i >= g_slot_count) g_slot_count = i + 1;
+        asx_notify_slot *s = &k->notifies.slots[i];
+        if (!s->alive) {
+            s->alive = 1;
+            s->generation = next_gen(s->generation);
+            s->stored = 0;
+            asx_wait_records_init(&s->waiters, notify_reap_queue, k->tag);
+            out->slot = ((uint32_t)k->tag << ASX_SYNC_SLOT_TAG_SHIFT) | i;
+            out->generation = s->generation;
+            if (i >= k->notifies.slot_count) k->notifies.slot_count = i + 1;
             return ASX_OK;
         }
     }
@@ -159,10 +157,10 @@ asx_status asx_notify_create(asx_notify_handle *out) {
 }
 
 asx_status asx_notify_close(asx_notify_handle handle) {
-    notify_slot *s;
+    asx_notify_slot *s;
     uint32_t i;
-    if (handle.slot >= ASX_NOTIFY_MAX) return ASX_E_INVALID_ARGUMENT;
-    s = &g_slots[handle.slot];
+    s = notify_slot_at(handle.slot);
+    if (s == NULL) return ASX_E_INVALID_ARGUMENT;
     if (!s->alive || s->generation != handle.generation) return ASX_E_STALE_HANDLE;
 
     /* Wake all waiters as disconnected */
@@ -182,9 +180,9 @@ asx_status asx_notify_close(asx_notify_handle handle) {
 /* ------------------------------------------------------------------ */
 
 asx_status asx_notify_one(asx_notify_handle handle) {
-    notify_slot *s;
-    if (handle.slot >= ASX_NOTIFY_MAX) return ASX_E_INVALID_ARGUMENT;
-    s = &g_slots[handle.slot];
+    asx_notify_slot *s;
+    s = notify_slot_at(handle.slot);
+    if (s == NULL) return ASX_E_INVALID_ARGUMENT;
     if (!s->alive || s->generation != handle.generation) return ASX_E_STALE_HANDLE;
 
     /* FIFO: notify the oldest waiter (reclaiming dead ones first). With no
@@ -196,10 +194,10 @@ asx_status asx_notify_one(asx_notify_handle handle) {
 }
 
 asx_status asx_notify_all(asx_notify_handle handle) {
-    notify_slot *s;
+    asx_notify_slot *s;
     uint32_t i;
-    if (handle.slot >= ASX_NOTIFY_MAX) return ASX_E_INVALID_ARGUMENT;
-    s = &g_slots[handle.slot];
+    s = notify_slot_at(handle.slot);
+    if (s == NULL) return ASX_E_INVALID_ARGUMENT;
     if (!s->alive || s->generation != handle.generation) return ASX_E_STALE_HANDLE;
 
     for (i = asx_wait_queue_first(&s->waiters); i != ASX_WAIT_NIL; i = asx_wait_queue_next(i)) {
@@ -216,11 +214,11 @@ asx_status asx_notify_all(asx_notify_handle handle) {
 /* ------------------------------------------------------------------ */
 
 asx_status asx_notify_wait_begin(asx_notify_handle handle, asx_notify_waiter *out) {
-    notify_slot *s;
+    asx_notify_slot *s;
     uint32_t i;
     if (out == NULL) return ASX_E_INVALID_ARGUMENT;
-    if (handle.slot >= ASX_NOTIFY_MAX) return ASX_E_INVALID_ARGUMENT;
-    s = &g_slots[handle.slot];
+    s = notify_slot_at(handle.slot);
+    if (s == NULL) return ASX_E_INVALID_ARGUMENT;
     if (!s->alive || s->generation != handle.generation) return ASX_E_STALE_HANDLE;
 
     i = asx_wait_record_add(&s->waiters);
@@ -240,14 +238,13 @@ asx_status asx_notify_wait_begin(asx_notify_handle handle, asx_notify_waiter *ou
 }
 
 asx_status asx_notify_poll_wait(asx_notify_waiter *waiter, asx_cx *cx) {
-    notify_slot *s;
+    asx_notify_slot *s;
     asx_wait_node *w;
 
     if (waiter == NULL) return ASX_E_INVALID_ARGUMENT;
-    if (waiter->notify_slot >= ASX_NOTIFY_MAX) return ASX_E_INVALID_ARGUMENT;
+    s = notify_slot_at(waiter->notify_slot);
+    if (s == NULL) return ASX_E_INVALID_ARGUMENT;
     if (waiter->waiter_slot >= ASX_WAIT_NODE_CAPACITY) return ASX_E_INVALID_ARGUMENT;
-
-    s = &g_slots[waiter->notify_slot];
 
     /* Check if notify was closed */
     if (!s->alive || s->generation != waiter->generation) return ASX_E_DISCONNECTED;
@@ -281,11 +278,11 @@ asx_status asx_notify_poll_wait(asx_notify_waiter *waiter, asx_cx *cx) {
 }
 
 asx_status asx_notify_wait_cancel(asx_notify_waiter *waiter) {
-    notify_slot *s;
+    asx_notify_slot *s;
     if (waiter == NULL) return ASX_E_INVALID_ARGUMENT;
-    if (waiter->notify_slot >= ASX_NOTIFY_MAX) return ASX_E_INVALID_ARGUMENT;
+    s = notify_slot_at(waiter->notify_slot);
+    if (s == NULL) return ASX_E_INVALID_ARGUMENT;
     if (waiter->waiter_slot >= ASX_WAIT_NODE_CAPACITY) return ASX_E_INVALID_ARGUMENT;
-    s = &g_slots[waiter->notify_slot];
     if (!s->alive || s->generation != waiter->generation)
         return ASX_OK; /* already closed, nothing to cancel */
 
@@ -300,30 +297,36 @@ asx_status asx_notify_wait_cancel(asx_notify_waiter *waiter) {
 /* ------------------------------------------------------------------ */
 
 uint32_t asx_notify_waiter_count(asx_notify_handle handle) {
-    if (handle.slot >= ASX_NOTIFY_MAX) return 0;
-    if (!g_slots[handle.slot].alive || g_slots[handle.slot].generation != handle.generation)
-        return 0;
-    return asx_wait_queue_len(&g_slots[handle.slot].waiters);
+    const asx_notify_slot *s = notify_slot_at(handle.slot);
+    if (s == NULL) return 0;
+    if (!s->alive || s->generation != handle.generation) return 0;
+    return asx_wait_queue_len(&s->waiters);
 }
 
 uint32_t asx_notify_stored_count(asx_notify_handle handle) {
-    if (handle.slot >= ASX_NOTIFY_MAX) return 0;
-    if (!g_slots[handle.slot].alive || g_slots[handle.slot].generation != handle.generation)
-        return 0;
-    return g_slots[handle.slot].stored;
+    const asx_notify_slot *s = notify_slot_at(handle.slot);
+    if (s == NULL) return 0;
+    if (!s->alive || s->generation != handle.generation) return 0;
+    return s->stored;
 }
 
 /* ------------------------------------------------------------------ */
 /* Arena management                                                    */
 /* ------------------------------------------------------------------ */
 
-void asx_notify_reset(void) {
+void asx_notify_reset_internal(asx_kernel *k) {
+    asx_notify_state *st = &k->notifies;
     uint32_t i;
-    for (i = 0; i < g_slot_count; i++) {
-        g_slots[i].generation = next_gen(g_slots[i].generation);
-        g_slots[i].alive = 0;
-        g_slots[i].stored = 0;
-        asx_wait_records_init(&g_slots[i].waiters, notify_reap_queue, 0u);
+    for (i = 0; i < st->slot_count; i++) {
+        st->slots[i].generation = next_gen(st->slots[i].generation);
+        st->slots[i].alive = 0;
+        st->slots[i].stored = 0;
+        asx_wait_records_init(&st->slots[i].waiters, notify_reap_queue, k->tag);
     }
-    g_slot_count = 0;
+    st->slot_count = 0;
+}
+
+void asx_notify_reset(const asx_runtime *rt) {
+    asx_kernel *k = asx_kernel_of_runtime(rt);
+    if (k != NULL) asx_notify_reset_internal(k);
 }

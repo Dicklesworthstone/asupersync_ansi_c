@@ -42,7 +42,7 @@ typedef asx_status (*asx_once_init_fn)(void *user_data, uint64_t *out_value);
  * ------------------------------------------------------------------- */
 
 /* Create an uninitialized once cell. */
-ASX_API ASX_MUST_USE asx_status asx_once_create(asx_once_handle *out);
+ASX_API ASX_MUST_USE asx_status asx_once_create(const asx_runtime *rt, asx_once_handle *out);
 
 /* Close a once cell. */
 ASX_API asx_status asx_once_close(asx_once_handle handle);
@@ -88,7 +88,7 @@ ASX_API int asx_once_is_initialized(asx_once_handle handle);
  * ------------------------------------------------------------------- */
 
 /* Reset all once-cell arena state (test support). */
-ASX_API void asx_once_reset(void);
+ASX_API void asx_once_reset(const asx_runtime *rt);
 
 #ifdef __cplusplus
 }

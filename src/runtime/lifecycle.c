@@ -143,6 +143,10 @@ void asx_runtime_clear_internal(asx_kernel *k) {
     /* Before the primitives: every wait queue of k is empty afterwards. */
     asx_wait_pool_reset_internal(k);
     asx_semaphore_reset_internal(k);
+    asx_rwlock_reset_internal(k);
+    asx_barrier_reset_internal(k);
+    asx_once_reset_internal(k);
+    asx_notify_reset_internal(k);
     if (asx_kernel_other_held(k)) { /* the subsystems below are process-wide */
         asx_trace_reset_internal(k);
         return;
@@ -171,10 +175,6 @@ void asx_runtime_clear_internal(asx_kernel *k) {
     asx_runtime_hooks_reset_internal();
     asx_event_log_reset();
     asx_error_ledger_reset();
-    asx_notify_reset();
-    asx_rwlock_reset();
-    asx_barrier_reset();
-    asx_once_reset();
     asx_actor_reset();
     asx_supervisor_reset();
     /* net, fs, process and signal: each registered its reset the first time it held state, and

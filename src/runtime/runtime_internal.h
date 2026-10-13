@@ -484,6 +484,10 @@ typedef struct asx_kernel {
     /* The sync primitives' arenas (sync/sync_state.h), each moved in as its
      * primitive became per runtime. */
     asx_sem_state sems;
+    asx_rw_state rws;
+    asx_barrier_state barriers;
+    asx_once_state onces;
+    asx_notify_state notifies;
     /* The runtime's trace: ring, digest, counters, observer. */
     asx_trace_state trace;
     uint32_t rt_generation; /* nonzero while an initialized runtime holds it */
@@ -567,10 +571,6 @@ void asx_kernel_release_internal(uint16_t tag);
  * state a second runtime would share. Each is defined with its subsystem;
  * rt.c evaluates them at a second initialization and names the first that
  * answers nonzero. */
-int asx_rwlock_in_use_internal(void);
-int asx_barrier_in_use_internal(void);
-int asx_once_in_use_internal(void);
-int asx_notify_in_use_internal(void);
 int asx_channel_in_use_internal(void);
 int asx_oneshot_in_use_internal(void);
 int asx_watch_in_use_internal(void);
@@ -648,6 +648,13 @@ void asx_wait_pool_reset_internal(asx_kernel *k);
 /* Invalidate every semaphore (and mutex) of kernel `k` and empty its arena
  * (a clear). Defined in sync/semaphore.c. */
 void asx_semaphore_reset_internal(asx_kernel *k);
+
+/* The same for kernel `k`'s read-write locks, barriers, once cells and
+ * notifies (a clear). Defined in sync/{rwlock,barrier,once,notify}.c. */
+void asx_rwlock_reset_internal(asx_kernel *k);
+void asx_barrier_reset_internal(asx_kernel *k);
+void asx_once_reset_internal(asx_kernel *k);
+void asx_notify_reset_internal(asx_kernel *k);
 
 /* Initialize the scheduling fields of a freshly allocated task slot. */
 void asx_task_sched_init_internal(asx_task_slot *task);
