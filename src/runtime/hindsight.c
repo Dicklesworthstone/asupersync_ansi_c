@@ -65,6 +65,19 @@ static uint32_t g_next_sequence; /* monotonic per-event sequence */
 static asx_fnv_fold g_digest = {ASX_HINDSIGHT_DIGEST_SEED, 0u};
 static uint32_t g_digest_folded; /* in g_write_index's count, wrapping with it */
 
+/* The slot a running event count n lands in. A capacity may be set to 1
+ * (asx_config.h accepts anything of at least 1), where `n % 1u` is always 0
+ * and a static analyzer rightly flags it (cppcheck moduloofone): a capacity
+ * of one is its own case here, so the other expressions stay free of it. */
+static uint32_t hs_slot(uint32_t n) {
+#if (ASX_HINDSIGHT_CAPACITY) == 1
+    (void)n;
+    return 0u;
+#else
+    return n % ASX_HINDSIGHT_CAPACITY;
+#endif
+}
+
 /* Default flush policy: both triggers enabled */
 static asx_hindsight_policy g_policy = {1, 1};
 
@@ -90,7 +103,7 @@ void asx_hindsight_init(void) {
 static void hs_digest_settle(void) {
     while (g_digest_folded != g_write_index) {
         /* ASX_CHECKPOINT_WAIVER("bounded: at most ASX_HINDSIGHT_CAPACITY unfolded events") */
-        hs_digest_fold(&g_digest, &g_ring[g_digest_folded % ASX_HINDSIGHT_CAPACITY]);
+        hs_digest_fold(&g_digest, &g_ring[hs_slot(g_digest_folded)]);
         g_digest_folded++;
     }
 }
@@ -102,7 +115,7 @@ void asx_hindsight_reset(void) { asx_hindsight_init(); }
  * ------------------------------------------------------------------- */
 
 void asx_hindsight_log(asx_nd_event_kind kind, uint64_t entity_id, uint64_t observed_value) {
-    uint32_t idx = g_write_index % ASX_HINDSIGHT_CAPACITY;
+    uint32_t idx = hs_slot(g_write_index);
     asx_hindsight_event *e = &g_ring[idx];
 
     if (g_write_index - g_digest_folded >= ASX_HINDSIGHT_CAPACITY) {
@@ -153,8 +166,8 @@ int asx_hindsight_get(uint32_t index, asx_hindsight_event *out) {
         *out = g_ring[index];
     } else {
         /* Ring has wrapped — oldest is at write_index */
-        oldest_slot = g_write_index % ASX_HINDSIGHT_CAPACITY;
-        actual_slot = (oldest_slot + index) % ASX_HINDSIGHT_CAPACITY;
+        oldest_slot = hs_slot(g_write_index);
+        actual_slot = hs_slot(oldest_slot + index);
         *out = g_ring[actual_slot];
     }
 
