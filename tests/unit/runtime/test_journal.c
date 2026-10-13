@@ -168,7 +168,7 @@ TEST(a_bad_header_is_refused) {
     copy[0] = 'X';
     ASSERT_EQ((int)asx_journal_reader_init(&r, copy, g_out_len), (int)ASX_JOURNAL_READ_BAD_HEADER);
     memcpy(copy, g_out, g_out_len);
-    copy[8] = 2u; /* version 2 */
+    copy[8] = (uint8_t)(ASX_JOURNAL_VERSION + 1u); /* a version this reader does not know */
     ASSERT_EQ((int)asx_journal_reader_init(&r, copy, g_out_len), (int)ASX_JOURNAL_READ_BAD_HEADER);
     memcpy(copy, g_out, g_out_len);
     copy[44] = 1u; /* reserved bytes are zero */
