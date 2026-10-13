@@ -2544,6 +2544,23 @@ release-install-smoke:
 		--target "$$target"
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# release gate (bd-9kll.18.5, bd-9kll.18.6)
+#   release-gate-expected   the lanes a release waits for, expanded from the
+#                           workflow files (what .github/workflows/release.yml
+#                           requires at the tagged commit)
+#   test-release-gate-e2e   the release-gate negative controls plus a real
+#                           candidate: builds the library, verifies the
+#                           archive, runs the installed consumer and doctor
+#                           probe, then corrupts copies and requires rejection
+# ---------------------------------------------------------------------------
+.PHONY: release-gate-expected test-release-gate-e2e
+release-gate-expected:
+	@python3 tools/ci/release_gate.py expected --manifest tools/ci/release_required_gates.json
+
+test-release-gate-e2e:
+	@ASX_RELEASE_E2E=1 bash tests/gates/test_release_gate.sh
+
 # install / uninstall
 # ---------------------------------------------------------------------------
 install: release

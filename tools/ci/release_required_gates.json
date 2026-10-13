@@ -1,0 +1,63 @@
+{
+  "schema": "asx.release_required_gates.v1",
+  "contract": "docs/DEPLOYMENT_HARDENING.md (Release Verification and Rollback Runbook); docs/QUALITY_GATES.md",
+  "description": "What must be true at the exact commit a release tag resolves to before release.yml publishes anything. tools/ci/release_gate.py reads this file and the workflow files at that commit; a lane the workflows define is required unless it is listed under optional_jobs or excluded with a rationale.",
+  "tag_pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+([-+][0-9A-Za-z.-]+)?$",
+  "default_profile": "CORE",
+  "workflows": [
+    {
+      "id": "ci",
+      "name": "CI",
+      "path": ".github/workflows/ci.yml",
+      "events": ["push"],
+      "optional_jobs": [],
+      "required_steps": {}
+    },
+    {
+      "id": "perf",
+      "name": "Perf Gates",
+      "path": ".github/workflows/perf.yml",
+      "events": ["push"],
+      "optional_jobs": [],
+      "required_steps": {
+        "perf-tail-deadline": [
+          "Evaluate SLO gates",
+          "Evaluate HFT SLO gates",
+          "Evaluate size and cold-start gates"
+        ]
+      }
+    }
+  ],
+  "profile_jobs": [
+    {
+      "workflow": "ci",
+      "pattern": "^compiler matrix \\((gcc|clang), {profile}\\)$",
+      "min": 2
+    }
+  ],
+  "reports": [
+    {
+      "id": "conformance_summary",
+      "workflow": "ci",
+      "artifact_prefix": "conformance-",
+      "glob": "*.summary.json",
+      "require": [
+        {"path": "total", "op": ">=", "value": 1},
+        {"path": "fail", "op": "==", "value": 0},
+        {"path": "semantic_delta_pass", "op": "==", "value": true}
+      ]
+    }
+  ],
+  "excluded": [
+    {
+      "id": "device-smoke",
+      "scope": "real-device smoke verification of the embedded targets",
+      "rationale": "No device lab is attached to CI. The QEMU user-mode lanes (cross + qemu) cover the instruction sets and the embedded matrix covers the builds; a device result would need its own provenance (run id, device id, commit) before it could count, so it is excluded rather than assumed."
+    },
+    {
+      "id": "nightly",
+      "scope": "the Nightly workflow (100K fuzz, extended e2e, DSL v2 differential)",
+      "rationale": "Scheduled per day, not per commit, so a nightly result cannot be bound to the tagged commit. Release readiness rests on the per-commit CI and Perf Gates runs, which include the Rust-vs-C differential fuzz lane."
+    }
+  ]
+}

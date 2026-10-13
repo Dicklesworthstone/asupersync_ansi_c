@@ -269,12 +269,12 @@ Manifest shape:
 | **Gate ID** | `GATE-RELEASE-INSTALL-SMOKE` |
 | **Plan ref** | `bd-dq94.1` |
 | **Makefile targets** | `release-install-smoke` |
-| **CI job** | `release-readiness` / release candidate validation |
-| **Scripts** | `tools/ci/run_release_install_smoke.sh` |
+| **CI job** | `build` job of `.github/workflows/release.yml` (after its `gate` job, before `publish`) |
+| **Scripts** | `tools/ci/run_release_install_smoke.sh`; the decision it follows: `tools/ci/release_gate.py` over `tools/ci/release_required_gates.json`; negative controls `tests/gates/test_release_gate.sh` (`make test-release-gate-e2e` adds a real candidate) |
 | **Artifacts** | `build/release/dist/asx-*.tar.xz`, `build/release/dist/asx-*.tar.xz.sha256`, `build/release/dist/asx-*.tar.xz.sigstore.json`, `build/release/dist/asx-*.provenance.json`, `build/release/install-smoke/*/release_install_smoke_report.json` |
-| **Pass criteria** | The packaged release tarball, checksum, sigstore bundle, and provenance exist; checksum and provenance match current `HEAD`; the tarball extracts cleanly; the extracted library and headers install into a fresh prefix; the README quickstart compiles and runs against only that installed prefix. |
+| **Pass criteria** | The packaged release tarball, checksum, sigstore bundle, and provenance exist; checksum matches; the provenance names the artifact, its checksum, the expected commit (`--expect-sha`, default `HEAD`), version and target; with `--require-signature` the Sigstore bundle verifies with `cosign verify-blob` for the release workflow's identity (the unsigned stub, a missing bundle and a missing `cosign` fail); the tarball extracts cleanly; the extracted library and headers install into a fresh prefix; the README quickstart and a doctor probe compile and run against only that installed prefix. A source archive (`--kind source`) is verified up to its unpacked tree. |
 | **Rerun** | `make release-install-smoke RELEASE_INSTALL_SMOKE_VERSION=0.1.0 RELEASE_INSTALL_SMOKE_TARGET=linux-x86_64` |
-| **Failure action** | Fix packaging, checksum/provenance generation, installed header/library layout, or README quickstart link/run drift before publishing release assets. |
+| **Failure action** | Fix packaging, checksum/provenance generation, signing, installed header/library layout, or README quickstart or doctor probe drift before publishing release assets. Publication is unreachable until this gate and the release evidence gate (`gate` job) have passed. |
 
 Report shape:
 
@@ -305,6 +305,19 @@ Report shape:
   ]
 }
 ```
+
+### 1.13 Release Evidence Gate
+
+| Field | Value |
+|-------|-------|
+| **Gate ID** | `GATE-RELEASE-EVIDENCE` |
+| **Plan ref** | `bd-9kll.18.5`, `bd-9kll.18.6` |
+| **CI job** | `gate` job of `.github/workflows/release.yml`; `build` and `publish` need it |
+| **Scripts** | `tools/ci/release_gate.py` (`expected`, `collect`, `decide`) over `tools/ci/release_required_gates.json`; controls `tests/gates/test_release_gate.sh` |
+| **Artifacts** | `build/release/decision.json`, `build/release/decision.txt`, `build/release/evidence/` (the evidence collected for the commit and its report artifacts), uploaded as `release-decision-<run>` |
+| **Pass criteria** | At the exact commit the tag resolves to (on `main`, tag still pointing there): a completed run of every required workflow (CI, Perf Gates) exists for an allowed event and its latest run succeeded; every job the workflow files define at that commit, matrix expanded, ran and succeeded unless listed `optional_jobs` with a rationale; the required steps of the perf job (SLO, HFT SLO, size and cold-start) each succeeded; the run's conclusion agrees with its jobs; the release profile's compiler-matrix lanes are covered; the conformance summary report exists with `total >= 1`, `fail == 0` and `semantic_delta_pass`. Lanes excluded for a stated scope (`device-smoke`, `nightly`) are listed in the decision, never dropped silently. |
+| **Rerun** | `python3 tools/ci/release_gate.py collect --manifest tools/ci/release_required_gates.json --repo <owner/repo> --sha <sha> --out evidence.json` then `python3 tools/ci/release_gate.py decide --manifest tools/ci/release_required_gates.json --workflows-dir . --evidence evidence.json --tag vX.Y.Z --sha <sha>`; or run the workflow with `workflow_dispatch` for a dry run |
+| **Failure action** | Exit status 1 with a structured reason per refusal (`only_other_sha_runs`, `run_failure`, `job_skipped`, `step_not_success`, `report_missing`, `zero_comparison`, ...). Fix the lane at the commit (or re-run it) and cut the tag from that commit; never loosen a budget or drop a lane to pass. A lane may be excluded only by adding it to the manifest with a scope and a rationale in the same review. |
 
 ## 2. Supplementary Enforcement Gates
 

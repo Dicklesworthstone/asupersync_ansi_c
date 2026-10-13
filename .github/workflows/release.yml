@@ -1,5 +1,18 @@
 # =============================================================================
 # release.yml — tag-driven release artifacts and integrity bundles (bd-56t.1)
+#
+# Nothing is published unless, at the exact commit the tag resolves to:
+#   1. gate    every required lane of CI and Perf Gates succeeded
+#              (tools/ci/release_gate.py over tools/ci/release_required_gates.json);
+#   2. build   the archives were built, their checksums and provenance match,
+#              the Sigstore bundle verifies for this workflow's identity, and a
+#              consumer and a doctor probe compile and run against the
+#              archive extracted into a fresh prefix;
+#   3. publish only then, from the files that were verified (re-checked).
+#
+# A workflow_dispatch run is a dry run: it resolves a commit, evaluates the
+# same gate, builds and verifies the same artifacts and uploads the decision
+# and the retained staging reports, and never reaches publish.
 # =============================================================================
 
 name: Release Artifacts
@@ -8,10 +21,20 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Full commit id to dry-run the release for (a dry run never publishes)"
+        required: true
+        type: string
+      version:
+        description: "x.y.z the dry-run artifacts are built as"
+        required: false
+        default: "0.0.0"
+        type: string
 
 permissions:
-  contents: write
-  id-token: write
+  contents: read
 
 env:
   CI: 1
@@ -19,13 +42,150 @@ env:
   ASX_CI_ARTIFACT_ROOT: build/ci-manifests
 
 jobs:
-  release-artifacts:
-    name: "release artifacts + checksums + signatures"
+  # ---------------------------------------------------------------------------
+  # gate — required evidence at the tagged commit
+  # ---------------------------------------------------------------------------
+  gate:
+    name: "release gate (required evidence at the tagged commit)"
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+      tag: ${{ steps.resolve.outputs.tag }}
+      version: ${{ steps.resolve.outputs.version }}
+      dry_run: ${{ steps.resolve.outputs.dry_run }}
+      decision: ${{ steps.decide.outputs.decision }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
+
+      - name: Resolve the commit being released
+        id: resolve
+        env:
+          INPUT_REF: ${{ inputs.ref }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            sha="${INPUT_REF}"
+            version="${INPUT_VERSION:-0.0.0}"
+            tag="v${version}"
+            dry_run=true
+          else
+            tag="${GITHUB_REF_NAME}"
+            sha="${GITHUB_SHA}"
+            version="${tag#v}"
+            dry_run=false
+            # The tag must still point where the event said it did.
+            git fetch --force --tags origin
+            tagged="$(git rev-parse "refs/tags/${tag}^{commit}")"
+            if [ "${tagged}" != "${sha}" ]; then
+              echo "::error::tag ${tag} now resolves to ${tagged}, not ${sha}"
+              exit 1
+            fi
+          fi
+          if ! printf '%s' "${sha}" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::'${sha}' is not a full commit id"
+            exit 1
+          fi
+          git cat-file -e "${sha}^{commit}"
+          # Releases are cut from main: the commit must be on it.
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "${sha}" origin/main; then
+            echo "::error::${sha} is not an ancestor of origin/main"
+            exit 1
+          fi
+          {
+            echo "sha=${sha}"
+            echo "tag=${tag}"
+            echo "version=${version}"
+            echo "dry_run=${dry_run}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Install the gate's dependencies
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || {
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq python3-yaml
+          }
+
+      - name: Collect the evidence for the commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.resolve.outputs.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p build/release/evidence
+          python3 tools/ci/release_gate.py collect \
+            --manifest tools/ci/release_required_gates.json \
+            --repo "${GITHUB_REPOSITORY}" \
+            --sha "${SHA}" \
+            --out build/release/evidence/evidence.json \
+            --report-dir build/release/evidence/reports
+
+      # On a tag a refusal fails this job, so build and publish never run.
+      # A dry run records the refusal and carries on, so its output shows
+      # what the build and verification would have done.
+      - name: Decide
+        id: decide
+        continue-on-error: ${{ github.event_name == 'workflow_dispatch' }}
+        env:
+          SHA: ${{ steps.resolve.outputs.sha }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          set +e
+          python3 tools/ci/release_gate.py decide \
+            --manifest tools/ci/release_required_gates.json \
+            --workflows-dir . \
+            --evidence build/release/evidence/evidence.json \
+            --tag "${TAG}" \
+            --sha "${SHA}" \
+            --profile CORE \
+            --output build/release/decision.json | tee build/release/decision.txt
+          rc="${PIPESTATUS[0]}"
+          if [ "${rc}" -eq 0 ]; then
+            echo "decision=allow" >> "${GITHUB_OUTPUT}"
+          else
+            echo "decision=refuse" >> "${GITHUB_OUTPUT}"
+          fi
+          {
+            echo '### Release gate'
+            echo '```'
+            cat build/release/decision.txt
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+          exit "${rc}"
+
+      - name: Upload the decision and its evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-decision-${{ env.ASX_CI_RUN_TAG }}
+          path: |
+            build/release/decision.json
+            build/release/decision.txt
+            build/release/evidence/
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # build — archives, integrity, signature, installed-consumer verification
+  # ---------------------------------------------------------------------------
+  build:
+    name: "release artifacts + checksums + signatures + installed consumer"
+    needs: [gate]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.gate.outputs.sha }}
 
       - name: Install dependencies
         run: |
@@ -40,26 +200,26 @@ jobs:
         env:
           ASX_ENABLE_SIGSTORE: "1"
           ASX_USE_RCH: "0"
-          ASX_RELEASE_TAG: "${{ github.ref_name }}"
+          ASX_RELEASE_TAG: "${{ needs.gate.outputs.tag }}"
+          VERSION: ${{ needs.gate.outputs.version }}
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
           source_date_epoch="$(git log -1 --format=%ct)"
 
           tools/ci/run_release_artifacts.sh \
-            --version "$version" \
+            --version "${VERSION}" \
             --target linux-x86_64 \
             --kind binary \
             --profile CORE \
             --codec BIN \
             --deterministic 1 \
-            --source-date-epoch "$source_date_epoch"
+            --source-date-epoch "${source_date_epoch}"
 
           tools/ci/run_release_artifacts.sh \
-            --version "$version" \
+            --version "${VERSION}" \
             --target source \
             --kind source \
-            --source-date-epoch "$source_date_epoch"
+            --source-date-epoch "${source_date_epoch}"
 
       - name: Validate release artifact contract
         id: validate_release_artifacts
@@ -71,6 +231,38 @@ jobs:
             test -s "${base}.sha256"
             test -s "${base}.sigstore.json"
             test -s "build/release/dist/asx-${target}.provenance.json"
+          done
+
+      # Checksum, provenance (commit, version, target), the Sigstore bundle
+      # for this workflow's identity, then install into a fresh prefix and run
+      # a consumer and the doctor probe against it. The staging directory is
+      # kept and uploaded.
+      - name: Verify the artifacts and run the installed consumer
+        id: verify_release_artifacts
+        env:
+          SHA: ${{ needs.gate.outputs.sha }}
+          VERSION: ${{ needs.gate.outputs.version }}
+          DRY_RUN: ${{ needs.gate.outputs.dry_run }}
+        run: |
+          set -euo pipefail
+          if [ "${DRY_RUN}" = "true" ]; then
+            ref_re='refs/heads/.*'
+          else
+            ref_re='refs/tags/v.*'
+          fi
+          identity="^https://github.com/${GITHUB_REPOSITORY}/\\.github/workflows/release\\.yml@${ref_re}\$"
+
+          for spec in "linux-x86_64 binary" "source source"; do
+            set -- ${spec}
+            bash tools/ci/run_release_install_smoke.sh \
+              --artifact "build/release/dist/asx-$1.tar.xz" \
+              --version "${VERSION}" \
+              --target "$1" \
+              --kind "$2" \
+              --expect-sha "${SHA}" \
+              --require-signature \
+              --cosign-identity-regexp "${identity}" \
+              --report-dir build/release/staging
           done
 
       - name: Emit release lane manifest
@@ -89,6 +281,9 @@ jobs:
           elif [ "${{ steps.validate_release_artifacts.outcome }}" = "failure" ]; then
             first_failure="validate-release-artifacts"
             rerun="ls -l build/release/dist"
+          elif [ "${{ steps.verify_release_artifacts.outcome }}" = "failure" ]; then
+            first_failure="verify-release-artifacts"
+            rerun="bash tools/ci/run_release_install_smoke.sh --help"
           fi
 
           status="pass"
@@ -96,21 +291,24 @@ jobs:
             status="fail"
           fi
 
-          artifacts_json="$(find build/release/dist -maxdepth 1 -type f -printf '%f\n' | sort | jq -R . | jq -s .)"
+          artifacts_json="$(find build/release/dist -maxdepth 1 -type f -printf '%f\n' 2>/dev/null | sort | jq -R . | jq -s .)"
 
           jq -n \
             --arg lane "$lane" \
             --arg status "$status" \
             --arg run_tag "${{ env.ASX_CI_RUN_TAG }}" \
             --arg workflow "${{ github.workflow }}" \
-            --arg sha "${{ github.sha }}" \
+            --arg sha "${{ needs.gate.outputs.sha }}" \
             --arg ref "${{ github.ref }}" \
-            --arg tag "${{ github.ref_name }}" \
+            --arg tag "${{ needs.gate.outputs.tag }}" \
+            --arg dry_run "${{ needs.gate.outputs.dry_run }}" \
+            --arg decision "${{ needs.gate.outputs.decision }}" \
             --arg build_outcome "${{ steps.build_release_artifacts.outcome }}" \
             --arg validate_outcome "${{ steps.validate_release_artifacts.outcome }}" \
+            --arg verify_outcome "${{ steps.verify_release_artifacts.outcome }}" \
             --arg first_failure "$first_failure" \
             --arg rerun "$rerun" \
-            --argjson artifacts "$artifacts_json" \
+            --argjson artifacts "${artifacts_json:-[]}" \
             '{
               lane: $lane,
               status: $status,
@@ -119,33 +317,75 @@ jobs:
               sha: $sha,
               ref: $ref,
               tag: $tag,
+              dry_run: ($dry_run == "true"),
+              gate_decision: $decision,
               artifacts: $artifacts,
               steps: [
                 {id: "build-release-artifacts", outcome: $build_outcome, rerun: "tools/ci/run_release_artifacts.sh --help"},
-                {id: "validate-release-artifacts", outcome: $validate_outcome, rerun: "ls -l build/release/dist"}
+                {id: "validate-release-artifacts", outcome: $validate_outcome, rerun: "ls -l build/release/dist"},
+                {id: "verify-release-artifacts", outcome: $verify_outcome, rerun: "bash tools/ci/run_release_install_smoke.sh --help"}
               ],
               first_failure: (if $first_failure == "" then null else {step: $first_failure, rerun: $rerun} end)
             }' > "${ASX_CI_ARTIFACT_ROOT}/${lane}.manifest.json"
 
-      - name: Upload release artifacts bundle
+      - name: Upload the release assets
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: release-artifacts-${{ env.ASX_CI_RUN_TAG }}
+          name: release-dist-${{ env.ASX_CI_RUN_TAG }}
+          path: build/release/dist/
+          retention-days: 30
+
+      - name: Upload the verification staging and manifest
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-staging-${{ env.ASX_CI_RUN_TAG }}
           path: |
-            build/release/dist/
+            build/release/staging/
+            build/release/manifests/
             ${{ env.ASX_CI_ARTIFACT_ROOT }}/release-artifacts.manifest.json
           retention-days: 30
 
+  # ---------------------------------------------------------------------------
+  # publish — only after the gate allowed and the artifacts verified
+  # ---------------------------------------------------------------------------
+  publish:
+    name: "publish GitHub release assets"
+    needs: [gate, build]
+    if: ${{ success() && needs.gate.outputs.dry_run != 'true' && needs.gate.outputs.decision == 'allow' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download the verified assets
+        uses: actions/download-artifact@v4
+        with:
+          name: release-dist-${{ env.ASX_CI_RUN_TAG }}
+          path: dist
+
+      # The files are the ones the build job verified: check them again after
+      # the transfer, and refuse anything that is not the expected set.
+      - name: Re-check the downloaded assets
+        run: |
+          set -euo pipefail
+          cd dist
+          for target in linux-x86_64 source; do
+            test -s "asx-${target}.tar.xz"
+            test -s "asx-${target}.tar.xz.sigstore.json"
+            test -s "asx-${target}.provenance.json"
+            sha256sum -c "asx-${target}.tar.xz.sha256"
+          done
+          ls -l
+
       - name: Publish GitHub release assets
-        if: success()
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.gate.outputs.tag }}
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: |
-            build/release/dist/asx-*.tar.xz
-            build/release/dist/asx-*.tar.xz.sha256
-            build/release/dist/asx-*.tar.xz.sigstore.json
-            build/release/dist/asx-*.provenance.json
-            ${{ env.ASX_CI_ARTIFACT_ROOT }}/release-artifacts.manifest.json
+            dist/asx-*.tar.xz
+            dist/asx-*.tar.xz.sha256
+            dist/asx-*.tar.xz.sigstore.json
+            dist/asx-*.provenance.json

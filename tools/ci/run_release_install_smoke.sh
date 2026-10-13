@@ -2,10 +2,18 @@
 # run_release_install_smoke.sh - install and run from a packaged release artifact
 #
 # Verifies a release tarball from the operator point of view:
-#   - artifact, checksum, and provenance exist and match
+#   - artifact, checksum, and provenance exist and match; the provenance names
+#     the expected commit, version and target
+#   - with --require-signature, the Sigstore bundle verifies against the
+#     artifact for the expected signing identity (the unsigned stub, a missing
+#     bundle or a missing cosign is a failure, never a skip)
 #   - lib/header payload installs from the extracted artifact into a fresh prefix
 #   - README quickstart compiles and runs against only the installed prefix
+#   - the library's doctor (what `asx doctor` runs) compiles against the
+#     installed headers and reports a healthy runtime
 #   - a machine-readable report records commands and pass/fail statuses
+#
+# The work directory under --report-dir is retained, not cleaned up.
 #
 # SPDX-License-Identifier: MIT
 
@@ -18,6 +26,11 @@ ARTIFACT_PATH=""
 VERSION=""
 TARGET=""
 REPORT_DIR="${REPO_ROOT}/build/release/install-smoke"
+EXPECT_SHA=""
+KIND="binary"
+REQUIRE_SIGNATURE=0
+COSIGN_IDENTITY_REGEXP=""
+COSIGN_OIDC_ISSUER="https://token.actions.githubusercontent.com"
 
 usage() {
     cat <<'USAGE'
@@ -28,6 +41,17 @@ Options:
   --version <x.y.z>     Release version expected in evidence
   --target <id>         Release target expected in evidence
   --report-dir <dir>    Report/work directory root (default: build/release/install-smoke)
+  --expect-sha <sha>    Commit the provenance must name (default: this checkout's HEAD)
+  --kind <binary|source>
+                        binary (default): install and run consumers; source: verify
+                        integrity, provenance, signature and the unpacked tree only
+  --require-signature   Verify the Sigstore bundle with cosign; the unsigned stub,
+                        a missing bundle or a missing cosign fails the run
+  --cosign-identity-regexp <re>
+                        Certificate identity the signature must carry
+                        (required with --require-signature)
+  --cosign-oidc-issuer <url>
+                        OIDC issuer (default: GitHub Actions)
   -h, --help            Show this help
 USAGE
 }
@@ -38,10 +62,25 @@ while [ $# -gt 0 ]; do
         --version) VERSION="$2"; shift 2 ;;
         --target) TARGET="$2"; shift 2 ;;
         --report-dir) REPORT_DIR="$2"; shift 2 ;;
+        --expect-sha) EXPECT_SHA="$2"; shift 2 ;;
+        --kind) KIND="$2"; shift 2 ;;
+        --require-signature) REQUIRE_SIGNATURE=1; shift ;;
+        --cosign-identity-regexp) COSIGN_IDENTITY_REGEXP="$2"; shift 2 ;;
+        --cosign-oidc-issuer) COSIGN_OIDC_ISSUER="$2"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "unknown option: $1" >&2; usage; exit 2 ;;
     esac
 done
+
+case "$KIND" in
+    binary|source) ;;
+    *) echo "invalid --kind: $KIND (expected binary|source)" >&2; exit 2 ;;
+esac
+
+if [ "$REQUIRE_SIGNATURE" = "1" ] && [ -z "$COSIGN_IDENTITY_REGEXP" ]; then
+    echo "--require-signature needs --cosign-identity-regexp" >&2
+    exit 2
+fi
 
 if [ -z "$ARTIFACT_PATH" ] || [ -z "$VERSION" ] || [ -z "$TARGET" ]; then
     echo "missing required --artifact/--version/--target arguments" >&2
@@ -70,6 +109,8 @@ STEPS_FILE="${WORK_DIR}/steps.jsonl"
 REPORT_FILE="${WORK_DIR}/release_install_smoke_report.json"
 QUICKSTART_SRC="${BUILD_DIR}/readme_quickstart.c"
 QUICKSTART_BIN="${BUILD_DIR}/readme_quickstart"
+DOCTOR_SRC="${BUILD_DIR}/doctor_probe.c"
+DOCTOR_BIN="${BUILD_DIR}/doctor_probe"
 CC_BIN="${CC:-gcc}"
 CC_COMMAND="${CC_BIN%% *}"
 SHA_TOOL=""
@@ -131,6 +172,8 @@ finalize_report() {
         --arg git_commit "$git_commit" \
         --arg version "$VERSION" \
         --arg target "$TARGET" \
+        --arg expect_sha "$EXPECT_SHA" \
+        --arg require_signature "$REQUIRE_SIGNATURE" \
         --arg artifact_path "$(json_escape_path "$ARTIFACT_PATH")" \
         --arg checksum "$checksum" \
         --arg sha_path "$(json_escape_path "$SHA_PATH")" \
@@ -145,7 +188,12 @@ finalize_report() {
           diagnostic: (if $diagnostic == "" then null else $diagnostic end),
           generated_at: $generated_at,
           git: {commit: $git_commit},
-          release: {version: $version, target: $target},
+          release: {
+            version: $version,
+            target: $target,
+            expected_commit: (if $expect_sha == "" then null else $expect_sha end),
+            signature_required: ($require_signature == "1")
+          },
           artifact: {
             path: $artifact_path,
             sha256: $checksum,
@@ -233,17 +281,51 @@ pass_step "checksum_matches" "sha256($ARTIFACT_PATH) == $(basename "$SHA_PATH")"
 PROVENANCE_ARTIFACT="$(jq -r '.artifact // ""' "$PROVENANCE_PATH")"
 PROVENANCE_SHA="$(jq -r '.integrity.sha256 // ""' "$PROVENANCE_PATH")"
 PROVENANCE_GIT="$(jq -r '.git.sha // ""' "$PROVENANCE_PATH")"
+PROVENANCE_VERSION="$(jq -r '.version // ""' "$PROVENANCE_PATH")"
+PROVENANCE_TARGET="$(jq -r '.target // ""' "$PROVENANCE_PATH")"
 HEAD_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
+if [ -z "$EXPECT_SHA" ]; then
+    EXPECT_SHA="$HEAD_SHA"
+fi
 if [ "$PROVENANCE_ARTIFACT" != "$(basename "$ARTIFACT_PATH")" ]; then
     fail_step "provenance_artifact_matches" "jq .artifact $PROVENANCE_PATH" "provenance artifact does not name the tarball" "$ACTUAL_SHA"
 fi
 if [ "$PROVENANCE_SHA" != "$ACTUAL_SHA" ]; then
     fail_step "provenance_checksum_matches" "jq .integrity.sha256 $PROVENANCE_PATH" "provenance checksum mismatch" "$ACTUAL_SHA"
 fi
-if [ "$PROVENANCE_GIT" != "$HEAD_SHA" ]; then
-    fail_step "provenance_commit_matches" "jq .git.sha $PROVENANCE_PATH" "provenance commit does not match HEAD" "$ACTUAL_SHA"
+if [ "$PROVENANCE_GIT" != "$EXPECT_SHA" ]; then
+    fail_step "provenance_commit_matches" "jq .git.sha $PROVENANCE_PATH" "provenance commit does not match the expected commit $EXPECT_SHA" "$ACTUAL_SHA"
 fi
-pass_step "provenance_matches_artifact" "jq .artifact/.integrity.sha256/.git.sha $PROVENANCE_PATH"
+if [ "$PROVENANCE_VERSION" != "$VERSION" ] || [ "$PROVENANCE_TARGET" != "$TARGET" ]; then
+    fail_step "provenance_release_matches" "jq .version/.target $PROVENANCE_PATH" "provenance names version $PROVENANCE_VERSION target $PROVENANCE_TARGET, expected $VERSION $TARGET" "$ACTUAL_SHA"
+fi
+pass_step "provenance_matches_artifact" "jq .artifact/.integrity.sha256/.git.sha/.version/.target $PROVENANCE_PATH"
+
+# The Sigstore bundle. The release builder writes a stub when signing is off
+# (asx.sigstore.bundle.stub.v1): a file is not a signature, so with
+# --require-signature the stub, a missing cosign and a failed verification
+# are all failures. Without it the step is recorded as skipped, visibly.
+if [ "$REQUIRE_SIGNATURE" = "1" ]; then
+    if [ "$(jq -r '.schema // ""' "$SIGSTORE_PATH" 2>/dev/null)" = "asx.sigstore.bundle.stub.v1" ]; then
+        fail_step "signature_is_not_stub" "jq .schema $SIGSTORE_PATH" "the sigstore bundle is the unsigned stub, not a signature" "$ACTUAL_SHA"
+    fi
+    pass_step "signature_is_not_stub" "jq .schema $SIGSTORE_PATH"
+    if ! command -v cosign >/dev/null 2>&1; then
+        fail_step "command_available_cosign" "command -v cosign" "cosign is required to verify the signature" "$ACTUAL_SHA"
+    fi
+    pass_step "command_available_cosign" "command -v cosign"
+    VERIFY_CMD="cosign verify-blob --bundle $SIGSTORE_PATH --certificate-identity-regexp $COSIGN_IDENTITY_REGEXP --certificate-oidc-issuer $COSIGN_OIDC_ISSUER $ARTIFACT_PATH"
+    if ! cosign verify-blob \
+        --bundle "$SIGSTORE_PATH" \
+        --certificate-identity-regexp "$COSIGN_IDENTITY_REGEXP" \
+        --certificate-oidc-issuer "$COSIGN_OIDC_ISSUER" \
+        "$ARTIFACT_PATH" >/dev/null 2>&1; then
+        fail_step "signature_verified" "$VERIFY_CMD" "signature verification failed" "$ACTUAL_SHA"
+    fi
+    pass_step "signature_verified" "$VERIFY_CMD"
+else
+    record_step "signature_verified" "skip" "cosign verify-blob" "not requested (--require-signature absent)"
+fi
 
 if ! tar -xJf "$ARTIFACT_PATH" -C "$EXTRACT_DIR"; then
     fail_step "extract_archive" "tar -xJf $ARTIFACT_PATH -C $EXTRACT_DIR" "artifact extraction failed" "$ACTUAL_SHA"
@@ -255,6 +337,19 @@ if [ -z "$PACKAGE_TOP" ] || [ "$PACKAGE_TOP" = "." ] || [ "$PACKAGE_TOP" = ".." 
     fail_step "package_root_detected" "tar -tf $ARTIFACT_PATH" "could not detect package root" "$ACTUAL_SHA"
 fi
 PACKAGE_DIR="${EXTRACT_DIR}/${PACKAGE_TOP}"
+
+if [ "$KIND" = "source" ]; then
+    # A source archive has no library to install: its integrity, provenance
+    # and signature are what can be verified, plus the tree it unpacks.
+    for required in Makefile include/asx/asx.h src README.md; do
+        if [ ! -e "${PACKAGE_DIR}/${required}" ]; then
+            fail_step "source_payload_present" "test -e ${PACKAGE_DIR}/${required}" "source archive lacks ${required}" "$ACTUAL_SHA"
+        fi
+    done
+    pass_step "source_payload_present" "test -e Makefile include/asx/asx.h src README.md"
+    finalize_report "pass" "" "$ACTUAL_SHA"
+    exit 0
+fi
 
 if [ ! -s "${PACKAGE_DIR}/lib/libasx.a" ]; then
     fail_step "package_library_present" "test -s ${PACKAGE_DIR}/lib/libasx.a" "packaged libasx.a missing or empty" "$ACTUAL_SHA"
@@ -330,5 +425,48 @@ if ! "$QUICKSTART_BIN"; then
     fail_step "quickstart_run" "$QUICKSTART_BIN" "README quickstart binary failed" "$ACTUAL_SHA"
 fi
 pass_step "quickstart_run" "$QUICKSTART_BIN"
+
+# Health probe against the installed library: the doctor `asx doctor` runs.
+# The CLI binary itself is not part of the release archive (make install does
+# not ship it), so this consumer is the installed-artifact equivalent.
+cat >"$DOCTOR_SRC" <<'C_EOF'
+#include <asx/app/doctor.h>
+#include <asx/asx.h>
+#include <stdio.h>
+
+int main(void) {
+    asx_runtime rt;
+    asx_runtime_config cfg;
+    asx_runtime_hooks hooks;
+    asx_doctor_report report;
+    asx_status st;
+
+    asx_runtime_config_init(&cfg);
+    if (asx_runtime_hooks_init(&hooks) != ASX_OK) return 1;
+    if (asx_runtime_init(&rt, &cfg, &hooks) != ASX_OK) return 1;
+    st = asx_doctor_run(&rt, &report);
+    asx_runtime_shutdown(&rt);
+    if (st != ASX_OK) return 2;
+    printf("doctor: checks=%u pass=%u warn=%u fail=%u skip=%u\n", (unsigned)report.check_count,
+           (unsigned)report.pass_count, (unsigned)report.warn_count, (unsigned)report.fail_count,
+           (unsigned)report.skip_count);
+    return asx_doctor_is_healthy(&report) ? 0 : 3;
+}
+C_EOF
+
+DOCTOR_COMPILE_CMD="$CC_BIN -std=c99 -Wall -Wextra -Wpedantic -Werror -I${PREFIX_DIR}/include -o ${DOCTOR_BIN} ${DOCTOR_SRC} ${PREFIX_DIR}/lib/libasx.a"
+if ! $CC_BIN -std=c99 -Wall -Wextra -Wpedantic -Werror \
+    -I"${PREFIX_DIR}/include" \
+    -o "$DOCTOR_BIN" \
+    "$DOCTOR_SRC" \
+    "${PREFIX_DIR}/lib/libasx.a"; then
+    fail_step "doctor_compile" "$DOCTOR_COMPILE_CMD" "doctor probe failed to compile against installed prefix" "$ACTUAL_SHA"
+fi
+pass_step "doctor_compile" "$DOCTOR_COMPILE_CMD"
+
+if ! "$DOCTOR_BIN"; then
+    fail_step "doctor_run" "$DOCTOR_BIN" "doctor probe reported an unhealthy runtime or failed" "$ACTUAL_SHA"
+fi
+pass_step "doctor_run" "$DOCTOR_BIN"
 
 finalize_report "pass" "" "$ACTUAL_SHA"

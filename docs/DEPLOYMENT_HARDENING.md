@@ -267,6 +267,46 @@ It is deterministic-by-default and references artifact classes emitted by:
    - tag `vX.Y.Z` matches `version` in `asx-*.provenance.json`
    - provenance `git.sha` matches release commit
 
+### The Automated Release Gate (`release.yml`)
+
+`.github/workflows/release.yml` enforces the checklist above before it
+publishes anything. It runs three jobs in order, and publication is
+unreachable unless the first two succeeded:
+
+1. **gate** resolves the tag to its commit (the tag must still point where the
+   event said, and the commit must be on `main`), collects the workflow runs
+   for exactly that commit with the GitHub CLI, and decides with
+   `tools/ci/release_gate.py` against `tools/ci/release_required_gates.json`.
+   Every job the CI and Perf Gates workflows define at that commit (matrix
+   expanded) must have run and succeeded; the Perf Gates SLO, HFT SLO and size
+   steps must each show `success`, so a failing CORE gate cannot hide a
+   skipped HFT or size gate; the run's aggregate must agree with its jobs; and
+   the conformance summary report must exist with a nonzero comparison count.
+   A green run of another commit, an older green run behind a failed re-run,
+   a skipped, cancelled or missing lane, and a missing report are each refused
+   with a structured reason. Lanes that are not required are listed in the
+   manifest with a scope and a rationale (`excluded`), never silently absent.
+2. **build** builds the archives, then `tools/ci/run_release_install_smoke.sh`
+   checks, for each archive: the checksum, the provenance (artifact, checksum,
+   commit, version and target), the Sigstore bundle with `cosign verify-blob`
+   for this workflow's identity (the unsigned stub, a missing bundle or a
+   missing `cosign` fails), and for the binary archive an install into a fresh
+   prefix, a README quickstart consumer and a doctor probe compiled and run
+   against only that prefix. The staging directory is retained and uploaded.
+   The CLI binary is not part of the archive, so the doctor probe stands in
+   for `asx doctor`.
+3. **publish** downloads the verified assets, checks the checksums again and
+   uploads them.
+
+To review a release without publishing, run the workflow by hand
+(`workflow_dispatch`) with the commit and a version: it evaluates the same gate
+(a refusal is recorded, and the build still runs so its output can be read),
+builds and verifies the same artifacts, uploads the decision and staging
+reports, and never reaches publish. `python3 tools/ci/release_gate.py expected
+--manifest tools/ci/release_required_gates.json` lists the jobs a release
+waits for. The policy is exercised without a release by
+`tests/gates/test_release_gate.sh` (part of `make test-gates`).
+
 ### Profile-Specific Smoke Requirements
 
 | Profile | Minimum smoke command | Required output |
