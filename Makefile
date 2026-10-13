@@ -3260,26 +3260,25 @@ endif
 # Each target gets a separate build directory under build/cross/<name>/.
 # ---------------------------------------------------------------------------
 
-# Generic bare-metal build recipe.
+# Generic bare-metal build recipe. RESOURCE_CLASS selects the arenas (the
+# default class otherwise); BAREMETAL_EXTRA_CFLAGS is for the proof images
+# (test-baremetal-qemu), which add section flags and the JSON document caps.
 # Usage: $(call baremetal-build,<name>,<cc>,<ar>,<arch-flags>,<specs>,<profile>)
+BAREMETAL_EXTRA_CFLAGS ?=
 define baremetal-build
 	@echo "[asx] cross-baremetal: building $(1) (profile=$(6))..."
 	@if command -v $(2) >/dev/null 2>&1; then \
 		bm_build="$(BUILD_DIR)/cross/$(1)"; \
 		bm_obj="$$bm_build/obj"; \
 		bm_lib="$$bm_build/lib"; \
-		mkdir -p $$bm_obj/core $$bm_obj/runtime $$bm_obj/channel \
-		         $$bm_obj/time $$bm_obj/security $$bm_obj/stream \
-		         $$bm_obj/fs $$bm_obj/process $$bm_obj/signal \
-		         $$bm_obj/plan \
-		         $$bm_obj/platform/freestanding \
-		         $$bm_lib; \
+		mkdir -p $$bm_lib; \
 		for src in $(LIB_SRC); do \
 			obj="$$bm_obj/$${src#src/}"; \
 			obj="$${obj%.c}.o"; \
+			mkdir -p "$${obj%/*}"; \
 			$(2) $(STD_FLAGS) $(WARN_FLAGS) -Wno-type-limits -Wno-unused-value -Wno-format -O2 -DNDEBUG \
-			     $(INC_FLAGS) -DASX_PROFILE_$(6) $(CODEC_DEF) $(DET_DEF) \
-			     $(4) $(5) \
+			     $(INC_FLAGS) -DASX_PROFILE_$(6) $(CODEC_DEF) $(DET_DEF) $(CLASS_DEF) \
+			     $(BAREMETAL_EXTRA_CFLAGS) $(4) $(5) \
 			     -c -o "$$obj" "$$src" || exit 1; \
 		done; \
 		$(3) rcs "$$bm_lib/libasx.a" $$(find "$$bm_obj" -name '*.o') && \
@@ -3332,6 +3331,111 @@ cross-baremetal-all: cross-baremetal-arm-m4-free cross-baremetal-arm-m0-free \
                      cross-baremetal-arm-m4-router cross-baremetal-arm-m0-router \
                      cross-baremetal-riscv32-router cross-baremetal-riscv64-router
 	@echo "[asx] cross-baremetal-all: all 8 bare-metal targets complete"
+
+# ---------------------------------------------------------------------------
+# test-baremetal-qemu — fixtures on bare-metal Cortex-M4 and RISC-V 32 under
+# qemu-system (bd-9kll.15.7)
+#
+# For each of the two cores and each resource class in BM_CLASSES the
+# library is built by the cross-baremetal targets above (FREESTANDING on
+# arm-none-eabi, EMBEDDED_ROUTER on riscv64-unknown-elf with rv32imac), then
+# linked with tools/baremetal/bm_main.c, that core's start-up and the
+# fixtures of tests/baremetal/subset.txt compiled in as const arrays
+# (tools/baremetal/embed_fixtures.sh; no file system). The image runs under
+# qemu-system-arm -M mps2-an386 or qemu-system-riscv32 -M virt, prints
+# `asx_conformance_replay_line` for each fixture through semihosting, and
+# tools/baremetal/compare_replay.sh compares that with the host's
+# `asx-conformance replay` of the same files: the lines (scenario id,
+# semantic digest, projection digest) must be identical. Resource class R1
+# must differ from the host exactly on tests/baremetal/exceeds_r1.txt, the
+# fixtures its arenas are too small for; a stale entry fails.
+#
+# The planted control builds the same image at BM_CONTROL_CLASS with one
+# byte of BM_CONTROL_ID's scenario changed (a sleep's nanoseconds, one digit
+# up): that fixture's line must differ and no other must.
+#
+# Footprint per image (text/data/bss from the linked ELF, and by origin:
+# kernel, harness, libc) is in $(BM_DIR)/<core>-c<class>/size.txt and is
+# printed. Needs arm-none-eabi-gcc (with newlib), riscv64-unknown-elf-gcc
+# (with picolibc), qemu-system-arm and qemu-system-riscv32; absent, the
+# target SKIPs unless STRICT_GATES=1 (FAIL_ON_MISSING_CROSS_TOOLCHAINS or
+# FAIL_ON_MISSING_RUNNERS), which makes it fail. Debian/Ubuntu packages:
+# gcc-arm-none-eabi libnewlib-arm-none-eabi gcc-riscv64-unknown-elf
+# picolibc-riscv64-unknown-elf qemu-system-arm qemu-system-riscv (qemu-system-
+# misc on releases that still carry riscv there).
+# ---------------------------------------------------------------------------
+BM_DIR := $(BUILD_DIR)/baremetal
+BM_SUBSET_FILE := tests/baremetal/subset.txt
+BM_EXCEEDS_R1 := tests/baremetal/exceeds_r1.txt
+BM_IDS := $(shell sed -e '/^[[:space:]]*\#/d' -e '/^[[:space:]]*$$/d' $(BM_SUBSET_FILE) 2>/dev/null)
+BM_FIXTURES := $(addprefix fixtures/rust_reference_v2/,$(addsuffix .json,$(BM_IDS)))
+BM_CLASSES ?= 1 2 3
+BM_JSON_NODES ?= 8192
+BM_JSON_TEXT ?= 131072
+BM_CONTROL_ID ?= mpsc-send-evict-oldest-001
+BM_CONTROL_CLASS ?= 3
+BM_QEMU_ARM ?= qemu-system-arm
+BM_QEMU_RV32 ?= qemu-system-riscv32
+BM_CFLAGS := -ffunction-sections -fdata-sections -DASX_JSON_MAX_NODES=$(BM_JSON_NODES)u -DASX_JSON_MAX_TEXT=$(BM_JSON_TEXT)u
+# core:make target:library dir:profile:qemu
+BM_CORES := arm-m4:cross-baremetal-arm-m4-free:arm-m4-free:FREESTANDING:$(BM_QEMU_ARM) \
+            riscv32:cross-baremetal-riscv32-router:riscv32-router:EMBEDDED_ROUTER:$(BM_QEMU_RV32)
+
+.PHONY: test-baremetal-qemu
+test-baremetal-qemu: $(CONFORMANCE_RUNNER)
+	@echo "[asx] test-baremetal-qemu: $(words $(BM_FIXTURES)) fixture(s) x classes $(BM_CLASSES) on Cortex-M4 and RISC-V 32 under qemu-system..."
+	@if command -v arm-none-eabi-gcc >/dev/null 2>&1 && command -v riscv64-unknown-elf-gcc >/dev/null 2>&1 && \
+	    command -v $(BM_QEMU_ARM) >/dev/null 2>&1 && command -v $(BM_QEMU_RV32) >/dev/null 2>&1; then \
+		mkdir -p $(BM_DIR) && \
+		$(TEST_EXEC) $(CONFORMANCE_RUNNER) replay $(BM_FIXTURES) > $(BM_DIR)/native.txt; \
+		rc=$$?; [ $$rc -le 1 ] || { echo "[asx] test-baremetal-qemu: FAIL (native replay exit $$rc)"; exit 1; }; \
+		digests=$$(grep -c ' sha256:.* sha256:' $(BM_DIR)/native.txt); \
+		[ "$$digests" -gt 0 ] || { echo "[asx] test-baremetal-qemu: FAIL (no digest line: nothing compared)"; exit 1; }; \
+		sh tools/baremetal/embed_fixtures.sh $(BM_DIR)/bm_fixtures.c $(BM_FIXTURES) || exit 1; \
+		sh tools/baremetal/embed_fixtures.sh $(BM_DIR)/control/bm_fixtures.c --corrupt $(BM_CONTROL_ID) $(BM_FIXTURES) || exit 1; \
+		: > $(BM_DIR)/footprint.txt; \
+		for core in $(BM_CORES); do \
+			arch=$${core%%:*}; rest=$${core#*:}; target=$${rest%%:*}; rest=$${rest#*:}; \
+			lib=$${rest%%:*}; rest=$${rest#*:}; profile=$${rest%%:*}; qemu=$${rest#*:}; \
+			for cls in $(BM_CLASSES); do \
+				d=$(BM_DIR)/$$arch-c$$cls; \
+				mkdir -p $$d; \
+				$(MAKE) --no-print-directory $$target BUILD_DIR=$$d RESOURCE_CLASS=$$cls \
+				        BAREMETAL_EXTRA_CFLAGS="$(BM_CFLAGS)" > $$d/build.log 2>&1 || \
+				    { echo "[asx] test-baremetal-qemu: FAIL ($$arch class $$cls library build; tail of $$d/build.log:)"; tail -5 $$d/build.log; exit 1; }; \
+				sh tools/baremetal/proof.sh --arch $$arch --lib $$d/cross/$$lib/lib/libasx.a \
+				        --fixtures $(BM_DIR)/bm_fixtures.c --out $$d --qemu $$qemu \
+				        --cflags "-DASX_PROFILE_$$profile $(CODEC_DEF) $(DET_DEF) -DASX_RESOURCE_CLASS=$$cls $(BM_CFLAGS)" || \
+				    { echo "[asx] test-baremetal-qemu: FAIL ($$arch class $$cls image build)"; exit 1; }; \
+				flag=; [ "$$cls" = "1" ] && flag="--expect-differ $(BM_EXCEEDS_R1)"; \
+				if sh tools/baremetal/compare_replay.sh $(BM_DIR)/native.txt $$d/qemu.txt $$flag > $$d/compare.txt 2>&1; then \
+					echo "[asx] test-baremetal-qemu: $$arch class $$cls: $$(tail -1 $$d/compare.txt)"; \
+				else \
+					echo "[asx] test-baremetal-qemu: FAIL ($$arch class $$cls, qemu exit $$(cat $$d/qemu.rc)):"; cat $$d/compare.txt; exit 1; \
+				fi; \
+				{ echo "$$arch class $$cls:"; grep -A1 '^ *text' $$d/size.txt | tail -1; grep -E '^(origin|kernel|harness|libc) ' $$d/size.txt; } >> $(BM_DIR)/footprint.txt; \
+			done; \
+			case " $(BM_CLASSES) " in *" $(BM_CONTROL_CLASS) "*) ;; \
+				*) echo "[asx] test-baremetal-qemu: FAIL (BM_CONTROL_CLASS $(BM_CONTROL_CLASS) is not in BM_CLASSES)"; exit 1 ;; esac; \
+			d=$(BM_DIR)/$$arch-c$(BM_CONTROL_CLASS); c=$(BM_DIR)/$$arch-control; \
+			sh tools/baremetal/proof.sh --arch $$arch --lib $$d/cross/$$lib/lib/libasx.a \
+			        --fixtures $(BM_DIR)/control/bm_fixtures.c --out $$c --qemu $$qemu \
+			        --cflags "-DASX_PROFILE_$$profile $(CODEC_DEF) $(DET_DEF) -DASX_RESOURCE_CLASS=$(BM_CONTROL_CLASS) $(BM_CFLAGS)" || \
+			    { echo "[asx] test-baremetal-qemu: FAIL ($$arch control image build)"; exit 1; }; \
+			if sh tools/baremetal/compare_replay.sh $(BM_DIR)/native.txt $$c/qemu.txt --expect-differ $(BM_CONTROL_ID) > $$c/compare.txt 2>&1; then \
+				echo "[asx] test-baremetal-qemu: $$arch planted control ($(BM_CONTROL_ID), one byte): $$(tail -1 $$c/compare.txt)"; \
+			else \
+				echo "[asx] test-baremetal-qemu: FAIL ($$arch planted control not detected):"; cat $$c/compare.txt; exit 1; \
+			fi; \
+		done; \
+		echo "[asx] test-baremetal-qemu: footprint (bytes; flash = text + data; $(BM_DIR)/footprint.txt):"; cat $(BM_DIR)/footprint.txt; \
+		echo "[asx] test-baremetal-qemu: PASS (2 cores x classes $(BM_CLASSES), $(words $(BM_FIXTURES)) fixture(s), $$digests digest line(s) on the host)"; \
+	elif [ "$(FAIL_ON_MISSING_CROSS_TOOLCHAINS)" = "1" ] || [ "$(FAIL_ON_MISSING_RUNNERS)" = "1" ]; then \
+		echo "[asx] test-baremetal-qemu: FAIL (arm-none-eabi-gcc, riscv64-unknown-elf-gcc, $(BM_QEMU_ARM) and $(BM_QEMU_RV32) are required; strict mode)"; \
+		exit 1; \
+	else \
+		echo "[asx] test-baremetal-qemu: SKIP (arm-none-eabi-gcc, riscv64-unknown-elf-gcc, $(BM_QEMU_ARM) or $(BM_QEMU_RV32) not found)"; \
+	fi
 
 # ---------------------------------------------------------------------------
 # QEMU smoke test
@@ -3417,6 +3521,7 @@ help:
 	@echo "  ci-embedded-matrix Cross-target embedded builds (Linux-musl)"
 	@echo "  embedded-portability-proof Compact EMBEDDED_ROUTER/R1 portability proof"
 	@echo "  cross-baremetal-all All 8 bare-metal ARM/RISC-V targets"
+	@echo "  test-baremetal-qemu Fixtures on bare-metal Cortex-M4 + RISC-V 32 under qemu-system, digests equal the host's"
 	@echo "  bench              Performance benchmarks (JSON output)"
 	@echo "  bench-json         Benchmarks (JSON-only to stdout)"
 	@echo "  parallel-bench-json PARALLEL worker-count baseline JSON"

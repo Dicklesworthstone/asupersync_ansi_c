@@ -1,0 +1,28 @@
+# Fixtures of subset.txt that resource class R1 does not reproduce
+# (bd-9kll.15.7). On the R1 images each is refused ("cannot open region":
+# R1 has 4 regions) or runs to a different digest than the host's, because
+# the scenario needs more arena slots than R1 has (2 supervisors, 4
+# regions, 16 tasks, ...). Resource exhaustion is deterministic and
+# failure-atomic, so the refusal is the class's answer, not a drift: the
+# same fixtures are identical to the host's on classes 2 and 3.
+# make test-baremetal-qemu requires every id here to differ from the host's
+# line on the R1 images (so the list cannot go stale) and every other
+# fixture to be identical on every class.
+cancel-region-nested-supervisor-reason-chain-001
+cancel-region-nested-supervisor-reason-chain-002
+cancel-subtree-order-001
+cancel-subtree-order-after-child-close-001
+lab-dispatch-region-command-advances-region-001
+region-lifecycle-closed-child-spawn-001
+supervision-cancel-while-children-run-001
+supervision-child-holds-obligation-001
+supervision-dependency-orders-the-start-001
+supervision-dependency-unavailable-stops-required-child-001
+supervision-generation-server-and-nested-supervisor-001
+supervision-one-for-all-restarts-siblings-001
+supervision-optional-child-stays-stopped-without-dependency-001
+supervision-registration-replace-001
+supervision-registration-restart-001
+supervision-registration-taken-name-001
+supervision-transient-body-returns-cancelled-001
+supervision-transient-ok-stays-stopped-001
