@@ -25,7 +25,6 @@ cancel-request-event-reason-001 lab-model: the lab's region-open command costs t
 cancel-subtree-order-after-child-close-001 lab-model: close_region from a poll is a deferred lab command and the child ends ok; the sweep applies it at once and cancels the child
 lab-dispatch-cached-abort-at-admission-001 lab-model: Rust's handle-cancel queue and next-step admission order a supervisor's abort before its child starts; the sweep admits at once
 lab-dispatch-mpsc-disconnect-order-001 order: the lab's seeded pick runs the receiver's task to completion before the sender's; the sweep polls in arena order
-lab-dispatch-region-command-advances-region-001 lab-model: Rust's lab region command requests the cancel then advances the region (Draining); the sweep cancels directly (Closing)
 lab-dispatch-region-command-deferred-wakes-001 lab-model: region commands from a poll are deferred to the next step with their wakes; the sweep applies them at once
 lab-dispatch-tie-break-001 order: which of four equal-priority tasks takes the one-permit semaphore first is the lab's seeded tie-break
 obligation-limit-permit-admitted-at-poll-end-001 lab-model: Rust's obligation mailbox applies a poll's obligation ops when the poll returns; the sweep applies them at once

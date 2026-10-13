@@ -620,7 +620,7 @@ snapshot outcome is its join's (vocabulary §6).
 | `server_evicted` | `server` | `h.evicted_count()` (`:1153`) | `asx_actor_evicted_count(h)` | no | ignored. The observation `value` is the number of casts evicted under `DropOldest`. |
 | `call` | `server`, `request` | `h.call(&cx, req).await` (`:1171`) | `asx_actor_call(h, &cx, request, &op, &reply)` | until the reply arrives | Checked first: `ASX_E_CANCELLED`; a stopping server: `ASX_E_DISCONNECTED`; a dropped call: `ASX_E_INVALID_STATE` (NoReply). The caller must not be in `"root"` (Rust rejects root-region callers, `gen_server.rs:1086-1094`); both interpreters reject such a scenario as a scenario error before running it. |
 | `server_stop` | `server` | `h.stop()` (`:1453`), then `h.join(&cx)` (`:1489`) | `asx_actor_stop`, then `asx_actor_join` | until its task finished | ignored; a server that never ran: `ASX_E_CANCELLED`. Later steps may not name the server. |
-| `supervise` | `as`, `policy` (`one_for_one`, `one_for_all`, `rest_for_one`), optional `escalation` (`stop`, the default, or `escalate`), `max_restarts` (at most 32), `window_ns`, optional `storm_threshold_milli` (a positive integer: restarts per second times 1000), `children` (1 to 8 `{name, mode: permanent\|transient\|temporary, program, optional depends_on: [sibling names], optional required: bool, optional registration: {name, collision: fail\|replace}}`) | `SupervisorBuilder::new(name).with_restart_policy(p)`, one `.child(ChildSpec::new(child, …)[.depends_on(dep)…][.with_required(false)][.with_registration(Register{name, collision})])` each (`:694`), `.compile()?` (`supervision.rs:894`, `:924`, `:655`, `:973`); `.bind_managed(bindings, SupervisionConfig::new(max, window).with_restart_policy(p).with_escalation(e)[.with_storm_threshold(milli / 1000.0)])` (`:2093`, `:470`, `:491`, `:505`, `:483`) with one `ManagedChildBinding::new(child, mode, factory)` each (`:1900`); then `ManagedSupervisor::spawn(&cx)` (`:3497`), which twin_run performs itself to keep the report | `asx_supervisor_spawn(&h, own_region, &config, specs, n)`, the config's backoff and budget left at `asx_supervisor_config_init`'s (Rust's defaults) and its `storm_threshold` set to `milli / 1000.0` | no | ignored |
+| `supervise` | `as`, `policy` (`one_for_one`, `one_for_all`, `rest_for_one`), optional `escalation` (`stop`, the default, or `escalate`), `max_restarts` (at most 32), `window_ns`, optional `storm_threshold_milli` (a positive integer: restarts per second times 1000), `children` (1 to 8 `{name, mode: permanent\|transient\|temporary, program, optional depends_on: [sibling names], optional required: bool, optional shutdown_budget: a budget (§Budgets; absent or null is infinite), optional registration: {name, collision: fail\|replace}}`) | `SupervisorBuilder::new(name).with_restart_policy(p)`, one `.child(ChildSpec::new(child, …)[.depends_on(dep)…][.with_required(false)][.with_shutdown_budget(b)][.with_registration(Register{name, collision})])` each (`:694`, `:680`), `.compile()?` (`supervision.rs:894`, `:924`, `:655`, `:973`); `.bind_managed(bindings, SupervisionConfig::new(max, window).with_restart_policy(p).with_escalation(e)[.with_storm_threshold(milli / 1000.0)])` (`:2093`, `:470`, `:491`, `:505`, `:483`) with one `ManagedChildBinding::new(child, mode, factory)` each (`:1900`); then `ManagedSupervisor::spawn(&cx)` (`:3497`), which twin_run performs itself to keep the report | `asx_supervisor_spawn(&h, own_region, &config, specs, n)`, the config's backoff and budget left at `asx_supervisor_config_init`'s (Rust's defaults) and its `storm_threshold` set to `milli / 1000.0` | no | ignored |
 | `supervisor_join` | `supervisor` | `handle.join().await` (`supervision.rs:3429`) | `asx_supervisor_join(h, self, &report)` until it stops returning `ASX_E_PENDING` | until the controller published its report | Ignored: the join is not interrupted. The observation `value` is the report (below); a controller that never ran gives `ASX_E_CANCELLED` and no value. |
 
 A supervised child's program runs once per generation, as the task
@@ -685,6 +685,24 @@ sleeps 1 ms between looks for its grant with Sleeps made inside the
 library, whose Timer events twin_run cannot attribute to a task, so a
 scenario using it could not be captured. It is ported and unit-tested in C
 only (`test_supervisor`).
+
+A child's `shutdown_budget` is the ceiling its generations are drained
+with (`ChildSpec::shutdown_budget`, `supervision.rs:626`): the drain
+cancels the generation's region with it (`cancel_with_budget`, `:2235`,
+a `CancelWithBudget` region command), the region and every descendant
+region keep the tightest ceiling that reaches them
+(`record/region.rs:1214`, `state.rs:7662-7686`), and each task that cancel
+cancels takes its reason's cleanup budget met with it (`state.rs:7829-7834`:
+the smaller poll quota and deadline, the higher priority). It shows in the
+snapshot as the `cleanup_budget` of a task the drain left cancel-requested:
+`supervision-shutdown-budget-bounds-the-drained-cleanup-001` (a worker of a
+child with `{"poll_quota": 17}` has 17 polls at User's priority 200, the
+default child's 1000) and `supervision-shutdown-budget-reaches-the-
+generations-subregions-001` (a task of a sub-region the generation opened,
+under `{"poll_quota": 5, "priority": 250}`, has 5 polls at 250 against
+ParentCancelled's 200 at 220). The ceiling also bounds the region's
+finalizer tasks in Rust (`state.rs:8615`, `:7871`); C does not apply it
+there yet (the header's "Not in the C model").
 
 A child's `depends_on` names siblings of the same `supervise` (an unknown
 name, or a cycle, is refused at compile time in both engines). The

@@ -41,7 +41,7 @@ make test
 The port targets asupersync commit `5e60b1c4c` (2026-10).
 
 - **Compared with the Rust runtime, and matching:**
-  - `make conformance` runs <!-- fact:rust_fixtures -->344<!-- /fact --> scenarios captured from asupersync's `LabRuntime` (`fixtures/rust_reference_v2`) through the C runtime. Each must match the capture's trace class, final snapshot, step observations and lab dispatch order. Checked obligation handoff is included: same-region quota reuse, cross-region ownership changes, chained transfers, refusals and destination-body token drop.
+  - `make conformance` runs <!-- fact:rust_fixtures -->346<!-- /fact --> scenarios captured from asupersync's `LabRuntime` (`fixtures/rust_reference_v2`) through the C runtime. Each must match the capture's trace class, final snapshot, step observations and lab dispatch order. Checked obligation handoff is included: same-region quota reuse, cross-region ownership changes, chained transfers, refusals and destination-body token drop.
   - CI also generates 200 scenarios on every push and compares the two runtimes live (`make fuzz-differential`, seed 9).
   - It checks that the two trace canonicalizers agree on 100,000 random traces (`make canon-differential`).
   - It compares the kernel constants and defaults no scenario observes, such as cancel-kind tables, budgets, the timer limit, supervision defaults and lab batch sizes, with Rust's (`make check-rust-constants`). `twin_run` reads Rust's values from the pinned crate into `schemas/rust_kernel_constants.json`. Each value matches or is declared n/a with a reason; the gate keeps no list of accepted differences.
@@ -50,7 +50,7 @@ The port targets asupersync commit `5e60b1c4c` (2026-10).
 - **Not compared with Rust; tested in C only:** networking, files, processes and HTTP; live, non-lab scheduling.
 - **Not ported:**
   - actors: the plain `Actor` trait, system messages, overflow policies, names, monitors and links;
-  - supervision: dynamic supervisors with shared restart domains, per-child shutdown budgets, region cleanup outcomes (the legacy boot-only `CompiledSupervisor::spawn` path is excluded);
+  - supervision: dynamic supervisors with shared restart domains, a child's shutdown budget on region finalizers (it reaches the tasks of a drained generation), region cleanup outcomes (the legacy boot-only `CompiledSupervisor::spawn` path is excluded);
   - I/O: kqueue, IOCP and io_uring reactors, and Windows native I/O.
 
   The module-by-module accounting is in [`docs/RUST_EXPORTED_SURFACE_INVENTORY.md`](docs/RUST_EXPORTED_SURFACE_INVENTORY.md) §11 and, per semantic unit, in [`docs/FEATURE_PARITY.md`](docs/FEATURE_PARITY.md).

@@ -1004,7 +1004,8 @@ asx_status asx_lab_region_open_capability_command(asx_task_slot *opener, asx_reg
     return ASX_OK;
 }
 
-asx_status asx_lab_region_cancel_command(asx_region_id region, const asx_cancel_reason *reason) {
+asx_status asx_lab_region_cancel_command(asx_region_id region, const asx_cancel_reason *reason,
+                                         const asx_budget *ceiling) {
     lab_region_cmd *c;
     if (g_lab_rcmd_n >= LAB_REGION_CMD_CAP) return ASX_E_RESOURCE_EXHAUSTED;
     c = &g_lab_rcmd[g_lab_rcmd_n++];
@@ -1014,7 +1015,9 @@ asx_status asx_lab_region_cancel_command(asx_region_id region, const asx_cancel_
     c->opener_gen = 0u;
     c->principal_id = 0u;
     c->region = region;
-    c->has_budget = 0;
+    /* CancelWithBudget (child_region.rs:388) carries its shutdown budget. */
+    c->has_budget = ceiling != NULL;
+    if (ceiling != NULL) c->budget = *ceiling;
     c->payload.reason = *reason;
     return ASX_OK;
 }
@@ -1023,8 +1026,15 @@ int asx_lab_region_commands_pending(void) { return g_lab_rcmd_n > 0u; }
 
 /* asx_region_cancel fails only for a region that is gone (closed and
  * reused): as in Rust, a late cancel of one only records region.cancelled. */
-static void lab_cancel_region(asx_region_id region, const asx_cancel_reason *reason) {
-    asx_status st = asx_region_cancel(region, reason, NULL);
+static void lab_cancel_region(asx_region_id region, const asx_cancel_reason *reason,
+                              const asx_budget *ceiling) {
+    asx_region_slot *rs;
+    asx_status st;
+    /* CancelWithBudget (state.rs:5008): the ceiling is tightened in first. */
+    if (ceiling != NULL && asx_region_slot_lookup(region, &rs) == ASX_OK) {
+        (void)asx_region_ceiling_tighten_internal(rs, ceiling);
+    }
+    st = asx_region_cancel(region, reason, NULL);
     if (st == ASX_E_STALE_HANDLE) {
         asx_region_trace_cancel_of_gone_internal(region, reason);
     } else if (st == ASX_OK) {
@@ -1168,7 +1178,7 @@ void asx_lab_drain_region_commands(void) {
             continue;
         }
         if (c->cancel) {
-            lab_cancel_region(c->region, &c->payload.reason);
+            lab_cancel_region(c->region, &c->payload.reason, c->has_budget ? &c->budget : NULL);
             continue;
         }
         /* An open with an envelope is planned here, against the parent's
@@ -1201,7 +1211,7 @@ void asx_lab_drain_region_commands(void) {
         if (!t->alive || t->generation != c->opener_gen || t->region_wait != ASX_REGION_WAIT_OPEN) {
             if (st == ASX_OK) {
                 asx_cancel_reason close = asx_region_close_reason_internal(lab_kernel());
-                lab_cancel_region(id, &close);
+                lab_cancel_region(id, &close, NULL);
             }
             continue;
         }

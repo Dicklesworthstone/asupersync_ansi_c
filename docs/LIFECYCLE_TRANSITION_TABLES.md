@@ -460,7 +460,7 @@ Each cancellation carries these operational fields:
 |-------|------|-------------|
 | `reason_kind` | enum | Why cancellation was initiated (see 4.4) |
 | `attribution_chain` | bounded chain | Recursive cause chain; bounded in Rust and in C, where the bound is applied when the chain is read (§4.7) |
-| `cleanup_budget` | `asx_budget` | Budget for the cleanup phase: the request's per-kind cleanup budget (§4.4), met with any earlier request's. Rust also meets it with a region's shutdown-budget ceiling (`src/runtime/state.rs:7832`) |
+| `cleanup_budget` | `asx_budget` | Budget for the cleanup phase: the request's per-kind cleanup budget (§4.4), met with any earlier request's. Rust also meets it with a region's shutdown-budget ceiling (`src/runtime/state.rs:7832`); so does C, for a region cancel under a stored ceiling (`asx_cancel_cleanup_budget_for_internal`; `asx_region_cancel_request_ceiling_internal` sets one: a supervised child's `shutdown_budget`, bd-9kll.8.6) |
 | `epoch` | `uint64_t` | Rust: set once by the first request. C: bumped by every changed request (§4.5) |
 | `phase` | `asx_cancel_phase` | Current phase of the cancellation protocol |
 

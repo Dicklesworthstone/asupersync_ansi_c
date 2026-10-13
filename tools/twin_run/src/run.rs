@@ -3259,6 +3259,11 @@ async fn exec_step(
                     spec =
                         spec.with_required(required.as_bool().ok_or("required must be a boolean")?);
                 }
+                // `shutdown_budget` (DSL §3.8): the ceiling each of the
+                // child's generations is drained with
+                // (`ChildSpec::with_shutdown_budget`, supervision.rs:680);
+                // absent or null is Budget::INFINITE, Rust's default.
+                spec = spec.with_shutdown_budget(budget(child.get("shutdown_budget"))?);
                 // `registration`: the name each of the child's generations
                 // takes in the supervisor's registry before its factory runs
                 // (DSL §3.8). `wait` has no DSL form: its 1 ms grant checks

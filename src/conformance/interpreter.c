@@ -4691,6 +4691,9 @@ static int exec_supervisor(it_task *t, asx_task_id self, uint32_t step, uint32_t
                 }
                 specs[i].required = required ? 1u : 0u;
             }
+            /* `shutdown_budget`: the ceiling its generations are drained
+             * with; absent or null leaves the spec's infinite one. */
+            (void)parse_budget(asx_json_get(g_in, c, "shutdown_budget"), &specs[i].shutdown_budget);
         }
         st = asx_supervisor_spawn(&sv->handle, t->region, &cfg, specs, n);
         if (st != ASX_OK) {

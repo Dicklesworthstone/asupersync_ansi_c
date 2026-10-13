@@ -818,6 +818,71 @@ ASX_MUST_USE asx_status asx_task_cancel_reason_internal(asx_task_id id,
                                                         const asx_cancel_reason *reason,
                                                         asx_cancel_source source);
 
+/* A region's shutdown ceiling (Rust RegionRecord::shutdown_budget,
+ * record/region.rs:1203-1222): left by a cancel that carries one (Rust's
+ * CancelWithBudget region command, child_region.rs:388, state.rs:4943-4952;
+ * asx_region_cancel_request_ceiling_internal), the tightest of every one
+ * that reached the region. asx_region_cancel hands it to the descendants
+ * (state.rs:7662-7686), and a task a region cancel cancels takes its
+ * reason's cleanup budget met with its region's ceiling (:7829-7834).
+ * asx_region_ceiling_internal: the stored one, NULL when none; and
+ * `inherited` (NULL: none) tightened into it, the tightest of the two
+ * (tighten_shutdown_budget, :1214), which returns the ceiling it ends with. */
+static inline const asx_budget *asx_region_ceiling_internal(const asx_region_slot *r) {
+    return r->has_shutdown_budget ? &r->shutdown_budget : NULL;
+}
+static inline const asx_budget *asx_region_ceiling_tighten_internal(asx_region_slot *r,
+                                                                    const asx_budget *inherited) {
+    if (inherited != NULL) {
+#ifdef ASX_MUTANT_SHUTDOWN_CEILING_LOOSENS
+        r->shutdown_budget = *inherited; /* oracle mutant: the latest request replaces it */
+#else
+        r->shutdown_budget =
+            r->has_shutdown_budget ? asx_budget_meet(&r->shutdown_budget, inherited) : *inherited;
+#endif
+        r->has_shutdown_budget = 1;
+    }
+    return asx_region_ceiling_internal(r);
+}
+/* A descendant of a region cancel inherits its parent's stored ceiling,
+ * which the cancel has already tightened (parents come first). */
+#ifdef ASX_MUTANT_SHUTDOWN_CEILING_NOT_INHERITED
+#define ASX_REGION_CEILING_OF_PARENT(k, rs) ((const asx_budget *)NULL) /* oracle mutant */
+#else
+#define ASX_REGION_CEILING_OF_PARENT(k, rs)                                                        \
+    asx_region_ceiling_internal(&(k)->regions[asx_handle_slot((rs)->parent_id)])
+#endif
+static inline void asx_region_ceiling_inherit_internal(asx_kernel *k, asx_region_slot *rs) {
+    (void)asx_region_ceiling_tighten_internal(rs, ASX_REGION_CEILING_OF_PARENT(k, rs));
+}
+
+/* The cleanup budget a task takes when cancelled with `kind`: the kind's
+ * (asx_cancel_cleanup_budget), met with its region's shutdown ceiling for a
+ * cancel the region delivers. */
+static inline asx_budget asx_cancel_cleanup_budget_for_internal(asx_cancel_kind kind,
+                                                                const asx_task_slot *t,
+                                                                asx_cancel_source source) {
+    asx_budget b = asx_cancel_cleanup_budget(kind);
+#ifndef ASX_MUTANT_SHUTDOWN_CEILING_IGNORED /* oracle mutant: the ceiling is ignored */
+    if (source == ASX_CANCEL_SRC_REGION) {
+        const asx_kernel *k = asx_kernel_of(t->region);
+        const asx_budget *c =
+            k != NULL ? asx_region_ceiling_internal(&k->regions[asx_handle_slot(t->region)]) : NULL;
+        if (c != NULL) return asx_budget_meet(&b, c);
+    }
+#else
+    (void)t;
+    (void)source;
+#endif
+    return b;
+}
+
+/* asx_region_cancel_request with a shutdown ceiling (NULL: the plain
+ * request). Defined in cancellation.c. */
+asx_status asx_region_cancel_request_ceiling_internal(asx_region_id region,
+                                                      const asx_cancel_reason *reason,
+                                                      const asx_budget *ceiling);
+
 /* Budget exhaustion observed for task `id` (deadline, poll quota, cost):
  * attributed to the task and its region and stamped `at`, recorded on the
  * task only, as Rust's checkpoint budget check does (cx.rs:3112-3160): no
@@ -953,7 +1018,8 @@ asx_status asx_lab_region_open_capability_command(asx_task_slot *opener, asx_reg
                                                   const asx_budget *budget,
                                                   const asx_capability_budget *envelope,
                                                   const asx_capability_requirements *requirements);
-asx_status asx_lab_region_cancel_command(asx_region_id region, const asx_cancel_reason *reason);
+asx_status asx_lab_region_cancel_command(asx_region_id region, const asx_cancel_reason *reason,
+                                         const asx_budget *ceiling);
 
 /* A queued region command's payload: a Cancel's reason, or the envelope and
  * requirements of an open that carries one. */

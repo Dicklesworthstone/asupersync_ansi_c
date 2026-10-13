@@ -238,7 +238,7 @@ asx_status asx_task_cancel_reason_internal(asx_task_id id, const asx_cancel_reas
         int reason_changed;
         int cx_changed;
         int budget_changed;
-        cleanup = asx_cancel_cleanup_budget(reason->kind);
+        cleanup = asx_cancel_cleanup_budget_for_internal(reason->kind, t, source);
         folded = asx_cancel_strengthen(reason, &cx_before);
         if (!reason_same(&folded, reason)) {
             asx_budget cx_cleanup = asx_cancel_cleanup_budget(cx_before.kind);
@@ -299,7 +299,7 @@ asx_status asx_task_cancel_reason_internal(asx_task_id id, const asx_cancel_reas
     t->cancel_reason = *reason;
     t->cancel_epoch = 1;
 
-    cleanup = asx_cancel_cleanup_budget(reason->kind);
+    cleanup = asx_cancel_cleanup_budget_for_internal(reason->kind, t, source);
     /* Met with a merged pending budget cancel's (identity otherwise). */
     t->cleanup_budget = asx_budget_meet(&cleanup, &prior_cleanup);
     t->cleanup_applied = 0;
@@ -539,7 +539,7 @@ asx_status asx_region_cancel(asx_region_id region, const asx_cancel_reason *reas
 
     /* Rust RuntimeState::cancel_request (state.rs:7625-7900). First pass,
      * parent-first: each region's reason, its region.cancelled event (every
-     * call), and the close transition or a strengthened reason. */
+     * call), the close transition or a strengthened reason, a parent's ceiling. */
     n = asx_region_subtree_internal(region, g_propagate_slots, ASX_MAX_REGIONS);
     for (r = 0; r < n; r++) {
         ASX_CHECKPOINT_WAIVER("bounded: n <= ASX_MAX_REGIONS");
@@ -549,7 +549,7 @@ asx_status asx_region_cancel(asx_region_id region, const asx_cancel_reason *reas
         asx_trace_payload payload = {0};
 
         settle_regions[r] = rid;
-
+        if (r != 0u) asx_region_ceiling_inherit_internal(k, rs);
         g_propagate_pos[slot] = r;
         if (r == 0u) {
             g_propagate_reasons[0] = *reason;
@@ -936,4 +936,22 @@ asx_outcome asx_task_record_outcome_internal(const asx_task_slot *t) {
         record = asx_outcome_make(ASX_OUTCOME_OK);
     }
     return record;
+}
+
+/* asx_region_cancel_request with a shutdown ceiling: Rust's CancelWithBudget
+ * region command (child_region.rs:388), applied by the lab at the next step
+ * and otherwise at once. Applying it tightens the region's stored ceiling
+ * (record/region.rs:1214, state.rs:7662-7686) before the cancel publishes;
+ * the cancel then carries it down the subtree and into each task's cleanup
+ * budget (asx_cancel_cleanup_budget_for_internal). NULL: the plain request. */
+asx_status asx_region_cancel_request_ceiling_internal(asx_region_id region,
+                                                      const asx_cancel_reason *reason,
+                                                      const asx_budget *ceiling) {
+    asx_region_slot *rs;
+    if (reason == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (asx_lab_dispatch_active()) return asx_lab_region_cancel_command(region, reason, ceiling);
+    if (ceiling != NULL && asx_region_slot_lookup(region, &rs) == ASX_OK) {
+        (void)asx_region_ceiling_tighten_internal(rs, ceiling);
+    }
+    return asx_region_cancel_request(region, reason);
 }

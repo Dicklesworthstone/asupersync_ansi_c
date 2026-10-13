@@ -1027,15 +1027,15 @@ asx_status asx_region_cancel_request(asx_region_id region, const asx_cancel_reas
     if (reason == NULL) return ASX_E_INVALID_ARGUMENT;
     st = asx_region_slot_lookup(region, &r);
     if (st != ASX_OK && st != ASX_E_STALE_HANDLE) return st;
-    /* The drain (or here, without lab dispatch) handles a region that is
-     * gone, closed and its slot reused, as Rust does: region.cancelled
-     * only. */
-    if (asx_lab_dispatch_active()) return asx_lab_region_cancel_command(region, reason);
+    /* A region that is gone (closed, slot reused) only records region.cancelled. */
+    if (asx_lab_dispatch_active()) return asx_lab_region_cancel_command(region, reason, NULL);
     if (st == ASX_E_STALE_HANDLE) {
         asx_region_trace_cancel_of_gone_internal(region, reason);
         return ASX_OK;
     }
-    return asx_region_cancel(region, reason, NULL);
+    st = asx_region_cancel(region, reason, NULL); /* close_region_command advances (:4936) */
+    if (st == ASX_OK) asx_region_advance_internal(region);
+    return st;
 }
 
 asx_status asx_region_close_request(asx_region_id region) {

@@ -2298,6 +2298,124 @@ TEST(get_cleanup_budget_reports_the_met_budget_of_a_pending_cancel) {
     ASSERT_EQ(asx_task_get_cleanup_budget(ASX_INVALID_ID, &got), ASX_E_NOT_FOUND);
 }
 
+/* ---- Region shutdown ceilings (bd-9kll.8.6) ----
+ *
+ * Rust's CancelWithBudget (child_region.rs:388) cancels a region with a
+ * shutdown budget: the region keeps the tightest ceiling that reaches it, a
+ * descendant takes its parent's (state.rs:7662-7686), and each task the
+ * cancel cancels takes its reason's cleanup budget met with the ceiling
+ * (:7829-7834). */
+
+/* A region cancel that carries a ceiling: the tightening
+ * asx_region_cancel_request_ceiling_internal applies when the command does,
+ * then the cancel. */
+static asx_status cancel_with_ceiling(asx_region_id rid, const asx_cancel_reason *reason,
+                                      const asx_budget *ceiling, uint32_t *out_cancelled) {
+    const asx_kernel *k = asx_kernel_of(rid);
+    if (ceiling != NULL && k != NULL) {
+        (void)asx_region_ceiling_tighten_internal(
+            &asx_kernel_of(rid)->regions[asx_handle_slot(rid)], ceiling);
+    }
+    return asx_region_cancel(rid, reason, out_cancelled);
+}
+
+static asx_cancel_reason ceiling_test_reason(asx_region_id rid) {
+    asx_cancel_reason r = asx_cancel_reason_default_ctx_internal(ASX_CANCEL_USER, NULL);
+    r.origin_region = rid;
+    return r;
+}
+
+TEST(region_cancel_ceiling_meets_into_the_cleanup_budget_of_its_tasks) {
+    asx_region_id rid;
+    asx_task_id capped;
+    asx_task_id plain;
+    asx_budget ceiling = asx_budget_new();
+    asx_budget got;
+    asx_cancel_reason reason;
+
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &capped), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &plain), ASX_OK);
+    reason = ceiling_test_reason(rid);
+    ceiling.poll_quota = 17u;
+    ceiling.priority = 250u;
+    /* One task cancelled on its own first: User's 1000 polls, which the
+     * region's cancel then meets the ceiling into. */
+    ASSERT_EQ(asx_task_cancel(plain, ASX_CANCEL_USER), ASX_OK);
+    ASSERT_EQ(asx_task_get_cleanup_budget(plain, &got), ASX_OK);
+    ASSERT_EQ(got.poll_quota, 1000u);
+    ASSERT_EQ((int)got.priority, 200);
+    ASSERT_EQ(cancel_with_ceiling(rid, &reason, &ceiling, NULL), ASX_OK);
+    /* The task cancelled with the ceiling: its quota is the ceiling's and
+     * its priority the higher of User's 200 and the ceiling's 250. */
+    ASSERT_EQ(asx_task_get_cleanup_budget(capped, &got), ASX_OK);
+    ASSERT_EQ(got.poll_quota, 17u);
+    ASSERT_EQ((int)got.priority, 250);
+    /* One already cancelled takes the ceiling met into its budget too. */
+    ASSERT_EQ(asx_task_get_cleanup_budget(plain, &got), ASX_OK);
+    ASSERT_EQ(got.poll_quota, 17u);
+}
+
+TEST(region_cancel_ceiling_is_inherited_by_descendant_regions) {
+    asx_region_id parent;
+    asx_region_id child;
+    asx_task_id in_child;
+    asx_budget ceiling = asx_budget_new();
+    asx_budget got;
+    asx_cancel_reason reason;
+
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &parent), ASX_OK);
+    ASSERT_EQ(asx_region_open_child(parent, &child), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(child, poll_pending, NULL, &in_child), ASX_OK);
+    reason = ceiling_test_reason(parent);
+    ceiling.poll_quota = 5u;
+    ASSERT_EQ(cancel_with_ceiling(parent, &reason, &ceiling, NULL), ASX_OK);
+    /* The descendant's task: ParentCancelled's table (200 polls at 220)
+     * met with the ceiling inherited down the tree. */
+    ASSERT_EQ(asx_task_get_cleanup_budget(in_child, &got), ASX_OK);
+    ASSERT_EQ(got.poll_quota, 5u);
+    ASSERT_EQ((int)got.priority, 220);
+    ASSERT_TRUE(asx_region_ceiling_internal(
+                    &asx_kernel_of(child)->regions[asx_handle_slot(child)]) != NULL);
+}
+
+TEST(region_cancel_ceilings_only_tighten) {
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_budget tight = asx_budget_new();
+    asx_budget loose = asx_budget_new();
+    asx_budget got;
+    const asx_budget *held;
+    asx_cancel_reason reason;
+
+    asx_runtime_reset(test_runtime());
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
+    reason = ceiling_test_reason(rid);
+    tight.poll_quota = 17u;
+    loose.poll_quota = 400u;
+    ASSERT_EQ(cancel_with_ceiling(rid, &reason, &tight, NULL), ASX_OK);
+    /* A later request with a looser ceiling, or none at all, keeps the
+     * tightest one (RegionRecord::tighten_shutdown_budget). */
+    ASSERT_EQ(cancel_with_ceiling(rid, &reason, &loose, NULL), ASX_OK);
+    ASSERT_EQ(cancel_with_ceiling(rid, &reason, NULL, NULL), ASX_OK);
+    ASSERT_EQ(asx_task_get_cleanup_budget(tid, &got), ASX_OK);
+    ASSERT_EQ(got.poll_quota, 17u);
+    /* The region itself holds the tightest one: the task's budget meets
+     * every request in, so only the region's ceiling shows a loosening. */
+    held = asx_region_ceiling_internal(&asx_kernel_of(rid)->regions[asx_handle_slot(rid)]);
+    ASSERT_TRUE(held != NULL);
+    ASSERT_EQ(held->poll_quota, 17u);
+    /* A tighter one tightens it. */
+    loose.poll_quota = 3u;
+    ASSERT_EQ(cancel_with_ceiling(rid, &reason, &loose, NULL), ASX_OK);
+    ASSERT_EQ(asx_task_get_cleanup_budget(tid, &got), ASX_OK);
+    ASSERT_EQ(got.poll_quota, 3u);
+    ASSERT_EQ(held->poll_quota, 3u);
+}
+
 /* -------------------------------------------------------------------
  * Budget cancels the record has not taken (bd-mex3): Rust raises them on
  * the task's Cx; the record stays Running until a checkpoint acknowledges.
@@ -2609,6 +2727,9 @@ int main(void) {
     RUN_TEST(acknowledgement_replaces_the_budget_with_the_cleanup_budget);
     RUN_TEST(cancel_during_cleanup_meets_and_refills_the_budget);
     RUN_TEST(get_cleanup_budget_reports_the_met_budget_of_a_pending_cancel);
+    RUN_TEST(region_cancel_ceiling_meets_into_the_cleanup_budget_of_its_tasks);
+    RUN_TEST(region_cancel_ceiling_is_inherited_by_descendant_regions);
+    RUN_TEST(region_cancel_ceilings_only_tighten);
     RUN_TEST(budget_cancel_stays_off_the_record_until_acknowledged);
     RUN_TEST(cancel_request_newly_cancels_a_record_with_a_pending_budget_cancel);
     RUN_TEST(cleanup_hard_bound_config_is_validated);

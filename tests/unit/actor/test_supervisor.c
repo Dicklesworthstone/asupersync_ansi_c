@@ -86,6 +86,9 @@ typedef struct {
     const char *probe_name;
     uint32_t probe_own;
     uint32_t probe_other;
+    /* The cleanup budget a blocking body read when it saw its cancel. */
+    asx_budget cleanup;
+    int has_cleanup;
 } behaviour;
 
 typedef struct {
@@ -123,6 +126,7 @@ static asx_status body_poll(void *user_data, asx_task_id self) {
     if (b->block) {
         asx_checkpoint_result cr;
         if (asx_checkpoint(self, &cr) == ASX_OK && cr.cancelled) {
+            b->has_cleanup = asx_task_get_cleanup_budget(self, &b->cleanup) == ASX_OK;
             return b->result != ASX_OK ? b->result : ASX_E_CANCELLED;
         }
         MUST_OK(asx_task_park(self));
@@ -1073,6 +1077,47 @@ static void test_abort_drains_without_restarting(void) {
     ASSERT(c != NULL && c->shutdown_requested_before_completion, "it was asked to stop");
 }
 
+/* bd-9kll.8.6: a child's shutdown budget is the ceiling its generation is
+ * drained with (ChildSpec::shutdown_budget, supervision.rs:626; the drain,
+ * :2235): the cleanup budget a drained generation's task takes is its
+ * cancel kind's (User: 1000 polls at priority 200) met with the ceiling,
+ * the smaller quota and the higher priority; a child with no ceiling keeps
+ * the kind's. The poll quota's are the observable half. */
+static void test_a_childs_shutdown_budget_bounds_its_drained_generation(void) {
+    owner o;
+    behaviour capped;
+    behaviour free_run;
+    behaviour raised;
+    setup();
+    memset(&capped, 0, sizeof(capped));
+    memset(&free_run, 0, sizeof(free_run));
+    memset(&raised, 0, sizeof(raised));
+    capped.block = 1;
+    free_run.block = 1;
+    raised.block = 1;
+    owner_init(&o, 1);
+    o.abort_after = 12;
+    add_child(&o, "capped", ASX_CHILD_PERMANENT, &capped);
+    add_child(&o, "free", ASX_CHILD_PERMANENT, &free_run);
+    add_child(&o, "raised", ASX_CHILD_PERMANENT, &raised);
+    o.specs[0].shutdown_budget = asx_budget_new();
+    o.specs[0].shutdown_budget.poll_quota = 17u;
+    o.specs[2].shutdown_budget = asx_budget_new();
+    o.specs[2].shutdown_budget.poll_quota = 5000u; /* looser than User's */
+    o.specs[2].shutdown_budget.priority = 250u;
+    run_owner(&o);
+    ASSERT(o.joined, "the owner joined the drained supervisor");
+    ASSERT(capped.started == 1u && capped.has_cleanup, "the capped generation saw its cancel");
+    ASSERT(free_run.started == 1u && free_run.has_cleanup, "the free generation saw its cancel");
+    ASSERT(raised.started == 1u && raised.has_cleanup, "the raised generation saw its cancel");
+    ASSERT(capped.cleanup.poll_quota == 17u && capped.cleanup.priority == 200u,
+           "the ceiling's 17 polls against User's 1000, at User's priority 200 (128 < 200)");
+    ASSERT(free_run.cleanup.poll_quota == 1000u && free_run.cleanup.priority == 200u,
+           "no ceiling: the cancel kind's budget");
+    ASSERT(raised.cleanup.poll_quota == 1000u && raised.cleanup.priority == 250u,
+           "a looser quota changes nothing and a higher priority wins (combine takes the max)");
+}
+
 static void test_a_panic_in_the_body_is_caught(void) {
     owner o;
     behaviour b;
@@ -1263,6 +1308,7 @@ int main(void) {
     RUN(test_one_for_one_leaves_siblings_alone);
 
     RUN(test_abort_drains_without_restarting);
+    RUN(test_a_childs_shutdown_budget_bounds_its_drained_generation);
     RUN(test_a_panic_in_the_body_is_caught);
     RUN(test_a_failing_start_function_is_a_panic);
     RUN(test_restart_without_its_dependency_fails);

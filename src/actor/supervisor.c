@@ -48,6 +48,7 @@ typedef struct {
     uint8_t has_registration;
     asx_name_collision collision;
     char reg_name[ASX_NAME_MAX_LEN + 1u];
+    asx_budget shutdown_budget; /* ChildSpec::shutdown_budget: the drain's ceiling */
 } sup_child;
 
 /* A running generation (Rust RunningChild, :2206-2216) and the state its
@@ -849,7 +850,7 @@ static int accepts_terminal(const sup_slot *s, uint32_t pos, const asx_superviso
 }
 
 /* RunningChild::cancel (:2219-2239): the generation's region, cancelled
- * once with the drain reason. */
+ * once with the drain reason and the child's shutdown budget (:2235). */
 static asx_status gen_cancel(sup_slot *s, uint32_t pos) {
     sup_gen *g = &s->running[pos];
     asx_cancel_reason r;
@@ -862,7 +863,8 @@ static asx_status gen_cancel(sup_slot *s, uint32_t pos) {
     r.origin_region = g->region;
     r.timestamp = sup_now();
     r.origin_task = g->handle_held ? g->task : ASX_INVALID_ID;
-    return asx_region_cancel_request(g->region, &r);
+    return asx_region_cancel_request_ceiling_internal(g->region, &r,
+                                                      &s->children[pos].shutdown_budget);
 }
 
 /* Controller::cancel_children (:2891), over positions in the order given. */
@@ -1655,6 +1657,7 @@ void asx_child_spec_init(asx_child_spec *spec, const char *name, asx_child_resta
     spec->start_immediately = 1;
     spec->registration_name = NULL;
     spec->registration_collision = ASX_NAME_COLLISION_FAIL;
+    spec->shutdown_budget = asx_budget_infinite();
 }
 
 asx_status asx_child_spec_depends_on(asx_child_spec *spec, uint32_t dep_index) {
@@ -1856,6 +1859,7 @@ asx_status asx_supervisor_spawn(asx_supervisor_handle *out, asx_region_id region
         c->restart = spec->restart;
         c->required = spec->required;
         c->start_immediately = spec->start_immediately;
+        c->shutdown_budget = spec->shutdown_budget;
         if (spec->registration_name != NULL) {
             c->has_registration = 1u;
             c->collision = spec->registration_collision;

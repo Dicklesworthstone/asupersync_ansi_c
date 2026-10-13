@@ -96,12 +96,13 @@
  *     pub(crate)), a separate module this port does not have, so the
  *     SharedRestartLimit error is unreachable through the managed
  *     supervisor;
- *   - per-child shutdown budgets (ChildSpec::shutdown_budget): Rust applies
- *     one as a region-level shutdown ceiling that propagates to descendants
- *     and finalizers (RuntimeState::cancel_request_with_shutdown_budget),
- *     which needs the region close and finalizer work of bd-9kll.3.4 and
- *     bd-9kll.3.5; a drained generation's cleanup budget is its cancel
- *     kind's, Rust's default Budget::INFINITE ceiling;
+ *   - the part of a child's shutdown budget that reaches finalizers: Rust's
+ *     ceiling (RuntimeState::cancel_request_with_shutdown_budget,
+ *     state.rs:7556) is also the ShutdownBudget handle of every finalizer
+ *     task the region spawns (:8615) and re-publishes a finalizer task it
+ *     tightens (:7871). The tasks of a drained generation and of its
+ *     sub-regions take the ceiling (asx_child_spec.shutdown_budget); a
+ *     region finalizer's budget stays the runtime config's;
  *   - region cleanup outcomes (ManagedSupervisorError::Cleanup and
  *     SupervisorCleanup): Rust's region close returns the finalizers'
  *     outcome (close_with_outcome), which C regions do not record until
@@ -237,10 +238,18 @@ typedef struct {
      * NULL for none; copied; at most ASX_NAME_MAX_LEN characters. */
     const char *registration_name;
     asx_name_collision registration_collision;
+    /* Shutdown budget (Rust ChildSpec::shutdown_budget, supervision.rs:626):
+     * the ceiling each of this child's generations is drained with. The
+     * drain cancels the generation's region with it (CancelWithBudget,
+     * :2235): the region and its descendants keep the tightest ceiling that
+     * reaches them, and every task that cancel cancels takes the cleanup
+     * budget of its reason met with it. Default asx_budget_infinite(),
+     * which changes nothing; a deadline is absolute time. */
+    asx_budget shutdown_budget;
 } asx_child_spec;
 
 /* A spec with Rust ChildSpec::new's defaults: no dependencies, required,
- * started at boot, not registered. */
+ * started at boot, not registered, an infinite shutdown budget. */
 ASX_API void asx_child_spec_init(asx_child_spec *spec, const char *name, asx_child_restart restart,
                                  asx_child_start_fn start, void *user_data);
 

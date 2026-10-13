@@ -280,6 +280,22 @@ run_unit_mutant SWEEP_TIMED_BEFORE_CANCEL unit/runtime/test_scheduler \
 run_unit_mutant SWEEP_NO_LATE_CANCEL unit/runtime/test_scheduler \
     scheduler_polls_a_task_cancelled_this_round_before_the_rest_of_the_timed_lane
 
+# A child's shutdown budget (bd-9kll.8.6): the ceiling a drain sets on a
+# generation's region is met into the cleanup budget of every task that
+# cancel cancels, is inherited by the region's descendants, and only
+# tightens. The conformance corpus shows the first two through a drained
+# generation's tasks (supervision-shutdown-budget-*).
+run_unit_mutant SHUTDOWN_CEILING_IGNORED unit/runtime/test_cancellation \
+    region_cancel_ceiling_meets_into_the_cleanup_budget_of_its_tasks \
+    region_cancel_ceiling_is_inherited_by_descendant_regions \
+    region_cancel_ceilings_only_tighten
+run_unit_mutant SHUTDOWN_CEILING_NOT_INHERITED unit/runtime/test_cancellation \
+    region_cancel_ceiling_is_inherited_by_descendant_regions
+run_unit_mutant SHUTDOWN_CEILING_LOOSENS unit/runtime/test_cancellation \
+    region_cancel_ceilings_only_tighten
+run_mutant SHUTDOWN_CEILING_IGNORED 'supervision-shutdown-budget-'
+run_mutant SHUTDOWN_CEILING_NOT_INHERITED 'supervision-shutdown-budget-reaches-'
+
 # CapabilityBudget (bd-9kll.3.27): an envelope can only tighten down the
 # tree, a spent one is refused when required, a refused child takes nothing,
 # and a refused apply leaves the Cx as it was. The conformance corpus has no

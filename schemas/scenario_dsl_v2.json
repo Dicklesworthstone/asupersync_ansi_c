@@ -374,6 +374,7 @@
                                       "depends_on": {"type": "array", "uniqueItems": true, "maxItems": 7,
                                                      "items": {"$ref": "#/$defs/name"}},
                                       "required": {"type": "boolean"},
+                                      "shutdown_budget": {"$ref": "#/$defs/budget_or_null"},
                                       "registration": {"type": "object", "required": ["name", "collision"], "additionalProperties": false,
                                         "properties": {"name": {"$ref": "#/$defs/name"}, "collision": {"enum": ["fail", "replace"]}}}}}}}},
     "s_supervisor_join": {"type": "object", "required": ["op", "supervisor"], "additionalProperties": false,
