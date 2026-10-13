@@ -140,6 +140,7 @@ asx_status asx_quic_conn_close(asx_quic_conn conn, uint32_t error_code) {
     s->stream_count = 0u;
 
     /* In deterministic mode, draining completes immediately */
+    /* ASX_ANALYZER_WAIVER("state machine: DRAINING is the protocol's step before CLOSED") */
     s->state = ASX_QUIC_STATE_CLOSED;
     s->alive = 0;
     return ASX_OK;

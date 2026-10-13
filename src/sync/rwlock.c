@@ -261,7 +261,7 @@ static void rw_reap(rw_slot *s) {
 
 /* Wait-node pool reclamation: retire this rwlock's dead waiters. */
 static void rw_reap_queue(asx_wait_queue *q) {
-    rw_reap((rw_slot *)(void *)((char *)q - offsetof(rw_slot, waiters)));
+    rw_reap((rw_slot *)((char *)q - offsetof(rw_slot, waiters)));
 }
 
 /* ------------------------------------------------------------------ */

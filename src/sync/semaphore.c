@@ -226,7 +226,7 @@ static int sem_permit_spent(const sem_slot *s, const asx_semaphore_permit *permi
 
 /* Wait-node pool reclamation: retire this semaphore's dead waiters. */
 static void sem_reap_queue(asx_wait_queue *q) {
-    sem_slot *s = (sem_slot *)(void *)((char *)q - offsetof(sem_slot, waiters));
+    sem_slot *s = (sem_slot *)((char *)q - offsetof(sem_slot, waiters));
     sem_reap(s);
     sem_dispatch_parked(s);
 }

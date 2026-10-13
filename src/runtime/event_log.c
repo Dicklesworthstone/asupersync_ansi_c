@@ -85,6 +85,7 @@ uint32_t asx_event_emit(asx_event_kind kind, uint64_t entity_id, uint64_t parent
     uint32_t seq = g_event_count;
 
 #ifdef ASX_MUTANT_SANITIZER_OOB_READ
+    /* ASX_ANALYZER_WAIVER("planted mutant: the sanitizer lane's negative control, never built") */
     g_mutant_oob_sink = g_mutant_oob_table[g_mutant_oob_index];
 #endif
 #ifdef ASX_MUTANT_GHOST_ILLEGAL_TRANSITION

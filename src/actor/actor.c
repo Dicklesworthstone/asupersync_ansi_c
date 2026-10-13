@@ -495,6 +495,7 @@ static asx_status actor_fail(asx_actor_slot *s, asx_task_id self, asx_status why
     return asx_task_panic(self, "gen_server callback failed") == ASX_OK ? ASX_OK : why;
 }
 
+/* ASX_ANALYZER_WAIVER("callback signature: const user_data would need a function-pointer cast") */
 static asx_status actor_poll(void *user_data, asx_task_id self) {
     uint32_t idx = (uint32_t)(uintptr_t)user_data;
     asx_actor_slot *s;
@@ -562,6 +563,7 @@ asx_status asx_actor_spawn(asx_actor_handle *out, asx_region_id region,
     st = asx_channel_create(region, mailbox_capacity, &mailbox);
     if (st != ASX_OK) return st;
     tid = ASX_INVALID_ID;
+    /* ASX_ANALYZER_WAIVER("opaque token: slot index as user_data, never dereferenced") */
     st = asx_task_spawn(region, actor_poll, (void *)(uintptr_t)idx, &tid);
     s = &g_actors[idx];
     if (idx >= g_actor_hwm) g_actor_hwm = idx + 1u;
@@ -777,6 +779,7 @@ static asx_status actor_try_send(asx_actor_slot *s, actor_env_kind kind, uint64_
 
 /* The DropOldest predicate (:1321): only a queued cast may be evicted, so
  * a call and its reply permit are never lost to backpressure. */
+/* ASX_ANALYZER_WAIVER("callback signature: a const ctx would need a function-pointer cast") */
 static int envelope_is_cast(void *ctx, uint64_t index) {
     const asx_actor_slot *s = (const asx_actor_slot *)ctx;
     return index < ACTOR_ENVELOPES && s->envelopes[index].kind == ENV_CAST;

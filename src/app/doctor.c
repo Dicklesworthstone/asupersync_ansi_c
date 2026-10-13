@@ -136,6 +136,7 @@ static void check_io_driver_state(const asx_runtime *rt, asx_doctor_report *r) {
         sev = ASX_DOCTOR_FAIL;
         msg = "io driver not initialized";
     } else if (count >= cap) {
+        /* ASX_ANALYZER_WAIVER("config-dependent: cap is 0u without the native IO driver") */
         sev = ASX_DOCTOR_FAIL;
         msg = "io registration arena exhausted";
     } else if (count > cap * 3u / 4u) {
@@ -176,6 +177,7 @@ static void check_blocking_pool_state(const asx_runtime *rt, asx_doctor_report *
         sev = ASX_DOCTOR_FAIL;
         msg = "blocking pool not initialized";
     } else if (count >= cap) {
+        /* ASX_ANALYZER_WAIVER("config-dependent: cap is 0u without the blocking surface") */
         sev = ASX_DOCTOR_FAIL;
         msg = "blocking task arena exhausted";
     } else if (count > cap * 3u / 4u) {
@@ -321,6 +323,7 @@ static asx_status echo_server_poll(void *ud, asx_task_id self) {
     uint32_t n = 0;
 
     if (probe_cancelled(self)) return echo_finish(e, ASX_E_CANCELLED);
+    /* ASX_ANALYZER_WAIVER("coroutine macro: the state word takes only the labels it emits") */
     ASX_CO_BEGIN(&e->co);
     for (;;) {
         st = asx_tcp_listener_poll_accept(e->listener, &e->conn, NULL);
@@ -355,6 +358,7 @@ static asx_status echo_client_poll(void *ud, asx_task_id self) {
     uint32_t n = 0;
 
     if (probe_cancelled(self)) return echo_finish(e, ASX_E_CANCELLED);
+    /* ASX_ANALYZER_WAIVER("coroutine macro: the state word takes only the labels it emits") */
     ASX_CO_BEGIN(&e->co);
     st = asx_tcp_connect(&e->conn, &e->addr);
     if (st != ASX_OK) return echo_finish(e, st);
@@ -597,6 +601,7 @@ static void probe_blocking_verdict(const doctor_probe_ctx *p, asx_doctor_report 
     } else if (p->waiter->result != ASX_OK) {
         add_check(r, "blocking_job", ASX_DOCTOR_FAIL, "blocking job failed", p->waiter->waits, 0);
     } else {
+        /* ASX_ANALYZER_WAIVER("config-dependent: constant 0 under ASX_DETERMINISTIC") */
         add_check(r, "blocking_job", ASX_DOCTOR_OK,
                   blocking_uses_worker_threads() ? "worker-thread job returned its result"
                                                  : "job ran inline (deterministic build)",
@@ -630,6 +635,7 @@ static void probe_cleanup(doctor_probe_ctx *p) {
     uint32_t i;
 
     if (p->have_region) {
+        /* ASX_ANALYZER_WAIVER("config-dependent: nothing pends without IO driver or blocking") */
         if (probe_tasks_pending(p)) {
             reason = asx_cancel_reason_default(ASX_CANCEL_SHUTDOWN, "asx doctor probe timed out");
             st = asx_region_cancel(p->region, &reason, NULL);

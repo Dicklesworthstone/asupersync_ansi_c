@@ -401,7 +401,6 @@ void asx_framed_transport_init(asx_framed_transport_state *state, asx_transport 
 asx_status asx_framed_transport_write(asx_framed_transport_state *state, const void *data,
                                       size_t data_len, size_t *bytes_written) {
     asx_status st;
-    size_t chunk_written = 0u;
 
     if (state == NULL || bytes_written == NULL) { return ASX_E_INVALID_ARGUMENT; }
     if (data_len > 0u && data == NULL) { return ASX_E_INVALID_ARGUMENT; }
@@ -423,7 +422,7 @@ asx_status asx_framed_transport_write(asx_framed_transport_state *state, const v
 
     if (state->write_header_pos < 4u) {
         size_t remaining = 4u - state->write_header_pos;
-        chunk_written = 0u;
+        size_t chunk_written = 0u;
         st = asx_transport_write(&state->inner, state->conn,
                                  state->write_header_buf + state->write_header_pos, remaining,
                                  &chunk_written);
@@ -437,7 +436,7 @@ asx_status asx_framed_transport_write(asx_framed_transport_state *state, const v
 
     if (state->write_body_pos < state->write_data_len) {
         size_t remaining = state->write_data_len - state->write_body_pos;
-        chunk_written = 0u;
+        size_t chunk_written = 0u;
         st = asx_transport_write(&state->inner, state->conn,
                                  state->write_data + state->write_body_pos, remaining,
                                  &chunk_written);

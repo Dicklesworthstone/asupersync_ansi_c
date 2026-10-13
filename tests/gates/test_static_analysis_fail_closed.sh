@@ -16,6 +16,7 @@
 #   - analyzers missing, FAIL_ON_MISSING_LINTER=0   -> SKIP, PASSES
 #   - analyzer exits abnormally                     -> FAILS
 #   - diagnostic capture cannot store output        -> FAILS (both analyzers)
+#   - scan scope omits a src/ directory with C code -> detected (bd-9kll.16.6)
 #
 # No real analyzer runs. Each run writes
 # under build/test-gates/<run_id>/ and logs JSONL to build/test-logs/gates.jsonl.
@@ -136,6 +137,47 @@ run_case cppcheck_capture_write_failure_fails nonzero 'cppcheck output capture e
 run_case clang_tidy_capture_write_failure_fails nonzero 'clang-tidy output capture exited' \
     CPPCHECK= CLANG_TIDY="bash $WORK/tidy_stdout.sh" FAIL_ON_MISSING_LINTER=0 --
 
+# The scan scope must reach every directory under src/ that holds C sources
+# (bd-9kll.16.6: src/net, security, raptorq, platform, sync and actor were
+# outside the old four-directory list, although net and security parse
+# untrusted input). `scope_uncovered <script>` prints the directories the
+# script's SCAN_DIRS does not cover: "src" covers the whole tree; a list must
+# name each directory.
+scope_uncovered() {
+    local scan dir
+    scan="$(sed -n 's/^SCAN_DIRS=(\(.*\))$/\1/p' "$1" | tr -d '"')"
+    for dir in $(cd "$REPO_ROOT" && find src -mindepth 1 -maxdepth 1 -type d | sort); do
+        if [ -z "$(find "$REPO_ROOT/$dir" -name '*.c' -print -quit)" ]; then
+            continue
+        fi
+        case " $scan " in
+            *" src "*|*" $dir "*) ;;
+            *) printf '%s ' "$dir" ;;
+        esac
+    done
+}
+
+# scope_case <name> <script> <expect: none|some>: "none" passes when the
+# script's scope leaves no source directory out, "some" when it leaves at
+# least one out (the control that the check can fail).
+scope_case() {
+    local name="$1" script="$2" expect="$3" missing status="pass" observed
+    missing="$(scope_uncovered "$script")"
+    if [ -z "$missing" ]; then observed="none"; else observed="some"; fi
+    if [ "$observed" != "$expect" ]; then status="fail"; fi
+    if [ "$status" = "pass" ]; then
+        echo "  PASS: $name (uncovered: ${missing:-none})"
+    else
+        echo "  FAIL: $name (uncovered: ${missing:-none}; expected $expect)"
+        failures=$((failures + 1))
+    fi
+    log_case "$name" "uncovered:$expect" "uncovered:$observed" "$status" "${missing:-none}"
+}
+
+printf 'SCAN_DIRS=("src/core" "src/runtime" "src/channel" "src/time")\n' >"$WORK/old_scope.sh"
+scope_case scan_scope_covers_every_source_directory "$RUNNER" none
+scope_case four_directory_scope_is_detected_as_incomplete "$WORK/old_scope.sh" some
+
 # Validate only this run: older raw artifacts are preserved, including any
 # malformed records that previously exposed the unescaped-regex defect.
 if python3 - "$LOG" "$RUN_ID" >"$WORK/jsonl.log" 2>&1 <<'PY'
@@ -145,18 +187,18 @@ import sys
 prefix = '"run_id":' + json.dumps(sys.argv[2])
 with open(sys.argv[1]) as stream:
     rows = [json.loads(line) for line in stream if prefix in line]
-if len(rows) != 10:
-    raise ValueError(f"expected all ten actual controls, got {len(rows)}")
+if len(rows) != 12:
+    raise ValueError(f"expected all twelve actual controls, got {len(rows)}")
 if any(row["suite"] != "static_analysis_fail_closed" or
        row["run_id"] != sys.argv[2] for row in rows):
     raise ValueError("record does not belong to the current static-analysis run")
 waived = next(row for row in rows if row["test"] == "waived_finding_passes")
 if waived["expected"] != r"0:cppcheck: 0 finding\(s\), 1 waived":
     raise ValueError("JSON encoding changed the original expected regex")
-print("all ten current-run records are valid JSON and preserve the expected regex")
+print("all twelve current-run records are valid JSON and preserve the expected regex")
 PY
 then
-    echo "  PASS: current_run_jsonl_is_valid (10 records)"
+    echo "  PASS: current_run_jsonl_is_valid (12 records)"
 else
     cat "$WORK/jsonl.log" >&2
     echo "  FAIL: current_run_jsonl_is_valid (log $WORK/jsonl.log)"
@@ -165,7 +207,7 @@ fi
 
 echo ""
 if [ "$failures" -eq 0 ]; then
-    echo "test_static_analysis_fail_closed: PASS (10 cases)"
+    echo "test_static_analysis_fail_closed: PASS (12 cases)"
     exit 0
 fi
 echo "test_static_analysis_fail_closed: FAIL ($failures case(s))"

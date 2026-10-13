@@ -455,12 +455,14 @@ static asx_status tls_null_handshake(void *ctx, asx_tls_session *session) {
     return ASX_OK;
 }
 
+/* ASX_ANALYZER_WAIVER("callback signature: a const session would need a function-pointer cast") */
 static asx_status tls_null_read(void *ctx, asx_tls_session *session, asx_buf_mut *dst,
                                 uint32_t *bytes_read) {
     (void)ctx;
     return asx_tcp_stream_poll_read(session->tcp, dst, bytes_read);
 }
 
+/* ASX_ANALYZER_WAIVER("callback signature: a const session would need a function-pointer cast") */
 static asx_status tls_null_write(void *ctx, asx_tls_session *session, const asx_buf *src,
                                  uint32_t *bytes_written) {
     (void)ctx;

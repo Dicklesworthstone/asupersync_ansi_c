@@ -249,14 +249,11 @@ asx_time asx_win32_qpc_now_ns(void *ctx) { return win32_qpc_now_ns(ctx); }
 
 asx_time asx_win32_wall_clock_unix_ns(void *ctx) {
     FILETIME ft;
-    ULARGE_INTEGER value;
     uint64_t filetime_100ns;
     (void)ctx;
 
     GetSystemTimeAsFileTime(&ft);
-    value.LowPart = ft.dwLowDateTime;
-    value.HighPart = ft.dwHighDateTime;
-    filetime_100ns = (uint64_t)value.QuadPart;
+    filetime_100ns = ((uint64_t)ft.dwHighDateTime << 32) | (uint64_t)ft.dwLowDateTime;
 
     if (filetime_100ns < ASX_WIN32_FILETIME_UNIX_EPOCH_100NS) return 0;
     return (asx_time)((filetime_100ns - ASX_WIN32_FILETIME_UNIX_EPOCH_100NS) * 100ULL);

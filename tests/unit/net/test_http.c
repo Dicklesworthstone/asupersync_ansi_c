@@ -553,14 +553,38 @@ TEST(static_file_serving_and_traversal_rejection) {
 #endif
 
 TEST(sse_response_builder) {
+    static const char full[] = "id: 42\nevent: tick\ndata: hello\n\n";
+    static const char data_only[] = "data: x\n\n";
     asx_http_response resp;
 
     ASSERT_EQ(asx_http_response_set_sse(&resp, "tick", "42", "hello"), ASX_OK);
     ASSERT_EQ(resp.status, ASX_HTTP_200_OK);
     ASSERT_STR_EQ(asx_http_headers_get(&resp.headers, "Content-Type"), "text/event-stream");
-    ASSERT_TRUE(strstr((const char *)resp.body.data, "id: 42") != NULL);
-    ASSERT_TRUE(strstr((const char *)resp.body.data, "event: tick") != NULL);
-    ASSERT_TRUE(strstr((const char *)resp.body.data, "data: hello") != NULL);
+    /* Each field ends in its own line break (the event line once ran into
+     * the data line: "event: tickdata: hello"). */
+    ASSERT_EQ(resp.body.len, (uint32_t)(sizeof(full) - 1u));
+    ASSERT_TRUE(memcmp(resp.body.data, full, sizeof(full) - 1u) == 0);
+
+    /* No id and no event: only the data field. NULL and "" both omit. */
+    ASSERT_EQ(asx_http_response_set_sse(&resp, NULL, "", "x"), ASX_OK);
+    ASSERT_EQ(resp.body.len, (uint32_t)(sizeof(data_only) - 1u));
+    ASSERT_TRUE(memcmp(resp.body.data, data_only, sizeof(data_only) - 1u) == 0);
+}
+
+TEST(sse_response_builder_cannot_be_made_to_inject_fields) {
+    static const char split[] = "data: a\ndata: b\ndata: \ndata: c\n\n";
+    asx_http_response resp;
+
+    /* A line break in id or event would start another field. */
+    ASSERT_EQ(asx_http_response_set_sse(&resp, "tick", "1\ndata: evil", "d"),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_http_response_set_sse(&resp, "a\rb", "1", "d"), ASX_E_INVALID_ARGUMENT);
+
+    /* Line breaks in data become one data field per line (CRLF is one
+     * break), so a blank line in the text cannot end the event early. */
+    ASSERT_EQ(asx_http_response_set_sse(&resp, NULL, NULL, "a\r\nb\n\nc"), ASX_OK);
+    ASSERT_EQ(resp.body.len, (uint32_t)(sizeof(split) - 1u));
+    ASSERT_TRUE(memcmp(resp.body.data, split, sizeof(split) - 1u) == 0);
 }
 
 TEST(multipart_parse_extracts_parts) {
@@ -739,6 +763,7 @@ int main(void) {
     RUN_TEST(static_file_serving_and_traversal_rejection);
 #endif
     RUN_TEST(sse_response_builder);
+    RUN_TEST(sse_response_builder_cannot_be_made_to_inject_fields);
     RUN_TEST(multipart_parse_extracts_parts);
     RUN_TEST(multipart_parse_preserves_binary_file_payload);
 

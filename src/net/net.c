@@ -178,20 +178,20 @@ static int parse_ipv6_host(const char *host, uint8_t out[16]) {
         if (n > 7u) return 0;
         memset(out, 0, 16);
         for (i = 0; i < (uint32_t)gap; i++) {
-            out[2u * i] = (uint8_t)(groups[i] >> 8);
-            out[2u * i + 1u] = (uint8_t)(groups[i] & 0xFFu);
+            out[(size_t)2u * i] = (uint8_t)(groups[i] >> 8);
+            out[((size_t)2u * i) + 1u] = (uint8_t)(groups[i] & 0xFFu);
         }
         for (i = 0; i < tail; i++) {
             uint32_t dst = 8u - tail + i;
-            out[2u * dst] = (uint8_t)(groups[(uint32_t)gap + i] >> 8);
-            out[2u * dst + 1u] = (uint8_t)(groups[(uint32_t)gap + i] & 0xFFu);
+            out[(size_t)2u * dst] = (uint8_t)(groups[(uint32_t)gap + i] >> 8);
+            out[((size_t)2u * dst) + 1u] = (uint8_t)(groups[(uint32_t)gap + i] & 0xFFu);
         }
         return 1;
     }
     if (n != 8u) return 0;
     for (i = 0; i < 8u; i++) {
-        out[2u * i] = (uint8_t)(groups[i] >> 8);
-        out[2u * i + 1u] = (uint8_t)(groups[i] & 0xFFu);
+        out[(size_t)2u * i] = (uint8_t)(groups[i] >> 8);
+        out[((size_t)2u * i) + 1u] = (uint8_t)(groups[i] & 0xFFu);
     }
     return 1;
 }

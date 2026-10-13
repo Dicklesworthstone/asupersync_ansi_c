@@ -28,7 +28,11 @@ REPORT_FILE="$ARTIFACT_DIR/report.json"
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-SCAN_DIRS=("src/core" "src/runtime" "src/channel" "src/time")
+# All of src/ (bd-9kll.16.6): every directory compiles into libasx.a, and the
+# parsers of untrusted input (net, security, raptorq) live outside the four
+# kernel directories this list used to name. Scanning the tree rather than a
+# list means a new module is analyzed by default instead of silently skipped.
+SCAN_DIRS=("src")
 WAIVER_PATTERN='ASX_ANALYZER_WAIVER'
 JSON_OUTPUT=0
 VERBOSE=0

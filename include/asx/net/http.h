@@ -338,7 +338,11 @@ ASX_API asx_status asx_http_request_verify_body_auth(const asx_http_request *req
 ASX_API asx_status asx_http_response_set_session_cookie(asx_http_response *resp, const char *name,
                                                         const char *value, int secure,
                                                         int http_only);
-/* Set the response as a Server-Sent Event with event type, id, and data. */
+/* Set the response as a Server-Sent Event with event type, id, and data.
+ * NULL or empty event/id omit the field. event and id must not contain CR or
+ * LF (ASX_E_INVALID_ARGUMENT); data is split at its line breaks into one
+ * `data:` field per line, so no text can add a field or end the event early.
+ * ASX_E_BUFFER_TOO_SMALL when the event does not fit the body. */
 ASX_API asx_status asx_http_response_set_sse(asx_http_response *resp, const char *event,
                                              const char *id, const char *data);
 #if ASX_HAS_NATIVE_RUNTIME_SURFACES

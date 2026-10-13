@@ -47,7 +47,8 @@ static uint32_t node_alloc(asx_json_doc *doc, asx_json_type type) {
  * ASX_JSON_NONE when the pool is full. */
 static uint32_t text_store(asx_json_doc *doc, const char *bytes, size_t len) {
     uint32_t off;
-    if (len >= (size_t)ASX_JSON_MAX_TEXT || (size_t)doc->text_used + len + 1u > ASX_JSON_MAX_TEXT) {
+    if (len >= (size_t)ASX_JSON_MAX_TEXT ||
+        (size_t)doc->text_used + len + 1u > (size_t)ASX_JSON_MAX_TEXT) {
         doc->error = "text pool exhausted";
         return ASX_JSON_NONE;
     }
@@ -119,7 +120,7 @@ static int read_hex4(json_parser *p, uint32_t *out) {
 
 /* Append one byte to the string being decoded (text pool tail). */
 static int text_push(asx_json_doc *doc, uint32_t start, char c) {
-    if ((size_t)doc->text_used + 1u >= ASX_JSON_MAX_TEXT) return 0;
+    if ((size_t)doc->text_used + 1u >= (size_t)ASX_JSON_MAX_TEXT) return 0;
     (void)start;
     doc->text[doc->text_used++] = c;
     return 1;
@@ -226,7 +227,7 @@ static asx_status parse_string(json_parser *p, uint32_t *out_off, uint32_t *out_
             p->pos += n;
         }
     }
-    if ((size_t)doc->text_used + 1u > ASX_JSON_MAX_TEXT) return parse_exhausted(p);
+    if ((size_t)doc->text_used + 1u > (size_t)ASX_JSON_MAX_TEXT) return parse_exhausted(p);
     doc->text[doc->text_used++] = '\0';
     *out_off = start;
     *out_len = doc->text_used - start - 1u;
@@ -282,6 +283,7 @@ static void link_child(asx_json_doc *doc, uint32_t parent, uint32_t child) {
     pn->count++;
 }
 
+/* ASX_ANALYZER_WAIVER("bounded recursion: nesting deeper than ASX_JSON_MAX_DEPTH is rejected") */
 static asx_status parse_container(json_parser *p, uint32_t node, int is_object) {
     char close = is_object ? '}' : ']';
     asx_status st;
@@ -336,6 +338,7 @@ static asx_status parse_container(json_parser *p, uint32_t node, int is_object) 
     return ASX_OK;
 }
 
+/* ASX_ANALYZER_WAIVER("bounded recursion: nesting deeper than ASX_JSON_MAX_DEPTH is rejected") */
 static asx_status parse_value(json_parser *p, uint32_t *out) {
     uint32_t node;
     char c;
@@ -561,6 +564,7 @@ void asx_json_set(asx_json_doc *doc, uint32_t obj, const char *key, uint32_t chi
     set_member(doc, obj, key, key == NULL ? 0u : strlen(key), child);
 }
 
+/* ASX_ANALYZER_WAIVER("bounded recursion: nesting deeper than ASX_JSON_MAX_DEPTH is rejected") */
 static uint32_t copy_node(asx_json_doc *dst, const asx_json_doc *src, uint32_t node,
                           uint32_t depth) {
     const asx_json_node *s = asx_json_at(src, node);
@@ -775,6 +779,7 @@ static int key_less(const asx_json_doc *doc, uint32_t a, uint32_t b) {
            0;
 }
 
+/* ASX_ANALYZER_WAIVER("bounded recursion: nesting deeper than ASX_JSON_MAX_DEPTH is rejected") */
 static asx_status write_node(const asx_json_doc *doc, uint32_t node, asx_json_out *out,
                              uint32_t depth) {
     const asx_json_node *n = asx_json_at(doc, node);

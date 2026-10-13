@@ -80,7 +80,7 @@ static void barrier_reap(barrier_slot *s) {
 
 /* Wait-node pool reclamation: withdraw this barrier's dead waiters. */
 static void barrier_reap_queue(asx_wait_queue *q) {
-    barrier_reap((barrier_slot *)(void *)((char *)q - offsetof(barrier_slot, waiters)));
+    barrier_reap((barrier_slot *)((char *)q - offsetof(barrier_slot, waiters)));
 }
 
 /* ------------------------------------------------------------------ */

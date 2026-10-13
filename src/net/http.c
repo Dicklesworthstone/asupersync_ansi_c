@@ -148,12 +148,13 @@ static asx_status http_parse_hex_tag(const char *text, asx_auth_tag *out_tag) {
     uint32_t i;
 
     if (text == NULL || out_tag == NULL) return ASX_E_INVALID_ARGUMENT;
-    if (http_bounded_strlen(text, (ASX_AUTH_TAG_SIZE * 2u) + 1u) != ASX_AUTH_TAG_SIZE * 2u) {
+    if (http_bounded_strlen(text, ((size_t)ASX_AUTH_TAG_SIZE * 2u) + 1u) !=
+        (size_t)ASX_AUTH_TAG_SIZE * 2u) {
         return ASX_E_INVALID_ARGUMENT;
     }
     for (i = 0u; i < ASX_AUTH_TAG_SIZE; i++) {
-        char hi = text[i * 2u];
-        char lo = text[(i * 2u) + 1u];
+        char hi = text[(size_t)i * 2u];
+        char lo = text[((size_t)i * 2u) + 1u];
         if (!http_is_hex(hi) || !http_is_hex(lo)) return ASX_E_INVALID_ARGUMENT;
         out_tag->bytes[i] = (uint8_t)((http_hex_value(hi) << 4u) | http_hex_value(lo));
     }
@@ -722,32 +723,63 @@ asx_status asx_http_response_set_session_cookie(asx_http_response *resp, const c
     return asx_http_headers_add(&resp->headers, "Set-Cookie", cookie);
 }
 
+/* Append "<name>: <value>\n" to buf (capacity cap) at *len; 0 when it does not fit. */
+static int sse_field(char *buf, size_t cap, size_t *len, const char *name, size_t name_len,
+                     const char *value, size_t value_len) {
+    if (name_len + 2u + value_len + 1u > cap - *len) return 0;
+    memcpy(buf + *len, name, name_len);
+    *len += name_len;
+    buf[(*len)++] = ':';
+    buf[(*len)++] = ' ';
+    memcpy(buf + *len, value, value_len);
+    *len += value_len;
+    buf[(*len)++] = '\n';
+    return 1;
+}
+
 asx_status asx_http_response_set_sse(asx_http_response *resp, const char *event, const char *id,
                                      const char *data) {
     char payload[ASX_HTTP_BODY_MAX];
-    int written;
+    size_t used = 0u;
+    const char *line;
     asx_status st;
 
     if (resp == NULL || data == NULL) return ASX_E_INVALID_ARGUMENT;
-    written =
-        snprintf(payload, sizeof(payload), "%s%s%s%sdata: %s\n\n",
-                 (id != NULL && id[0] != '\0') ? "id: " : "",
-                 (id != NULL && id[0] != '\0') ? id : "", (id != NULL && id[0] != '\0') ? "\n" : "",
-                 (event != NULL && event[0] != '\0') ? "" : "", data);
-    if (event != NULL && event[0] != '\0') {
-        written = snprintf(payload, sizeof(payload), "%s%s%s%s%sdata: %s\n\n",
-                           (id != NULL && id[0] != '\0') ? "id: " : "",
-                           (id != NULL && id[0] != '\0') ? id : "",
-                           (id != NULL && id[0] != '\0') ? "\n" : "", "event: ", event, data);
+    /* A line break in a field value would end the field and let the text
+     * after it start another one (or a blank line end the event). */
+    if ((id != NULL && strpbrk(id, "\r\n") != NULL) ||
+        (event != NULL && strpbrk(event, "\r\n") != NULL)) {
+        return ASX_E_INVALID_ARGUMENT;
     }
-    if (written < 0 || (size_t)written >= sizeof(payload)) return ASX_E_BUFFER_TOO_SMALL;
+    if (id != NULL && id[0] != '\0' &&
+        !sse_field(payload, sizeof(payload), &used, "id", 2u, id, strlen(id))) {
+        return ASX_E_BUFFER_TOO_SMALL;
+    }
+    if (event != NULL && event[0] != '\0' &&
+        !sse_field(payload, sizeof(payload), &used, "event", 5u, event, strlen(event))) {
+        return ASX_E_BUFFER_TOO_SMALL;
+    }
+    /* One data field per line of data (CR, LF or CRLF ends a line). */
+    line = data;
+    for (;;) {
+        size_t n = strcspn(line, "\r\n");
+        size_t skip = n;
+        if (!sse_field(payload, sizeof(payload), &used, "data", 4u, line, n)) {
+            return ASX_E_BUFFER_TOO_SMALL;
+        }
+        if (line[n] == '\0') break;
+        if (line[n] == '\r' && line[n + 1u] == '\n') skip++;
+        line += skip + 1u;
+    }
+    if (used >= sizeof(payload)) return ASX_E_BUFFER_TOO_SMALL;
+    payload[used++] = '\n';
 
     asx_http_response_init(resp, ASX_HTTP_200_OK);
     st = asx_http_headers_add(&resp->headers, "Content-Type", "text/event-stream");
     if (st != ASX_OK) return st;
     st = asx_http_headers_add(&resp->headers, "Cache-Control", "no-cache");
     if (st != ASX_OK) return st;
-    return asx_http_body_set_bytes(&resp->body, payload, (uint32_t)written);
+    return asx_http_body_set_bytes(&resp->body, payload, (uint32_t)used);
 }
 
 #if ASX_HAS_NATIVE_RUNTIME_SURFACES
@@ -922,7 +954,7 @@ asx_status asx_http_parse_multipart(const asx_http_request *req,
             return ASX_E_BUFFER_TOO_SMALL;
         }
         part->data_len = (uint32_t)(part_end - content_start);
-        if (part->data_len > 0u) memcpy(part->data, content_start, part->data_len);
+        memcpy(part->data, content_start, part->data_len);
         out_form->count++;
         cursor = part_end;
     }

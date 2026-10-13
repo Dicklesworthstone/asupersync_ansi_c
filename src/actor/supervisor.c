@@ -433,6 +433,7 @@ static asx_supervisor_generation gen_identity(const sup_slot *s, uint32_t pos) {
 /* ------------------------------------------------------------------ */
 
 static void *gen_code(const sup_slot *s, uint32_t pos) {
+    /* ASX_ANALYZER_WAIVER("opaque token: slot and child index as user_data, not dereferenced") */
     return (void *)(uintptr_t)((uint32_t)(s - g_sups) * SUP_CHILDREN + pos);
 }
 
@@ -456,6 +457,7 @@ static void gen_publish(sup_gen *g, asx_outcome_severity outcome, asx_status sta
     g->terminal_shutdown = g->shutdown_requested;
 }
 
+/* ASX_ANALYZER_WAIVER("callback signature: const user_data would need a function-pointer cast") */
 static asx_status gen_poll(void *user_data, asx_task_id self) {
     uint32_t code = (uint32_t)(uintptr_t)user_data;
     uint32_t slot = code / SUP_CHILDREN;
@@ -1168,6 +1170,7 @@ static void publish(sup_slot *s) {
     s->pc = PC_DONE;
 }
 
+/* ASX_ANALYZER_WAIVER("callback signature: const user_data would need a function-pointer cast") */
 static asx_status ctl_poll(void *user_data, asx_task_id self) {
     uint32_t idx = (uint32_t)(uintptr_t)user_data;
     sup_slot *s;
@@ -1504,6 +1507,7 @@ asx_status asx_supervisor_spawn(asx_supervisor_handle *out, asx_region_id region
     }
     if (idx >= ASX_MAX_SUPERVISORS) return ASX_E_RESOURCE_EXHAUSTED;
 
+    /* ASX_ANALYZER_WAIVER("opaque token: slot index as user_data, never dereferenced") */
     st = asx_task_spawn(region, ctl_poll, (void *)(uintptr_t)idx, &tid);
     if (st != ASX_OK) {
         /* Under lab dispatch Rust's handle exists anyway; its controller's

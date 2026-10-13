@@ -115,7 +115,7 @@ static void sha1_compress(void *state_v, const uint8_t *block) {
     uint32_t a, b, c, d, e, f, k, temp;
     unsigned t;
 
-    for (t = 0u; t < 16u; t++) w[t] = asx_load_be_u32(block + (4u * t));
+    for (t = 0u; t < 16u; t++) w[t] = asx_load_be_u32(block + ((size_t)4u * t));
     for (t = 16u; t < 80u; t++) w[t] = rotl32(w[t - 3u] ^ w[t - 8u] ^ w[t - 14u] ^ w[t - 16u], 1u);
 
     a = state[0];
@@ -185,7 +185,7 @@ void asx_sha1_final(asx_sha1_ctx *ctx, uint8_t out[ASX_SHA1_DIGEST_SIZE]) {
     memset(ctx->block + ctx->block_len, 0, 56u - ctx->block_len);
     asx_store_be_u64(ctx->block + 56, bit_len);
     sha1_compress(ctx->state, ctx->block);
-    for (i = 0u; i < 5u; i++) asx_store_be_u32(out + (4u * i), ctx->state[i]);
+    for (i = 0u; i < 5u; i++) asx_store_be_u32(out + ((size_t)4u * i), ctx->state[i]);
     asx_crypto_secure_zero(ctx, sizeof(*ctx));
 }
 
@@ -218,7 +218,7 @@ static void sha256_compress(void *state_v, const uint8_t *block) {
     uint32_t a, b, c, d, e, f, g, h, t1, t2;
     unsigned t;
 
-    for (t = 0u; t < 16u; t++) w[t] = asx_load_be_u32(block + (4u * t));
+    for (t = 0u; t < 16u; t++) w[t] = asx_load_be_u32(block + ((size_t)4u * t));
     for (t = 16u; t < 64u; t++) {
         uint32_t s0 = rotr32(w[t - 15u], 7u) ^ rotr32(w[t - 15u], 18u) ^ (w[t - 15u] >> 3);
         uint32_t s1 = rotr32(w[t - 2u], 17u) ^ rotr32(w[t - 2u], 19u) ^ (w[t - 2u] >> 10);
@@ -296,7 +296,7 @@ void asx_sha256_final(asx_sha256_ctx *ctx, uint8_t out[ASX_SHA256_DIGEST_SIZE]) 
     memset(ctx->block + ctx->block_len, 0, 56u - ctx->block_len);
     asx_store_be_u64(ctx->block + 56, bit_len);
     sha256_compress(ctx->state, ctx->block);
-    for (i = 0u; i < 8u; i++) asx_store_be_u32(out + (4u * i), ctx->state[i]);
+    for (i = 0u; i < 8u; i++) asx_store_be_u32(out + ((size_t)4u * i), ctx->state[i]);
     asx_crypto_secure_zero(ctx, sizeof(*ctx));
 }
 
@@ -346,7 +346,7 @@ static void sha512_compress(void *state_v, const uint8_t *block) {
     uint64_t a, b, c, d, e, f, g, h, t1, t2;
     unsigned t;
 
-    for (t = 0u; t < 16u; t++) w[t] = asx_load_be_u64(block + (8u * t));
+    for (t = 0u; t < 16u; t++) w[t] = asx_load_be_u64(block + ((size_t)8u * t));
     for (t = 16u; t < 80u; t++) {
         uint64_t s0 = rotr64(w[t - 15u], 1u) ^ rotr64(w[t - 15u], 8u) ^ (w[t - 15u] >> 7);
         uint64_t s1 = rotr64(w[t - 2u], 19u) ^ rotr64(w[t - 2u], 61u) ^ (w[t - 2u] >> 6);
@@ -428,7 +428,7 @@ void asx_sha512_final(asx_sha512_ctx *ctx, uint8_t out[ASX_SHA512_DIGEST_SIZE]) 
     asx_store_be_u64(ctx->block + 112, bit_len_hi);
     asx_store_be_u64(ctx->block + 120, bit_len_lo);
     sha512_compress(ctx->state, ctx->block);
-    for (i = 0u; i < 8u; i++) asx_store_be_u64(out + (8u * i), ctx->state[i]);
+    for (i = 0u; i < 8u; i++) asx_store_be_u64(out + ((size_t)8u * i), ctx->state[i]);
     asx_crypto_secure_zero(ctx, sizeof(*ctx));
 }
 
@@ -518,7 +518,7 @@ asx_status asx_hkdf_sha256_expand(const uint8_t *prk, size_t prk_len, const void
     if (prk == NULL || prk_len < ASX_SHA256_DIGEST_SIZE) return ASX_E_INVALID_ARGUMENT;
     if (okm == NULL && okm_len > 0u) return ASX_E_INVALID_ARGUMENT;
     if (info == NULL && info_len > 0u) return ASX_E_INVALID_ARGUMENT;
-    if (okm_len > ASX_HKDF_SHA256_MAX_OKM) return ASX_E_INVALID_ARGUMENT;
+    if (okm_len > (size_t)ASX_HKDF_SHA256_MAX_OKM) return ASX_E_INVALID_ARGUMENT;
 
     done = 0u;
     counter = 1u;
@@ -549,7 +549,7 @@ asx_status asx_hkdf_sha256(const void *salt, size_t salt_len, const void *ikm, s
     if (ikm == NULL && ikm_len > 0u) return ASX_E_INVALID_ARGUMENT;
     if (okm == NULL && okm_len > 0u) return ASX_E_INVALID_ARGUMENT;
     if (info == NULL && info_len > 0u) return ASX_E_INVALID_ARGUMENT;
-    if (okm_len > ASX_HKDF_SHA256_MAX_OKM) return ASX_E_INVALID_ARGUMENT;
+    if (okm_len > (size_t)ASX_HKDF_SHA256_MAX_OKM) return ASX_E_INVALID_ARGUMENT;
 
     asx_hkdf_sha256_extract(salt, salt_len, ikm, ikm_len, prk);
     st = asx_hkdf_sha256_expand(prk, sizeof(prk), info, info_len, okm, okm_len);
@@ -798,7 +798,7 @@ asx_status asx_crypto_random_bytes(asx_crypto_entropy_fn source, void *ctx, uint
                 asx_crypto_secure_zero(out, len);
                 return st;
             }
-            asx_store_le_u64(seed + (8u * i), v);
+            asx_store_le_u64(seed + ((size_t)8u * i), v);
         }
         asx_store_le_u64(counter_le, counter);
 

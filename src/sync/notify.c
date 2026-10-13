@@ -126,7 +126,7 @@ static void notify_reap(notify_slot *s) {
 
 /* Wait-node pool reclamation: retire this notify's dead waiters. */
 static void notify_reap_queue(asx_wait_queue *q) {
-    notify_reap((notify_slot *)(void *)((char *)q - offsetof(notify_slot, waiters)));
+    notify_reap((notify_slot *)((char *)q - offsetof(notify_slot, waiters)));
 }
 
 /* ------------------------------------------------------------------ */

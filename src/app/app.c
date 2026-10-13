@@ -279,7 +279,6 @@ asx_exit_code asx_app_run_server_with_cx(asx_app *app, const asx_cx *app_cx,
     asx_budget budget;
     asx_status st;
     asx_signal_subscription subscription;
-    int have_subscription = 0;
     asx_process_handle process = {0u, 0u}; /* read only when have_process */
     int have_process = 0;
     int32_t process_exit_code = 0;
@@ -349,7 +348,6 @@ asx_exit_code asx_app_run_server_with_cx(asx_app *app, const asx_cx *app_cx,
 
     st = asx_signal_subscribe(&subscription, server_config->shutdown_signal);
     if (st == ASX_OK) {
-        have_subscription = 1;
         report->signal_subscription_active = 1;
     } else {
         report->last_status = st;
@@ -362,14 +360,10 @@ asx_exit_code asx_app_run_server_with_cx(asx_app *app, const asx_cx *app_cx,
 
     st = asx_task_spawn(app->region, main_fn, user_data, &tid);
     if (st != ASX_OK) {
-        asx_status cleanup_st = ASX_OK;
         report->last_status = st;
         report->exit_code = ASX_EXIT_TASK_FAILED;
-        if (have_subscription) {
-            cleanup_st = asx_signal_unsubscribe(subscription);
-            asx_app_note_cleanup_status(report, cleanup_st);
-            asx_signal_clear_shutdown();
-        }
+        asx_app_note_cleanup_status(report, asx_signal_unsubscribe(subscription));
+        asx_signal_clear_shutdown();
         if (have_process) asx_app_note_cleanup_status(report, asx_process_release(process));
         app->exit_code = report->exit_code;
         asx_app_server_summary(out_summary, report);
@@ -420,11 +414,8 @@ asx_exit_code asx_app_run_server_with_cx(asx_app *app, const asx_cx *app_cx,
      * handed to the reaper (never left as a zombie). */
     if (have_process) asx_app_note_cleanup_status(report, asx_process_release(process));
 
-    if (have_subscription) {
-        asx_status cleanup_st = asx_signal_unsubscribe(subscription);
-        asx_app_note_cleanup_status(report, cleanup_st);
-        asx_signal_clear_shutdown();
-    }
+    asx_app_note_cleanup_status(report, asx_signal_unsubscribe(subscription));
+    asx_signal_clear_shutdown();
 
     if (report->bootstrap_process_exited && report->bootstrap_process_exit_code != 0 &&
         !report->shutdown_requested) {
