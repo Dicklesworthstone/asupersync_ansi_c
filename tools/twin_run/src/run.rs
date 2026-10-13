@@ -37,7 +37,7 @@ use asupersync::supervision::{
 use asupersync::sync as asx_sync;
 use asupersync::time::delay_queue::Key as DelayKey;
 use asupersync::time::{DelayQueue, Interval, MissedTickBehavior, interval, interval_at};
-use asupersync::trace::{CompactTaskId, TraceData, TraceEventKind};
+use asupersync::trace::{CompactTaskId, TraceData, TraceEvent, TraceEventKind};
 use asupersync::{Budget, CancelKind, CancelReason, Cx, RegionId, TaskId, Time};
 use serde_json::{Value, json};
 
@@ -4299,9 +4299,13 @@ struct IdsSeen {
 
 impl IdsSeen {
     fn from_trace(lab: &LabRuntime) -> Self {
+        Self::from_events(&lab.trace().snapshot())
+    }
+
+    fn from_events(events: &[TraceEvent]) -> Self {
         use TraceEventKind as K;
         let mut ids = Self::default();
-        for event in lab.trace().snapshot() {
+        for event in events {
             match (&event.kind, &event.data) {
                 (K::RegionCreated, TraceData::Region { region, parent }) => {
                     ids.regions.insert(format!("{region:?}"), *region);
@@ -4797,6 +4801,12 @@ fn handoff_fields(message: &str) -> RunResult<HandoffFields> {
 }
 
 fn project_trace(lab: &LabRuntime, shared: &SharedRef) -> RunResult<Projected> {
+    project_events(&lab.trace().snapshot(), shared)
+}
+
+/// The projection proper, over any slice of trace events: the unit tests of
+/// `projection_tests` feed it hand-built traces (bd-9kll.2.23).
+fn project_events(trace: &[TraceEvent], shared: &SharedRef) -> RunResult<Projected> {
     use TraceEventKind as K;
     let s = lock(shared);
     let mut accepted_handoffs = s.handoff_tickets.clone();
@@ -4808,8 +4818,8 @@ fn project_trace(lab: &LabRuntime, shared: &SharedRef) -> RunResult<Projected> {
     let mut timer_order: Vec<String> = Vec::new();
     // timer id -> the name of its current schedule (ids are reused).
     let mut timer_current: HashMap<u64, String> = HashMap::new();
-    let ids_seen = IdsSeen::from_trace(lab);
-    for event in lab.trace().snapshot() {
+    let ids_seen = IdsSeen::from_events(trace);
+    for event in trace {
         let ev = match (&event.kind, &event.data) {
             (K::Spawn, TraceData::Task { task, region }) => {
                 json!({"k": "task.spawned", "task": task_name(&s, *task)?, "region": region_name(&s, *region)?})
@@ -5215,6 +5225,414 @@ fn check_expectation(scenario: &Value, observations: &[Value], events: &[Value])
         ));
     }
     Ok(())
+}
+
+/// The projection of hand-built Rust traces into the vocabulary
+/// (bd-9kll.2.23). Each expected event is spelled from the vocabulary table
+/// (docs/CANONICAL_VOCABULARY_V2.md section 3), not read back from what the
+/// projection returns, so a field that changes in `project_events` fails here
+/// before it is baked into every fixture. The last test runs the whole path
+/// (lab, names, projection, canonical form) on two small committed scenarios.
+#[cfg(test)]
+mod projection_tests {
+    use super::*;
+
+    fn task(index: u32) -> TaskId {
+        serde_json::from_value(json!({"kind": "TaskId", "index": index, "generation": 1}))
+            .expect("a task id from its serde envelope")
+    }
+
+    fn region(index: u32) -> RegionId {
+        serde_json::from_value(json!({"kind": "RegionId", "index": index, "generation": 1}))
+            .expect("a region id from its serde envelope")
+    }
+
+    fn obligation(index: u32) -> asupersync::ObligationId {
+        serde_json::from_value(json!({"kind": "ObligationId", "index": index, "generation": 1}))
+            .expect("an obligation id from its serde envelope")
+    }
+
+    fn at(nanos: u64) -> Time {
+        Time::from_nanos(nanos)
+    }
+
+    /// Tasks 1 and 2 are `t1` and `t2`; regions 1 and 2 are `root` and `child`.
+    fn world() -> SharedRef {
+        let mut s = Shared::default();
+        s.task_names.insert(task(1), "t1".to_string());
+        s.task_names.insert(task(2), "t2".to_string());
+        s.region_names.insert(region(1), "root".to_string());
+        s.region_names.insert(region(2), "child".to_string());
+        Arc::new(Mutex::new(s))
+    }
+
+    fn project(trace: &[TraceEvent], shared: &SharedRef) -> Projected {
+        project_events(trace, shared).expect("the trace projects")
+    }
+
+    fn reason(kind: CancelKind, nanos: u64) -> CancelReason {
+        CancelReason::with_origin(kind, region(1), at(nanos))
+    }
+
+    #[test]
+    fn a_task_spawn_and_completion_name_the_task_and_its_region() {
+        let shared = world();
+        let trace = [
+            TraceEvent::spawn(1, at(0), task(1), region(2)),
+            TraceEvent::complete(2, at(5), task(1), region(2)),
+        ];
+        assert_eq!(
+            Value::Array(project(&trace, &shared).events),
+            json!([
+                {"k": "task.spawned", "task": "t1", "region": "child"},
+                {"k": "task.completed", "task": "t1", "region": "child"},
+            ])
+        );
+    }
+
+    #[test]
+    fn a_region_is_created_closed_begin_and_closed_without_its_parent_field() {
+        let shared = world();
+        let data = TraceData::Region {
+            region: region(2),
+            parent: Some(region(1)),
+        };
+        let trace = [
+            TraceEvent::region_created(1, at(0), region(1), None),
+            TraceEvent::region_created(2, at(0), region(2), Some(region(1))),
+            TraceEvent::new(3, at(9), TraceEventKind::RegionCloseBegin, data.clone()),
+            TraceEvent::new(4, at(9), TraceEventKind::RegionCloseComplete, data),
+        ];
+        assert_eq!(
+            Value::Array(project(&trace, &shared).events),
+            json!([
+                {"k": "region.created", "region": "root", "parent": null},
+                {"k": "region.created", "region": "child", "parent": "root"},
+                {"k": "region.close_begin", "region": "child"},
+                {"k": "region.closed", "region": "child"},
+            ])
+        );
+    }
+
+    /// `cancel.requested` carries the reason (docs/CANONICAL_VOCABULARY_V2.md);
+    /// the acknowledgement is an excluded event (docs/VOCABULARY_EXCLUSIONS.md).
+    #[test]
+    fn a_cancel_request_projects_its_reason_and_the_ack_is_excluded() {
+        let shared = world();
+        let user = reason(CancelKind::User, 7)
+            .with_task(task(2))
+            .with_message("stop");
+        let trace = [
+            TraceEvent::cancel_request(1, at(7), task(1), region(2), user.clone()),
+            TraceEvent::new(
+                2,
+                at(8),
+                TraceEventKind::CancelAck,
+                TraceData::Cancel {
+                    task: task(1),
+                    region: region(2),
+                    reason: user,
+                },
+            ),
+            TraceEvent::region_cancelled(
+                3,
+                at(9),
+                region(2),
+                reason(CancelKind::ParentCancelled, 9),
+            ),
+        ];
+        assert_eq!(
+            Value::Array(project(&trace, &shared).events),
+            json!([
+                {
+                    "k": "cancel.requested", "task": "t1", "region": "child",
+                    "reason": {
+                        "kind": "User", "origin_region": "root", "origin_task": "t2",
+                        "timestamp_ns": 7, "message": "stop", "cause_chain_len": 0,
+                        "truncated": false,
+                    },
+                },
+                {
+                    "k": "region.cancelled", "region": "child",
+                    "reason": {
+                        "kind": "ParentCancelled", "origin_region": "root", "origin_task": null,
+                        "timestamp_ns": 9, "message": null, "cause_chain_len": 0,
+                        "truncated": false,
+                    },
+                },
+            ])
+        );
+    }
+
+    /// Names are `<holder>/o<n>` by the holder's order of first appearance;
+    /// only the events that resolve an obligation carry `duration_ns`, and
+    /// only an abort carries `abort_reason`.
+    #[test]
+    fn obligation_reserve_commit_abort_and_leak_project_with_stable_names() {
+        let shared = world();
+        let trace = [
+            TraceEvent::obligation_reserve(
+                1,
+                at(0),
+                obligation(1),
+                task(1),
+                region(1),
+                ObligationKind::SendPermit,
+            ),
+            TraceEvent::obligation_reserve(
+                2,
+                at(0),
+                obligation(2),
+                task(2),
+                region(1),
+                ObligationKind::Ack,
+            ),
+            TraceEvent::obligation_commit(
+                3,
+                at(10),
+                obligation(1),
+                task(1),
+                region(1),
+                ObligationKind::SendPermit,
+                10,
+            ),
+            TraceEvent::obligation_abort(
+                4,
+                at(3),
+                obligation(2),
+                task(2),
+                region(1),
+                ObligationKind::Ack,
+                3,
+                ObligationAbortReason::Cancel,
+            ),
+            TraceEvent::obligation_reserve(
+                5,
+                at(3),
+                obligation(3),
+                task(1),
+                region(1),
+                ObligationKind::Lease,
+            ),
+            TraceEvent::obligation_leak(
+                6,
+                at(12),
+                obligation(3),
+                task(1),
+                region(1),
+                ObligationKind::Lease,
+                9,
+            ),
+        ];
+        let projected = project(&trace, &shared);
+        assert_eq!(
+            Value::Array(projected.events),
+            json!([
+                {"k": "obligation.reserved", "obligation": "t1/o1", "task": "t1",
+                 "region": "root", "kind": "SendPermit"},
+                {"k": "obligation.reserved", "obligation": "t2/o1", "task": "t2",
+                 "region": "root", "kind": "Ack"},
+                {"k": "obligation.committed", "obligation": "t1/o1", "task": "t1",
+                 "region": "root", "kind": "SendPermit", "duration_ns": 10},
+                {"k": "obligation.aborted", "obligation": "t2/o1", "task": "t2",
+                 "region": "root", "kind": "Ack", "duration_ns": 3, "abort_reason": "Cancel"},
+                {"k": "obligation.reserved", "obligation": "t1/o2", "task": "t1",
+                 "region": "root", "kind": "Lease"},
+                {"k": "obligation.leaked", "obligation": "t1/o2", "task": "t1",
+                 "region": "root", "kind": "Lease", "duration_ns": 9},
+            ])
+        );
+        // The final state of each obligation, for the snapshot.
+        let names: Vec<&str> = projected
+            .obligations
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect();
+        assert_eq!(names, ["t1/o1", "t2/o1", "t1/o2"]);
+        assert_eq!(
+            projected.obligations[0].1,
+            json!({"state": "Committed", "kind": "SendPermit", "holder": "t1",
+                   "region": "root", "abort_reason": null})
+        );
+        assert_eq!(
+            projected.obligations[1].1,
+            json!({"state": "Aborted", "kind": "Ack", "holder": "t2",
+                   "region": "root", "abort_reason": "Cancel"})
+        );
+        assert_eq!(
+            projected.obligations[2].1,
+            json!({"state": "Leaked", "kind": "Lease", "holder": "t1",
+                   "region": "root", "abort_reason": null})
+        );
+    }
+
+    /// A timer takes its sleep's name from the event that scheduled it (seq
+    /// in `timer_names`); a fire or cancel recorded under the same timer id
+    /// carries that name, and only an unresolved timer is pending.
+    #[test]
+    fn timer_schedule_fire_and_cancel_project_with_the_sleeps_name() {
+        let shared = world();
+        {
+            let mut s = lock(&shared);
+            s.timer_names.insert(10, "sleep.a".to_string());
+            s.timer_names.insert(12, "sleep.b".to_string());
+            s.timer_names.insert(14, "sleep.c".to_string());
+        }
+        let trace = [
+            TraceEvent::timer_scheduled(10, at(0), 7, at(100)),
+            TraceEvent::timer_fired(11, at(100), 7),
+            TraceEvent::timer_scheduled(12, at(100), 8, at(200)),
+            TraceEvent::timer_cancelled(13, at(150), 8),
+            TraceEvent::timer_scheduled(14, at(150), 9, at(300)),
+        ];
+        let projected = project(&trace, &shared);
+        assert_eq!(
+            Value::Array(projected.events),
+            json!([
+                {"k": "timer.scheduled", "timer": "sleep.a", "deadline_ns": 100},
+                {"k": "timer.fired", "timer": "sleep.a"},
+                {"k": "timer.scheduled", "timer": "sleep.b", "deadline_ns": 200},
+                {"k": "timer.cancelled", "timer": "sleep.b"},
+                {"k": "timer.scheduled", "timer": "sleep.c", "deadline_ns": 300},
+            ])
+        );
+        assert_eq!(
+            Value::Array(projected.timers_pending),
+            json!([{"timer": "sleep.c", "deadline_ns": 300}])
+        );
+    }
+
+    #[test]
+    fn a_user_trace_message_passes_through() {
+        let shared = world();
+        let trace = [TraceEvent::user_trace(1, at(0), "hello")];
+        assert_eq!(
+            Value::Array(project(&trace, &shared).events),
+            json!([{"k": "user.trace", "message": "hello"}])
+        );
+    }
+
+    /// The scheduler's own bookkeeping is not in the vocabulary
+    /// (docs/VOCABULARY_EXCLUSIONS.md), and anything the projection cannot
+    /// name is an error, never a silent drop.
+    #[test]
+    fn excluded_events_vanish_and_unprojectable_ones_fail_the_run() {
+        let shared = world();
+        let excluded = [
+            TraceEvent::schedule(1, at(0), task(1), region(1)),
+            TraceEvent::poll(2, at(0), task(1), region(1)),
+            TraceEvent::wake(3, at(0), task(1), region(1)),
+            TraceEvent::yield_task(4, at(0), task(1), region(1)),
+        ];
+        assert!(project(&excluded, &shared).events.is_empty());
+
+        let unnamed = [TraceEvent::spawn(1, at(0), task(9), region(1))];
+        let error = project_events(&unnamed, &shared).err();
+        assert!(error.is_some_and(|e| e.contains("unnamed task")));
+
+        let mismatched = [TraceEvent::new(
+            1,
+            at(0),
+            TraceEventKind::Spawn,
+            TraceData::Time {
+                old: at(0),
+                new: at(1),
+            },
+        )];
+        let error = project_events(&mismatched, &shared).err();
+        assert!(error.is_some_and(|e| e.contains("unprojectable trace event")));
+    }
+
+    /// Two of the smallest committed scenarios, through the lab: the names,
+    /// the order, the Foata form and the final obligation state.
+    #[test]
+    fn small_scenarios_run_end_to_end() {
+        let task_err = json!({
+            "channels": [],
+            "description": "A task returns an error outcome.",
+            "expect": {"kind": "ok"},
+            "id": "task-lifecycle-err-outcome-001",
+            "lab": {"max_steps": 100},
+            "regions": [{"budget": null, "name": "r.main", "parent": "root"}],
+            "rules": ["def.outcome.four_valued"],
+            "schema": "asx.scenario.v2",
+            "script": [],
+            "seed": 42,
+            "sync": [],
+            "tasks": [{
+                "budget": null,
+                "name": "t.a",
+                "program": [{
+                    "op": "return",
+                    "outcome": {"status": "ASX_E_INVALID_ARGUMENT", "tag": "err"},
+                }],
+                "region": "r.main",
+            }],
+            "unit": "task_lifecycle",
+        });
+        let fixture = run_scenario(&task_err).expect("the scenario runs");
+        assert_eq!(
+            fixture["trace"],
+            json!([
+                [{"k": "region.created", "parent": null, "region": "root"}],
+                [{"k": "region.created", "parent": "root", "region": "r.main"}],
+                [{"k": "task.spawned", "region": "r.main", "task": "t.a"}],
+                [{"k": "task.completed", "region": "r.main", "task": "t.a"}],
+            ])
+        );
+        assert_eq!(
+            fixture["snapshot"]["tasks"]["t.a"]["outcome"],
+            json!({"status": "ASX_E_INVALID_ARGUMENT", "tag": "err"})
+        );
+
+        let reserve_commit = json!({
+            "channels": [],
+            "description": "A task reserves a Lease, commits it and completes ok.",
+            "expect": {"kind": "ok"},
+            "id": "obligation-reserve-commit-001",
+            "lab": {"max_steps": 100},
+            "regions": [{"budget": null, "name": "r.main", "parent": "root"}],
+            "rules": [
+                "rule.obligation.reserve",
+                "rule.obligation.commit",
+                "inv.obligation.linear",
+            ],
+            "schema": "asx.scenario.v2",
+            "script": [],
+            "seed": 42,
+            "sync": [],
+            "tasks": [{
+                "budget": null,
+                "name": "t.a",
+                "program": [
+                    {"as": "o.lease", "kind": "Lease", "op": "reserve"},
+                    {"op": "yield"},
+                    {"obligation": "o.lease", "op": "commit"},
+                ],
+                "region": "r.main",
+            }],
+            "unit": "obligation",
+        });
+        let fixture = run_scenario(&reserve_commit).expect("the scenario runs");
+        assert_eq!(
+            fixture["trace"],
+            json!([
+                [{"k": "region.created", "parent": null, "region": "root"}],
+                [{"k": "region.created", "parent": "root", "region": "r.main"}],
+                [{"k": "task.spawned", "region": "r.main", "task": "t.a"}],
+                [{"k": "obligation.reserved", "kind": "Lease", "obligation": "t.a/o1",
+                  "region": "r.main", "task": "t.a"}],
+                [{"k": "obligation.committed", "kind": "Lease", "obligation": "t.a/o1",
+                  "region": "r.main", "task": "t.a", "duration_ns": 0}],
+                [{"k": "task.completed", "region": "r.main", "task": "t.a"}],
+            ])
+        );
+        assert_eq!(
+            fixture["snapshot"]["obligations"],
+            json!({"t.a/o1": {"abort_reason": null, "holder": "t.a", "kind": "Lease",
+                              "region": "r.main", "state": "Committed"}})
+        );
+    }
 }
 
 #[cfg(test)]
