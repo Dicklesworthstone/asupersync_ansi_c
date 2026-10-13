@@ -2124,9 +2124,29 @@ Durable counterexamples live in `fixtures/fuzz_counterexamples/` with schema
 failures there after triage; every fixture records the deterministic input
 seed, expected C exit and summary counters, and minimization metadata.
 `make fuzz-minimize` retains live DSL v2 counterexamples under
-`build/fuzz_v2/seed-<seed>/minimized/`. After fixing a divergence, its genuine
-Rust regression capture goes into `fixtures/rust_reference_v2/` and its input
-into `tests/conformance/scenarios_v2/`.
+`build/fuzz_v2/seed-<seed>/minimized/` (the nightly workflow uploads that
+tree; unpack it under `build/fuzz_v2/` to work from a night's divergences).
+After fixing a divergence, one command promotes its minimized counterexample
+into the corpus every push runs:
+
+```bash
+make fuzz-minimize FUZZ_V2_SEED=9
+make fuzz-promote FUZZ_V2_SEED=9 PROMOTE_ID=gen-9-017   # [PROMOTE_NAME=<slug>-NNN]
+```
+
+`fuzz-promote` renames `gen-9-017-min.scenario.json` to the schema's id
+pattern (`gen-9-017-min-001` by default), validates it, captures its Rust
+fixture with `twin_run` at that moment (never hand-written or edited), requires
+the C runtime to pass it, writes the scenario to
+`tests/conformance/scenarios_v2/` and the fixture to
+`fixtures/rust_reference_v2/`, and runs `lint-scenarios-v2` and
+`fixture-integrity` over the corpus. It never overwrites a corpus file;
+`PROMOTE_ALLOW_FAILING=1` lands a divergence the C runtime still fails, which
+leaves `make conformance` red until it is fixed. Afterwards update the README
+`rust_fixtures` fact (`sh tools/count_inventory.sh --facts`) and commit both
+files with the divergence's bead. `tests/gates/test_fuzz_promotion.sh` plants
+each refusal (an existing file, a bad name, an invalid scenario, a failed or
+foreign capture, a failing C runtime) against stub tools.
 
 Resource-pressure scenarios live in `fixtures/resource_pressure/` with schema
 `asx.resource_pressure.failure_atomic_scenarios.v1`. Each listed scenario must

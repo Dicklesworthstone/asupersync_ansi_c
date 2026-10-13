@@ -1853,6 +1853,39 @@ fuzz-ghost:
 		$(TEST_EXEC) $(CONFORMANCE_GHOST_DIR)/bin/asx-conformance compare $$fixtures
 	@echo "[asx] fuzz-ghost: PASS"
 
+# ---------------------------------------------------------------------------
+# fuzz-promote — a minimized fuzz counterexample becomes a per-push fixture
+# (bd-9kll.2.24). Takes build/fuzz_v2/seed-<FUZZ_V2_SEED>/minimized/
+# <PROMOTE_ID>-min.scenario.json (written by fuzz-minimize), renames it
+# <PROMOTE_NAME> (default <PROMOTE_ID>-min-001, the schema's id pattern),
+# validates it, captures its Rust fixture with twin_run now, requires the C
+# runtime to PASS it, and installs the pair in tests/conformance/scenarios_v2
+# and fixtures/rust_reference_v2; then lint-scenarios-v2 and fixture-integrity
+# run over the corpus. Never overwrites a corpus file. PROMOTE_ALLOW_FAILING=1
+# lands a divergence the C runtime still FAILs (make conformance is red until
+# it is fixed). The step is exercised, with stub tools, by
+# tests/gates/test_fuzz_promotion.sh.
+#   make fuzz-minimize FUZZ_V2_SEED=9
+#   make fuzz-promote FUZZ_V2_SEED=9 PROMOTE_ID=gen-9-017 [PROMOTE_NAME=...]
+# Then update the README rust_fixtures fact (tools/count_inventory.sh
+# --facts) and commit both files with the divergence's bead.
+# ---------------------------------------------------------------------------
+.PHONY: fuzz-promote
+fuzz-promote: $(CONFORMANCE_RUNNER)
+	@test -n "$(PROMOTE_ID)" || \
+		{ echo "usage: make fuzz-promote FUZZ_V2_SEED=<n> PROMOTE_ID=<generated scenario id> [PROMOTE_NAME=<id>-NNN] [PROMOTE_ALLOW_FAILING=1]"; exit 2; }
+	@if [ -z "$(CHECK_JSONSCHEMA)" ]; then \
+		echo "[asx] fuzz-promote: FAIL (check-jsonschema $(CHECK_JSONSCHEMA_VERSION) not found and no uvx)"; exit 1; \
+	fi
+	@TWIN_RUN="$(TWIN_RUN)" CHECK_JSONSCHEMA="$(CHECK_JSONSCHEMA)" \
+		./tools/ci/promote_fuzz_counterexample.sh \
+		--minimized $(FUZZ_V2_DIR)/minimized --id "$(PROMOTE_ID)" \
+		--runner $(CONFORMANCE_RUNNER) \
+		--note "Minimized from fuzz seed $(FUZZ_V2_SEED), scenario $(PROMOTE_ID)." \
+		$(if $(PROMOTE_NAME),--name "$(PROMOTE_NAME)") \
+		$(if $(PROMOTE_ALLOW_FAILING),--allow-failing)
+	@$(MAKE) --no-print-directory lint-scenarios-v2 fixture-integrity
+
 # Reproduce the live oracle's positive and planted-negative controls. The
 # mutation changes runtime budget priority; it is built in a separate tree.
 # Both runners execute actual Rust captures, and a reduced counterexample
