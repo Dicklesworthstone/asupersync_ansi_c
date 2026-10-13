@@ -54,6 +54,7 @@
 #include <time.h>
 
 #include "../../src/runtime/fnv_fold.h"
+#include "../test_runtime.h"
 #include <asx/asx.h>
 #include <asx/runtime/event.h>
 #include <asx/runtime/hindsight.h>
@@ -432,8 +433,8 @@ static void spawn_run_once(one_run *out) {
     uint64_t t3;
     uint64_t sink = 0u;
 
-    asx_runtime_reset();
-    if (asx_region_open(&rid) != ASX_OK) g_failed = 1;
+    asx_runtime_reset(test_runtime());
+    if (asx_region_open(test_runtime(), &rid) != ASX_OK) g_failed = 1;
 
     t0 = now_ns();
     if (asx_task_spawn(rid, noop_poll, NULL, &tid) != ASX_OK) g_failed = 1;
@@ -548,8 +549,8 @@ static void bench_sustained(uint32_t ops, double log_old, double log_new, double
     double lev;
     double saved;
 
-    asx_runtime_reset();
-    if (asx_region_open(&rid) != ASX_OK) return;
+    asx_runtime_reset(test_runtime());
+    if (asx_region_open(test_runtime(), &rid) != ASX_OK) return;
     trace0 = asx_trace_emitted_total();
     hs0 = asx_hindsight_total_count();
     log0 = asx_event_log_count();

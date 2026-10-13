@@ -1,6 +1,7 @@
 /*
  * embedded_minimal.c — Narrow down embedded test failures
  */
+#include "../test_runtime.h"
 #include <asx/asx.h>
 
 static asx_status noop_poll(void *user_data, asx_task_id self) {
@@ -18,10 +19,10 @@ int main(void) {
     asx_budget budget;
 
     g_stage = 1;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     g_stage = 2;
-    st = asx_region_open(&rid);
+    st = asx_region_open(test_runtime(), &rid);
     if (st != ASX_OK) return 1;
 
     g_stage = 3;

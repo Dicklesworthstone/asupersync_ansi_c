@@ -62,7 +62,7 @@ asx_status asx_abi_host_start(void) {
     host_polls = 0u;
     st = asx_runtime_init_default(&host_runtime);
     if (st != ASX_OK) return st;
-    st = asx_region_open(&host_region);
+    st = asx_region_open(&host_runtime, &host_region);
     if (st != ASX_OK) return st;
     st = asx_task_spawn(host_region, host_poll, NULL, &host_task);
     if (st != ASX_OK) return st;
@@ -101,6 +101,8 @@ asx_status asx_abi_host_finish(void) {
 }
 
 #else
+
+#include "../test_runtime.h"
 
 static int failures = 0;
 static int passes = 0;
@@ -404,9 +406,9 @@ static void test_lifecycle_smoke(void) {
 
     fprintf(stderr, "--- Lifecycle smoke ---\n");
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    st = asx_region_open(&rid);
+    st = asx_region_open(test_runtime(), &rid);
     SHIM_CHECK(st == ASX_OK, "region_open succeeds");
 
     st = asx_task_spawn(rid, noop_poll, NULL, &tid);
@@ -433,9 +435,9 @@ static void test_actor_surface_smoke(void) {
     fprintf(stderr, "--- Actor surface smoke ---\n");
 
     memset(&state, 0, sizeof(state));
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    st = asx_region_open(&rid);
+    st = asx_region_open(test_runtime(), &rid);
     SHIM_CHECK(st == ASX_OK, "actor smoke region_open succeeds");
 
     {
@@ -526,7 +528,7 @@ static void test_runtime_creation_fingerprint(void) {
             st = asx_runtime_builder_build(&builder, &rt);
         SHIM_CHECK(st == ASX_OK, "matching creation path starts runtime");
         if (st != ASX_OK) continue;
-        SHIM_CHECK(asx_region_open(&region) == ASX_OK, "creation path opens region");
+        SHIM_CHECK(asx_region_open(&rt, &region) == ASX_OK, "creation path opens region");
         SHIM_CHECK(asx_task_spawn(region, noop_poll, NULL, &task) == ASX_OK,
                    "creation path spawns real task");
         budget = asx_budget_from_polls(64u);
@@ -637,7 +639,7 @@ static void test_higher_level_creation(void) {
         SHIM_CHECK(asx_snapshot_restore(&lab, snapshot) == ASX_OK,
                    "matching snapshot reconstructs lab");
         SHIM_CHECK(asx_lab_reset(&lab) == ASX_OK, "matching lab resets");
-        SHIM_CHECK(asx_region_open(&region) == ASX_OK, "reconstructed lab opens region");
+        SHIM_CHECK(asx_region_open(&lab.rt, &region) == ASX_OK, "reconstructed lab opens region");
         SHIM_CHECK(asx_task_spawn(region, noop_poll, NULL, &task) == ASX_OK,
                    "reconstructed lab spawns task");
         budget = asx_budget_from_polls(64u);
@@ -692,7 +694,7 @@ int main(int argc, char **argv) {
     test_typed_symbol_surface();
     test_lifecycle_smoke();
     test_actor_surface_smoke();
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     test_runtime_creation_fingerprint();
     test_higher_level_creation();
 

@@ -8,6 +8,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../test_runtime.h"
 #include <asx/asx.h>
 #include <asx/runtime/trace.h>
 #include <inttypes.h>
@@ -70,10 +71,10 @@ int main(int argc, char **argv) {
     uint32_t event_count = 0u;
     int scenario_pass = 0;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_trace_reset();
 
-    status = asx_region_open(&region);
+    status = asx_region_open(test_runtime(), &region);
     if (status == ASX_OK) { status = asx_task_spawn(region, poll_complete, NULL, &task); }
     if (status == ASX_OK) {
         budget = asx_budget_from_polls(8u);

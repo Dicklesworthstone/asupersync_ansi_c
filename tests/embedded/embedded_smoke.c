@@ -9,6 +9,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../test_runtime.h"
 #include <asx/asx.h>
 
 /* ------------------------------------------------------------------ */
@@ -100,7 +101,7 @@ static void test_region_open_close(void) {
     asx_region_state state;
     asx_status st;
 
-    st = asx_region_open(&rid);
+    st = asx_region_open(test_runtime(), &rid);
     SMOKE_ASSERT_EQ(st, ASX_OK);
 
     st = asx_region_get_state(rid, &state);
@@ -125,7 +126,7 @@ static void test_noop_task(void) {
     asx_status st;
     asx_budget budget;
 
-    st = asx_region_open(&rid);
+    st = asx_region_open(test_runtime(), &rid);
     SMOKE_ASSERT_EQ(st, ASX_OK);
 
     st = asx_task_spawn(rid, noop_poll, NULL, &tid);
@@ -154,7 +155,7 @@ static void test_countdown_task(void) {
 
     ctx.remaining = 3;
 
-    st = asx_region_open(&rid);
+    st = asx_region_open(test_runtime(), &rid);
     SMOKE_ASSERT_EQ(st, ASX_OK);
 
     st = asx_task_spawn(rid, countdown_poll, &ctx, &tid);
@@ -182,7 +183,7 @@ static void test_failing_task(void) {
     asx_status st;
     asx_budget budget;
 
-    st = asx_region_open(&rid);
+    st = asx_region_open(test_runtime(), &rid);
     SMOKE_ASSERT_EQ(st, ASX_OK);
 
     st = asx_task_spawn(rid, failing_poll, NULL, &tid);
@@ -209,7 +210,7 @@ static void test_region_drain(void) {
     asx_status st;
     asx_budget budget;
 
-    st = asx_region_open(&rid);
+    st = asx_region_open(test_runtime(), &rid);
     SMOKE_ASSERT_EQ(st, ASX_OK);
 
     st = asx_task_spawn(rid, noop_poll, NULL, &tid);
@@ -235,7 +236,7 @@ static void test_quiescence(void) {
     asx_status st;
     asx_budget budget;
 
-    st = asx_region_open(&rid);
+    st = asx_region_open(test_runtime(), &rid);
     SMOKE_ASSERT_EQ(st, ASX_OK);
 
     st = asx_task_spawn(rid, noop_poll, NULL, &tid);
@@ -261,7 +262,7 @@ static void test_obligation(void) {
     asx_budget budget;
     obligation_ctx ctx;
 
-    st = asx_region_open(&rid);
+    st = asx_region_open(test_runtime(), &rid);
     SMOKE_ASSERT_EQ(st, ASX_OK);
 
     /* A sentinel status until the holder's poll runs */
@@ -325,7 +326,7 @@ static void test_budget_exhaustion(void) {
 
     ctx.remaining = 100;
 
-    st = asx_region_open(&rid);
+    st = asx_region_open(test_runtime(), &rid);
     SMOKE_ASSERT_EQ(st, ASX_OK);
 
     st = asx_task_spawn(rid, countdown_poll, &ctx, &tid);
@@ -350,7 +351,7 @@ static volatile int g_pre_fail;
 static void run_test(void (*fn)(void), int marker) {
     g_test_marker = marker;
     g_pre_fail = g_fail_count;
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     fn();
 }
 

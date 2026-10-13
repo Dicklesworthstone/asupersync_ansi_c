@@ -41,6 +41,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "../test_runtime.h"
 #include <asx/asx.h>
 #include <asx/time/timer_wheel.h>
 
@@ -558,7 +559,7 @@ static void fuzz_execute(const fuzz_scenario *sc, fuzz_execution *exec) {
     exec->op_count = sc->op_count;
 
     /* Reset all runtime state for clean execution */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_channel_reset();
     asx_timer_wheel_reset(asx_timer_wheel_global());
     fuzz_reset_task_states();
@@ -577,7 +578,7 @@ static void fuzz_execute(const fuzz_scenario *sc, fuzz_execution *exec) {
         case FUZZ_OP_SPAWN_REGION: {
             asx_region_id rid = ASX_INVALID_ID;
             if (hs.region_count < FUZZ_MAX_REGIONS) {
-                st = asx_region_open(&rid);
+                st = asx_region_open(test_runtime(), &rid);
                 if (st == ASX_OK) { hs.regions[hs.region_count++] = rid; }
             } else {
                 st = ASX_E_REGION_AT_CAPACITY;

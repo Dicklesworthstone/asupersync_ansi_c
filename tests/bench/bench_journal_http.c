@@ -325,7 +325,7 @@ static int run_once(int mode, uint32_t n, const char *dir, run_result *out) {
     hcfg.idle_timeout_ms = 0u;
     hcfg.max_requests = 0u; /* the default closes a connection after 1000 */
     if (st == ASX_OK) st = asx_http_server_init(&g_hs, &g_srv, &hcfg);
-    if (st == ASX_OK) st = asx_region_open(&region);
+    if (st == ASX_OK) st = asx_region_open(&rt, &region);
     if (st == ASX_OK) st = asx_task_spawn(region, server_task, NULL, &task);
     if (st != ASX_OK || pipe(pipefd) != 0) {
         asx_runtime_shutdown(&rt);

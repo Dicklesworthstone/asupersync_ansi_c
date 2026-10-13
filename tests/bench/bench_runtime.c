@@ -20,6 +20,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "../test_runtime.h"
 #include <asx/asx.h>
 #include <asx/core/adaptive.h>
 #include <asx/core/budget.h>
@@ -320,8 +321,8 @@ static bench_stats bench_scheduler_single_task(void) {
         asx_budget budget;
         uint64_t t0, t1;
 
-        asx_runtime_reset();
-        (void)asx_region_open(&rid);
+        asx_runtime_reset(test_runtime());
+        (void)asx_region_open(test_runtime(), &rid);
 
         t0 = bench_now_ns();
 
@@ -356,8 +357,8 @@ static bench_stats bench_scheduler_multi_task(void) {
         uint64_t t0, t1;
         uint32_t t_i;
 
-        asx_runtime_reset();
-        (void)asx_region_open(&rid);
+        asx_runtime_reset(test_runtime());
+        (void)asx_region_open(test_runtime(), &rid);
 
         /* Spawn ASX_MAX_TASKS tasks */
         for (t_i = 0; t_i < ASX_MAX_TASKS; t_i++) {
@@ -397,8 +398,8 @@ static bench_stats bench_scheduler_multi_round(void) {
         uint32_t t_i;
         countdown_ctx ctxs[16];
 
-        asx_runtime_reset();
-        (void)asx_region_open(&rid);
+        asx_runtime_reset(test_runtime());
+        (void)asx_region_open(test_runtime(), &rid);
 
         /* Spawn 16 tasks that each need 10 polls */
         for (t_i = 0; t_i < 16; t_i++) {
@@ -540,9 +541,9 @@ static bench_stats bench_channel_send(void) {
         uint64_t t0, t1;
         uint32_t m_i;
 
-        asx_runtime_reset();
+        asx_runtime_reset(test_runtime());
         asx_channel_reset();
-        (void)asx_region_open(&rid);
+        (void)asx_region_open(test_runtime(), &rid);
         (void)asx_channel_create(rid, ASX_CHANNEL_MAX_CAPACITY, &cid);
 
         t0 = bench_now_ns();
@@ -577,9 +578,9 @@ static bench_stats bench_channel_recv(void) {
         uint64_t t0, t1;
         uint32_t m_i;
 
-        asx_runtime_reset();
+        asx_runtime_reset(test_runtime());
         asx_channel_reset();
-        (void)asx_region_open(&rid);
+        (void)asx_region_open(test_runtime(), &rid);
         (void)asx_channel_create(rid, ASX_CHANNEL_MAX_CAPACITY, &cid);
 
         /* Fill channel */
@@ -622,8 +623,8 @@ static bench_stats bench_quiescence_drain(void) {
         uint64_t t0, t1;
         uint32_t t_i;
 
-        asx_runtime_reset();
-        (void)asx_region_open(&rid);
+        asx_runtime_reset(test_runtime());
+        (void)asx_region_open(test_runtime(), &rid);
 
         /* Spawn 8 noop tasks */
         for (t_i = 0; t_i < 8; t_i++) { (void)asx_task_spawn(rid, noop_poll, NULL, &tid); }
@@ -705,8 +706,8 @@ static bench_stats bench_embedded_pressure(void) {
         countdown_ctx ctxs[8];
         uint32_t rounds = 0;
 
-        asx_runtime_reset();
-        (void)asx_region_open(&rid);
+        asx_runtime_reset(test_runtime());
+        (void)asx_region_open(test_runtime(), &rid);
 
         /* 8 tasks, each needs 5 polls */
         for (t_i = 0; t_i < 8; t_i++) {
@@ -811,10 +812,10 @@ static bench_stats bench_parallel_cancel_latency(uint32_t worker_count, uint32_t
         uint32_t i;
 
         bench_parallel_config_init(&cfg, worker_count);
-        asx_runtime_reset();
+        asx_runtime_reset(test_runtime());
         asx_parallel_reset();
         (void)asx_parallel_init(&cfg);
-        (void)asx_region_open(&rid);
+        (void)asx_region_open(test_runtime(), &rid);
 
         for (i = 0u; i < ASX_MAX_TASKS; i++) {
             (void)asx_task_spawn(rid, cancel_checkpoint_poll, NULL, &tids[i]);
@@ -848,11 +849,11 @@ static bench_stats bench_parallel_mpsc_contention(uint32_t worker_count, uint32_
         uint32_t i;
 
         bench_parallel_config_init(&cfg, worker_count);
-        asx_runtime_reset();
+        asx_runtime_reset(test_runtime());
         asx_channel_reset();
         asx_parallel_reset();
         (void)asx_parallel_init(&cfg);
-        (void)asx_region_open(&rid);
+        (void)asx_region_open(test_runtime(), &rid);
         (void)asx_channel_create(rid, ASX_CHANNEL_MAX_CAPACITY, &cid);
 
         t0 = bench_now_ns();
@@ -898,10 +899,10 @@ static bench_parallel_report bench_parallel_large_swarm_for_workers(uint32_t req
         uint32_t i;
 
         bench_parallel_config_init(&cfg, rpt.worker_count);
-        asx_runtime_reset();
+        asx_runtime_reset(test_runtime());
         asx_parallel_reset();
         (void)asx_parallel_init(&cfg);
-        (void)asx_region_open(&rid);
+        (void)asx_region_open(test_runtime(), &rid);
         for (i = 0u; i < ASX_MAX_TASKS; i++) { (void)asx_task_spawn(rid, noop_poll, NULL, &tid); }
 
         (void)asx_parallel_get_telemetry_snapshot(&rpt.snapshot);
@@ -1329,8 +1330,8 @@ static bench_deadline_report bench_deadline_miss(void) {
         asx_budget budget;
         uint64_t t0, t1, deadline_ns;
 
-        asx_runtime_reset();
-        (void)asx_region_open(&rid);
+        asx_runtime_reset(test_runtime());
+        (void)asx_region_open(test_runtime(), &rid);
         (void)asx_task_spawn(rid, noop_poll, NULL, &tid);
 
         budget = asx_budget_from_polls(4);
@@ -1529,8 +1530,8 @@ static bench_cold_start_report bench_cold_start(void) {
         uint64_t t0, t1, t2;
 
         t0 = bench_now_ns();
-        asx_runtime_reset();
-        (void)asx_region_open(&rid);
+        asx_runtime_reset(test_runtime());
+        (void)asx_region_open(test_runtime(), &rid);
         t1 = bench_now_ns();
 
         (void)asx_task_spawn(rid, noop_poll, NULL, &tid);

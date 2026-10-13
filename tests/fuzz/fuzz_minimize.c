@@ -31,6 +31,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "../test_runtime.h"
 #include <asx/asx.h>
 #include <asx/time/timer_wheel.h>
 
@@ -538,7 +539,7 @@ static asx_status min_execute_one_op(const min_op *op, min_handle_state *hs) {
     case MIN_OP_SPAWN_REGION: {
         asx_region_id rid = ASX_INVALID_ID;
         if (hs->region_count < MIN_MAX_REGIONS) {
-            st = asx_region_open(&rid);
+            st = asx_region_open(test_runtime(), &rid);
             if (st == ASX_OK) hs->regions[hs->region_count++] = rid;
         } else {
             st = ASX_E_REGION_AT_CAPACITY;
@@ -772,7 +773,7 @@ static uint64_t min_execute_digest(const min_scenario *sc) {
 
     memset(&hs, 0, sizeof(hs));
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_scheduler_event_reset();
     asx_channel_reset();
     asx_timer_wheel_reset(asx_timer_wheel_global());
@@ -1151,7 +1152,7 @@ static int min_predicate_has_poisoned_spawn(const min_scenario *sc, void *user_d
     (void)user_data;
 
     memset(&hs, 0, sizeof(hs));
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_scheduler_event_reset();
     asx_channel_reset();
     asx_timer_wheel_reset(asx_timer_wheel_global());
