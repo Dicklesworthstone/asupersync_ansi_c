@@ -1857,7 +1857,9 @@ TEST(a_filesystem_call_that_differs_diverges_naming_the_path_or_the_field) {
     asx_fs_path other;
     char root[ASX_FS_PATH_MAX];
     char dir[ASX_FS_PATH_MAX];
-    char tmp[ASX_FS_PATH_MAX];
+    /* A path of dir's longest length plus the longest suffix below
+     * ("-other", "/a.txt") and the terminator, so no snprintf truncates. */
+    char tmp[ASX_FS_PATH_MAX + 8];
     asx_file_handle f;
 
     ASSERT_TRUE(fs_roots(root, dir, sizeof(dir)));
