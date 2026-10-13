@@ -14,6 +14,7 @@
 #include <asx/sync/mutex.h>
 #include <asx/sync/notify.h>
 #include <asx/sync/once.h>
+#include <asx/sync/rwlock.h>
 #include <asx/sync/semaphore.h>
 #include <string.h>
 
@@ -25,10 +26,10 @@ static asx_status st_sink_;
     } while (0)
 
 static void setup(void) {
-    asx_notify_reset();
+    asx_notify_reset(test_runtime());
     asx_semaphore_reset(test_runtime());
-    asx_barrier_reset();
-    asx_once_reset();
+    asx_barrier_reset(test_runtime());
+    asx_once_reset(test_runtime());
 }
 
 /* ================================================================== */
@@ -38,19 +39,19 @@ static void setup(void) {
 TEST(notify_create_close) {
     asx_notify_handle h;
     setup();
-    ASSERT_EQ(asx_notify_create(&h), ASX_OK);
+    ASSERT_EQ(asx_notify_create(test_runtime(), &h), ASX_OK);
     ASSERT_EQ(asx_notify_close(h), ASX_OK);
 }
 
 TEST(notify_create_null_fails) {
     setup();
-    ASSERT_EQ(asx_notify_create(NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_notify_create(test_runtime(), NULL), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(notify_one_no_waiters) {
     asx_notify_handle h;
     setup();
-    MUST_OK(asx_notify_create(&h));
+    MUST_OK(asx_notify_create(test_runtime(), &h));
     ASSERT_EQ(asx_notify_one(h), ASX_OK); /* no waiter: stored */
     ASSERT_EQ(asx_notify_stored_count(h), 1u);
     ASSERT_EQ(asx_notify_close(h), ASX_OK);
@@ -59,7 +60,7 @@ TEST(notify_one_no_waiters) {
 TEST(notify_all_no_waiters) {
     asx_notify_handle h;
     setup();
-    MUST_OK(asx_notify_create(&h));
+    MUST_OK(asx_notify_create(test_runtime(), &h));
     ASSERT_EQ(asx_notify_all(h), ASX_OK);
     ASSERT_EQ(asx_notify_stored_count(h), 0u); /* notify_all stores nothing */
     ASSERT_EQ(asx_notify_close(h), ASX_OK);
@@ -72,7 +73,7 @@ TEST(notify_one_before_wait_is_stored) {
     asx_notify_handle h;
     asx_notify_waiter w1, w2, w3;
     setup();
-    MUST_OK(asx_notify_create(&h));
+    MUST_OK(asx_notify_create(test_runtime(), &h));
 
     MUST_OK(asx_notify_one(h));
     MUST_OK(asx_notify_one(h));
@@ -96,7 +97,7 @@ TEST(notify_stored_permit_survives_abandoned_waiter) {
     asx_notify_handle h;
     asx_notify_waiter w1, w2;
     setup();
-    MUST_OK(asx_notify_create(&h));
+    MUST_OK(asx_notify_create(test_runtime(), &h));
 
     MUST_OK(asx_notify_one(h));
     /* w1 claims the stored permit, then gives up before consuming it */
@@ -120,7 +121,7 @@ TEST(notify_wait_then_signal) {
     asx_notify_handle h;
     asx_notify_waiter w;
     setup();
-    MUST_OK(asx_notify_create(&h));
+    MUST_OK(asx_notify_create(test_runtime(), &h));
     MUST_OK(asx_notify_wait_begin(h, &w));
     ASSERT_EQ(asx_notify_waiter_count(h), 1u);
 
@@ -139,7 +140,7 @@ TEST(notify_all_wakes_multiple) {
     asx_notify_handle h;
     asx_notify_waiter w1, w2, w3;
     setup();
-    MUST_OK(asx_notify_create(&h));
+    MUST_OK(asx_notify_create(test_runtime(), &h));
     MUST_OK(asx_notify_wait_begin(h, &w1));
     MUST_OK(asx_notify_wait_begin(h, &w2));
     MUST_OK(asx_notify_wait_begin(h, &w3));
@@ -157,7 +158,7 @@ TEST(notify_one_fifo) {
     asx_notify_handle h;
     asx_notify_waiter w1, w2;
     setup();
-    MUST_OK(asx_notify_create(&h));
+    MUST_OK(asx_notify_create(test_runtime(), &h));
     MUST_OK(asx_notify_wait_begin(h, &w1));
     MUST_OK(asx_notify_wait_begin(h, &w2));
 
@@ -177,7 +178,7 @@ TEST(notify_wait_cancel) {
     asx_notify_handle h;
     asx_notify_waiter w;
     setup();
-    MUST_OK(asx_notify_create(&h));
+    MUST_OK(asx_notify_create(test_runtime(), &h));
     MUST_OK(asx_notify_wait_begin(h, &w));
     ASSERT_EQ(asx_notify_waiter_count(h), 1u);
     MUST_OK(asx_notify_wait_cancel(&w));
@@ -189,7 +190,7 @@ TEST(notify_close_disconnects_waiters) {
     asx_notify_handle h;
     asx_notify_waiter w;
     setup();
-    MUST_OK(asx_notify_create(&h));
+    MUST_OK(asx_notify_create(test_runtime(), &h));
     MUST_OK(asx_notify_wait_begin(h, &w));
     MUST_OK(asx_notify_close(h));
     ASSERT_EQ(asx_notify_poll_wait(&w, NULL), ASX_E_DISCONNECTED);
@@ -198,7 +199,7 @@ TEST(notify_close_disconnects_waiters) {
 TEST(notify_stale_handle) {
     asx_notify_handle h;
     setup();
-    MUST_OK(asx_notify_create(&h));
+    MUST_OK(asx_notify_create(test_runtime(), &h));
     MUST_OK(asx_notify_close(h));
     ASSERT_EQ(asx_notify_one(h), ASX_E_STALE_HANDLE);
 }
@@ -208,8 +209,10 @@ TEST(notify_exhaustion) {
     asx_notify_handle extra;
     uint32_t i;
     setup();
-    for (i = 0; i < ASX_NOTIFY_MAX; i++) { MUST_OK(asx_notify_create(&handles[i])); }
-    ASSERT_EQ(asx_notify_create(&extra), ASX_E_RESOURCE_EXHAUSTED);
+    for (i = 0; i < ASX_NOTIFY_MAX; i++) {
+        MUST_OK(asx_notify_create(test_runtime(), &handles[i]));
+    }
+    ASSERT_EQ(asx_notify_create(test_runtime(), &extra), ASX_E_RESOURCE_EXHAUSTED);
     for (i = 0; i < ASX_NOTIFY_MAX; i++) { MUST_OK(asx_notify_close(handles[i])); }
 }
 
@@ -217,7 +220,7 @@ TEST(notify_waiter_slot_bounds_checked) {
     asx_notify_handle h;
     asx_notify_waiter w;
     setup();
-    MUST_OK(asx_notify_create(&h));
+    MUST_OK(asx_notify_create(test_runtime(), &h));
     MUST_OK(asx_notify_wait_begin(h, &w));
 
     w.waiter_slot = UINT32_MAX; /* beyond the wait-node pool */
@@ -971,7 +974,7 @@ TEST(mutex_poisoned_release_rejects_foreign_credit_before_mutation) {
 TEST(barrier_create_close) {
     asx_barrier_handle h;
     setup();
-    ASSERT_EQ(asx_barrier_create(3, &h), ASX_OK);
+    ASSERT_EQ(asx_barrier_create(test_runtime(), 3, &h), ASX_OK);
     ASSERT_EQ(asx_barrier_waiting_count(h), 0u);
     ASSERT_EQ(asx_barrier_close(h), ASX_OK);
 }
@@ -979,14 +982,14 @@ TEST(barrier_create_close) {
 TEST(barrier_zero_fails) {
     asx_barrier_handle h;
     setup();
-    ASSERT_EQ(asx_barrier_create(0, &h), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_barrier_create(test_runtime(), 0, &h), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(barrier_single) {
     asx_barrier_handle h;
     asx_barrier_waiter w;
     setup();
-    MUST_OK(asx_barrier_create(1, &h));
+    MUST_OK(asx_barrier_create(test_runtime(), 1, &h));
     MUST_OK(asx_barrier_wait_begin(h, &w));
     /* N=1, immediately released */
     ASSERT_EQ(asx_barrier_poll_wait(&w, NULL), ASX_OK);
@@ -998,7 +1001,7 @@ TEST(barrier_two_tasks) {
     asx_barrier_handle h;
     asx_barrier_waiter w1, w2;
     setup();
-    MUST_OK(asx_barrier_create(2, &h));
+    MUST_OK(asx_barrier_create(test_runtime(), 2, &h));
 
     /* A waiter arrives at its first poll (Rust's BarrierWaitFuture), not
      * at wait_begin. The first arrives and waits. */
@@ -1024,7 +1027,7 @@ TEST(barrier_three_tasks) {
     asx_barrier_handle h;
     asx_barrier_waiter w1, w2, w3;
     setup();
-    MUST_OK(asx_barrier_create(3, &h));
+    MUST_OK(asx_barrier_create(test_runtime(), 3, &h));
 
     MUST_OK(asx_barrier_wait_begin(h, &w1));
     MUST_OK(asx_barrier_wait_begin(h, &w2));
@@ -1047,7 +1050,7 @@ TEST(barrier_wait_cancel) {
     asx_barrier_waiter w;
     asx_barrier_waiter idle;
     setup();
-    MUST_OK(asx_barrier_create(2, &h));
+    MUST_OK(asx_barrier_create(test_runtime(), 2, &h));
     MUST_OK(asx_barrier_wait_begin(h, &w));
     ASSERT_EQ(asx_barrier_poll_wait(&w, NULL), ASX_E_PENDING);
     ASSERT_EQ(asx_barrier_waiting_count(h), 1u);
@@ -1065,7 +1068,7 @@ TEST(barrier_close_disconnects) {
     asx_barrier_handle h;
     asx_barrier_waiter w;
     setup();
-    MUST_OK(asx_barrier_create(2, &h));
+    MUST_OK(asx_barrier_create(test_runtime(), 2, &h));
     MUST_OK(asx_barrier_wait_begin(h, &w));
     MUST_OK(asx_barrier_close(h));
     ASSERT_EQ(asx_barrier_poll_wait(&w, NULL), ASX_E_DISCONNECTED);
@@ -1080,7 +1083,7 @@ TEST(barrier_reusable_across_rounds) {
     asx_barrier_waiter w1, w2, w3;
     int round;
     setup();
-    MUST_OK(asx_barrier_create(3, &h));
+    MUST_OK(asx_barrier_create(test_runtime(), 3, &h));
 
     for (round = 0; round < 3; round++) {
         MUST_OK(asx_barrier_wait_begin(h, &w1));
@@ -1108,7 +1111,7 @@ TEST(barrier_cancel_counts_only_current_round) {
     asx_barrier_handle h;
     asx_barrier_waiter a, b, c, d;
     setup();
-    MUST_OK(asx_barrier_create(2, &h));
+    MUST_OK(asx_barrier_create(test_runtime(), 2, &h));
 
     /* Round 1 trips at b's arrival; a is released but has not polled
      * since */
@@ -1166,7 +1169,7 @@ static asx_status init_fail(void *user_data, uint64_t *out) {
 TEST(once_create_close) {
     asx_once_handle h;
     setup();
-    ASSERT_EQ(asx_once_create(&h), ASX_OK);
+    ASSERT_EQ(asx_once_create(test_runtime(), &h), ASX_OK);
     ASSERT_FALSE(asx_once_is_initialized(h));
     ASSERT_EQ(asx_once_close(h), ASX_OK);
 }
@@ -1175,7 +1178,7 @@ TEST(once_get_uninitialized_fails) {
     asx_once_handle h;
     uint64_t val;
     setup();
-    MUST_OK(asx_once_create(&h));
+    MUST_OK(asx_once_create(test_runtime(), &h));
     ASSERT_EQ(asx_once_get(h, &val), ASX_E_INVALID_STATE);
     ASSERT_EQ(asx_once_close(h), ASX_OK);
 }
@@ -1184,7 +1187,7 @@ TEST(once_get_or_init) {
     asx_once_handle h;
     uint64_t val;
     setup();
-    MUST_OK(asx_once_create(&h));
+    MUST_OK(asx_once_create(test_runtime(), &h));
     ASSERT_EQ(asx_once_get_or_init(h, init_42, NULL, &val), ASX_OK);
     ASSERT_EQ(val, (uint64_t)42);
     ASSERT_TRUE(asx_once_is_initialized(h));
@@ -1196,7 +1199,7 @@ TEST(once_init_called_once) {
     uint64_t val1 = 100, val2 = 200;
     uint64_t result;
     setup();
-    MUST_OK(asx_once_create(&h));
+    MUST_OK(asx_once_create(test_runtime(), &h));
     MUST_OK(asx_once_get_or_init(h, init_from_ptr, &val1, &result));
     ASSERT_EQ(result, (uint64_t)100);
 
@@ -1211,7 +1214,7 @@ TEST(once_get_after_init) {
     asx_once_handle h;
     uint64_t val;
     setup();
-    MUST_OK(asx_once_create(&h));
+    MUST_OK(asx_once_create(test_runtime(), &h));
     MUST_OK(asx_once_get_or_init(h, init_42, NULL, &val));
     ASSERT_EQ(asx_once_get(h, &val), ASX_OK);
     ASSERT_EQ(val, (uint64_t)42);
@@ -1222,7 +1225,7 @@ TEST(once_init_fail_retryable) {
     asx_once_handle h;
     uint64_t val;
     setup();
-    MUST_OK(asx_once_create(&h));
+    MUST_OK(asx_once_create(test_runtime(), &h));
     /* First init fails */
     ASSERT_EQ(asx_once_get_or_init(h, init_fail, NULL, &val), ASX_E_INVALID_STATE);
     ASSERT_FALSE(asx_once_is_initialized(h));
@@ -1237,7 +1240,7 @@ TEST(once_stale_handle) {
     asx_once_handle h;
     uint64_t val;
     setup();
-    MUST_OK(asx_once_create(&h));
+    MUST_OK(asx_once_create(test_runtime(), &h));
     MUST_OK(asx_once_close(h));
     ASSERT_EQ(asx_once_get(h, &val), ASX_E_STALE_HANDLE);
 }
@@ -1247,9 +1250,27 @@ TEST(once_exhaustion) {
     asx_once_handle extra;
     uint32_t i;
     setup();
-    for (i = 0; i < ASX_ONCE_MAX; i++) { MUST_OK(asx_once_create(&handles[i])); }
-    ASSERT_EQ(asx_once_create(&extra), ASX_E_RESOURCE_EXHAUSTED);
+    for (i = 0; i < ASX_ONCE_MAX; i++) { MUST_OK(asx_once_create(test_runtime(), &handles[i])); }
+    ASSERT_EQ(asx_once_create(test_runtime(), &extra), ASX_E_RESOURCE_EXHAUSTED);
     for (i = 0; i < ASX_ONCE_MAX; i++) { MUST_OK(asx_once_close(handles[i])); }
+}
+
+/* ================================================================== */
+/* Runtime argument                                                    */
+/* ================================================================== */
+
+/* Every create names the runtime it allocates from; NULL names none and is
+ * refused as an invalid argument rather than falling back to a kernel. */
+TEST(sync_create_null_runtime_fails) {
+    asx_rwlock_handle rw;
+    asx_barrier_handle bar;
+    asx_once_handle once;
+    asx_notify_handle nt;
+    setup();
+    ASSERT_EQ(asx_rwlock_create(NULL, &rw), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_barrier_create(NULL, 2, &bar), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_once_create(NULL, &once), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_notify_create(NULL, &nt), ASX_E_INVALID_ARGUMENT);
 }
 
 /* ================================================================== */
@@ -1268,7 +1289,7 @@ TEST(notify_cx_budget_exhaustion) {
     budget = asx_budget_zero();
     MUST_OK(asx_cx_bind_budget(&cx, &budget));
 
-    MUST_OK(asx_notify_create(&h));
+    MUST_OK(asx_notify_create(test_runtime(), &h));
     MUST_OK(asx_notify_wait_begin(h, &w));
 
     /* The checkpoint observes the spent budget as a cancel (Rust's
@@ -1381,6 +1402,9 @@ int main(void) {
     RUN_TEST(once_init_fail_retryable);
     RUN_TEST(once_stale_handle);
     RUN_TEST(once_exhaustion);
+
+    /* Runtime argument */
+    RUN_TEST(sync_create_null_runtime_fails);
 
     /* Cx integration */
     RUN_TEST(notify_cx_budget_exhaustion);

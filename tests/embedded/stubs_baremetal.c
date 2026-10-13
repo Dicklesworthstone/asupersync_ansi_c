@@ -22,10 +22,10 @@ void asx_session_reset(void) {}
 void asx_waker_reset(const asx_runtime *rt) { (void)rt; }
 void asx_io_driver_reset(void) {}
 void asx_blocking_pool_reset(void) {}
-void asx_notify_reset(void) {}
-void asx_semaphore_reset(void) {}
-void asx_barrier_reset(void) {}
-void asx_once_reset(void) {}
+void asx_notify_reset(const asx_runtime *rt) { (void)rt; }
+void asx_semaphore_reset(const asx_runtime *rt) { (void)rt; }
+void asx_barrier_reset(const asx_runtime *rt) { (void)rt; }
+void asx_once_reset(const asx_runtime *rt) { (void)rt; }
 void asx_actor_reset(void) {}
 void asx_actor_task_finished(asx_task_id task) { (void)task; }
 void asx_supervisor_reset(void) {}

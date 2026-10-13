@@ -5,9 +5,10 @@
  */
 
 #include "../../test_harness.h"
+#include "../../test_runtime.h"
 #include <asx/sync/rwlock.h>
 
-static void setup(void) { asx_rwlock_reset(); }
+static void setup(void) { asx_rwlock_reset(test_runtime()); }
 
 /* ------------------------------------------------------------------ */
 /* Lifecycle                                                           */
@@ -16,21 +17,23 @@ static void setup(void) { asx_rwlock_reset(); }
 TEST(create_and_close) {
     asx_rwlock_handle h;
     setup();
-    ASSERT_EQ(asx_rwlock_create(&h), ASX_OK);
+    ASSERT_EQ(asx_rwlock_create(test_runtime(), &h), ASX_OK);
     ASSERT_EQ(asx_rwlock_reader_count(h), 0u);
     ASSERT_FALSE(asx_rwlock_is_write_locked(h));
     ASSERT_EQ(asx_rwlock_close(h), ASX_OK);
 }
 
 TEST(create_null_fails) {
+    asx_rwlock_handle h;
     setup();
-    ASSERT_EQ(asx_rwlock_create(NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_rwlock_create(test_runtime(), NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_rwlock_create(NULL, &h), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(close_stale_fails) {
     asx_rwlock_handle h;
     setup();
-    ASSERT_EQ(asx_rwlock_create(&h), ASX_OK);
+    ASSERT_EQ(asx_rwlock_create(test_runtime(), &h), ASX_OK);
     ASSERT_EQ(asx_rwlock_close(h), ASX_OK);
     ASSERT_EQ(asx_rwlock_close(h), ASX_E_STALE_HANDLE);
 }
@@ -43,7 +46,7 @@ TEST(try_read_succeeds_when_unlocked) {
     asx_rwlock_handle h;
     asx_rwlock_read_guard g;
     setup();
-    ASSERT_EQ(asx_rwlock_create(&h), ASX_OK);
+    ASSERT_EQ(asx_rwlock_create(test_runtime(), &h), ASX_OK);
     ASSERT_EQ(asx_rwlock_try_read(h, &g), ASX_OK);
     ASSERT_EQ(asx_rwlock_reader_count(h), 1u);
     ASSERT_EQ(asx_rwlock_read_unlock(g), ASX_OK);
@@ -55,7 +58,7 @@ TEST(multiple_concurrent_readers) {
     asx_rwlock_handle h;
     asx_rwlock_read_guard g1, g2, g3;
     setup();
-    ASSERT_EQ(asx_rwlock_create(&h), ASX_OK);
+    ASSERT_EQ(asx_rwlock_create(test_runtime(), &h), ASX_OK);
     ASSERT_EQ(asx_rwlock_try_read(h, &g1), ASX_OK);
     ASSERT_EQ(asx_rwlock_try_read(h, &g2), ASX_OK);
     ASSERT_EQ(asx_rwlock_try_read(h, &g3), ASX_OK);
@@ -70,7 +73,7 @@ TEST(multiple_concurrent_readers) {
 TEST(try_read_null_out_fails) {
     asx_rwlock_handle h;
     setup();
-    ASSERT_EQ(asx_rwlock_create(&h), ASX_OK);
+    ASSERT_EQ(asx_rwlock_create(test_runtime(), &h), ASX_OK);
     ASSERT_EQ(asx_rwlock_try_read(h, NULL), ASX_E_INVALID_ARGUMENT);
     asx_rwlock_close(h);
 }
@@ -83,7 +86,7 @@ TEST(try_write_succeeds_when_unlocked) {
     asx_rwlock_handle h;
     asx_rwlock_write_guard g;
     setup();
-    ASSERT_EQ(asx_rwlock_create(&h), ASX_OK);
+    ASSERT_EQ(asx_rwlock_create(test_runtime(), &h), ASX_OK);
     ASSERT_EQ(asx_rwlock_try_write(h, &g), ASX_OK);
     ASSERT_TRUE(asx_rwlock_is_write_locked(h));
     ASSERT_EQ(asx_rwlock_write_unlock(g), ASX_OK);
@@ -96,7 +99,7 @@ TEST(try_write_fails_when_read_locked) {
     asx_rwlock_read_guard rg;
     asx_rwlock_write_guard wg;
     setup();
-    ASSERT_EQ(asx_rwlock_create(&h), ASX_OK);
+    ASSERT_EQ(asx_rwlock_create(test_runtime(), &h), ASX_OK);
     ASSERT_EQ(asx_rwlock_try_read(h, &rg), ASX_OK);
     ASSERT_EQ(asx_rwlock_try_write(h, &wg), ASX_E_WOULD_BLOCK);
     ASSERT_EQ(asx_rwlock_read_unlock(rg), ASX_OK);
@@ -107,7 +110,7 @@ TEST(try_write_fails_when_write_locked) {
     asx_rwlock_handle h;
     asx_rwlock_write_guard g1, g2;
     setup();
-    ASSERT_EQ(asx_rwlock_create(&h), ASX_OK);
+    ASSERT_EQ(asx_rwlock_create(test_runtime(), &h), ASX_OK);
     ASSERT_EQ(asx_rwlock_try_write(h, &g1), ASX_OK);
     ASSERT_EQ(asx_rwlock_try_write(h, &g2), ASX_E_WOULD_BLOCK);
     ASSERT_EQ(asx_rwlock_write_unlock(g1), ASX_OK);
@@ -119,7 +122,7 @@ TEST(try_read_fails_when_write_locked) {
     asx_rwlock_write_guard wg;
     asx_rwlock_read_guard rg;
     setup();
-    ASSERT_EQ(asx_rwlock_create(&h), ASX_OK);
+    ASSERT_EQ(asx_rwlock_create(test_runtime(), &h), ASX_OK);
     ASSERT_EQ(asx_rwlock_try_write(h, &wg), ASX_OK);
     ASSERT_EQ(asx_rwlock_try_read(h, &rg), ASX_E_WOULD_BLOCK);
     ASSERT_EQ(asx_rwlock_write_unlock(wg), ASX_OK);
@@ -136,7 +139,7 @@ TEST(writer_preference_blocks_new_readers) {
     asx_rwlock_write_guard wg;
     asx_rwlock_waiter ww;
     setup();
-    ASSERT_EQ(asx_rwlock_create(&h), ASX_OK);
+    ASSERT_EQ(asx_rwlock_create(test_runtime(), &h), ASX_OK);
 
     /* Acquire a read lock */
     ASSERT_EQ(asx_rwlock_try_read(h, &rg1), ASX_OK);
@@ -170,7 +173,7 @@ TEST(async_read_immediate) {
     asx_rwlock_waiter w;
     asx_rwlock_read_guard rg;
     setup();
-    ASSERT_EQ(asx_rwlock_create(&h), ASX_OK);
+    ASSERT_EQ(asx_rwlock_create(test_runtime(), &h), ASX_OK);
     ASSERT_EQ(asx_rwlock_read_begin(h, &w), ASX_OK);
     ASSERT_EQ(asx_rwlock_poll_read(&w, &rg, NULL), ASX_OK);
     ASSERT_EQ(asx_rwlock_reader_count(h), 1u);
@@ -184,7 +187,7 @@ TEST(async_read_pending_when_write_locked) {
     asx_rwlock_waiter rw;
     asx_rwlock_read_guard rg;
     setup();
-    ASSERT_EQ(asx_rwlock_create(&h), ASX_OK);
+    ASSERT_EQ(asx_rwlock_create(test_runtime(), &h), ASX_OK);
     ASSERT_EQ(asx_rwlock_try_write(h, &wg), ASX_OK);
     ASSERT_EQ(asx_rwlock_read_begin(h, &rw), ASX_OK);
     ASSERT_EQ(asx_rwlock_poll_read(&rw, &rg, NULL), ASX_E_PENDING);
@@ -206,7 +209,7 @@ TEST(async_write_immediate) {
     asx_rwlock_waiter w;
     asx_rwlock_write_guard wg;
     setup();
-    ASSERT_EQ(asx_rwlock_create(&h), ASX_OK);
+    ASSERT_EQ(asx_rwlock_create(test_runtime(), &h), ASX_OK);
     ASSERT_EQ(asx_rwlock_write_begin(h, &w), ASX_OK);
     ASSERT_EQ(asx_rwlock_poll_write(&w, &wg, NULL), ASX_OK);
     ASSERT_TRUE(asx_rwlock_is_write_locked(h));
@@ -220,7 +223,7 @@ TEST(async_write_pending_when_read_locked) {
     asx_rwlock_waiter ww;
     asx_rwlock_write_guard wg;
     setup();
-    ASSERT_EQ(asx_rwlock_create(&h), ASX_OK);
+    ASSERT_EQ(asx_rwlock_create(test_runtime(), &h), ASX_OK);
     ASSERT_EQ(asx_rwlock_try_read(h, &rg), ASX_OK);
     ASSERT_EQ(asx_rwlock_write_begin(h, &ww), ASX_OK);
     ASSERT_EQ(asx_rwlock_poll_write(&ww, &wg, NULL), ASX_E_PENDING);
@@ -242,7 +245,7 @@ TEST(cancel_read_waiter) {
     asx_rwlock_write_guard wg;
     asx_rwlock_waiter rw;
     setup();
-    ASSERT_EQ(asx_rwlock_create(&h), ASX_OK);
+    ASSERT_EQ(asx_rwlock_create(test_runtime(), &h), ASX_OK);
     ASSERT_EQ(asx_rwlock_try_write(h, &wg), ASX_OK);
     ASSERT_EQ(asx_rwlock_read_begin(h, &rw), ASX_OK);
     ASSERT_EQ(asx_rwlock_waiter_cancel(&rw), ASX_OK);
@@ -256,7 +259,7 @@ TEST(cancel_write_waiter) {
     asx_rwlock_write_guard wg;
     asx_rwlock_waiter ww;
     setup();
-    ASSERT_EQ(asx_rwlock_create(&h), ASX_OK);
+    ASSERT_EQ(asx_rwlock_create(test_runtime(), &h), ASX_OK);
     ASSERT_EQ(asx_rwlock_try_read(h, &rg), ASX_OK);
     ASSERT_EQ(asx_rwlock_write_begin(h, &ww), ASX_OK);
     ASSERT_EQ(asx_rwlock_poll_write(&ww, &wg, NULL), ASX_E_PENDING);
@@ -281,7 +284,7 @@ TEST(read_unlock_without_readers_fails) {
     asx_rwlock_handle h;
     asx_rwlock_read_guard g;
     setup();
-    ASSERT_EQ(asx_rwlock_create(&h), ASX_OK);
+    ASSERT_EQ(asx_rwlock_create(test_runtime(), &h), ASX_OK);
     g.rw_slot = h.slot;
     g.generation = h.generation;
     ASSERT_EQ(asx_rwlock_read_unlock(g), ASX_E_INVALID_STATE);
@@ -292,7 +295,7 @@ TEST(write_unlock_without_writer_fails) {
     asx_rwlock_handle h;
     asx_rwlock_write_guard g;
     setup();
-    ASSERT_EQ(asx_rwlock_create(&h), ASX_OK);
+    ASSERT_EQ(asx_rwlock_create(test_runtime(), &h), ASX_OK);
     g.rw_slot = h.slot;
     g.generation = h.generation;
     ASSERT_EQ(asx_rwlock_write_unlock(g), ASX_E_INVALID_STATE);
@@ -308,8 +311,10 @@ TEST(arena_exhaustion) {
     asx_rwlock_handle overflow;
     uint32_t i;
     setup();
-    for (i = 0; i < ASX_RWLOCK_MAX; i++) { ASSERT_EQ(asx_rwlock_create(&handles[i]), ASX_OK); }
-    ASSERT_EQ(asx_rwlock_create(&overflow), ASX_E_RESOURCE_EXHAUSTED);
+    for (i = 0; i < ASX_RWLOCK_MAX; i++) {
+        ASSERT_EQ(asx_rwlock_create(test_runtime(), &handles[i]), ASX_OK);
+    }
+    ASSERT_EQ(asx_rwlock_create(test_runtime(), &overflow), ASX_E_RESOURCE_EXHAUSTED);
     for (i = 0; i < ASX_RWLOCK_MAX; i++) { asx_rwlock_close(handles[i]); }
 }
 
@@ -321,8 +326,8 @@ TEST(reset_invalidates_handles) {
     asx_rwlock_handle h;
     asx_rwlock_read_guard rg;
     setup();
-    ASSERT_EQ(asx_rwlock_create(&h), ASX_OK);
-    asx_rwlock_reset();
+    ASSERT_EQ(asx_rwlock_create(test_runtime(), &h), ASX_OK);
+    asx_rwlock_reset(test_runtime());
     ASSERT_EQ(asx_rwlock_try_read(h, &rg), ASX_E_STALE_HANDLE);
 }
 
@@ -336,7 +341,7 @@ TEST(write_unlock_wakes_all_readers) {
     asx_rwlock_waiter rw1, rw2;
     asx_rwlock_read_guard rg1, rg2;
     setup();
-    ASSERT_EQ(asx_rwlock_create(&h), ASX_OK);
+    ASSERT_EQ(asx_rwlock_create(test_runtime(), &h), ASX_OK);
     ASSERT_EQ(asx_rwlock_try_write(h, &wg), ASX_OK);
 
     /* Two readers begin waiting */
@@ -366,7 +371,7 @@ TEST(queued_writer_ahead_of_reader_goes_first) {
     asx_rwlock_waiter ww, rw;
     asx_rwlock_read_guard rg;
     setup();
-    ASSERT_EQ(asx_rwlock_create(&h), ASX_OK);
+    ASSERT_EQ(asx_rwlock_create(test_runtime(), &h), ASX_OK);
     ASSERT_EQ(asx_rwlock_try_write(h, &wg1), ASX_OK);
 
     /* A writer, then a reader, queue */
@@ -397,7 +402,7 @@ TEST(reader_queued_before_writer_goes_first) {
     asx_rwlock_waiter ww, rw1, rw2;
     asx_rwlock_read_guard rg1, rg2;
     setup();
-    ASSERT_EQ(asx_rwlock_create(&h), ASX_OK);
+    ASSERT_EQ(asx_rwlock_create(test_runtime(), &h), ASX_OK);
     ASSERT_EQ(asx_rwlock_try_write(h, &held), ASX_OK);
 
     /* Arrival order: reader 1, writer, reader 2 */
@@ -436,7 +441,7 @@ TEST(downgrade_keeps_the_lock_and_admits_readers_before_the_first_writer) {
     asx_rwlock_waiter ww, rw1, rw2;
     asx_rwlock_read_guard down, rg1, rg2, extra;
     setup();
-    ASSERT_EQ(asx_rwlock_create(&h), ASX_OK);
+    ASSERT_EQ(asx_rwlock_create(test_runtime(), &h), ASX_OK);
     ASSERT_EQ(asx_rwlock_try_write(h, &held), ASX_OK);
 
     /* Arrival order: reader 1, writer, reader 2 */
@@ -478,7 +483,7 @@ TEST(downgrade_with_no_writer_queued_admits_every_reader) {
     asx_rwlock_waiter rw1, rw2;
     asx_rwlock_read_guard down, rg1, rg2, more;
     setup();
-    ASSERT_EQ(asx_rwlock_create(&h), ASX_OK);
+    ASSERT_EQ(asx_rwlock_create(test_runtime(), &h), ASX_OK);
     ASSERT_EQ(asx_rwlock_try_write(h, &held), ASX_OK);
     ASSERT_EQ(asx_rwlock_read_begin(h, &rw1), ASX_OK);
     ASSERT_EQ(asx_rwlock_poll_read(&rw1, &rg1, NULL), ASX_E_PENDING);
@@ -503,7 +508,7 @@ TEST(downgrade_errors) {
     asx_rwlock_write_guard wg;
     asx_rwlock_read_guard rg;
     setup();
-    ASSERT_EQ(asx_rwlock_create(&h), ASX_OK);
+    ASSERT_EQ(asx_rwlock_create(test_runtime(), &h), ASX_OK);
     ASSERT_EQ(asx_rwlock_try_write(h, &wg), ASX_OK);
     ASSERT_EQ(asx_rwlock_downgrade(wg, NULL), ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_rwlock_write_unlock(wg), ASX_OK);
@@ -524,7 +529,7 @@ TEST(forced_reader_turn_after_sixteen_writer_handoffs) {
     asx_rwlock_read_guard rg;
     uint32_t i;
     setup();
-    ASSERT_EQ(asx_rwlock_create(&h), ASX_OK);
+    ASSERT_EQ(asx_rwlock_create(test_runtime(), &h), ASX_OK);
     ASSERT_EQ(asx_rwlock_try_write(h, &held), ASX_OK);
 
     /* Arrival order: writers 0..16, the reader, writer 17 */
@@ -564,7 +569,7 @@ TEST(abandoned_last_writer_admits_queued_readers) {
     asx_rwlock_write_guard wg;
     asx_rwlock_waiter ww, rw1, rw2;
     setup();
-    ASSERT_EQ(asx_rwlock_create(&h), ASX_OK);
+    ASSERT_EQ(asx_rwlock_create(test_runtime(), &h), ASX_OK);
     ASSERT_EQ(asx_rwlock_try_read(h, &held), ASX_OK);
     ASSERT_EQ(asx_rwlock_write_begin(h, &ww), ASX_OK);
     ASSERT_EQ(asx_rwlock_poll_write(&ww, &wg, NULL), ASX_E_PENDING);
@@ -591,7 +596,7 @@ TEST(abandoned_granted_writer_passes_the_lock_on) {
     asx_rwlock_write_guard wg;
     asx_rwlock_waiter ww, rw;
     setup();
-    ASSERT_EQ(asx_rwlock_create(&h), ASX_OK);
+    ASSERT_EQ(asx_rwlock_create(test_runtime(), &h), ASX_OK);
     ASSERT_EQ(asx_rwlock_try_read(h, &held), ASX_OK);
     ASSERT_EQ(asx_rwlock_write_begin(h, &ww), ASX_OK);
     ASSERT_EQ(asx_rwlock_poll_write(&ww, &wg, NULL), ASX_E_PENDING);
@@ -612,7 +617,7 @@ TEST(poll_of_the_other_kind_is_refused) {
     asx_rwlock_waiter ww;
     asx_rwlock_read_guard rg;
     setup();
-    ASSERT_EQ(asx_rwlock_create(&h), ASX_OK);
+    ASSERT_EQ(asx_rwlock_create(test_runtime(), &h), ASX_OK);
     ASSERT_EQ(asx_rwlock_write_begin(h, &ww), ASX_OK);
     ASSERT_EQ(asx_rwlock_poll_read(&ww, &rg, NULL), ASX_E_INVALID_STATE);
     ASSERT_EQ(asx_rwlock_waiter_cancel(&ww), ASX_OK);
@@ -628,7 +633,7 @@ TEST(write_unlock_poisoned_poisons_the_lock) {
     asx_rwlock_waiter rw;
     asx_rwlock_waiter ww;
     setup();
-    ASSERT_EQ(asx_rwlock_create(&h), ASX_OK);
+    ASSERT_EQ(asx_rwlock_create(test_runtime(), &h), ASX_OK);
     ASSERT_EQ(asx_rwlock_try_write(h, &wg), ASX_OK);
     ASSERT_EQ(asx_rwlock_read_begin(h, &rw), ASX_OK);
     ASSERT_EQ(asx_rwlock_poll_read(&rw, &rg, NULL), ASX_E_PENDING);
@@ -653,7 +658,7 @@ TEST(read_guards_never_poison) {
     asx_rwlock_read_guard rg;
     asx_rwlock_write_guard wg;
     setup();
-    ASSERT_EQ(asx_rwlock_create(&h), ASX_OK);
+    ASSERT_EQ(asx_rwlock_create(test_runtime(), &h), ASX_OK);
     ASSERT_EQ(asx_rwlock_try_read(h, &rg), ASX_OK);
     /* Only a write guard can be released poisoned. */
     wg.rw_slot = rg.rw_slot;

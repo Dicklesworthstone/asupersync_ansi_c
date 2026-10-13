@@ -894,7 +894,7 @@ TEST(barrier_with_every_task_as_a_party_trips) {
 
     ASSERT_TRUE(setup());
     memset(g_flood_barrier, 0, sizeof(g_flood_barrier));
-    ASSERT_EQ(asx_barrier_create(FLOOD_TASKS, &b), ASX_OK);
+    ASSERT_EQ(asx_barrier_create(&g_rt, FLOOD_TASKS, &b), ASX_OK);
     for (i = 0; i < FLOOD_TASKS; i++) {
         g_flood_barrier[i].barrier = b;
         ASSERT_EQ(asx_task_spawn(g_region, poll_flood_barrier_task, &g_flood_barrier[i], &t),
@@ -957,7 +957,7 @@ TEST(barrier_rounds_trip_once_with_one_leader_each) {
     memset(g_round_barrier, 0, sizeof(g_round_barrier));
     memset(g_round_leaders, 0, sizeof(g_round_leaders));
     memset(g_round_passed, 0, sizeof(g_round_passed));
-    ASSERT_EQ(asx_barrier_create(ROUND_PARTIES, &b), ASX_OK);
+    ASSERT_EQ(asx_barrier_create(&g_rt, ROUND_PARTIES, &b), ASX_OK);
     for (i = 0; i < ROUND_PARTIES; i++) {
         g_round_barrier[i].barrier = b;
         ASSERT_EQ(asx_task_spawn(g_region, poll_round_barrier_task, &g_round_barrier[i], &t),
@@ -1276,10 +1276,10 @@ TEST(close_wakes_all_sync_waiters) {
     ASSERT_TRUE(setup());
     memset(tasks, 0, sizeof(tasks));
     ASSERT_EQ(asx_semaphore_create(&g_rt, 0, &sem), ASX_OK);
-    ASSERT_EQ(asx_notify_create(&nh), ASX_OK);
-    ASSERT_EQ(asx_rwlock_create(&rh), ASX_OK);
+    ASSERT_EQ(asx_notify_create(&g_rt, &nh), ASX_OK);
+    ASSERT_EQ(asx_rwlock_create(&g_rt, &rh), ASX_OK);
     ASSERT_EQ(asx_rwlock_try_write(rh, &wg), ASX_OK);
-    ASSERT_EQ(asx_barrier_create(5, &bh), ASX_OK);
+    ASSERT_EQ(asx_barrier_create(&g_rt, 5, &bh), ASX_OK);
     for (i = 0; i < 8u; i++) {
         tasks[i].kind = (int)(i / 2u);
         tasks[i].sem = sem;
@@ -1373,7 +1373,7 @@ TEST(notify_storms_lose_no_wakeup) {
     uint32_t i;
 
     ASSERT_TRUE(setup());
-    ASSERT_EQ(asx_notify_create(&h), ASX_OK);
+    ASSERT_EQ(asx_notify_create(&g_rt, &h), ASX_OK);
     for (i = 0; i < 1000u; i++) {
         ASSERT_EQ(asx_notify_one(h), ASX_OK);
         ASSERT_EQ(asx_notify_wait_begin(h, &w), ASX_OK);
@@ -1409,7 +1409,7 @@ TEST(notify_one_wakes_oldest_and_passes_on_when_abandoned) {
 
     ASSERT_TRUE(setup());
     memset(n, 0, sizeof(n));
-    ASSERT_EQ(asx_notify_create(&h), ASX_OK);
+    ASSERT_EQ(asx_notify_create(&g_rt, &h), ASX_OK);
     for (i = 0; i < 3u; i++) {
         n[i].h = h;
         ASSERT_EQ(asx_task_spawn(g_region, poll_notify_task, &n[i], &t), ASX_OK);
@@ -1486,7 +1486,7 @@ TEST(rwlock_serves_the_line_in_arrival_order) {
     ASSERT_TRUE(setup());
     memset(r, 0, sizeof(r));
     g_order_len = 0;
-    ASSERT_EQ(asx_rwlock_create(&h), ASX_OK);
+    ASSERT_EQ(asx_rwlock_create(&g_rt, &h), ASX_OK);
     ASSERT_EQ(asx_rwlock_try_write(h, &held), ASX_OK);
     /* Arena order: reader, writer, reader, writer. */
     for (i = 0; i < 4u; i++) {
@@ -1546,7 +1546,7 @@ TEST(rwlock_unlock_hands_the_lock_to_a_cancel_pending_front_writer) {
     ASSERT_TRUE(setup());
     memset(r, 0, sizeof(r));
     g_order_len = 0;
-    ASSERT_EQ(asx_rwlock_create(&h), ASX_OK);
+    ASSERT_EQ(asx_rwlock_create(&g_rt, &h), ASX_OK);
     ASSERT_EQ(asx_rwlock_try_write(h, &held), ASX_OK);
     for (i = 0; i < 2u; i++) {
         r[i].id = i;
@@ -1606,7 +1606,7 @@ TEST(barrier_parks_until_last_arrival) {
 
     ASSERT_TRUE(setup());
     memset(b, 0, sizeof(b));
-    ASSERT_EQ(asx_barrier_create(3, &h), ASX_OK);
+    ASSERT_EQ(asx_barrier_create(&g_rt, 3, &h), ASX_OK);
     for (i = 0; i < 3u; i++) {
         b[i].h = h;
         b[i].arrive_after = (i == 1u) ? 5u * MS : 0u;
@@ -1668,7 +1668,7 @@ TEST(once_async_init_parks_other_callers) {
     ASSERT_TRUE(setup());
     memset(o, 0, sizeof(o));
     g_init_calls = 0;
-    ASSERT_EQ(asx_once_create(&h), ASX_OK);
+    ASSERT_EQ(asx_once_create(&g_rt, &h), ASX_OK);
     ASSERT_EQ(asx_oneshot_create(&tx, &rx), ASX_OK);
     for (i = 0; i < 3u; i++) {
         o[i].h = h;
@@ -1706,7 +1706,7 @@ TEST(once_abandoned_init_passes_turn_to_next_waiter) {
     ASSERT_TRUE(setup());
     memset(o, 0, sizeof(o));
     g_init_calls = 0;
-    ASSERT_EQ(asx_once_create(&h), ASX_OK);
+    ASSERT_EQ(asx_once_create(&g_rt, &h), ASX_OK);
     ASSERT_EQ(asx_oneshot_create(&tx, &rx), ASX_OK);
     for (i = 0; i < 2u; i++) {
         o[i].h = h;

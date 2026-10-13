@@ -135,6 +135,12 @@ TEST(two_runtimes_have_independent_regions_tasks_and_quiescence) {
     asx_semaphore_permit pb;
     asx_mutex_handle mb;
     asx_mutex_guard gb;
+    asx_rwlock_handle rwa;
+    asx_rwlock_handle rwb;
+    asx_rwlock_write_guard wg;
+    asx_notify_handle nb;
+    asx_barrier_handle bb;
+    asx_once_handle once_b;
 
     memset(&a, 0, sizeof(a));
     memset(&b, 0, sizeof(b));
@@ -244,6 +250,33 @@ TEST(two_runtimes_have_independent_regions_tasks_and_quiescence) {
     ASSERT_EQ(asx_semaphore_close(sb), ASX_OK);
     ASSERT_EQ(asx_semaphore_create(NULL, 1u, &sa), ASX_E_INVALID_ARGUMENT);
 
+    /* Read-write locks, notifies, barriers and once cells likewise: the same
+     * arena index in each runtime, told apart by the tag. */
+    ASSERT_EQ(asx_rwlock_create(&a, &rwa), ASX_OK);
+    ASSERT_EQ(asx_rwlock_create(&b, &rwb), ASX_OK);
+    ASSERT_EQ(rwa.slot, 0u);
+    ASSERT_EQ(rwb.slot, 1u << 16);
+    ASSERT_EQ(asx_rwlock_try_write(rwb, &wg), ASX_OK);
+    ASSERT_TRUE(asx_rwlock_is_write_locked(rwb));
+    ASSERT_FALSE(asx_rwlock_is_write_locked(rwa));
+    ASSERT_EQ(asx_rwlock_write_unlock(wg), ASX_OK);
+    ASSERT_EQ(asx_notify_create(&b, &nb), ASX_OK);
+    ASSERT_EQ(nb.slot, 1u << 16);
+    ASSERT_EQ(asx_notify_one(nb), ASX_OK);
+    ASSERT_EQ(asx_notify_stored_count(nb), 1u);
+    ASSERT_EQ(asx_barrier_create(&b, 2u, &bb), ASX_OK);
+    ASSERT_EQ(bb.slot, 1u << 16);
+    ASSERT_EQ(asx_barrier_waiting_count(bb), 0u);
+    ASSERT_EQ(asx_once_create(&b, &once_b), ASX_OK);
+    ASSERT_EQ(once_b.slot, 1u << 16);
+    ASSERT_FALSE(asx_once_is_initialized(once_b));
+    ASSERT_EQ(asx_rwlock_close(rwa), ASX_OK);
+    ASSERT_EQ(asx_rwlock_close(rwb), ASX_OK);
+    ASSERT_EQ(asx_notify_close(nb), ASX_OK);
+    ASSERT_EQ(asx_barrier_close(bb), ASX_OK);
+    ASSERT_EQ(asx_once_close(once_b), ASX_OK);
+    ASSERT_EQ(asx_rwlock_create(NULL, &rwa), ASX_E_INVALID_ARGUMENT);
+
     /* A handle of the other runtime is no member of this one's world. */
     ASSERT_EQ(asx_task_watch(ta, tb), ASX_E_NOT_FOUND);
     ASSERT_EQ(asx_obligation_reserve_ex(ra, ASX_OBLIGATION_KIND_GENERIC, tb, &ob), ASX_E_NOT_FOUND);
@@ -292,6 +325,7 @@ TEST(a_second_runtime_is_refused_by_name_while_a_shared_subsystem_is_in_use) {
     asx_channel_id ch;
     asx_semaphore_handle sem;
     asx_rwlock_handle rw;
+    asx_contended_mutex_handle cm;
     asx_task_id tid;
 
     memset(&a, 0, sizeof(a));
@@ -332,10 +366,12 @@ TEST(a_second_runtime_is_refused_by_name_while_a_shared_subsystem_is_in_use) {
     ASSERT_EQ(asx_region_open(&a, &ra), ASX_OK);
     ASSERT_EQ(asx_channel_create(ra, 4u, &ch), ASX_E_INVALID_STATE);
     ASSERT_TRUE(reason_names("channels"));
-    ASSERT_EQ(asx_rwlock_create(&rw), ASX_E_INVALID_STATE);
-    ASSERT_TRUE(reason_names("rwlocks"));
+    ASSERT_EQ(asx_contended_mutex_create(&cm), ASX_E_INVALID_STATE);
+    ASSERT_TRUE(reason_names("pools"));
     ASSERT_EQ(asx_semaphore_create(&a, 1u, &sem), ASX_OK);
     ASSERT_EQ(asx_semaphore_close(sem), ASX_OK);
+    ASSERT_EQ(asx_rwlock_create(&a, &rw), ASX_OK);
+    ASSERT_EQ(asx_rwlock_close(rw), ASX_OK);
     ASSERT_EQ(asx_task_spawn(ra, done_poll, NULL, &tid), ASX_OK);
 
     /* One runtime again: the subsystem takes state, as before. */
