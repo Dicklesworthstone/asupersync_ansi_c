@@ -66,6 +66,20 @@ asx_status asx_task_mask_depth(asx_task_id id, uint32_t *out_depth) {
     return ASX_OK;
 }
 
+/* Stub for asx_region_capability_budget, which Cx's init loads its
+ * envelopes from: the stub region carries g_stub_region_envelopes; any other
+ * region is not held. */
+static asx_region_id g_stub_region_id = ASX_INVALID_ID;
+static asx_capability_budget g_stub_region_envelopes;
+
+asx_status asx_region_capability_budget(asx_region_id region, asx_capability_budget *out);
+asx_status asx_region_capability_budget(asx_region_id region, asx_capability_budget *out) {
+    if (out == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (region == ASX_INVALID_ID || region != g_stub_region_id) return ASX_E_NOT_FOUND;
+    *out = g_stub_region_envelopes;
+    return ASX_OK;
+}
+
 /* ------------------------------------------------------------------ */
 /* Lifecycle tests                                                     */
 /* ------------------------------------------------------------------ */
@@ -773,11 +787,227 @@ TEST(checkpoint_cancel_takes_priority_over_budget) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Capability budget (resource envelopes; bd-9kll.3.27)                */
+/* ------------------------------------------------------------------ */
+
+#define CAP_REGION ((asx_region_id)77)
+
+/* The stub region carries 1024 bytes of memory and 100 CPU units. */
+static void cap_region_with_envelopes(void) {
+    asx_capability_budget b = asx_capability_budget_unspecified();
+    b = asx_capability_budget_with_memory_bytes(b, 1024u);
+    b = asx_capability_budget_with_cpu_units(b, 100u);
+    g_stub_region_id = CAP_REGION;
+    g_stub_region_envelopes = b;
+}
+
+static void cap_no_region(void) {
+    g_stub_region_id = ASX_INVALID_ID;
+    g_stub_region_envelopes = asx_capability_budget_unspecified();
+}
+
+/* Field-wise: the struct has padding, so memcmp would compare bytes the
+ * type does not define. */
+static int cap_same(const asx_capability_budget *a, const asx_capability_budget *b) {
+    return a->has_memory_bytes == b->has_memory_bytes && a->memory_bytes == b->memory_bytes &&
+           a->has_cpu_units == b->has_cpu_units && a->cpu_units == b->cpu_units &&
+           a->has_io_bytes == b->has_io_bytes && a->io_bytes == b->io_bytes &&
+           a->has_cleanup_budget == b->has_cleanup_budget &&
+           a->cleanup_budget.poll_quota == b->cleanup_budget.poll_quota &&
+           a->has_artifact_bytes == b->has_artifact_bytes && a->artifact_bytes == b->artifact_bytes;
+}
+
+TEST(capability_budget_init_loads_the_regions_envelopes) {
+    asx_cx cx;
+    asx_capability_budget got;
+    cap_region_with_envelopes();
+    ASSERT_EQ(asx_cx_init(&cx, CAP_REGION, 1, ASX_CAP_NONE), ASX_OK);
+    got = asx_cx_capability_budget(&cx);
+    ASSERT_TRUE(got.has_memory_bytes);
+    ASSERT_EQ(got.memory_bytes, (uint64_t)1024);
+    ASSERT_TRUE(got.has_cpu_units);
+    ASSERT_EQ(got.cpu_units, (uint64_t)100);
+    ASSERT_FALSE(got.has_io_bytes);
+    ASSERT_FALSE(got.has_cleanup_budget);
+    ASSERT_FALSE(got.has_artifact_bytes);
+    cap_no_region();
+}
+
+TEST(capability_budget_init_of_an_unheld_region_has_none) {
+    asx_cx cx;
+    asx_capability_budget got;
+    cap_region_with_envelopes();
+    ASSERT_EQ(asx_cx_init(&cx, 42, 1, ASX_CAP_NONE), ASX_OK); /* not the stub's */
+    got = asx_cx_capability_budget(&cx);
+    ASSERT_FALSE(got.has_memory_bytes);
+    ASSERT_FALSE(got.has_cpu_units);
+    cap_no_region();
+}
+
+TEST(capability_budget_null_cx_is_unspecified) {
+    asx_capability_budget got = asx_cx_capability_budget(NULL);
+    ASSERT_FALSE(got.has_memory_bytes);
+    ASSERT_FALSE(got.has_cpu_units);
+    ASSERT_FALSE(got.has_io_bytes);
+    ASSERT_FALSE(got.has_cleanup_budget);
+    ASSERT_FALSE(got.has_artifact_bytes);
+}
+
+TEST(capability_budget_narrow_and_attenuate_carry_the_envelopes) {
+    asx_cx parent, narrowed, attenuated;
+    cap_region_with_envelopes();
+    ASSERT_EQ(asx_cx_init(&parent, CAP_REGION, 1, ASX_CAP_CLOCK_READ | ASX_CAP_ENTROPY), ASX_OK);
+    cap_no_region(); /* what the children carry is the Cx's, not a fresh lookup */
+    ASSERT_EQ(asx_cx_narrow(&parent, &narrowed, ASX_CAP_CLOCK_READ), ASX_OK);
+    ASSERT_EQ(asx_cx_attenuate(&parent, &attenuated, ASX_CAP_ENTROPY), ASX_OK);
+    ASSERT_EQ(asx_cx_capability_budget(&narrowed).memory_bytes, (uint64_t)1024);
+    ASSERT_EQ(asx_cx_capability_budget(&narrowed).cpu_units, (uint64_t)100);
+    ASSERT_EQ(asx_cx_capability_budget(&attenuated).memory_bytes, (uint64_t)1024);
+    ASSERT_TRUE(asx_cx_capability_budget(&attenuated).has_cpu_units);
+}
+
+TEST(capability_budget_plan_child_tightens_without_changing_the_cx) {
+    asx_cx cx;
+    asx_capability_budget child = asx_capability_budget_unspecified();
+    asx_capability_budget out;
+    asx_capability_refusal refusal;
+    cap_region_with_envelopes();
+    ASSERT_EQ(asx_cx_init(&cx, CAP_REGION, 1, ASX_CAP_NONE), ASX_OK);
+    cap_no_region();
+
+    child = asx_capability_budget_with_memory_bytes(child, 256u);
+    child = asx_capability_budget_with_io_bytes(child, 4096u);
+    ASSERT_EQ(asx_cx_plan_child_capability_budget(&cx, &child, NULL, &out, &refusal), ASX_OK);
+    ASSERT_EQ(out.memory_bytes, (uint64_t)256); /* tightened */
+    ASSERT_EQ(out.cpu_units, (uint64_t)100);    /* inherited */
+    ASSERT_TRUE(out.has_io_bytes);              /* the child's own */
+    ASSERT_EQ(out.io_bytes, (uint64_t)4096);
+    /* Read-only (Rust plan_child_capability_budget, cx.rs:2588). */
+    ASSERT_EQ(asx_cx_capability_budget(&cx).memory_bytes, (uint64_t)1024);
+    ASSERT_FALSE(asx_cx_capability_budget(&cx).has_io_bytes);
+}
+
+TEST(capability_budget_plan_child_refusal_names_the_dimension_and_writes_nothing) {
+    asx_cx cx;
+    asx_capability_budget out;
+    asx_capability_budget before;
+    asx_capability_requirements req = {0, 0, 1, 0, 0}; /* io_bytes */
+    asx_capability_refusal refusal;
+    cap_region_with_envelopes();
+    ASSERT_EQ(asx_cx_init(&cx, CAP_REGION, 1, ASX_CAP_NONE), ASX_OK);
+    cap_no_region();
+
+    out = asx_capability_budget_with_artifact_bytes(asx_capability_budget_unspecified(), 0xABu);
+    before = out;
+    ASSERT_EQ(asx_cx_plan_child_capability_budget(&cx, NULL, &req, &out, &refusal),
+              ASX_E_CAPABILITY_BUDGET_REFUSED);
+    ASSERT_EQ(refusal.kind, ASX_CAPABILITY_MISSING_REQUIRED);
+    ASSERT_EQ(refusal.dimension, ASX_CAPABILITY_IO_BYTES);
+    ASSERT_TRUE(cap_same(&out, &before)); /* not written */
+
+    /* The permitted near-identical case: requiring what the Cx has. */
+    req.io_bytes = 0u;
+    req.cpu_units = 1u;
+    ASSERT_EQ(asx_cx_plan_child_capability_budget(&cx, NULL, &req, &out, &refusal), ASX_OK);
+    ASSERT_EQ(out.cpu_units, (uint64_t)100);
+}
+
+TEST(capability_budget_apply_child_tightens_and_never_loosens) {
+    asx_cx cx;
+    asx_capability_budget tighter = asx_capability_budget_unspecified();
+    asx_capability_budget looser = asx_capability_budget_unspecified();
+    asx_capability_budget out;
+    asx_capability_refusal refusal;
+    cap_region_with_envelopes();
+    ASSERT_EQ(asx_cx_init(&cx, CAP_REGION, 1, ASX_CAP_NONE), ASX_OK);
+    cap_no_region();
+
+    tighter = asx_capability_budget_with_memory_bytes(tighter, 512u);
+    ASSERT_EQ(asx_cx_apply_child_capability_budget(&cx, &tighter, NULL, &out, &refusal), ASX_OK);
+    ASSERT_EQ(out.memory_bytes, (uint64_t)512);
+    ASSERT_EQ(asx_cx_capability_budget(&cx).memory_bytes, (uint64_t)512);
+    ASSERT_EQ(asx_cx_capability_budget(&cx).cpu_units, (uint64_t)100);
+
+    looser = asx_capability_budget_with_memory_bytes(looser, 4096u);
+    looser = asx_capability_budget_with_artifact_bytes(looser, 9u);
+    ASSERT_EQ(asx_cx_apply_child_capability_budget(&cx, &looser, NULL, NULL, &refusal), ASX_OK);
+    ASSERT_EQ(asx_cx_capability_budget(&cx).memory_bytes, (uint64_t)512); /* not 4096 */
+    ASSERT_TRUE(asx_cx_capability_budget(&cx).has_artifact_bytes);        /* a new bound */
+    ASSERT_EQ(asx_cx_capability_budget(&cx).artifact_bytes, (uint64_t)9);
+}
+
+TEST(capability_budget_apply_child_refusal_leaves_the_cx_unchanged) {
+    asx_cx cx;
+    asx_capability_budget child = asx_capability_budget_unspecified();
+    asx_capability_budget before;
+    asx_capability_budget after;
+    asx_capability_requirements req = {0, 0, 0, 1, 0}; /* cleanup */
+    asx_capability_refusal refusal;
+    cap_region_with_envelopes();
+    ASSERT_EQ(asx_cx_init(&cx, CAP_REGION, 1, ASX_CAP_NONE), ASX_OK);
+    cap_no_region();
+
+    /* A child that tightens memory but misses a required dimension: the
+     * tightening is not applied. */
+    child = asx_capability_budget_with_memory_bytes(child, 8u);
+    before = asx_cx_capability_budget(&cx);
+    ASSERT_EQ(asx_cx_apply_child_capability_budget(&cx, &child, &req, NULL, &refusal),
+              ASX_E_CAPABILITY_BUDGET_REFUSED);
+    ASSERT_EQ(refusal.kind, ASX_CAPABILITY_MISSING_REQUIRED);
+    ASSERT_EQ(refusal.dimension, ASX_CAPABILITY_CLEANUP);
+    after = asx_cx_capability_budget(&cx);
+    ASSERT_TRUE(cap_same(&before, &after));
+    ASSERT_EQ(after.memory_bytes, (uint64_t)1024);
+
+    /* The near-identical case supplying the dimension is admitted. */
+    {
+        asx_budget cleanup = asx_budget_from_polls(4);
+        child = asx_capability_budget_with_cleanup_budget(child, &cleanup);
+    }
+    ASSERT_EQ(asx_cx_apply_child_capability_budget(&cx, &child, &req, NULL, &refusal), ASX_OK);
+    ASSERT_EQ(asx_cx_capability_budget(&cx).memory_bytes, (uint64_t)8);
+    ASSERT_TRUE(asx_cx_capability_budget(&cx).has_cleanup_budget);
+}
+
+TEST(capability_budget_a_tightened_cx_narrows_to_a_tightened_child) {
+    asx_cx cx, narrowed;
+    asx_capability_budget child = asx_capability_budget_unspecified();
+    cap_region_with_envelopes();
+    ASSERT_EQ(asx_cx_init(&cx, CAP_REGION, 1, ASX_CAP_CLOCK_READ), ASX_OK);
+    cap_no_region();
+
+    child = asx_capability_budget_with_cpu_units(child, 10u);
+    ASSERT_EQ(asx_cx_apply_child_capability_budget(&cx, &child, NULL, NULL, NULL), ASX_OK);
+    ASSERT_EQ(asx_cx_narrow(&cx, &narrowed, ASX_CAP_CLOCK_READ), ASX_OK);
+    ASSERT_EQ(asx_cx_capability_budget(&narrowed).cpu_units, (uint64_t)10);
+
+    /* A Cx is a value: tightening the narrowed copy leaves its parent as it
+     * was (Rust's clones share one inner state; documented in cx.h). */
+    child = asx_capability_budget_with_cpu_units(asx_capability_budget_unspecified(), 2u);
+    ASSERT_EQ(asx_cx_apply_child_capability_budget(&narrowed, &child, NULL, NULL, NULL), ASX_OK);
+    ASSERT_EQ(asx_cx_capability_budget(&narrowed).cpu_units, (uint64_t)2);
+    ASSERT_EQ(asx_cx_capability_budget(&cx).cpu_units, (uint64_t)10);
+}
+
+TEST(capability_budget_plan_and_apply_reject_a_null_cx) {
+    asx_capability_budget out;
+    asx_capability_refusal refusal;
+    ASSERT_EQ(asx_cx_plan_child_capability_budget(NULL, NULL, NULL, &out, &refusal),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_cx_apply_child_capability_budget(NULL, NULL, NULL, &out, &refusal),
+              ASX_E_INVALID_ARGUMENT);
+}
+
+/* ------------------------------------------------------------------ */
 /* Permission denied status string test                                */
 /* ------------------------------------------------------------------ */
 
 TEST(permission_denied_status_str) {
     ASSERT_STR_EQ(asx_status_str(ASX_E_PERMISSION_DENIED), "capability not granted");
+}
+
+TEST(capability_budget_refused_status_str) {
+    ASSERT_STR_EQ(asx_status_str(ASX_E_CAPABILITY_BUDGET_REFUSED), "capability budget refused");
 }
 
 /* ------------------------------------------------------------------ */
@@ -876,8 +1106,21 @@ int main(void) {
     RUN_TEST(checkpoint_defers_a_spent_budget_while_the_task_is_masked);
     RUN_TEST(checkpoint_cancel_takes_priority_over_budget);
 
+    /* Capability budget */
+    RUN_TEST(capability_budget_init_loads_the_regions_envelopes);
+    RUN_TEST(capability_budget_init_of_an_unheld_region_has_none);
+    RUN_TEST(capability_budget_null_cx_is_unspecified);
+    RUN_TEST(capability_budget_narrow_and_attenuate_carry_the_envelopes);
+    RUN_TEST(capability_budget_plan_child_tightens_without_changing_the_cx);
+    RUN_TEST(capability_budget_plan_child_refusal_names_the_dimension_and_writes_nothing);
+    RUN_TEST(capability_budget_apply_child_tightens_and_never_loosens);
+    RUN_TEST(capability_budget_apply_child_refusal_leaves_the_cx_unchanged);
+    RUN_TEST(capability_budget_a_tightened_cx_narrows_to_a_tightened_child);
+    RUN_TEST(capability_budget_plan_and_apply_reject_a_null_cx);
+
     /* Status string */
     RUN_TEST(permission_denied_status_str);
+    RUN_TEST(capability_budget_refused_status_str);
 
     TEST_REPORT();
     return test_failures;

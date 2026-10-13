@@ -1495,6 +1495,40 @@ ASX_API const char *asx_runtime_last_refusal_reason(void);
  * runtime (always, while ASX_MAX_RUNTIMES is 1). */
 ASX_API int asx_runtime_shared_state_refused_internal(const char *subsystem);
 
+/* ------------------------------------------------------------------ */
+/* Capability budgets of regions (bd-9kll.3.27; asx/core/budget.h)     */
+/* ------------------------------------------------------------------ */
+
+/* A region carries a resource envelope (Rust RegionRecord::capability_
+ * budget). A region opened without one has none (UNSPECIFIED); a child
+ * opened with asx_region_open_child or asx_region_open_child_with_budget
+ * inherits its parent's unchanged. It can only be tightened below a parent,
+ * never loosened. */
+
+/* Open a root region that carries `capability_budget` (NULL: none), as Rust's
+ * create_root_region_with_capability_budget. Same contract and errors as
+ * asx_region_open. */
+ASX_API ASX_MUST_USE asx_status asx_region_open_with_capability_budget(
+    const asx_runtime *rt, const asx_capability_budget *capability_budget, asx_region_id *out_id);
+
+/* Open a child region whose envelope is meet(parent's, *capability_budget),
+ * admitted against `requirements` (NULL: none), and whose cost budget is as
+ * asx_region_open_child_with_budget's (budget may be NULL). Rust's
+ * RegionTable::create_child_with_capability_budget (region_table.rs:292):
+ * the envelope is planned before anything is taken, so a refusal returns
+ * ASX_E_CAPABILITY_BUDGET_REFUSED with *refusal (if non-NULL) naming the
+ * dimension and leaves the arena, the parent's children and every counter
+ * exactly as they were; a parent that is not found, closed, poisoned or at
+ * capacity is the same error as asx_region_open_child, after the planning. */
+ASX_API ASX_MUST_USE asx_status asx_region_open_child_with_capability_budget(
+    asx_region_id parent, const asx_budget *budget, const asx_capability_budget *capability_budget,
+    const asx_capability_requirements *requirements, asx_region_id *out_child,
+    asx_capability_refusal *refusal);
+
+/* The envelope a region carries (Rust RegionRecord::capability_budget). */
+ASX_API ASX_MUST_USE asx_status asx_region_capability_budget(asx_region_id region,
+                                                             asx_capability_budget *out);
+
 #ifdef __cplusplus
 }
 #endif

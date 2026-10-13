@@ -255,6 +255,21 @@ run_unit_mutant SPAWN_INTO_CLOSING_REGION unit/runtime/test_parallel \
 run_unit_mutant CLEAR_SKIPS_USED_SLOTS unit/runtime/test_boundary_exhaustion \
     reset_after_heavy_then_light_use_leaves_no_slot_behind
 
+# CapabilityBudget (bd-9kll.3.27): an envelope can only tighten down the
+# tree, a spent one is refused when required, a refused child takes nothing,
+# and a refused apply leaves the Cx as it was. The conformance corpus has no
+# scenario that reads an envelope, so each is caught by its unit test.
+run_unit_mutant CAPABILITY_MEET_LOOSENS unit/core/test_budget \
+    capability_child_inherits_parent_and_tightens_overrides \
+    capability_meet_never_loosens
+run_unit_mutant CAPABILITY_SPENT_ADMITS unit/core/test_budget \
+    capability_required_exhausted_dimension_rejects \
+    capability_requirement_is_checked_against_the_meet
+run_unit_mutant CAPABILITY_SLOT_BEFORE_REFUSAL unit/runtime/test_budget_obligation \
+    capability_budget_refused_child_is_failure_atomic
+run_unit_mutant CAPABILITY_APPLY_ON_REFUSAL unit/cx/test_cx \
+    capability_budget_apply_child_refusal_leaves_the_cx_unchanged
+
 if [ "$failures" -eq 0 ]; then
     echo "test_oracle_mutants: every mutant caught"
     exit 0

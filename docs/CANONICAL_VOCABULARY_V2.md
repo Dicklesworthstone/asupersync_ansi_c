@@ -339,6 +339,7 @@ table covers all 67 C codes. Each row is one of three things:
 | `ASX_E_REPLAY_MISMATCH` (1500) | — | C-only |
 | `ASX_E_CONFIG_FROZEN`, `ASX_E_CONFIG_RESTART_REQ`, `ASX_E_CONFIG_MISMATCH` (1600–1602) | `ErrorKind::ConfigError` | lossy; build mismatch is a C startup error outside scenario execution |
 | `ASX_E_PERMISSION_DENIED` (1700) | — | C-only: capability masks (Rust's `Cx::spawn` mask returns `RuntimeUnavailable`, row 401) |
+| `ASX_E_CAPABILITY_BUDGET_REFUSED` (1701) | `RegionCreateError::CapabilityBudgetRefused { parent, reason }` (`src/runtime/region_table.rs:45`, `:320`) | lossy: `reason` (`CapabilityBudgetRefusal::MissingRequired` / `Exhausted` and the dimension, `src/types/budget.rs:892`) is `asx_capability_refusal`, not part of the status; not an `ErrorKind`, so no scenario outcome carries it |
 
 Rust values reachable through DSL v2 that have no row above, and how they
 are handled:

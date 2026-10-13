@@ -120,7 +120,9 @@ typedef enum {
     ASX_E_CONFIG_MISMATCH = 1602,    /* incompatible application/library build */
 
     /* Permission / capability errors (17xx) */
-    ASX_E_PERMISSION_DENIED = 1700 /* capability not granted */
+    ASX_E_PERMISSION_DENIED = 1700,        /* capability not granted */
+    ASX_E_CAPABILITY_BUDGET_REFUSED = 1701 /* a required resource envelope is missing or spent
+                                            * (Rust RegionCreateError::CapabilityBudgetRefused) */
 
 } asx_status;
 

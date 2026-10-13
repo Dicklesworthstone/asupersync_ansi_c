@@ -74,7 +74,8 @@ typedef struct {
     int poisoned;              /* 1 if region has been poisoned (containment) */
     asx_cleanup_stack cleanup; /* LIFO cleanup for finalization */
     asx_budget budget; /* met into child regions; tasks spawned into it from another region */
-    asx_region_limits limits; /* admission limits (unlimited by default) */
+    asx_capability_budget capability_budget; /* resource envelopes; a child's is the meet (Rust) */
+    asx_region_limits limits;                /* admission limits (unlimited by default) */
     /* Captured task state is carved at 8-byte offsets: the union keeps the
      * arena itself 8-byte aligned whatever fields precede it. */
     union {
@@ -1182,5 +1183,21 @@ const char *asx_channel_accounting_defect_internal(const asx_channel_accounting 
 #else
 #define ASX_ARENA_CLEAR_N(k, count, max) ((k)->arenas_clear ? (count) : (uint32_t)(max))
 #endif
+
+/* A region's two budgets when it opens (Rust RegionRecord::new_with_time:
+ * Budget::INFINITE and CapabilityBudget::UNSPECIFIED), and a child's, which
+ * start as its parent's: create_child_with_capability_budget meets the
+ * child's own envelope into the parent's (region_table.rs:292-325), and a
+ * child that supplies none keeps the parent's. */
+static inline void asx_region_budgets_reset_internal(asx_region_slot *r) {
+    r->budget = asx_budget_infinite();
+    r->capability_budget = asx_capability_budget_unspecified();
+}
+
+static inline void asx_region_budgets_inherit_internal(asx_region_slot *child,
+                                                       const asx_region_slot *parent) {
+    child->budget = parent->budget;
+    child->capability_budget = parent->capability_budget;
+}
 
 #endif /* ASX_RUNTIME_INTERNAL_H */

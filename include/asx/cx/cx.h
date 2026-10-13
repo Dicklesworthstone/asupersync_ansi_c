@@ -77,6 +77,11 @@ typedef struct {
     asx_time *clock;         /* borrowed logical clock (NULL = wall clock) */
     uint64_t *entropy_state; /* borrowed entropy state (NULL = system) */
     uint32_t generation;     /* context generation (for stale detection) */
+    /* Resource envelopes (Rust Cx::capability_budget): the region's at init,
+     * a narrowed Cx's parent's, tightened only by asx_cx_apply_child_
+     * capability_budget. Zeroed is UNSPECIFIED. A Cx is a value: a copy
+     * tightens on its own, where Rust's clones share one inner state. */
+    asx_capability_budget capability_budget;
 } asx_cx;
 
 typedef struct {
@@ -238,6 +243,31 @@ ASX_API const asx_budget *asx_cx_budget(const asx_cx *cx);
  * no budget is bound), ASX_E_POLL_BUDGET_EXHAUSTED if no polls remain,
  * ASX_E_PERMISSION_DENIED if ASX_CAP_BUDGET_CONSUME not set. */
 ASX_API asx_status asx_cx_consume_poll(asx_cx *cx);
+
+/* ------------------------------------------------------------------ */
+/* Capability budget (resource envelopes; bd-9kll.3.27)                */
+/* ------------------------------------------------------------------ */
+
+/* The envelopes this Cx carries (Rust Cx::capability_budget, cx.rs:2516).
+ * Needs no capability. NULL cx: UNSPECIFIED. */
+ASX_API asx_capability_budget asx_cx_capability_budget(const asx_cx *cx);
+
+/* The effective child envelope without changing the Cx (Rust
+ * plan_child_capability_budget, cx.rs:2588): meet(this Cx's, *child),
+ * admitted against `requirements`. ASX_OK with *out filled, or
+ * ASX_E_CAPABILITY_BUDGET_REFUSED with *refusal naming the dimension and
+ * *out not written. NULL child is UNSPECIFIED, NULL requirements none. */
+ASX_API ASX_MUST_USE asx_status
+asx_cx_plan_child_capability_budget(const asx_cx *cx, const asx_capability_budget *child,
+                                    const asx_capability_requirements *requirements,
+                                    asx_capability_budget *out, asx_capability_refusal *refusal);
+
+/* The same, applied (Rust apply_child_capability_budget, cx.rs:2606): the
+ * Cx carries the effective envelope afterwards, and is unchanged on a
+ * refusal. It can only tighten. *out (may be NULL) gets the new envelope. */
+ASX_API ASX_MUST_USE asx_status asx_cx_apply_child_capability_budget(
+    asx_cx *cx, const asx_capability_budget *child, const asx_capability_requirements *requirements,
+    asx_capability_budget *out, asx_capability_refusal *refusal);
 
 /* ------------------------------------------------------------------ */
 /* Clock access                                                        */

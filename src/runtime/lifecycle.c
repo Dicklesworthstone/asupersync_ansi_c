@@ -71,7 +71,7 @@ void asx_runtime_clear_internal(asx_kernel *k) {
         k->regions[i].generation = 0;
         k->regions[i].alive = 0;
         asx_cleanup_init(&k->regions[i].cleanup);
-        k->regions[i].budget = asx_budget_infinite();
+        asx_region_budgets_reset_internal(&k->regions[i]);
         k->regions[i].capture_used = 0;
     }
     k->region_count = 0;
@@ -895,7 +895,7 @@ static asx_status region_open_with_parent(asx_kernel *k, asx_region_id parent,
     k->regions[idx].alive = 1;
     k->regions[idx].poisoned = 0;
     asx_cleanup_init(&k->regions[idx].cleanup);
-    k->regions[idx].budget = asx_budget_infinite();
+    asx_region_budgets_reset_internal(&k->regions[idx]);
     k->regions[idx].limits.max_tasks = ASX_REGION_UNLIMITED;
     k->regions[idx].limits.max_children = ASX_REGION_UNLIMITED;
     k->regions[idx].limits.max_obligations = ASX_REGION_UNLIMITED;
@@ -957,7 +957,7 @@ asx_status asx_region_open_child(asx_region_id parent, asx_region_id *out_child)
     st = asx_region_slot_lookup(*out_child, &child_slot);
     if (st != ASX_OK) return st;
 
-    child_slot->budget = parent_slot->budget; /* children inherit the budget */
+    asx_region_budgets_inherit_internal(child_slot, parent_slot); /* children inherit both */
     parent_slot->children[parent_slot->child_count] = *out_child;
     parent_slot->child_count++;
     return ASX_OK;
@@ -2236,4 +2236,74 @@ void asx_runtime_reset_hooks_run_internal(void) {
         /* ASX_CHECKPOINT_WAIVER("bounded: one slot per optional subsystem") */
         if (g_reset_hooks[i] != NULL) g_reset_hooks[i]();
     }
+}
+
+/* -------------------------------------------------------------------
+ * Capability budgets of regions (bd-9kll.3.27)
+ *
+ * A region carries a resource envelope its children inherit and can only
+ * tighten (Rust RegionRecord::capability_budget, record/region.rs:1080).
+ * Admission of a child that supplies its own is
+ * RegionTable::create_child_with_capability_budget (runtime/
+ * region_table.rs:292-325): the parent's envelope met with the child's and
+ * validated against the requirements, a refusal taken before the child
+ * record is inserted, so nothing changes (its own invariant comment).
+ * ------------------------------------------------------------------- */
+
+asx_status asx_region_open_with_capability_budget(const asx_runtime *rt,
+                                                  const asx_capability_budget *capability_budget,
+                                                  asx_region_id *out_id) {
+    asx_region_slot *slot;
+    asx_status st = asx_region_open(rt, out_id);
+    if (st != ASX_OK) return st;
+    st = asx_region_slot_lookup(*out_id, &slot);
+    if (st != ASX_OK) return st;
+    if (capability_budget != NULL) slot->capability_budget = *capability_budget;
+    return ASX_OK;
+}
+
+asx_status asx_region_open_child_with_capability_budget(
+    asx_region_id parent, const asx_budget *budget, const asx_capability_budget *capability_budget,
+    const asx_capability_requirements *requirements, asx_region_id *out_child,
+    asx_capability_refusal *refusal) {
+    asx_region_slot *parent_slot;
+    asx_region_slot *child_slot;
+    asx_capability_budget effective;
+    asx_status st;
+
+    if (out_child == NULL) return ASX_E_INVALID_ARGUMENT;
+    st = asx_region_slot_lookup(parent, &parent_slot);
+    if (st != ASX_OK) return st;
+
+#ifdef ASX_MUTANT_CAPABILITY_SLOT_BEFORE_REFUSAL
+    {
+        /* Gate mutant (tests/gates/test_oracle_mutants.sh): the slot is
+         * taken before the plan, so a refusal leaves a child behind. */
+        asx_region_id taken;
+        st = asx_region_open_child(parent, &taken);
+        if (st != ASX_OK) return st;
+    }
+#endif
+    /* Planned before any slot is taken: a refusal leaves the arena, the
+     * parent's children and every counter as they were. */
+    st = asx_capability_budget_plan_child(&parent_slot->capability_budget, capability_budget,
+                                          requirements, &effective, refusal);
+    if (st != ASX_OK) return st;
+
+    st = asx_region_open_child_with_budget(parent, budget, out_child);
+    if (st != ASX_OK) return st;
+    st = asx_region_slot_lookup(*out_child, &child_slot);
+    if (st != ASX_OK) return st;
+    child_slot->capability_budget = effective;
+    return ASX_OK;
+}
+
+asx_status asx_region_capability_budget(asx_region_id region, asx_capability_budget *out) {
+    asx_region_slot *slot;
+    asx_status st;
+    if (out == NULL) return ASX_E_INVALID_ARGUMENT;
+    st = asx_region_slot_lookup(region, &slot);
+    if (st != ASX_OK) return st;
+    *out = slot->capability_budget;
+    return ASX_OK;
 }

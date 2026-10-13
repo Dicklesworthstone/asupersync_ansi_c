@@ -220,6 +220,7 @@ const char *asx_status_str(asx_status s) {
     case ASX_E_CONFIG_RESTART_REQ: return "config field requires restart";
     case ASX_E_CONFIG_MISMATCH: return "application/library configuration mismatch";
     case ASX_E_PERMISSION_DENIED: return "capability not granted";
+    case ASX_E_CAPABILITY_BUDGET_REFUSED: return "capability budget refused";
     default: return "unknown status";
     }
 }
@@ -301,6 +302,7 @@ static const asx_status_name_entry g_status_names[] = {
     ASX_STATUS_NAME_ENTRY(ASX_E_CONFIG_RESTART_REQ),
     ASX_STATUS_NAME_ENTRY(ASX_E_CONFIG_MISMATCH),
     ASX_STATUS_NAME_ENTRY(ASX_E_PERMISSION_DENIED),
+    ASX_STATUS_NAME_ENTRY(ASX_E_CAPABILITY_BUDGET_REFUSED),
 };
 
 #define ASX_STATUS_NAME_COUNT (sizeof(g_status_names) / sizeof(g_status_names[0]))
@@ -396,7 +398,8 @@ asx_error_category asx_status_category(asx_status s) {
     case ASX_E_CONFIG_FROZEN:
     case ASX_E_CONFIG_RESTART_REQ:
     case ASX_E_CONFIG_MISMATCH: return ASX_ERROR_CATEGORY_CONFIG;
-    case ASX_E_PERMISSION_DENIED: return ASX_ERROR_CATEGORY_PERMISSION;
+    case ASX_E_PERMISSION_DENIED:
+    case ASX_E_CAPABILITY_BUDGET_REFUSED: return ASX_ERROR_CATEGORY_PERMISSION;
     default: return ASX_ERROR_CATEGORY_GENERAL;
     }
 }
@@ -478,6 +481,7 @@ asx_recoverability asx_status_recoverability(asx_status s) {
     case ASX_E_OBJECT_MISMATCH:
     case ASX_E_CORRUPTED_SYMBOL:
     case ASX_E_REPLAY_MISMATCH:
+    case ASX_E_CAPABILITY_BUDGET_REFUSED:
     case ASX_E_PERMISSION_DENIED: return ASX_RECOVERABILITY_PERMANENT;
     case ASX_E_INVALID_STATE:
     case ASX_E_BUFFER_TOO_SMALL:
@@ -551,6 +555,7 @@ asx_recovery_action asx_status_recovery_action(asx_status s) {
     case ASX_E_DUPLICATE_SYMBOL:
     case ASX_E_OBJECT_MISMATCH:
     case ASX_E_CORRUPTED_SYMBOL:
+    case ASX_E_CAPABILITY_BUDGET_REFUSED:
     case ASX_E_PERMISSION_DENIED: return ASX_RECOVERY_PROPAGATE;
     case ASX_E_WOULD_BLOCK:
     case ASX_E_CHANNEL_FULL:
@@ -655,6 +660,7 @@ asx_backoff_hint asx_status_backoff_hint(asx_status s) {
     case ASX_E_CONFIG_FROZEN:
     case ASX_E_CONFIG_RESTART_REQ:
     case ASX_E_CONFIG_MISMATCH:
+    case ASX_E_CAPABILITY_BUDGET_REFUSED:
     case ASX_E_PERMISSION_DENIED: return asx_backoff_hint_none();
     case ASX_E_WOULD_BLOCK:
     case ASX_E_CHANNEL_FULL:

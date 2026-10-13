@@ -31,7 +31,7 @@ static asx_status cx_copy_with_caps(const asx_cx *parent, asx_cx *child, asx_cap
     if (!asx_cx_is_valid(parent)) return ASX_E_INVALID_STATE;
     if (!cx_caps_subset(parent->caps, child_caps)) return ASX_E_INVALID_ARGUMENT;
 
-    memset(child, 0, sizeof(*child));
+    *child = *parent; /* the envelopes carry over: a narrowed Cx never gains one */
     child->region_id = parent->region_id;
     child->task_id = parent->task_id;
     child->caps = child_caps;
@@ -76,9 +76,9 @@ asx_status asx_cx_init(asx_cx *cx, asx_region_id region_id, asx_task_id task_id,
     cx->region_id = region_id;
     cx->task_id = task_id;
     cx->caps = caps;
-    cx->budget = NULL;
-    cx->clock = NULL;
-    cx->entropy_state = NULL;
+    /* Its region's envelope; an id the runtime does not hold (a bare one) has none. */
+    if (asx_region_capability_budget(region_id, &cx->capability_budget) != ASX_OK)
+        cx->capability_budget = asx_capability_budget_unspecified();
     cx->generation = g_cx_generation++;
     return ASX_OK;
 }
@@ -440,5 +440,43 @@ asx_status asx_cx_checkpoint(asx_cx *cx) {
         return ASX_E_CANCELLED;
     }
 
+    return ASX_OK;
+}
+
+/* ------------------------------------------------------------------ */
+/* Capability budget (resource envelopes; bd-9kll.3.27)                */
+/* ------------------------------------------------------------------ */
+
+asx_capability_budget asx_cx_capability_budget(const asx_cx *cx) {
+    if (cx == NULL) return asx_capability_budget_unspecified();
+    return cx->capability_budget;
+}
+
+asx_status asx_cx_plan_child_capability_budget(const asx_cx *cx, const asx_capability_budget *child,
+                                               const asx_capability_requirements *requirements,
+                                               asx_capability_budget *out,
+                                               asx_capability_refusal *refusal) {
+    if (cx == NULL) return ASX_E_INVALID_ARGUMENT;
+    return asx_capability_budget_plan_child(&cx->capability_budget, child, requirements, out,
+                                            refusal);
+}
+
+asx_status asx_cx_apply_child_capability_budget(asx_cx *cx, const asx_capability_budget *child,
+                                                const asx_capability_requirements *requirements,
+                                                asx_capability_budget *out,
+                                                asx_capability_refusal *refusal) {
+    asx_capability_budget effective;
+    asx_status st;
+    if (cx == NULL) return ASX_E_INVALID_ARGUMENT;
+#ifdef ASX_MUTANT_CAPABILITY_APPLY_ON_REFUSAL
+    /* Gate mutant (tests/gates/test_oracle_mutants.sh): tightened before it
+     * is admitted, so a refusal leaves the Cx changed. */
+    cx->capability_budget = asx_capability_budget_meet(&cx->capability_budget, child);
+#endif
+    st = asx_capability_budget_plan_child(&cx->capability_budget, child, requirements, &effective,
+                                          refusal);
+    if (st != ASX_OK) return st; /* the Cx is as it was */
+    cx->capability_budget = effective;
+    if (out != NULL) *out = effective;
     return ASX_OK;
 }

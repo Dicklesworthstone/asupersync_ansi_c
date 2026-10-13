@@ -1395,6 +1395,319 @@ TEST(region_deadline_bounds_tasks_spawned_into_it_from_a_task) {
 }
 
 /* -------------------------------------------------------------------
+ * Capability budgets of regions (bd-9kll.3.27). A region carries a
+ * resource envelope its children inherit and can only tighten; a child
+ * admitted with requirements that its effective envelope does not meet is
+ * refused before anything is taken (Rust RegionTable::
+ * create_child_with_capability_budget, region_table.rs:292-325).
+ * ------------------------------------------------------------------- */
+
+/* 1024 bytes of memory, 100 CPU units, a 50-poll cleanup budget. */
+static asx_capability_budget cap_envelope(void) {
+    asx_budget cleanup = asx_budget_from_polls(50);
+    asx_capability_budget b = asx_capability_budget_unspecified();
+    b = asx_capability_budget_with_memory_bytes(b, 1024u);
+    b = asx_capability_budget_with_cpu_units(b, 100u);
+    b = asx_capability_budget_with_cleanup_budget(b, &cleanup);
+    return b;
+}
+
+TEST(capability_budget_root_region_carries_its_envelope) {
+    asx_region_id plain;
+    asx_region_id carrying;
+    asx_region_id unset;
+    asx_capability_budget env = cap_envelope();
+    asx_capability_budget got;
+
+    setup();
+    ASSERT_EQ(asx_region_open(&g_rt, &plain), ASX_OK);
+    ASSERT_EQ(asx_region_capability_budget(plain, &got), ASX_OK);
+    ASSERT_FALSE(got.has_memory_bytes); /* UNSPECIFIED, as Rust's RegionRecord::new */
+    ASSERT_FALSE(got.has_cpu_units);
+    ASSERT_FALSE(got.has_io_bytes);
+    ASSERT_FALSE(got.has_cleanup_budget);
+    ASSERT_FALSE(got.has_artifact_bytes);
+
+    ASSERT_EQ(asx_region_open_with_capability_budget(&g_rt, &env, &carrying), ASX_OK);
+    ASSERT_EQ(asx_region_capability_budget(carrying, &got), ASX_OK);
+    ASSERT_TRUE(got.has_memory_bytes);
+    ASSERT_EQ(got.memory_bytes, (uint64_t)1024);
+    ASSERT_TRUE(got.has_cpu_units);
+    ASSERT_EQ(got.cpu_units, (uint64_t)100);
+    ASSERT_TRUE(got.has_cleanup_budget);
+    ASSERT_EQ(got.cleanup_budget.poll_quota, 50u);
+    ASSERT_FALSE(got.has_io_bytes);
+
+    ASSERT_EQ(asx_region_open_with_capability_budget(&g_rt, NULL, &unset), ASX_OK);
+    ASSERT_EQ(asx_region_capability_budget(unset, &got), ASX_OK);
+    ASSERT_FALSE(got.has_memory_bytes);
+
+    ASSERT_EQ(asx_region_capability_budget(carrying, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_region_open_with_capability_budget(&g_rt, &env, NULL), ASX_E_INVALID_ARGUMENT);
+}
+
+TEST(capability_budget_plain_children_inherit_the_parents_envelope) {
+    asx_region_id root;
+    asx_region_id plain;
+    asx_region_id with_budget;
+    asx_region_id nested;
+    asx_budget b = asx_budget_from_polls(9);
+    asx_capability_budget env = cap_envelope();
+    asx_capability_budget got;
+
+    setup();
+    ASSERT_EQ(asx_region_open_with_capability_budget(&g_rt, &env, &root), ASX_OK);
+    ASSERT_EQ(asx_region_open_child(root, &plain), ASX_OK);
+    ASSERT_EQ(asx_region_open_child_with_budget(root, &b, &with_budget), ASX_OK);
+    ASSERT_EQ(asx_region_open_child(with_budget, &nested), ASX_OK);
+
+    ASSERT_EQ(asx_region_capability_budget(plain, &got), ASX_OK);
+    ASSERT_EQ(got.memory_bytes, (uint64_t)1024);
+    ASSERT_EQ(got.cpu_units, (uint64_t)100);
+    ASSERT_EQ(asx_region_capability_budget(with_budget, &got), ASX_OK);
+    ASSERT_EQ(got.memory_bytes, (uint64_t)1024);
+    ASSERT_EQ(asx_region_capability_budget(nested, &got), ASX_OK);
+    ASSERT_EQ(got.memory_bytes, (uint64_t)1024);
+    ASSERT_TRUE(got.has_cleanup_budget);
+}
+
+TEST(capability_budget_child_tightens_and_never_loosens_down_the_tree) {
+    asx_region_id root;
+    asx_region_id child;
+    asx_region_id grandchild;
+    asx_region_id greedy;
+    asx_capability_budget env = cap_envelope();
+    asx_capability_budget tighter = asx_capability_budget_unspecified();
+    asx_capability_budget looser = asx_capability_budget_unspecified();
+    asx_capability_budget got;
+    asx_capability_refusal refusal;
+
+    setup();
+    ASSERT_EQ(asx_region_open_with_capability_budget(&g_rt, &env, &root), ASX_OK);
+
+    tighter = asx_capability_budget_with_memory_bytes(tighter, 256u);
+    tighter = asx_capability_budget_with_io_bytes(tighter, 4096u);
+    ASSERT_EQ(asx_region_open_child_with_capability_budget(root, NULL, &tighter, NULL, &child,
+                                                           &refusal),
+              ASX_OK);
+    ASSERT_EQ(refusal.kind, ASX_CAPABILITY_REFUSAL_NONE);
+    ASSERT_EQ(asx_region_capability_budget(child, &got), ASX_OK);
+    ASSERT_EQ(got.memory_bytes, (uint64_t)256); /* tightened */
+    ASSERT_EQ(got.cpu_units, (uint64_t)100);    /* inherited */
+    ASSERT_TRUE(got.has_io_bytes);              /* the child's own */
+    ASSERT_EQ(got.io_bytes, (uint64_t)4096);
+    ASSERT_TRUE(got.has_cleanup_budget); /* inherited */
+
+    /* A grandchild asking for more than its parent holds gets the
+     * parent's, in every dimension. */
+    looser = asx_capability_budget_with_memory_bytes(looser, 1u << 20);
+    looser = asx_capability_budget_with_io_bytes(looser, 1u << 20);
+    ASSERT_EQ(asx_region_open_child_with_capability_budget(child, NULL, &looser, NULL, &grandchild,
+                                                           &refusal),
+              ASX_OK);
+    ASSERT_EQ(asx_region_capability_budget(grandchild, &got), ASX_OK);
+    ASSERT_EQ(got.memory_bytes, (uint64_t)256);
+    ASSERT_EQ(got.io_bytes, (uint64_t)4096);
+
+    /* The parent is not changed by its children. */
+    ASSERT_EQ(asx_region_capability_budget(root, &got), ASX_OK);
+    ASSERT_EQ(got.memory_bytes, (uint64_t)1024);
+    ASSERT_FALSE(got.has_io_bytes);
+
+    /* Open-time cost budget composes with it, as asx_region_open_child_with_budget. */
+    {
+        asx_budget b = asx_budget_from_polls(3);
+        asx_budget rb;
+        ASSERT_EQ(asx_region_open_child_with_capability_budget(root, &b, NULL, NULL, &greedy, NULL),
+                  ASX_OK);
+        ASSERT_EQ(asx_region_get_budget(greedy, &rb), ASX_OK);
+        ASSERT_EQ(rb.poll_quota, 3u);
+        ASSERT_EQ(asx_region_capability_budget(greedy, &got), ASX_OK);
+        ASSERT_EQ(got.memory_bytes, (uint64_t)1024);
+    }
+}
+
+TEST(capability_budget_refused_child_is_failure_atomic) {
+    asx_region_id root;
+    asx_region_id child = (asx_region_id)0xDEADBEEFu;
+    asx_region_slot *slot;
+    asx_capability_budget env = cap_envelope();
+    asx_capability_budget before;
+    asx_capability_budget after;
+    asx_capability_requirements need_io = {0, 0, 1, 0, 0};
+    asx_capability_refusal refusal;
+    uint32_t regions;
+    uint32_t children;
+
+    setup();
+    ASSERT_EQ(asx_region_open_with_capability_budget(&g_rt, &env, &root), ASX_OK);
+    ASSERT_EQ(asx_region_slot_lookup(root, &slot), ASX_OK);
+    regions = asx_runtime_region_count(&g_rt);
+    children = slot->child_count;
+    ASSERT_EQ(asx_region_capability_budget(root, &before), ASX_OK);
+
+    /* Required and missing: the envelope has no io_bytes. */
+    ASSERT_EQ(asx_region_open_child_with_capability_budget(root, NULL, NULL, &need_io, &child,
+                                                           &refusal),
+              ASX_E_CAPABILITY_BUDGET_REFUSED);
+    ASSERT_EQ(refusal.kind, ASX_CAPABILITY_MISSING_REQUIRED);
+    ASSERT_EQ(refusal.dimension, ASX_CAPABILITY_IO_BYTES);
+    ASSERT_EQ(child, (asx_region_id)0xDEADBEEFu); /* *out_child is not written */
+    ASSERT_EQ(asx_runtime_region_count(&g_rt), regions);
+    ASSERT_EQ(slot->child_count, children);
+    ASSERT_EQ(asx_region_capability_budget(root, &after), ASX_OK);
+    ASSERT_EQ(after.memory_bytes, before.memory_bytes);
+
+    /* Required and spent: the child's own zero exhausts what the parent has. */
+    {
+        asx_capability_budget spent =
+            asx_capability_budget_with_memory_bytes(asx_capability_budget_unspecified(), 0u);
+        asx_capability_requirements need_mem = {1, 0, 0, 0, 0};
+        ASSERT_EQ(asx_region_open_child_with_capability_budget(root, NULL, &spent, &need_mem,
+                                                               &child, &refusal),
+                  ASX_E_CAPABILITY_BUDGET_REFUSED);
+        ASSERT_EQ(refusal.kind, ASX_CAPABILITY_EXHAUSTED);
+        ASSERT_EQ(refusal.dimension, ASX_CAPABILITY_MEMORY_BYTES);
+        ASSERT_EQ(child, (asx_region_id)0xDEADBEEFu);
+        ASSERT_EQ(asx_runtime_region_count(&g_rt), regions);
+        ASSERT_EQ(slot->child_count, children);
+    }
+
+    /* The refusal is repeatable: nothing was consumed to produce it. */
+    ASSERT_EQ(asx_region_open_child_with_capability_budget(root, NULL, NULL, &need_io, &child,
+                                                           &refusal),
+              ASX_E_CAPABILITY_BUDGET_REFUSED);
+
+    /* Permitted, near-identical: the same call once the child supplies the
+     * required dimension. */
+    {
+        asx_capability_budget supplies =
+            asx_capability_budget_with_io_bytes(asx_capability_budget_unspecified(), 512u);
+        ASSERT_EQ(asx_region_open_child_with_capability_budget(root, NULL, &supplies, &need_io,
+                                                               &child, &refusal),
+                  ASX_OK);
+        ASSERT_EQ(asx_runtime_region_count(&g_rt), regions + 1u);
+        ASSERT_EQ(slot->child_count, children + 1u);
+        ASSERT_EQ(slot->children[children], child);
+    }
+}
+
+TEST(capability_budget_refusal_is_planned_before_the_parents_admission_checks) {
+    /* Rust plans the envelope before the child is inserted, so a refusal
+     * outranks a full parent (ParentAtCapacity comes with the insertion);
+     * a child that is admissible meets the full parent's limit instead. */
+    asx_region_id root;
+    asx_region_id child = ASX_INVALID_ID;
+    asx_region_limits limits;
+    asx_capability_budget env = cap_envelope();
+    asx_capability_requirements need_io = {0, 0, 1, 0, 0};
+    asx_capability_refusal refusal;
+
+    setup();
+    ASSERT_EQ(asx_region_open_with_capability_budget(&g_rt, &env, &root), ASX_OK);
+    ASSERT_EQ(asx_region_get_limits(root, &limits), ASX_OK);
+    limits.max_children = 0u;
+    ASSERT_EQ(asx_region_set_limits(root, &limits), ASX_OK);
+
+    ASSERT_EQ(asx_region_open_child_with_capability_budget(root, NULL, NULL, &need_io, &child,
+                                                           &refusal),
+              ASX_E_CAPABILITY_BUDGET_REFUSED);
+    ASSERT_EQ(asx_region_open_child_with_capability_budget(root, NULL, NULL, NULL, &child,
+                                                           &refusal),
+              ASX_E_ADMISSION_LIMIT);
+    ASSERT_EQ(child, ASX_INVALID_ID);
+}
+
+TEST(capability_budget_open_child_rejects_bad_arguments_and_parents) {
+    asx_region_id root;
+    asx_region_id child = ASX_INVALID_ID;
+    asx_capability_refusal refusal;
+
+    setup();
+    ASSERT_EQ(asx_region_open(&g_rt, &root), ASX_OK);
+    ASSERT_EQ(asx_region_open_child_with_capability_budget(root, NULL, NULL, NULL, NULL, &refusal),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_region_open_child_with_capability_budget(ASX_INVALID_ID, NULL, NULL, NULL, &child,
+                                                           &refusal),
+              ASX_E_NOT_FOUND);
+    ASSERT_EQ(child, ASX_INVALID_ID);
+    /* No requirements and no envelope: a plain child, refusal untouched. */
+    ASSERT_EQ(asx_region_open_child_with_capability_budget(root, NULL, NULL, NULL, &child, NULL),
+              ASX_OK);
+}
+
+TEST(capability_budget_cx_of_a_region_carries_its_envelope) {
+    asx_region_id root;
+    asx_region_id child;
+    asx_capability_budget env = cap_envelope();
+    asx_capability_budget tighter =
+        asx_capability_budget_with_memory_bytes(asx_capability_budget_unspecified(), 64u);
+    asx_cx cx;
+    asx_cx narrowed;
+    asx_capability_budget got;
+
+    setup();
+    ASSERT_EQ(asx_region_open_with_capability_budget(&g_rt, &env, &root), ASX_OK);
+    ASSERT_EQ(asx_region_open_child_with_capability_budget(root, NULL, &tighter, NULL, &child,
+                                                           NULL),
+              ASX_OK);
+
+    ASSERT_EQ(asx_cx_init(&cx, root, ASX_INVALID_ID, ASX_CAP_CLOCK_READ), ASX_OK);
+    got = asx_cx_capability_budget(&cx);
+    ASSERT_EQ(got.memory_bytes, (uint64_t)1024);
+    ASSERT_EQ(got.cpu_units, (uint64_t)100);
+
+    ASSERT_EQ(asx_cx_init(&cx, child, ASX_INVALID_ID, ASX_CAP_CLOCK_READ), ASX_OK);
+    got = asx_cx_capability_budget(&cx);
+    ASSERT_EQ(got.memory_bytes, (uint64_t)64); /* the child region's */
+
+    ASSERT_EQ(asx_cx_narrow(&cx, &narrowed, ASX_CAP_NONE), ASX_OK);
+    got = asx_cx_capability_budget(&narrowed);
+    ASSERT_EQ(got.memory_bytes, (uint64_t)64);
+    ASSERT_EQ(got.cpu_units, (uint64_t)100);
+}
+
+TEST(capability_budget_a_recycled_slot_starts_unspecified) {
+    asx_region_id first;
+    asx_region_id second;
+    asx_capability_budget env = cap_envelope();
+    asx_capability_budget got;
+    asx_region_state rs;
+    asx_budget run;
+
+    setup();
+    ASSERT_EQ(asx_region_open_with_capability_budget(&g_rt, &env, &first), ASX_OK);
+    ASSERT_EQ(asx_region_close(first), ASX_OK);
+    run = asx_budget_infinite();
+    ASSERT_EQ(asx_region_drain(first, &run), ASX_OK);
+    ASSERT_EQ(asx_region_get_state(first, &rs), ASX_OK);
+    ASSERT_EQ(rs, ASX_REGION_CLOSED);
+    ASSERT_EQ(asx_region_open(&g_rt, &second), ASX_OK);
+    ASSERT_NE(first, second); /* the closed slot was recycled: a new generation */
+    ASSERT_EQ(asx_region_capability_budget(second, &got), ASX_OK);
+    ASSERT_FALSE(got.has_memory_bytes); /* not the old region's envelope */
+    ASSERT_FALSE(got.has_cpu_units);
+    ASSERT_FALSE(got.has_cleanup_budget);
+    ASSERT_EQ(asx_region_capability_budget(first, &got), ASX_E_STALE_HANDLE);
+}
+
+TEST(capability_budget_runtime_reset_clears_every_envelope) {
+    asx_region_id first;
+    asx_region_id second;
+    asx_capability_budget env = cap_envelope();
+    asx_capability_budget got;
+
+    setup();
+    ASSERT_EQ(asx_region_open_with_capability_budget(&g_rt, &env, &first), ASX_OK);
+    asx_runtime_reset(&g_rt);
+    setup();
+    ASSERT_EQ(asx_region_open(&g_rt, &second), ASX_OK);
+    ASSERT_EQ(asx_region_capability_budget(second, &got), ASX_OK);
+    ASSERT_FALSE(got.has_memory_bytes);
+    ASSERT_FALSE(got.has_cleanup_budget);
+}
+
+/* -------------------------------------------------------------------
  * Obligations: kinds and holders
  * ------------------------------------------------------------------- */
 
@@ -2016,6 +2329,15 @@ int main(void) {
     RUN_TEST(nested_region_budgets_equal_their_meet);
     RUN_TEST(budgets_tighten_down_the_region_tree);
     RUN_TEST(region_deadline_bounds_tasks_spawned_into_it_from_a_task);
+    RUN_TEST(capability_budget_root_region_carries_its_envelope);
+    RUN_TEST(capability_budget_plain_children_inherit_the_parents_envelope);
+    RUN_TEST(capability_budget_child_tightens_and_never_loosens_down_the_tree);
+    RUN_TEST(capability_budget_refused_child_is_failure_atomic);
+    RUN_TEST(capability_budget_refusal_is_planned_before_the_parents_admission_checks);
+    RUN_TEST(capability_budget_open_child_rejects_bad_arguments_and_parents);
+    RUN_TEST(capability_budget_cx_of_a_region_carries_its_envelope);
+    RUN_TEST(capability_budget_a_recycled_slot_starts_unspecified);
+    RUN_TEST(capability_budget_runtime_reset_clears_every_envelope);
     RUN_TEST(reserve_ex_records_kind_and_holder);
     RUN_TEST(non_holder_cannot_resolve_an_obligation_but_its_owner_can);
     RUN_TEST(handoff_same_region_reuses_the_full_quota);
