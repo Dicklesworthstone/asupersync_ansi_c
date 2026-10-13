@@ -23,6 +23,7 @@ use asupersync::gen_server::{
     CallError, CastError, CastOverflowPolicy, GenServer, GenServerHandle, Reply, SystemMsg,
 };
 use asupersync::lab::{LabConfig, LabRuntime};
+use asupersync::link::{Link, LinkRef};
 use asupersync::monitor::{DownReason, Monitor, MonitorRef, WatchError, WatchTarget};
 use asupersync::record::task::TaskState;
 use asupersync::record::{ObligationAbortReason, ObligationKind, RegionLimits};
@@ -532,6 +533,11 @@ struct Local {
     /// by name.
     monitors: BTreeMap<String, (Monitor, String)>,
     server_monitors: BTreeMap<String, MonitorRef>,
+    /// Links this task holds by name, with the peer's name, and the
+    /// references of the links a server holds for it (DSL §3.10). Dropping a
+    /// `Link` does not remove it: only `unlink` does.
+    links: BTreeMap<String, (Link, String)>,
+    server_links: BTreeMap<String, LinkRef>,
     /// GenServers this task spawned, by name (DSL §3.8).
     servers: BTreeMap<String, Server>,
     /// Supervisors this task spawned, by name, joined or not (DSL §3.8):
@@ -2042,6 +2048,35 @@ fn exec_sync(
             }
             observe(&ctx.shared, me, idx, label, "ASX_OK", Value::Null);
         }
+        // Link::unlink(self) (link.rs:889): an Unlink command; the Link is
+        // consumed.
+        "unlink" => {
+            let name = str_field(step, "link")?;
+            let (link, _) = local
+                .links
+                .remove(name)
+                .ok_or_else(|| format!("this task holds no link {name:?}"))?;
+            link.unlink();
+            observe(&ctx.shared, me, idx, label, "ASX_OK", Value::Null);
+        }
+        // GenServerHandle::unlink(cx, ref) (gen_server.rs:2012).
+        "server_unlink" => {
+            let server = str_field(step, "server")?;
+            let name = str_field(step, "link")?;
+            let link_ref = local
+                .server_links
+                .remove(name)
+                .ok_or_else(|| format!("this task holds no server link {name:?}"))?;
+            match local
+                .servers
+                .get(server)
+                .ok_or_else(|| format!("unknown server {server:?}"))?
+            {
+                Server::Counter(h) => h.unlink(cx, link_ref),
+                Server::Echo(h) => h.unlink(cx, link_ref),
+            }
+            observe(&ctx.shared, me, idx, label, "ASX_OK", Value::Null);
+        }
         // GenServerHandle::demonitor(cx, ref) (gen_server.rs:1978).
         "server_demonitor" => {
             let server = str_field(step, "server")?;
@@ -2361,6 +2396,76 @@ async fn exec_step(
                 Ok(reference) => {
                     local.server_monitors.insert(name, reference);
                     observe(&ctx.shared, me, idx, op, "ASX_OK", json!(reference.id()));
+                }
+                Err(e) => observe(&ctx.shared, me, idx, op, watch_error_status(e), Value::Null),
+            }
+        }
+        // Cx::link(peer).await / Cx::link_trapping(peer).await (link.rs:824,
+        // DSL §3.10): through the region-command lane like a monitor. The
+        // reference is a process-wide counter in Rust, so it is not observed.
+        "link" | "link_trapping" => {
+            let peer = str_field(step, "task")?.to_string();
+            let name = str_field(step, "as")?.to_string();
+            if local.links.contains_key(&name) {
+                return Err(format!("link {name:?} is named twice"));
+            }
+            let watch_target = watch_target_of(&ctx.shared, &peer)?;
+            let opening = if op == "link" {
+                cx.link(watch_target)
+            } else {
+                cx.link_trapping(watch_target)
+            };
+            match opening.await {
+                Ok(link) => {
+                    local.links.insert(name, (link, peer));
+                    observe(&ctx.shared, me, idx, op, "ASX_OK", Value::Null);
+                }
+                Err(e) => observe(&ctx.shared, me, idx, op, watch_error_status(e), Value::Null),
+            }
+        }
+        // Link::exit(&cx).await (link.rs:864): the exit signal of a
+        // trapping link, as the peer's name and the reason kind.
+        "await_exit" => {
+            let name = str_field(step, "link")?;
+            let (link, peer) = local
+                .links
+                .get(name)
+                .ok_or_else(|| format!("this task holds no link {name:?}"))?;
+            match link.exit(cx).await {
+                Ok(signal) => {
+                    let value = json!({
+                        "from": peer,
+                        "reason": down_reason_kind(&signal.reason),
+                    });
+                    observe(&ctx.shared, me, idx, op, "ASX_OK", value);
+                }
+                Err(e) => observe(&ctx.shared, me, idx, op, watch_error_status(e), Value::Null),
+            }
+        }
+        // GenServerHandle::link / link_trapping (gen_server.rs:1991, :2003).
+        "server_link" | "server_link_trapping" => {
+            let server = str_field(step, "server")?;
+            let peer = str_field(step, "task")?.to_string();
+            let name = str_field(step, "as")?.to_string();
+            if local.server_links.contains_key(&name) {
+                return Err(format!("server link {name:?} is named twice"));
+            }
+            let watch_target = watch_target_of(&ctx.shared, &peer)?;
+            let trapping = op == "server_link_trapping";
+            let opening = match local
+                .servers
+                .get(server)
+                .ok_or_else(|| format!("unknown server {server:?}"))?
+            {
+                Server::Counter(h) if trapping => h.link_trapping(cx, watch_target),
+                Server::Counter(h) => h.link(cx, watch_target),
+                Server::Echo(h) if trapping => h.link_trapping(cx, watch_target),
+                Server::Echo(h) => h.link(cx, watch_target),
+            };
+            match opening.await {
+                Ok(link_ref) => {
+                    local.server_links.insert(name, link_ref);
+                    observe(&ctx.shared, me, idx, op, "ASX_OK", Value::Null);
                 }
                 Err(e) => observe(&ctx.shared, me, idx, op, watch_error_status(e), Value::Null),
             }
