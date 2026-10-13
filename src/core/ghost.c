@@ -458,4 +458,25 @@ void asx_ghost_obligation_moved(asx_obligation_id id, asx_region_id region) {
     if (entry != NULL) { entry->region = region; }
 }
 
+/* --- Reset for the next run of the same program (bd-flkg): everything
+ * asx_ghost_reset clears and the current determinism sequence, but not the
+ * sealed reference ordering, so a rerun is checked against the run before it.
+ * After the monitors above so their line anchors stay put. --- */
+
+void asx_ghost_reset_run(void) {
+    memset(g_ghost_ring, 0, sizeof(g_ghost_ring));
+    g_ghost_ring_write = 0;
+    g_ghost_ring_count = 0;
+    g_ghost_ring_overflow = 0;
+
+    memset(g_ghost_linearity, 0, sizeof(g_ghost_linearity));
+    g_ghost_linearity_count = 0;
+
+    memset(g_ghost_borrows, 0, sizeof(g_ghost_borrows));
+    g_ghost_borrow_count = 0;
+
+    memset(g_ghost_det_events, 0, sizeof(g_ghost_det_events));
+    g_ghost_det_count = 0;
+}
+
 #endif /* ASX_DEBUG_GHOST */

@@ -182,6 +182,13 @@ ASX_API ASX_MUST_USE uint64_t asx_ghost_determinism_digest(void);
 /* Return the number of events recorded since last reset. */
 ASX_API ASX_MUST_USE uint32_t asx_ghost_determinism_event_count(void);
 
+/* Reset for the next run of the same program: what asx_ghost_reset clears
+ * (violations, linearity, borrows) and the current event sequence, but not
+ * the sealed reference ordering, so a rerun's events are checked against the
+ * run that was sealed. The runtime's reset calls this one;
+ * asx_ghost_reset() and asx_ghost_determinism_reset() forget the reference. */
+ASX_API void asx_ghost_reset_run(void);
+
 #else /* !ASX_DEBUG_GHOST */
 
 /* Zero-overhead stubs when ghost monitors are disabled. */
@@ -209,6 +216,7 @@ ASX_API ASX_MUST_USE uint32_t asx_ghost_determinism_event_count(void);
 #define asx_ghost_determinism_check() ((uint32_t)0)
 #define asx_ghost_determinism_digest() ((uint64_t)0)
 #define asx_ghost_determinism_event_count() ((uint32_t)0)
+#define asx_ghost_reset_run() ((void)0)
 
 #endif /* ASX_DEBUG_GHOST */
 
