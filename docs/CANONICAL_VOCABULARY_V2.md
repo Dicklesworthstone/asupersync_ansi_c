@@ -97,6 +97,7 @@ through the snapshot (`now_ns`, timer deadlines).
 | `timer.scheduled` | `timer`, `deadline_ns` | `TimerScheduled`, `Timer{timer_id,deadline:Some}` (`:213`) | `ASX_TRACE_TIMER_SET` |
 | `timer.fired` | `timer` | `TimerFired` (`:215`) | `ASX_TRACE_TIMER_FIRE` |
 | `timer.cancelled` | `timer` | `TimerCancelled` (`:217`) | `ASX_TRACE_TIMER_CANCEL` |
+| `futurelock.detected` | `task`, `region`, `idle_steps`, `held` (a list of `{obligation, kind}`) | `FuturelockDetected` (`:233`), `Futurelock{task,region,idle_steps,held}` (`:969`) | `ASX_TRACE_LAB_FUTURELOCK`; the observer payload carries the region and the held list. Only in a scenario that declares `lab.futurelock_max_idle_steps` |
 | `user.trace` | `message` | `UserTrace`, `Message(String)` (`:237`), not a handoff. A `managed_supervisor_v1` message has its `region=` and `task=` ids replaced by their §2 names | `ASX_TRACE_USER`; the supervisor's ids (hex handles) are replaced the same way |
 
 ### Emission rules both engines must follow
@@ -136,6 +137,24 @@ reproduce exactly for the projected streams to agree.
   event carries none. C stamps the reserve when it is applied, which for a
   reserve posted during a poll is the end of that poll, and reads the same
   virtual clock at the resolution (`asx_obligation_info.held_ns`).
+- **`futurelock.detected` at every step, only when declared.** A scenario
+  that declares `lab.futurelock_max_idle_steps` (DSL §1) runs with that
+  threshold and with `panic_on_futurelock` off. At every lab step, after the
+  step's rng draw and before the timers fire, each task that is not
+  terminal, holds at least one pending obligation and has been idle more
+  than the threshold steps (`steps - last_polled_step`, once `steps` is past
+  the threshold) emits one event, tasks in `TaskId` order and `held` in the
+  obligation arena's order (`futurelock_violations`,
+  `src/lab/runtime.rs:5612-5672`; `check_futurelocks`, `:5674-5723`). There
+  is no dedup: a task that stays idle is reported again at every following
+  step with `idle_steps` one higher, so the events carry the step count
+  that no other event does. A step that returns early to give reentrant
+  cancellation the next step (`:4492-4498`) runs no check, and the check
+  follows the draw (`:4499`, `:4508`). A scenario that does not declare
+  the knob runs with Rust's default threshold (10000) and
+  `panic_on_futurelock` on, so a futurelock there is a harness failure
+  (`docs/VOCABULARY_EXCLUSIONS.md`). Held order is the C obligation
+  arena's, equal to Rust's while both reuse freed slots alike.
 - **Oneshot `user.trace` messages:** `"oneshot::reserve creating permit"`
   (`oneshot.rs:512`), `"oneshot::recv received value"` (`:1041`),
   `"oneshot::recv channel closed"` (`:1055`) and
@@ -432,6 +451,7 @@ where mode is `R` or `W`. These are restated from `resource_footprint`
 | `obligation.reserved` / `committed` / `aborted` / `leaked` | W obligation, R task, R region |
 | `obligation.handoff` | W obligation, W from_task, W to_task, W from_region, W to_region |
 | `timer.scheduled`, `timer.fired`, `timer.cancelled` | W timer, R clock |
+| `futurelock.detected` | R task, R region (the held obligations are data, not accesses) |
 | `user.trace` | ∅ (empty) |
 
 Resources are typed by entity name: `task:<n>`, `region:<n>`,
@@ -452,7 +472,7 @@ it as conflicting with everything, `independence.rs:310-314`.)
 The relation is checked by a table test on both sides: a C test under
 `tests/unit/runtime/` and a Rust test in `tools/twin_run`. Both use the same
 JSON table of event pairs and expected answers,
-`tests/conformance/vocab_v2_independence_table.json`. Its 22 cases cover
+`tests/conformance/vocab_v2_independence_table.json`. Its 25 cases cover
 every footprint rule; `"$reason"` stands for its `reason_fixture`.
 
 ### Foata layers

@@ -101,6 +101,14 @@ static asx_status footprint(const asx_json_doc *doc, uint32_t ev, res_access fp[
         if (a == NULL) return canon_fail("timer event lacks timer");
         add_access(fp, n, RES_TIMER, a, 1);
         add_access(fp, n, RES_CLOCK, "", 0);
+    } else if (strcmp(k, "futurelock.detected") == 0) {
+        /* An observation of the task and its region; the obligations it
+         * names are data (independence.rs:204-210). */
+        a = asx_json_get_string(doc, ev, "task");
+        b = asx_json_get_string(doc, ev, "region");
+        if (a == NULL || b == NULL) return canon_fail("futurelock.detected lacks task/region");
+        add_access(fp, n, RES_TASK, a, 0);
+        add_access(fp, n, RES_REGION, b, 0);
     } else if (strcmp(k, "user.trace") == 0) {
         /* commutes with everything */
     } else {

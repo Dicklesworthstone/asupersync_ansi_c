@@ -151,6 +151,12 @@ fn footprint(event: &Value) -> CanonResult<Vec<Access>> {
                 r("clock".to_string()),
             ]
         }
+        // An observation of the task and its region; the obligations it
+        // names are data (`resource_footprint`, independence.rs:204-210).
+        "futurelock.detected" => vec![
+            r(format!("task:{}", field(event, "task")?)),
+            r(format!("region:{}", field(event, "region")?)),
+        ],
         "user.trace" => vec![],
         other => return Err(format!("not a vocabulary v2 event kind: {other:?}")),
     })
@@ -266,7 +272,7 @@ mod tests {
             ev
         };
         let cases = table["cases"].as_array().unwrap();
-        assert_eq!(cases.len(), 22);
+        assert_eq!(cases.len(), 25);
         for case in cases {
             let a = resolve(case["a"].clone());
             let b = resolve(case["b"].clone());

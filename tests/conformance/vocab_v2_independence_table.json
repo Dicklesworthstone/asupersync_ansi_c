@@ -90,6 +90,23 @@
     {"id": "identical-events-at-different-positions",
      "a": {"k": "task.completed", "task": "t.1", "region": "r.a"},
      "b": {"k": "task.completed", "task": "t.1", "region": "r.a"},
-     "independent": false, "why": "distinct stream positions, both write task t.1"}
+     "independent": false, "why": "distinct stream positions, both write task t.1"},
+    {"id": "futurelock-at-consecutive-steps",
+     "a": {"k": "futurelock.detected", "task": "t.1", "region": "r.a", "idle_steps": 4,
+           "held": [{"obligation": "t.1/o1", "kind": "Lease"}]},
+     "b": {"k": "futurelock.detected", "task": "t.1", "region": "r.a", "idle_steps": 5,
+           "held": [{"obligation": "t.1/o1", "kind": "Lease"}]},
+     "independent": true, "why": "both only read task t.1 and region r.a"},
+    {"id": "futurelock-vs-completion-of-the-task",
+     "a": {"k": "futurelock.detected", "task": "t.1", "region": "r.a", "idle_steps": 4,
+           "held": [{"obligation": "t.1/o1", "kind": "Lease"}]},
+     "b": {"k": "task.completed", "task": "t.1", "region": "r.a"},
+     "independent": false, "why": "R task t.1 vs W task t.1"},
+    {"id": "futurelock-vs-commit-of-an-obligation-it-names",
+     "a": {"k": "futurelock.detected", "task": "t.1", "region": "r.a", "idle_steps": 4,
+           "held": [{"obligation": "t.1/o1", "kind": "Lease"}]},
+     "b": {"k": "obligation.committed", "obligation": "t.1/o1", "task": "t.1", "region": "r.a",
+           "kind": "Lease", "duration_ns": 0},
+     "independent": true, "why": "Rust's footprint is R task, R region: the held obligations are data, not accesses"}
   ]
 }

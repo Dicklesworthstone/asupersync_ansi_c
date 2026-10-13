@@ -69,6 +69,7 @@
         {"$ref": "#/$defs/ev_obligation_handoff"},
         {"$ref": "#/$defs/ev_timer_scheduled"},
         {"$ref": "#/$defs/ev_timer"},
+        {"$ref": "#/$defs/ev_futurelock_detected"},
         {"$ref": "#/$defs/ev_user_trace"}
       ]
     },
@@ -169,6 +170,25 @@
       "properties": {
         "k": {"enum": ["timer.fired", "timer.cancelled"]},
         "timer": {"$ref": "#/$defs/name"}
+      }
+    },
+    "ev_futurelock_detected": {
+      "type": "object", "required": ["k", "task", "region", "idle_steps", "held"], "additionalProperties": false,
+      "properties": {
+        "k": {"const": "futurelock.detected"},
+        "task": {"$ref": "#/$defs/name"},
+        "region": {"$ref": "#/$defs/name"},
+        "idle_steps": {"$ref": "#/$defs/u64"},
+        "held": {
+          "type": "array",
+          "items": {
+            "type": "object", "required": ["obligation", "kind"], "additionalProperties": false,
+            "properties": {
+              "obligation": {"$ref": "#/$defs/name"},
+              "kind": {"$ref": "#/$defs/obligation_kind"}
+            }
+          }
+        }
       }
     },
     "ev_user_trace": {

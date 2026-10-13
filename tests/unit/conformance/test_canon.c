@@ -58,7 +58,7 @@ TEST(independence_table_vectors_both_orders) {
     ASSERT_TRUE(load_json("tests/conformance/vocab_v2_independence_table.json", &root));
     cases = asx_json_get(&g_doc, root, "cases");
     reason = asx_json_get(&g_doc, root, "reason_fixture");
-    ASSERT_EQ(asx_json_count(&g_doc, cases), 22u);
+    ASSERT_EQ(asx_json_count(&g_doc, cases), 25u);
     for (i = 0; i < asx_json_count(&g_doc, cases); i++) {
         uint32_t c = asx_json_item(&g_doc, cases, i);
         uint32_t a = resolve_reason(asx_json_get(&g_doc, c, "a"), reason);
