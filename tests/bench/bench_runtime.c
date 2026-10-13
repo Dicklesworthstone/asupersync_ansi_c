@@ -229,6 +229,40 @@ static const char *bench_compiler_version(void) {
 #endif
 }
 
+/* One value of a host description file: the text after the colon of the
+ * first line that starts with `key`, or the whole first line when `key` is
+ * NULL. NULL where the file is absent (any host without /proc), which the
+ * report prints as "": the numbers are then published without a name for the
+ * machine, not with a made-up one. */
+static const char *bench_host_field(const char *path, const char *key, char *out, size_t cap) {
+    char line[256];
+    FILE *fp = fopen(path, "r");
+    const char *found = NULL;
+
+    if (fp == NULL) { return NULL; }
+    while (fgets(line, (int)sizeof(line), fp) != NULL) {
+        char *v = line;
+        size_t n;
+
+        if (key != NULL) {
+            if (strncmp(line, key, strlen(key)) != 0) { continue; }
+            v = strchr(line, ':');
+            if (v == NULL) { continue; }
+            v++;
+            while (*v == ' ' || *v == '\t') { v++; }
+        }
+        n = strlen(v);
+        while (n > 0u && (v[n - 1u] == '\n' || v[n - 1u] == '\r')) { n--; }
+        if (n >= cap) { n = cap - 1u; }
+        memcpy(out, v, n);
+        out[n] = '\0';
+        found = out;
+        break;
+    }
+    (void)fclose(fp);
+    return found;
+}
+
 static uint64_t bench_ops_per_sec(uint32_t ops_per_sample, const bench_stats *st) {
     if (st->mean == 0u) { return 0u; }
     return ((uint64_t)ops_per_sample * UINT64_C(1000000000)) / st->mean;
@@ -1583,7 +1617,27 @@ int main(int argc, char **argv) {
     printf(",\n");
     printf("    \"rch_worker_id\": ");
     bench_print_json_string(getenv("RCH_WORKER_ID"));
-    printf("\n");
+    printf(",\n");
+    /* Whose numbers these are: a baseline refresh records the host, and a
+     * CI log carries no CPU name of its own (bd-9kll.14.2). */
+    {
+        char cpu[160];
+        char osrel[96];
+
+        printf("    \"host\": {\n");
+        printf("      \"cpu_model\": ");
+        bench_print_json_string(bench_host_field("/proc/cpuinfo", "model name", cpu, sizeof(cpu)));
+        printf(",\n");
+        printf("      \"os_release\": ");
+        bench_print_json_string(
+            bench_host_field("/proc/sys/kernel/osrelease", NULL, osrel, sizeof(osrel)));
+        printf(",\n");
+        printf("      \"pointer_bits\": %u,\n", (unsigned)(sizeof(void *) * 8u));
+        printf("      \"ci_sha\": ");
+        bench_print_json_string(getenv("GITHUB_SHA"));
+        printf("\n");
+        printf("    }\n");
+    }
     printf("  },\n");
 
     printf("  \"benchmarks\": {\n");
