@@ -499,17 +499,23 @@ static void test_the_runtime_fires_a_servers_monitor_at_completion(void) {
     ASSERT(asx_monitor_count() == 0u, "and it is gone");
 }
 
+/* A poll that returns an error is an Error exit and a fault: under the
+ * debug profile's fail-fast containment the scheduler halts on it right
+ * after the completion, so a server would not run handle_info in that run.
+ * The monitor fires at the completion all the same, which a polled monitor's
+ * stored notice shows whatever the profile does next. */
 static void test_the_runtime_reports_an_error_exit(void) {
-    rec_state s;
-    asx_actor_handle h;
+    asx_task_id watcher;
     asx_task_id target;
     asx_monitor_ref ref = 0;
+    asx_down d;
     setup();
-    h = spawn_server(&s);
+    watcher = spawn_task();
     target = spawn_runnable(fail_poll);
-    MUST_OK(asx_monitor_establish_server(h, target, &ref));
-    run(g_root);
-    ASSERT(s.n == 1u && s.got[0].reason.severity == ASX_OUTCOME_ERR, "an Error exit");
+    MUST_OK(asx_monitor_establish(watcher, target, &ref));
+    run(g_root); /* may return the fault; the completion already fired it */
+    ASSERT(asx_monitor_down(ref, &d) == ASX_OK, "the completion fired the monitor");
+    ASSERT(d.reason.severity == ASX_OUTCOME_ERR, "an Error exit");
 }
 
 static void test_the_runtime_fires_a_polled_monitor(void) {
