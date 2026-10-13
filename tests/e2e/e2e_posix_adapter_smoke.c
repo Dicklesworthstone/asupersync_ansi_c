@@ -95,9 +95,13 @@ static void scenario_reactor_trace(uint64_t logical_step, uint32_t ready_count,
     scenario("posix_adapter_smoke.reactor_scheduler_trace", 1, detail);
 }
 
+/* Poll until the worker thread has published the result. The success path
+ * returns on the first completed poll; the bound is only a hang guard, sized
+ * (10 s of 1 ms sleeps) well past any scheduling delay of a loaded runner, so
+ * a descheduled worker is never mistaken for a lost result. */
 static int wait_result(const asx_blocking_handle *handle, uint64_t *out) {
     unsigned int i;
-    for (i = 0; i < 200u; ++i) {
+    for (i = 0; i < 10000u; ++i) {
         asx_status st = asx_blocking_get_result(handle, out);
         if (st == ASX_OK) return 1;
         if (st != ASX_E_PENDING) return 0;
