@@ -508,6 +508,12 @@ struct Local {
     /// borrows its channel's sender and the Cx it was reserved with
     /// (`Reserve<'a>` ties both to the permit, `channel/mpsc.rs:951`).
     send_permits: BTreeMap<String, (String, mpsc::SendPermit<'static, u64>)>,
+    /// Senders a `close_sender` closed while a permit on their channel was
+    /// held. A Rust permit borrows its sender, so the body can drop the
+    /// sender only after the permit is gone: the drop is projected there,
+    /// when the last such permit is sent or aborted, or at the body's end
+    /// (DSL §3.6). Declared right after `send_permits` so they drop next.
+    deferred_tx: BTreeMap<String, Box<mpsc::Sender<u64>>>,
     /// A clone of the task's Cx for permits to borrow (`lend`).
     cx: Option<Box<Cx>>,
     /// The channel endpoints this task owns, by channel name (DSL §3.6).
@@ -1079,12 +1085,13 @@ impl Local {
         let tx: *const mpsc::Sender<u64> = &**tx;
         let cx: *const Cx = &**cx;
         // SAFETY: both are boxed, so their addresses do not move with the
-        // `Local`. The sender box is freed only by `close_sender`, which
-        // first requires that no permit on the channel is held; the Cx box
-        // is never replaced; and when `Local` drops, `send_permits` goes
-        // first (fields drop in declaration order). A borrow taken for a
-        // `send` or `reserve` future lives within one step, and the steps
-        // of a task never overlap.
+        // `Local`. The sender box is freed only once no permit on its channel
+        // is held (by `close_sender`, or deferred to the last permit's
+        // resolution in `deferred_tx`); the Cx box is never replaced; and
+        // when `Local` drops, `send_permits` goes first (fields drop in
+        // declaration order). A borrow taken for a `send` or `reserve`
+        // future lives within one step, and the steps of a task never
+        // overlap.
         Ok(unsafe { (&*tx, &*cx) })
     }
 
@@ -1310,6 +1317,21 @@ fn run_program(
 /// or send permit the task does not hold, because the step that would have
 /// acquired it failed or it was already released (DSL §3).
 const NOT_HELD: &str = "ASX_E_NOT_FOUND";
+
+/// `depth` nested `Cx::masked` sections around `body` (the DSL's
+/// `masked.depth`). A level that would exceed MAX_MASK_DEPTH panics inside
+/// `Cx::masked` (cx.rs:3323), unwinding out of every level already entered.
+fn masked_nested(
+    cx: &Cx,
+    depth: u64,
+    body: &mut dyn FnMut() -> RunResult<Flow>,
+) -> RunResult<Flow> {
+    if depth <= 1 {
+        cx.masked(|| body())
+    } else {
+        cx.masked(|| masked_nested(cx, depth - 1, body))
+    }
+}
 
 /// Non-blocking steps; also the only steps allowed inside `masked`.
 fn exec_sync(
@@ -1675,7 +1697,7 @@ fn exec_sync(
         // Non-blocking mpsc steps (DSL §3.6).
         "permit_send" | "permit_abort" => {
             let name = str_field(step, "permit")?;
-            let Some((_, permit)) = local.send_permits.remove(name) else {
+            let Some((channel, permit)) = local.send_permits.remove(name) else {
                 // Its reserve_send failed (DSL §3).
                 observe(&ctx.shared, me, idx, label, NOT_HELD, Value::Null);
                 return Ok(Flow::Continue);
@@ -1690,6 +1712,11 @@ fn exec_sync(
                 permit.abort();
                 "ASX_OK"
             };
+            // The permit's sender, closed while it was held, is dropped now
+            // that no permit of the channel is left.
+            if !local.send_permits.values().any(|(c, _)| *c == channel) {
+                local.deferred_tx.remove(&channel);
+            }
             observe(&ctx.shared, me, idx, label, status, Value::Null);
         }
         "try_send" => {
@@ -1738,11 +1765,18 @@ fn exec_sync(
         "close_sender" => {
             let ch = str_field(step, "channel")?;
             if local.send_permits.values().any(|(c, _)| c == ch) {
-                return Err(format!(
-                    "close_sender on {ch:?} while holding one of its permits (a Rust body cannot drop a borrowed sender)"
-                ));
+                // A permit borrows its sender (SendPermit<'a>), so a Rust
+                // body drops the sender only after the permit is gone: the
+                // drop is deferred to the last permit of the channel. The
+                // sender is out of the task's hands from here on.
+                let tx = local
+                    .mpsc_tx
+                    .remove(ch)
+                    .ok_or_else(|| format!("this task does not own the sender of {ch:?}"))?;
+                local.deferred_tx.insert(ch.to_string(), tx);
+            } else {
+                local.close(ch, true)?;
             }
-            local.close(ch, true)?;
             observe(&ctx.shared, me, idx, label, "ASX_OK", Value::Null);
         }
         "close_receiver" => {
@@ -2115,7 +2149,17 @@ fn exec_sync(
                 .get("steps")
                 .and_then(Value::as_array)
                 .ok_or("masked without steps")?;
-            return cx.masked(|| -> RunResult<Flow> {
+            // `depth` nests the steps in that many masks (DSL §3.2). Rust
+            // asserts `mask_depth < MAX_MASK_DEPTH` on each entry
+            // (cx.rs:3323), so the 65th level panics before any step runs.
+            let depth = match step.get("depth") {
+                None => 1,
+                Some(v) => v
+                    .as_u64()
+                    .filter(|d| (1..=80).contains(d))
+                    .ok_or("masked depth must be 1 to 80")?,
+            };
+            let mut body = || -> RunResult<Flow> {
                 for (j, inner) in steps.iter().enumerate() {
                     let path = format!("{label}/{}/{}", j + 1, str_field(inner, "op")?);
                     if let Flow::Return(body) = exec_sync(cx, ctx, local, idx, &path, inner)? {
@@ -2123,7 +2167,8 @@ fn exec_sync(
                     }
                 }
                 Ok(Flow::Continue)
-            });
+            };
+            return masked_nested(cx, depth, &mut body);
         }
         other => {
             return Err(format!("op {other:?} is not interpreted yet (increment 3)"));
@@ -3075,6 +3120,26 @@ async fn exec_step(
                     .ok_or("supervised child without a program")?
                     .clone();
                 let mut spec = ChildSpec::new(child_name.clone(), unused_child_start);
+                // `depends_on` and `required` (DSL §3.8): a child starts
+                // after the children it names, and a restart that finds one
+                // of them not running stops the supervisor with
+                // DependencyUnavailable when the child is required (the
+                // default), else leaves the child stopped.
+                for dependency in child
+                    .get("depends_on")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
+                    let dependency = dependency
+                        .as_str()
+                        .ok_or("a depends_on entry is a child name")?;
+                    spec = spec.depends_on(dependency.to_string());
+                }
+                if let Some(required) = child.get("required") {
+                    spec =
+                        spec.with_required(required.as_bool().ok_or("required must be a boolean")?);
+                }
                 // `registration`: the name each of the child's generations
                 // takes in the supervisor's registry before its factory runs
                 // (DSL §3.8). `wait` has no DSL form: its 1 ms grant checks
@@ -3947,11 +4012,12 @@ pub fn run_scenario_with(scenario: &Value, raw: Option<&mut Vec<String>>) -> Run
     }
 
     // Script: at each entry, run to idle, advance time, apply the op.
-    for entry in scenario
+    for (entry_index, entry) in scenario
         .get("script")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
+        .enumerate()
     {
         lab.run_until_idle();
         let at = u64_field(entry, "at_ns")?;
@@ -3962,6 +4028,7 @@ pub fn run_scenario_with(scenario: &Value, raw: Option<&mut Vec<String>>) -> Run
             &mut lab,
             &shared,
             entry.get("op").ok_or("script entry without op")?,
+            entry_index + 1,
         )?;
     }
 
@@ -4102,7 +4169,14 @@ pub fn run_scenario_with(scenario: &Value, raw: Option<&mut Vec<String>>) -> Run
     }))
 }
 
-fn apply_driver_op(lab: &mut LabRuntime, shared: &SharedRef, op: &Value) -> RunResult<()> {
+/// One script entry's operation; `step` is the entry's 1-based index, the
+/// step number of an observation a driver operation makes (task `driver`).
+fn apply_driver_op(
+    lab: &mut LabRuntime,
+    shared: &SharedRef,
+    op: &Value,
+    step: usize,
+) -> RunResult<()> {
     let region_id = |field: &str| -> RunResult<RegionId> {
         let name = str_field(op, field)?;
         lock(shared)
@@ -4112,6 +4186,39 @@ fn apply_driver_op(lab: &mut LabRuntime, shared: &SharedRef, op: &Value) -> RunR
             .ok_or_else(|| format!("unknown region {name:?}"))
     };
     match str_field(op, "op")? {
+        // The aggregated close outcome of a live or recently closed region
+        // (RuntimeState::region_close_outcome, state.rs:3743), observed
+        // under the task name `driver`: none yet is ASX_E_NOT_FOUND.
+        "region_close_outcome" => {
+            let region = region_id("region")?;
+            let (status, value) = match lab.state.region_close_outcome(region) {
+                None => ("ASX_E_NOT_FOUND", Value::Null),
+                Some(outcome) => {
+                    let s = lock(shared);
+                    let value = match outcome {
+                        asupersync::Outcome::Ok(()) => json!({"tag": "ok"}),
+                        asupersync::Outcome::Err(error) => {
+                            json!({"tag": "err", "status": status_of_error(&error)?})
+                        }
+                        asupersync::Outcome::Cancelled(reason) => {
+                            json!({"tag": "cancelled", "reason": project_reason(&s, &reason)?})
+                        }
+                        asupersync::Outcome::Panicked(payload) => {
+                            json!({"tag": "panicked", "message": payload.message()})
+                        }
+                    };
+                    ("ASX_OK", value)
+                }
+            };
+            observe(
+                shared,
+                "driver",
+                step,
+                "region_close_outcome",
+                status,
+                value,
+            );
+        }
         "finish_region" => {
             let region = region_id("region")?;
             // Execute Scope's body-return branch against the real runtime.

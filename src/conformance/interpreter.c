@@ -242,7 +242,7 @@ typedef struct {
      * Sender::clone at setup). A broadcast sender is a handle per owner. */
     struct {
         uint32_t task;
-        int open;
+        int open, deferred; /* deferred: closed in the DSL, dropped with its last permit */
         asx_broadcast_sender broadcast;
         asx_channel_sender mpsc; /* a clone's identity; slot 0 is the creator's */
     } senders[IT_MAX_SENDERS];
@@ -1238,17 +1238,23 @@ static void it_observe(void *ctx, const asx_trace_event *ev, const asx_trace_pay
 /* Observations                                                        */
 /* ------------------------------------------------------------------ */
 
-/* Returns the observation's node. */
-static uint32_t observe(const it_task *t, uint32_t step, const char *op, uint32_t status,
-                        uint32_t value) {
+/* Returns the observation's node. `task` is a task name, or `driver` for an
+ * observation a script operation makes (DSL §4). */
+static uint32_t observe_named(const char *task, uint32_t step, const char *op, uint32_t status,
+                              uint32_t value) {
     uint32_t o = asx_json_new_object(g_out);
-    asx_json_set(g_out, o, "task", asx_json_new_string(g_out, t->name));
+    asx_json_set(g_out, o, "task", asx_json_new_string(g_out, task));
     asx_json_set(g_out, o, "step", asx_json_new_u64(g_out, step));
     asx_json_set(g_out, o, "op", asx_json_new_string(g_out, op));
     asx_json_set(g_out, o, "status", status);
     asx_json_set(g_out, o, "value", value == ASX_JSON_NONE ? asx_json_new_null(g_out) : value);
     asx_json_push(g_out, g_observations, o);
     return o;
+}
+
+static uint32_t observe(const it_task *t, uint32_t step, const char *op, uint32_t status,
+                        uint32_t value) {
+    return observe_named(t->name, step, op, status, value);
 }
 
 static uint32_t observe_status(const it_task *t, uint32_t step, const char *op, asx_status st) {
@@ -1346,11 +1352,15 @@ static it_channel *channel_by_name(const char *name) {
     return NULL;
 }
 
-/* The index in c->senders of task `me`'s still-open sender, or -1. */
+/* The index in c->senders of task `me`'s still-open sender, or -1. A
+ * sender whose close waits for a held permit (`deferred`) is already closed
+ * to the task's steps. */
 static int sender_slot(const it_channel *c, uint32_t me) {
     uint32_t i;
     for (i = 0; i < c->n_senders; i++) {
-        if (c->senders[i].task == me && c->senders[i].open) return (int)i;
+        if (c->senders[i].task == me && c->senders[i].open && !c->senders[i].deferred) {
+            return (int)i;
+        }
     }
     return -1;
 }
@@ -1424,6 +1434,31 @@ static void close_endpoint(it_channel *c, it_receiver *r, uint32_t owner) {
         }
     }
     (void)st; /* closing an already half-closed mpsc side cannot fail */
+}
+
+/* The drop of task `owner`'s sender of `c` that close_sender left waiting
+ * for a permit it held: Rust's SendPermit borrows its Sender, so a body
+ * drops the sender only after the permit is gone, and twin_run keeps the
+ * closed sender until then (DSL §3.6). */
+static void drop_deferred_sender(it_channel *c, uint32_t owner) {
+    uint32_t i;
+    for (i = 0; i < c->n_senders; i++) {
+        if (c->senders[i].task == owner && c->senders[i].open && c->senders[i].deferred) {
+            c->senders[i].deferred = 0;
+            close_endpoint(c, NULL, owner);
+            return;
+        }
+    }
+}
+
+/* Task `t` has just sent, aborted or dropped a permit on channel `ch`: when
+ * it holds no other permit of it, a sender it closed meanwhile is dropped. */
+static void release_deferred_close(const it_task *t, uint32_t ch) {
+    uint32_t i;
+    for (i = 0; i < t->n_send_permits; i++) {
+        if (t->send_permits[i].channel == ch) return;
+    }
+    drop_deferred_sender(&g_channels[ch], (uint32_t)(t - g_tasks));
 }
 
 /* Release held guard / permit i, keeping the others in acquisition order
@@ -1561,6 +1596,26 @@ static void drop_locals(it_task *t) {
             t->send_permits[i] = t->send_permits[i + 1u];
         }
         t->n_send_permits--;
+    }
+    /* A sender closed while a permit was held goes with the permits, by
+     * channel name (twin_run's deferred_tx is a BTreeMap). */
+    for (;;) {
+        it_channel *next = NULL;
+        uint32_t k;
+        for (k = 0; k < g_n_channels; k++) {
+            uint32_t j;
+            for (j = 0; j < g_channels[k].n_senders; j++) {
+                if (g_channels[k].senders[j].task != me || !g_channels[k].senders[j].open ||
+                    !g_channels[k].senders[j].deferred) {
+                    continue;
+                }
+                if (next == NULL || strcmp(g_channels[k].name, next->name) < 0) {
+                    next = &g_channels[k];
+                }
+            }
+        }
+        if (next == NULL) break;
+        drop_deferred_sender(next, me);
     }
     for (type = 0; type < (int)IT_CH_TYPES; type++) {
         for (sender = 1; sender >= 0; sender--) {
@@ -3481,6 +3536,7 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
     /* Non-blocking mpsc steps (DSL §3.6). */
     if (strcmp(op, "permit_send") == 0 || strcmp(op, "permit_abort") == 0) {
         uint32_t i = send_permit_index(t, it_str(step, "permit"));
+        uint32_t held_on;
         uint64_t v = 0;
         if (i >= t->n_send_permits) {
             /* Its reserve_send failed (DSL §3). */
@@ -3492,6 +3548,7 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
             it_fail_task(t, idx, "permit_send needs a value");
             return STEP_END;
         }
+        held_on = t->send_permits[i].channel;
         if (strcmp(op, "permit_send") == 0) {
             st = asx_send_permit_send(&t->send_permits[i].permit, v);
         } else {
@@ -3500,6 +3557,7 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
         }
         for (; i + 1u < t->n_send_permits; i++) t->send_permits[i] = t->send_permits[i + 1u];
         t->n_send_permits--;
+        release_deferred_close(t, held_on);
         observe_status(t, idx, label, st);
         return STEP_NEXT;
     }
@@ -3516,9 +3574,14 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
         }
         for (i = 0; sender && i < t->n_send_permits; i++) {
             if (t->send_permits[i].channel == (uint32_t)(c - g_channels)) {
-                /* A Rust body cannot drop a sender a held permit borrows. */
-                it_fail_task(t, idx, "close_sender while holding one of its permits");
-                return STEP_END;
+                /* A Rust body cannot drop a sender a held permit borrows: it
+                 * drops it after the permit, which twin_run projects by
+                 * keeping the closed sender until the last permit of the
+                 * channel is sent, aborted or dropped (DSL §3.6). The task's
+                 * steps see it closed from here on. */
+                c->senders[sender_slot(c, (uint32_t)(t - g_tasks))].deferred = 1;
+                observe_status(t, idx, label, ASX_OK);
+                return STEP_NEXT;
             }
         }
         close_endpoint(c, r, (uint32_t)(t - g_tasks));
@@ -3797,12 +3860,51 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
          * inner observation's op is its path, e.g. masked/2/masked/1/checkpoint
          * (DSL §3.2). */
         it_masked_run run;
+        uint64_t depth = 1;
+        uint32_t held = 0;
+        uint32_t depth_node = asx_json_get(g_in, step, "depth");
+        asx_status mst = ASX_OK;
+        if (depth_node != ASX_JSON_NONE &&
+            (!asx_json_u64(g_in, depth_node, &depth) || depth < 1u || depth > 80u)) {
+            it_fail_task(t, idx, "masked depth must be 1 to 80");
+            return STEP_END;
+        }
         run.task = t;
         run.steps = asx_json_get(g_in, step, "steps");
         run.index = idx;
         run.label = label;
         run.result = STEP_NEXT;
-        if (asx_task_masked(self, exec_masked_steps, &run) != ASX_OK) {
+        /* `depth` nested masks (DSL §3.2): the outer ones by asx_task_mask,
+         * the innermost by asx_task_masked, which runs the steps. */
+        while ((uint64_t)held + 1u < depth) {
+            mst = asx_task_mask(self);
+            if (mst != ASX_OK) break;
+            held++;
+        }
+        if (mst == ASX_OK) mst = asx_task_masked(self, exec_masked_steps, &run);
+        while (held > 0u) {
+            asx_status ust = asx_task_unmask(self);
+            if (ust != ASX_OK) it_fail_task(t, idx, "asx_task_unmask failed");
+            held--;
+        }
+        if (mst == ASX_E_INVALID_STATE) {
+            /* A level beyond ASX_MAX_MASK_DEPTH: Rust asserts in Cx::masked
+             * (cx.rs:3323), which panics the task before any step of the
+             * masked section runs, so the step has no observation. */
+            static char message[256];
+            (void)snprintf(message, sizeof(message),
+                           "mask depth exceeded MAX_MASK_DEPTH (%u): this violates "
+                           "INV-MASK-BOUNDED and prevents cancellation from ever being observed. "
+                           "Reduce nesting of Cx::masked() sections.",
+                           (unsigned)ASX_MAX_MASK_DEPTH);
+            t->panicking = 1;
+            if (asx_task_panic(self, message) != ASX_OK) {
+                it_fail_task(t, idx, "asx_task_panic failed");
+            }
+            t->end = ASX_OK;
+            return STEP_END;
+        }
+        if (mst != ASX_OK) {
             it_fail_task(t, idx, "asx_task_masked failed");
             return STEP_END;
         }
@@ -4300,6 +4402,38 @@ static int exec_supervisor(it_task *t, asx_task_id self, uint32_t step, uint32_t
                     return 1;
                 }
                 cfg.registry = &sv->registry;
+            }
+        }
+        /* `depends_on` and `required` (DSL §3.8), the names resolved once
+         * every child's is known: a child starts after the children it
+         * names, and a restart that finds one not running stops the
+         * supervisor with DependencyUnavailable when the child is required
+         * (the default), else leaves the child stopped. */
+        for (i = 0; i < n; i++) {
+            uint32_t c = asx_json_item(g_in, list, i);
+            uint32_t deps = asx_json_get(g_in, c, "depends_on");
+            uint32_t req = asx_json_get(g_in, c, "required");
+            uint32_t k;
+            for (k = 0; deps != ASX_JSON_NONE && k < asx_json_count(g_in, deps); k++) {
+                const char *dep = asx_json_string(g_in, asx_json_item(g_in, deps, k));
+                uint32_t j;
+                for (j = 0; dep != NULL && j < n; j++) {
+                    if (strcmp(sv->children[j].name, dep) == 0) break;
+                }
+                if (dep == NULL || j >= n || asx_child_spec_depends_on(&specs[i], j) != ASX_OK) {
+                    it_fail_task(t, idx, "a depends_on names no child of its supervisor");
+                    *out = STEP_END;
+                    return 1;
+                }
+            }
+            if (req != ASX_JSON_NONE) {
+                int required = 1;
+                if (!asx_json_bool(g_in, req, &required)) {
+                    it_fail_task(t, idx, "required must be a boolean");
+                    *out = STEP_END;
+                    return 1;
+                }
+                specs[i].required = required ? 1u : 0u;
             }
         }
         st = asx_supervisor_spawn(&sv->handle, t->region, &cfg, specs, n);
@@ -4865,11 +4999,59 @@ static int parse_region_limit(uint32_t op, const char *field, uint32_t *out) {
     return 1;
 }
 
-static void apply_driver_op(uint32_t op) {
+static void apply_driver_op(uint32_t op, uint32_t step) {
     const char *name = it_str(op, "op");
     asx_cancel_kind kind;
     if (name == NULL) {
         it_fail("script entry without op", NULL);
+        return;
+    }
+    if (strcmp(name, "region_close_outcome") == 0) {
+        /* The aggregated close outcome of a region (Rust
+         * RuntimeState::region_close_outcome, state.rs:3743), observed
+         * under the task name `driver` at the script entry's 1-based
+         * index: none yet is ASX_E_NOT_FOUND (DSL §4). */
+        it_region *r = region_by_name(it_str(op, "region"));
+        asx_outcome outcome;
+        asx_status st;
+        uint32_t value = ASX_JSON_NONE;
+        if (r == NULL) {
+            it_fail("region_close_outcome needs a known region", NULL);
+            return;
+        }
+        st = asx_region_get_close_outcome(r->id, &outcome);
+        if (st != ASX_OK && st != ASX_E_NOT_FOUND) {
+            it_fail("asx_region_get_close_outcome failed", r->name);
+            return;
+        }
+        if (st == ASX_OK) {
+            value = asx_json_new_object(g_out);
+            switch (outcome.severity) {
+            case ASX_OUTCOME_OK:
+                asx_json_set(g_out, value, "tag", asx_json_new_string(g_out, "ok"));
+                break;
+            case ASX_OUTCOME_CANCELLED: {
+                it_reason captured;
+                capture_reason(&outcome.cancel_reason, &captured);
+                asx_json_set(g_out, value, "tag", asx_json_new_string(g_out, "cancelled"));
+                asx_json_set(g_out, value, "reason", reason_node(&captured));
+                break;
+            }
+            case ASX_OUTCOME_PANICKED:
+                asx_json_set(g_out, value, "tag", asx_json_new_string(g_out, "panicked"));
+                asx_json_set(g_out, value, "message",
+                             asx_json_new_string(g_out, outcome.panic_message != NULL
+                                                            ? outcome.panic_message
+                                                            : "unknown panic"));
+                break;
+            case ASX_OUTCOME_ERR:
+                /* C's outcome carries no status for an error severity. */
+                it_fail("a region close outcome of severity err has no status in C", r->name);
+                return;
+            }
+        }
+        (void)observe_named("driver", step, "region_close_outcome",
+                            status_node(st == ASX_OK ? ASX_OK : ASX_E_NOT_FOUND), value);
         return;
     }
     if (strcmp(name, "finish_region") == 0) {
@@ -5946,7 +6128,7 @@ static asx_status conformance_run(const asx_json_doc *in, uint32_t scenario, asx
             break;
         }
         if (at > asx_runtime_virtual_now()) asx_runtime_virtual_advance(at);
-        apply_driver_op(asx_json_get(in, entry, "op"));
+        apply_driver_op(asx_json_get(in, entry, "op"), i + 1u);
     }
 
     /* Finish (DSL §2): run to quiescence with timer auto-advance. */

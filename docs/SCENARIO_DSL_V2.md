@@ -294,7 +294,7 @@ observes `ASX_E_NOT_FOUND`: the abort consumed the token.
 
 | op | Fields | Rust | C | Blocks | Cancel |
 |---|---|---|---|---|---|
-| `masked` | `steps` | `cx.masked(\|\| { …steps… })` (`cx.rs:3315`) | `asx_task_mask(self)`; steps; `asx_task_unmask(self)` | no: `steps` may contain only non-blocking steps, `masked` among them | Inside, `checkpoint` returns `ASX_OK` (`rule.cancel.checkpoint_masked`), also after a nested `masked` ends while an outer one still holds (`cancel-masked-nested-001`). Nesting deeper than 64 is a harness error (`cx.rs:3323`), but the C scenario parser's JSON depth limit (64 levels) stops a document at about 29 nested masks first. |
+| `masked` | `steps`, optional `depth` (1 to 80, default 1) | `cx.masked(\|\| { …steps… })` (`cx.rs:3315`), `depth` times nested around the steps | `asx_task_mask(self)` `depth` - 1 times, then `asx_task_masked` around the steps (mask, steps, unmask); the outer masks are unmasked after | no: `steps` may contain only non-blocking steps, `masked` among them | Inside, `checkpoint` returns `ASX_OK` (`rule.cancel.checkpoint_masked`), also after a nested `masked` ends while an outer one still holds (`cancel-masked-nested-001`). `depth` nests that many masks without nesting the document (the C parser's JSON depth limit, 64 levels, allows only about 29 nested `masked` steps). A mask beyond 64 on the task is refused: Rust asserts `mask_depth < MAX_MASK_DEPTH` on entry (`cx.rs:3323`), which panics the task before any step of the section runs (no observation for the step; outcome Panicked with the assertion's message, `cancel-mask-depth-65-panics-001`), and C's `asx_task_mask` returns `ASX_E_INVALID_STATE`, which the interpreter ends the task on with the same message. Depth 64 is allowed (`cancel-mask-depth-64-allowed-001`). |
 
 Rust has no mask that spans an await (`MaskGuard` is private, `cx.rs:706`),
 so a blocking step inside `masked` is a schema error.
@@ -464,7 +464,7 @@ errors on such a channel. A scenario declaring one lists
 | `send_evict_oldest` | `channel`, `value` | `tx.send_evict_oldest(v)` (`:872`) | `asx_channel_send_evict_oldest` (never parks, no permit) | no | ignored. The observation `value` is the evicted message, or null when there was room. A free slot owned by a parked producer, or a channel whose every slot is reserved, gives `ASX_E_CHANNEL_FULL`. |
 | `recv_many` | `channel`, `limit` | `rx.recv_many(&cx, &mut buf, limit).await` (`:1754`) | `asx_channel_recv_many(id, cx, buf, limit, &n)` until done | while empty | Checked first, after a `limit` of 0 (which gives `[]` at once): `ASX_E_CANCELLED`, tracing `"mpsc::recv_many cancelled"` (`:1882`). The observation `value` is the array of received integers, oldest first; a channel that can get no more messages gives `ASX_OK` with `[]`. |
 | `closed` | `channel` (the sender's) | `tx.closed().await` (`channel/mpsc_closed.rs:39`) | `asx_channel_closed` until done | until the receiver is closed or dropped | ignored: no `Cx`. Queued messages and reservations are untouched. |
-| `close_sender` | `channel` | `drop(tx)` (`:1241`) | `asx_channel_close_sender` | no | ignored |
+| `close_sender` | `channel` | `drop(tx)` (`:1241`). With a permit of the channel held, a Rust body cannot drop the sender it borrows (`SendPermit<'a>`, `:1461`): the drop is projected after the permit, twin_run keeping the closed sender until the last permit the task holds on the channel is sent, aborted or dropped (or the body ends, permits first), and the task's steps see the sender closed from the step on | `asx_channel_close_sender`; with a permit held, the interpreter does the same, calling it when the last permit of the channel is gone | no | ignored. A receiver is not told the channel is closed while the drop waits (`mpsc-sender-closed-with-permit-held-send-001`, `-abort-001`, `-body-end-001`) |
 | `close_receiver` | `channel`, optional `receiver` (a watch clone) | `drop(rx)` (`:2122`) | `asx_channel_close_receiver` | no | ignored. Discards what the queue holds, also after a `seal`. |
 | `seal` | `channel` (mpsc, the receiver's) | `rx.close()` (`:1698`) | `asx_channel_seal` | no | ignored. Sends and reservations fail with `ASX_E_DISCONNECTED` and parked producers and `closed` waiters wake; the receiver stays held and the queue receivable, then receives see `ASX_E_DISCONNECTED` (`mpsc-seal-drains-001`). A second `seal` is a harness error: Rust's `close()` would return without effect, C's `asx_channel_seal` refuses it. |
 | `oneshot_send` | `channel`, `value` | `tx.send(&cx, v)` (`channel/oneshot.rs:556`): reserves a SendPermit, traces `"oneshot::reserve creating permit"`, commits | `asx_oneshot_send(&tx, &cx, v)`: reserves the SendPermit obligation, traces, commits | no | Checked first: `ASX_E_CANCELLED`. |
@@ -559,7 +559,7 @@ snapshot outcome is its join's (vocabulary §6).
 | `server_evicted` | `server` | `h.evicted_count()` (`:1153`) | `asx_actor_evicted_count(h)` | no | ignored. The observation `value` is the number of casts evicted under `DropOldest`. |
 | `call` | `server`, `request` | `h.call(&cx, req).await` (`:1171`) | `asx_actor_call(h, &cx, request, &op, &reply)` | until the reply arrives | Checked first: `ASX_E_CANCELLED`; a stopping server: `ASX_E_DISCONNECTED`; a dropped call: `ASX_E_INVALID_STATE` (NoReply). The caller must not be in `"root"` (Rust rejects root-region callers, `gen_server.rs:1086-1094`); both interpreters reject such a scenario as a scenario error before running it. |
 | `server_stop` | `server` | `h.stop()` (`:1453`), then `h.join(&cx)` (`:1489`) | `asx_actor_stop`, then `asx_actor_join` | until its task finished | ignored; a server that never ran: `ASX_E_CANCELLED`. Later steps may not name the server. |
-| `supervise` | `as`, `policy` (`one_for_one`, `one_for_all`, `rest_for_one`), optional `escalation` (`stop`, the default, or `escalate`), `max_restarts` (at most 32), `window_ns`, optional `storm_threshold_milli` (a positive integer: restarts per second times 1000), `children` (1 to 8 `{name, mode: permanent\|transient\|temporary, program, optional registration: {name, collision: fail\|replace}}`) | `SupervisorBuilder::new(name).with_restart_policy(p)`, one `.child(ChildSpec::new(child, …)[.with_registration(Register{name, collision})])` each (`:694`), `.compile()?` (`supervision.rs:894`, `:924`, `:655`, `:973`); `.bind_managed(bindings, SupervisionConfig::new(max, window).with_restart_policy(p).with_escalation(e)[.with_storm_threshold(milli / 1000.0)])` (`:2093`, `:470`, `:491`, `:505`, `:483`) with one `ManagedChildBinding::new(child, mode, factory)` each (`:1900`); then `ManagedSupervisor::spawn(&cx)` (`:3497`), which twin_run performs itself to keep the report | `asx_supervisor_spawn(&h, own_region, &config, specs, n)`, the config's backoff and budget left at `asx_supervisor_config_init`'s (Rust's defaults) and its `storm_threshold` set to `milli / 1000.0` | no | ignored |
+| `supervise` | `as`, `policy` (`one_for_one`, `one_for_all`, `rest_for_one`), optional `escalation` (`stop`, the default, or `escalate`), `max_restarts` (at most 32), `window_ns`, optional `storm_threshold_milli` (a positive integer: restarts per second times 1000), `children` (1 to 8 `{name, mode: permanent\|transient\|temporary, program, optional depends_on: [sibling names], optional required: bool, optional registration: {name, collision: fail\|replace}}`) | `SupervisorBuilder::new(name).with_restart_policy(p)`, one `.child(ChildSpec::new(child, …)[.depends_on(dep)…][.with_required(false)][.with_registration(Register{name, collision})])` each (`:694`), `.compile()?` (`supervision.rs:894`, `:924`, `:655`, `:973`); `.bind_managed(bindings, SupervisionConfig::new(max, window).with_restart_policy(p).with_escalation(e)[.with_storm_threshold(milli / 1000.0)])` (`:2093`, `:470`, `:491`, `:505`, `:483`) with one `ManagedChildBinding::new(child, mode, factory)` each (`:1900`); then `ManagedSupervisor::spawn(&cx)` (`:3497`), which twin_run performs itself to keep the report | `asx_supervisor_spawn(&h, own_region, &config, specs, n)`, the config's backoff and budget left at `asx_supervisor_config_init`'s (Rust's defaults) and its `storm_threshold` set to `milli / 1000.0` | no | ignored |
 | `supervisor_join` | `supervisor` | `handle.join().await` (`supervision.rs:3429`) | `asx_supervisor_join(h, self, &report)` until it stops returning `ASX_E_PENDING` | until the controller published its report | Ignored: the join is not interrupted. The observation `value` is the report (below); a controller that never ran gives `ASX_E_CANCELLED` and no value. |
 
 A supervised child's program runs once per generation, as the task
@@ -624,6 +624,22 @@ sleeps 1 ms between looks for its grant with Sleeps made inside the
 library, whose Timer events twin_run cannot attribute to a task, so a
 scenario using it could not be captured. It is ported and unit-tested in C
 only (`test_supervisor`).
+
+A child's `depends_on` names siblings of the same `supervise` (an unknown
+name, or a cycle, is refused at compile time in both engines). The
+controller starts children in compiled order, dependencies before
+dependents, whatever the declaration order (`supervision-dependency-orders-
+the-start-001`). When a failed child is to be restarted and one of its
+dependencies has no running generation (a temporary dependency that ended,
+say), `dependency_unavailable` (`supervision.rs:2904`) finds it: a required
+child (the default) stops the supervisor with a `DependencyUnavailable`
+error naming that child, traced `restart_dependency_unavailable`, with no
+restart batch counted (`supervision-dependency-unavailable-stops-required-
+child-001`); with `required: false` the restart is skipped, still traced,
+and the child stays stopped while the supervisor goes on (`supervision-
+optional-child-stays-stopped-without-dependency-001`). `GenerationExhausted`
+has no scenario: a generation number is a u64 the controller counts from 1,
+so the error needs 2^64 restarts and neither engine's API seeds the count.
 
 The `supervisor_join` value is
 `{"outcome", "started", "joined", "restart_batches", "escalations", "children"}`:
@@ -763,6 +779,7 @@ idle and virtual time is advanced to `t` (§2).
 | `finish_region` | `region`, `body` (`ok`, `err`, `cancelled`, `panicked`); Cancelled requires `kind`, optional `message` | Scope's body-return branch (`scope.rs:877-920`): Ok only `begin_close(None)`; Cancelled `cancel_request` with the supplied reason; Err/Panicked `CancelReason::fail_fast().with_region(region)`; then `advance_region_state` once | `asx_region_close_with_outcome`, then the runtime's ordinary close advancement; subsequent lab steps finish existing work without a new cancellation |
 | `advance` | `ns` | `lab.advance_time(ns)` (`lab/runtime.rs:3076`; a forward jump, the only clock fault Rust offers) | `asx_lab_advance_time(ns)` |
 | `region_limits` | `region`, optional `max_tasks`, `max_children`, `max_obligations` | `lab.state.set_region_limits(region, RegionLimits{…})` (`state.rs:4103`; `record/region.rs:208`); a region already gone has nothing to limit: no effect | `asx_region_set_limits(region, &limits)`; an omitted or null field is `ASX_REGION_UNLIMITED`; a region already gone: no effect |
+| `region_close_outcome` | `region` | `lab.state.region_close_outcome(region)` (`state.rs:3743`): the outcomes of the tasks that completed in the region, joined, read live or after its close | `asx_region_get_close_outcome(region, &outcome)` |
 
 `finish_region` is a primitive body-branch witness executed against the real
 Rust runtime. It does not run `Scope::region_with_child_admission`'s typed
@@ -771,6 +788,19 @@ snapshot's child-derived close outcome. An Ok parent waits for still-Open
 child regions to finish their own bodies. Err/Panicked use the native
 Cx-free FailFast constructor, including its testing-default timestamp;
 Cancelled uses the driver's supplied reason and virtual-time attribution.
+
+`region_close_outcome` is the one driver operation that observes: it is
+recorded under the task name `driver`, with the script entry's 1-based index
+as its step and `region_close_outcome` as its op. The status is `ASX_OK` and
+the value the outcome (vocabulary §4: `ok`, `cancelled` with its reason, or
+`panicked` with its message), or `ASX_E_NOT_FOUND` and no value while no
+task of the region has completed and the region is not Closed. The outcome
+is the join of the tasks' outcomes, folded as each completes (so readable
+before the close), with the severity order Ok < Err < Cancelled < Panicked
+deciding; with nothing folded, a closed region reports Cancelled with its own
+cancel reason if it was cancelled and Ok otherwise (`record/region.rs:1810`).
+An `err` outcome has no status on the C side, so the interpreter refuses a
+scenario that reads one. The name `driver` is reserved.
 
 ### Reason attribution
 

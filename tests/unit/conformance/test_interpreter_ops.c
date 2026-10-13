@@ -431,8 +431,115 @@ TEST(an_unknown_step_fails_the_run_closed) {
     ASSERT_TRUE(g_error[0] != '\0');
 }
 
+/* The observation of task `task` at `step` with op `op` in g_out's
+ * observations, or ASX_JSON_NONE. */
+static uint32_t find_observation(uint32_t root, const char *task, uint32_t step, const char *op) {
+    uint32_t obs = asx_json_get(&g_out, root, "observations");
+    uint32_t i;
+    for (i = 0; i < asx_json_count(&g_out, obs); i++) {
+        uint32_t o = asx_json_item(&g_out, obs, i);
+        const char *t = asx_json_get_string(&g_out, o, "task");
+        const char *p = asx_json_get_string(&g_out, o, "op");
+        uint64_t s = 0;
+        (void)asx_json_u64(&g_out, asx_json_get(&g_out, o, "step"), &s);
+        if (t != NULL && p != NULL && strcmp(t, task) == 0 && strcmp(p, op) == 0 && s == step) {
+            return o;
+        }
+    }
+    return ASX_JSON_NONE;
+}
+
+/* A sender closed while a permit of its channel is held (DSL 3.6): Rust's
+ * permit borrows the sender, so the drop is projected after the permit. The
+ * receiver's first recv gets the value the permit sends and only its second
+ * sees the channel closed; the close step itself is observed ok. */
+TEST(a_sender_closed_with_a_permit_held_is_dropped_after_the_permit) {
+    static const char text[] = SCENARIO_HEAD
+        "\"channels\":[{\"name\":\"ch.q\",\"type\":\"mpsc\",\"capacity\":2,\"sender\":\"t.p\","
+        "\"receiver\":\"t.r\"}],\"sync\":[],"
+        "\"tasks\":[{\"name\":\"t.p\",\"region\":\"r.main\",\"budget\":null,\"program\":["
+        "{\"op\":\"reserve_send\",\"channel\":\"ch.q\",\"as\":\"p\"},"
+        "{\"op\":\"close_sender\",\"channel\":\"ch.q\"},"
+        "{\"op\":\"sleep\",\"ns\":100},"
+        "{\"op\":\"permit_send\",\"permit\":\"p\",\"value\":5}]},"
+        "{\"name\":\"t.r\",\"region\":\"r.main\",\"budget\":null,\"program\":["
+        "{\"op\":\"recv\",\"channel\":\"ch.q\"},{\"op\":\"recv\",\"channel\":\"ch.q\"}]}],"
+        "\"script\":[],\"expect\":{\"kind\":\"ok\"}}";
+    uint32_t root = 0;
+    uint32_t o;
+    uint64_t v = 0;
+    ASSERT_EQ(run_text(text, &root), ASX_OK);
+    o = find_observation(root, "t.p", 2, "close_sender");
+    ASSERT_TRUE(o != ASX_JSON_NONE);
+    ASSERT_STR_EQ(asx_json_get_string(&g_out, o, "status"), "ASX_OK");
+    o = find_observation(root, "t.r", 1, "recv");
+    ASSERT_TRUE(o != ASX_JSON_NONE);
+    ASSERT_STR_EQ(asx_json_get_string(&g_out, o, "status"), "ASX_OK");
+    ASSERT_TRUE(asx_json_u64(&g_out, asx_json_get(&g_out, o, "value"), &v));
+    ASSERT_EQ(v, (uint64_t)5u);
+    o = find_observation(root, "t.r", 2, "recv");
+    ASSERT_TRUE(o != ASX_JSON_NONE);
+    ASSERT_STR_EQ(asx_json_get_string(&g_out, o, "status"), "ASX_E_DISCONNECTED");
+}
+
+/* The mask bound (DSL 3.2): depth 64 nests 64 masks and runs its steps, one
+ * level more panics the task with Rust's assertion message before any step
+ * of the section runs, so it has no observation. */
+TEST(a_mask_beyond_the_bound_panics_the_task_and_depth_64_runs) {
+    static const char text[] = SCENARIO_HEAD
+        "\"channels\":[],\"sync\":[],"
+        "\"tasks\":[{\"name\":\"t.ok\",\"region\":\"r.main\",\"budget\":null,\"program\":["
+        "{\"op\":\"masked\",\"depth\":64,\"steps\":[{\"op\":\"trace\",\"message\":\"in\"}]}]},"
+        "{\"name\":\"t.over\",\"region\":\"r.main\",\"budget\":null,\"program\":["
+        "{\"op\":\"masked\",\"depth\":65,\"steps\":[{\"op\":\"trace\",\"message\":\"in\"}]}]}],"
+        "\"script\":[],\"expect\":{\"kind\":\"ok\"}}";
+    uint32_t root = 0;
+    uint32_t tasks;
+    uint32_t outcome;
+    const char *message;
+    ASSERT_EQ(run_text(text, &root), ASX_OK);
+    ASSERT_TRUE(find_observation(root, "t.ok", 1, "masked/1/trace") != ASX_JSON_NONE);
+    ASSERT_TRUE(find_observation(root, "t.over", 1, "masked/1/trace") == ASX_JSON_NONE);
+    tasks = asx_json_get(&g_out, asx_json_get(&g_out, root, "snapshot"), "tasks");
+    outcome = asx_json_get(&g_out, asx_json_get(&g_out, tasks, "t.ok"), "outcome");
+    ASSERT_STR_EQ(asx_json_get_string(&g_out, outcome, "tag"), "ok");
+    outcome = asx_json_get(&g_out, asx_json_get(&g_out, tasks, "t.over"), "outcome");
+    ASSERT_STR_EQ(asx_json_get_string(&g_out, outcome, "tag"), "panicked");
+    message = asx_json_get_string(&g_out, outcome, "message");
+    ASSERT_TRUE(message != NULL);
+    ASSERT_TRUE(strncmp(message, "mask depth exceeded MAX_MASK_DEPTH (64)", 39u) == 0);
+}
+
+/* The driver's region_close_outcome (DSL 4): none yet is ASX_E_NOT_FOUND,
+ * and after the close of a cancelled region it is Cancelled; observed under
+ * the task name `driver` at the script entry's 1-based index. */
+TEST(the_close_outcome_of_a_region_is_observed_under_the_driver) {
+    static const char text[] = SCENARIO_HEAD
+        "\"channels\":[],\"sync\":[],"
+        "\"tasks\":[{\"name\":\"t.a\",\"region\":\"r.main\",\"budget\":null,\"program\":["
+        "{\"op\":\"sleep\",\"ns\":1000},{\"op\":\"checkpoint\"}]}],"
+        "\"script\":[{\"at_ns\":5,\"op\":{\"op\":\"region_close_outcome\",\"region\":\"r.main\"}},"
+        "{\"at_ns\":50,\"op\":{\"op\":\"close_region\",\"region\":\"r.main\",\"kind\":\"User\"}},"
+        "{\"at_ns\":60,\"op\":{\"op\":\"region_close_outcome\",\"region\":\"r.main\"}}],"
+        "\"expect\":{\"kind\":\"ok\"}}";
+    uint32_t root = 0;
+    uint32_t o;
+    ASSERT_EQ(run_text(text, &root), ASX_OK);
+    o = find_observation(root, "driver", 1, "region_close_outcome");
+    ASSERT_TRUE(o != ASX_JSON_NONE);
+    ASSERT_STR_EQ(asx_json_get_string(&g_out, o, "status"), "ASX_E_NOT_FOUND");
+    o = find_observation(root, "driver", 3, "region_close_outcome");
+    ASSERT_TRUE(o != ASX_JSON_NONE);
+    ASSERT_STR_EQ(asx_json_get_string(&g_out, o, "status"), "ASX_OK");
+    ASSERT_STR_EQ(asx_json_get_string(&g_out, asx_json_get(&g_out, o, "value"), "tag"),
+                  "cancelled");
+}
+
 int main(void) {
     fprintf(stderr, "=== test_interpreter_ops ===\n");
+    RUN_TEST(a_sender_closed_with_a_permit_held_is_dropped_after_the_permit);
+    RUN_TEST(a_mask_beyond_the_bound_panics_the_task_and_depth_64_runs);
+    RUN_TEST(the_close_outcome_of_a_region_is_observed_under_the_driver);
     RUN_TEST(the_interval_delay_queue_and_watch_steps_are_dispatched);
     RUN_TEST(an_unbounded_channel_runs_where_the_profile_allows_it);
     RUN_TEST(a_skip_needs_a_declared_requirement_the_profile_forbids);
