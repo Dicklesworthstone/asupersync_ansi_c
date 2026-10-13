@@ -108,14 +108,14 @@ static int scenario_session_link_roundtrip(void) {
         return 1;
     }
 
-    st = asx_record_summary_capture(&rec_summary);
+    st = asx_record_summary_capture(test_runtime(), &rec_summary);
     if (st != ASX_OK) {
         printf("  FAIL: record_summary returned %s\n", asx_status_str(st));
         return 1;
     }
 
     asx_record_snapshot_init(&snapshot);
-    st = asx_record_snapshot_capture(&snapshot);
+    st = asx_record_snapshot_capture(test_runtime(), &snapshot);
     if (st != ASX_OK) {
         printf("  FAIL: snapshot_capture returned %s\n", asx_status_str(st));
         return 1;

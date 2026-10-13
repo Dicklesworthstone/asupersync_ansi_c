@@ -44,7 +44,7 @@ static int run_scenario(uint64_t *out_digest) {
     det_state *ds;
 
     asx_runtime_reset(test_runtime());
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
 
     st = asx_region_open(test_runtime(), &region);
     if (st != ASX_OK) return 1;
@@ -62,11 +62,11 @@ static int run_scenario(uint64_t *out_digest) {
     if (st != ASX_OK) return 1;
 
     /*
-     * ERGO: asx_trace_digest() returns the hash directly — no out-param
+     * ERGO: asx_trace_digest(rt) returns the hash directly — no out-param
      * pattern. This is nice for a value that can't fail. Good use of
      * direct return for infallible operations.
      */
-    *out_digest = asx_trace_digest();
+    *out_digest = asx_trace_digest(test_runtime());
     return 0;
 }
 
@@ -87,7 +87,7 @@ static int scenario_trace_digest(void) {
     /*
      * ERGO: Running the same scenario twice should produce the same
      * digest. This is the core determinism guarantee. The API makes
-     * it easy to verify: just call asx_trace_digest() after each run.
+     * it easy to verify: just call asx_trace_digest(rt) after each run.
      */
     if (run_scenario(&digest2) != 0) {
         printf("  FAIL: second run failed\n");
@@ -120,12 +120,12 @@ static int scenario_event_inspection(void) {
     }
 
     /*
-     * ERGO: asx_trace_event_count() + asx_trace_event_get(index, &ev)
+     * ERGO: asx_trace_event_count(rt) + asx_trace_event_get(rt, index, &ev)
      * is a clean iteration pattern. The index-based API avoids exposing
      * internal ring buffer details. Each event has kind, entity_id,
      * aux, and sequence — enough for diagnostics and conformance.
      */
-    count = asx_trace_event_count();
+    count = asx_trace_event_count(test_runtime());
     printf("  trace contains %u events\n", count);
 
     if (count == 0) {
@@ -135,7 +135,7 @@ static int scenario_event_inspection(void) {
 
     /* Print first few events for illustration. */
     for (uint32_t i = 0; i < count && i < 5; i++) {
-        if (asx_trace_event_get(i, &ev)) {
+        if (asx_trace_event_get(test_runtime(), i, &ev)) {
             /*
              * ERGO: asx_trace_event_kind_str() returns a human-readable
              * name. Good for diagnostics. Naming is consistent with
@@ -169,12 +169,12 @@ static int scenario_binary_roundtrip(void) {
     }
 
     /*
-     * ERGO: asx_trace_export_binary(buf, capacity, &out_len) follows
+     * ERGO: asx_trace_export_binary(rt, buf, capacity, &out_len) follows
      * the standard C buffer pattern. The capacity parameter prevents
      * overflows and ASX_E_BUFFER_TOO_SMALL is returned if insufficient.
      * This is idiomatic and safe.
      */
-    st = asx_trace_export_binary(buf, (uint32_t)sizeof(buf), &buf_len);
+    st = asx_trace_export_binary(test_runtime(), buf, (uint32_t)sizeof(buf), &buf_len);
     if (st != ASX_OK) {
         printf("  FAIL: export_binary returned %s\n", asx_status_str(st));
         return 1;
@@ -189,15 +189,15 @@ static int scenario_binary_roundtrip(void) {
 
     /*
      * ERGO: asx_trace_import_binary loads the exported trace as a
-     * replay reference. Then asx_replay_verify() compares the current
+     * replay reference. Then asx_replay_verify(rt) compares the current
      * trace against it. This two-step pattern gives control over when
      * the comparison happens.
      *
-     * ALTERNATIVE: asx_trace_continuity_check(buf, len) combines both
+     * ALTERNATIVE: asx_trace_continuity_check(rt, buf, len) combines both
      * steps into one call — good for the common case where you just
      * want to know "did it match?"
      */
-    st = asx_trace_continuity_check(buf, buf_len);
+    st = asx_trace_continuity_check(test_runtime(), buf, buf_len);
     if (st != ASX_OK) {
         printf("  FAIL: continuity_check returned %s\n", asx_status_str(st));
         return 1;
@@ -209,7 +209,7 @@ static int scenario_binary_roundtrip(void) {
         printf("  FAIL: import_binary returned %s\n", asx_status_str(st));
         return 1;
     }
-    rr = asx_replay_verify();
+    rr = asx_replay_verify(test_runtime());
     printf("  replay_verify result=%s index=%u\n", asx_replay_result_kind_str(rr.result),
            rr.divergence_index);
     if (rr.result != ASX_REPLAY_MATCH) {
@@ -232,7 +232,7 @@ static int scenario_snapshot(void) {
     printf("--- scenario: snapshot capture ---\n");
 
     /*
-     * ERGO: asx_snapshot_capture(&buf) fills a buffer with the current
+     * ERGO: asx_snapshot_capture(rt, &buf) fills a buffer with the current
      * runtime state (JSON object with regions, tasks, obligations).
      * asx_snapshot_digest(&buf) returns a FNV-1a hash of that buffer.
      * Both are deterministic for the same runtime state.
@@ -242,7 +242,7 @@ static int scenario_snapshot(void) {
         return 1;
     }
 
-    if (asx_snapshot_capture(&snap1) != ASX_OK) {
+    if (asx_snapshot_capture(test_runtime(), &snap1) != ASX_OK) {
         printf("  FAIL: snapshot_capture failed\n");
         return 1;
     }
@@ -270,7 +270,7 @@ static int scenario_snapshot(void) {
         return 1;
     }
 
-    if (asx_snapshot_capture(&snap2) != ASX_OK) {
+    if (asx_snapshot_capture(test_runtime(), &snap2) != ASX_OK) {
         printf("  FAIL: second snapshot_capture failed\n");
         return 1;
     }

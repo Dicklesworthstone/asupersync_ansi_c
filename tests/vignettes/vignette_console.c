@@ -62,7 +62,7 @@ int main(void) {
     printf("console_doctor:\n%s", asx_report_buf_cstr(&doctor));
     printf("console_log:%s\n", asx_report_buf_cstr(&log_record));
 
-    if (asx_tracing_compat_export_current(emit_trace_record, stdout, &exported) != ASX_OK) {
+    if (asx_tracing_compat_export_current(&rt, emit_trace_record, stdout, &exported) != ASX_OK) {
         fprintf(stderr, "trace export failed\n");
         asx_runtime_shutdown(&rt);
         return 1;
