@@ -513,6 +513,10 @@ struct Local {
     broadcast_rx: BTreeMap<String, broadcast::Receiver<u64>>,
     watch_tx: BTreeMap<String, watch::Sender<u64>>,
     watch_rx: BTreeMap<String, watch::Receiver<u64>>,
+    /// Clones of the task's watch receivers (`watch_clone`), by channel and
+    /// then by their `as` name (DSL §3.6). A clone drops with the task's
+    /// other endpoints; the order between receivers is not observable.
+    watch_clones: BTreeMap<String, BTreeMap<String, watch::Receiver<u64>>>,
     /// GenServers this task spawned, by name (DSL §3.8).
     servers: BTreeMap<String, Server>,
     /// Supervisors this task spawned, by name, joined or not (DSL §3.8):
@@ -979,6 +983,23 @@ impl Local {
         self.mpsc_rx
             .get_mut(channel)
             .ok_or_else(|| format!("this task does not own the receiver of {channel:?}"))
+    }
+
+    /// The watch receiver a step selects (DSL §3.6): the clone its `receiver`
+    /// field names, else the receiver the task declared on `channel`.
+    fn watch_receiver(&mut self, step: &Value) -> RunResult<&mut watch::Receiver<u64>> {
+        let channel = str_field(step, "channel")?;
+        match step.get("receiver").and_then(Value::as_str) {
+            Some(alias) => self
+                .watch_clones
+                .get_mut(channel)
+                .and_then(|clones| clones.get_mut(alias))
+                .ok_or_else(|| format!("this task holds no watch clone {alias:?} of {channel:?}")),
+            None => self
+                .watch_rx
+                .get_mut(channel)
+                .ok_or_else(|| format!("this task does not own a watch receiver of {channel:?}")),
+        }
     }
 }
 
@@ -1601,7 +1622,22 @@ fn exec_sync(
             observe(&ctx.shared, me, idx, label, "ASX_OK", Value::Null);
         }
         "close_receiver" => {
-            local.close(str_field(step, "channel")?, false)?;
+            let ch = str_field(step, "channel")?;
+            match step.get("receiver").and_then(Value::as_str) {
+                // A watch clone made by watch_clone (DSL §3.6).
+                Some(alias) => {
+                    let clone = local
+                        .watch_clones
+                        .get_mut(ch)
+                        .and_then(|clones| clones.remove(alias));
+                    if clone.is_none() {
+                        return Err(format!(
+                            "this task holds no watch clone {alias:?} of {ch:?}"
+                        ));
+                    }
+                }
+                None => local.close(ch, false)?,
+            }
             observe(&ctx.shared, me, idx, label, "ASX_OK", Value::Null);
         }
         // rx.close() (mpsc.rs:1698): unlike close_receiver (the drop), the
@@ -1685,6 +1721,73 @@ fn exec_sync(
                 Err(watch::SendError::Closed(_)) => "ASX_E_DISCONNECTED",
             };
             observe(&ctx.shared, me, idx, label, status, Value::Null);
+        }
+        // The watch steps that never suspend (DSL §3.6).
+        "watch_send_modify" => {
+            let ch = str_field(step, "channel")?;
+            let add = u64_field(step, "add")?;
+            let tx = local
+                .watch_tx
+                .get(ch)
+                .ok_or_else(|| format!("this task does not own the watch sender of {ch:?}"))?;
+            let status = match tx.send_modify(|v| *v = v.wrapping_add(add)) {
+                Ok(()) => "ASX_OK",
+                Err(_) => "ASX_E_DISCONNECTED",
+            };
+            observe(&ctx.shared, me, idx, label, status, Value::Null);
+        }
+        "watch_receiver_count" => {
+            let ch = str_field(step, "channel")?;
+            let tx = local
+                .watch_tx
+                .get(ch)
+                .ok_or_else(|| format!("this task does not own the watch sender of {ch:?}"))?;
+            let count = tx.receiver_count() as u64;
+            observe(&ctx.shared, me, idx, label, "ASX_OK", json!(count));
+        }
+        "watch_borrow" | "watch_borrow_and_update" | "watch_mark_seen" | "watch_has_changed" => {
+            let rx = local.watch_receiver(step)?;
+            let value = match op {
+                "watch_borrow" => json!(*rx.borrow()),
+                "watch_borrow_and_update" => json!(*rx.borrow_and_update()),
+                "watch_mark_seen" => {
+                    rx.mark_seen();
+                    Value::Null
+                }
+                _ => json!(rx.has_changed()),
+            };
+            observe(&ctx.shared, me, idx, label, "ASX_OK", value);
+        }
+        "watch_is_closed" => {
+            let ch = str_field(step, "channel")?;
+            let closed = match str_field(step, "end")? {
+                "sender" => local
+                    .watch_tx
+                    .get(ch)
+                    .ok_or_else(|| format!("this task does not own the watch sender of {ch:?}"))?
+                    .is_closed(),
+                "receiver" => local.watch_receiver(step)?.is_closed(),
+                other => return Err(format!("watch_is_closed end {other:?}")),
+            };
+            observe(&ctx.shared, me, idx, label, "ASX_OK", json!(closed));
+        }
+        "watch_clone" => {
+            let ch = str_field(step, "channel")?;
+            let alias = str_field(step, "as")?.to_string();
+            if local
+                .watch_clones
+                .get(ch)
+                .is_some_and(|clones| clones.contains_key(&alias))
+            {
+                return Err(format!("watch clone {alias:?} of {ch:?} is named twice"));
+            }
+            let clone = local.watch_receiver(step)?.clone();
+            local
+                .watch_clones
+                .entry(ch.to_string())
+                .or_default()
+                .insert(alias, clone);
+            observe(&ctx.shared, me, idx, label, "ASX_OK", Value::Null);
         }
         // A masked step inside masked nests; each inner observation's op is
         // its path, e.g. masked/2/masked/1/checkpoint (DSL §3.2).
@@ -1897,16 +2000,32 @@ async fn exec_step(
             }
         }
         "watch_changed" => {
-            let ch = str_field(step, "channel")?;
-            let rx = local
-                .watch_rx
-                .get_mut(ch)
-                .ok_or_else(|| format!("this task does not own a watch receiver of {ch:?}"))?;
+            let rx = local.watch_receiver(step)?;
             match rx.changed(cx).await {
                 Ok(()) => {
                     let v = *rx.borrow_and_update();
                     observe(&ctx.shared, me, idx, op, "ASX_OK", json!(v));
                 }
+                Err(e) => observe(&ctx.shared, me, idx, op, watch_recv_status(e), Value::Null),
+            }
+        }
+        // rx.wait_for(&cx, |v| *v <cmp> value) (watch.rs:858): the accepted
+        // value is the observation's, and only that version is marked seen.
+        "watch_wait_for" => {
+            let want = u64_field(step, "value")?;
+            let holds: fn(u64, u64) -> bool = match str_field(step, "cmp")? {
+                "eq" => |v, w| v == w,
+                "ne" => |v, w| v != w,
+                "lt" => |v, w| v < w,
+                "le" => |v, w| v <= w,
+                "gt" => |v, w| v > w,
+                "ge" => |v, w| v >= w,
+                other => return Err(format!("watch_wait_for cmp {other:?}")),
+            };
+            let rx = local.watch_receiver(step)?;
+            let accepted = rx.wait_for(cx, |v| holds(*v, want)).await.map(|v| *v);
+            match accepted {
+                Ok(v) => observe(&ctx.shared, me, idx, op, "ASX_OK", json!(v)),
                 Err(e) => observe(&ctx.shared, me, idx, op, watch_recv_status(e), Value::Null),
             }
         }
