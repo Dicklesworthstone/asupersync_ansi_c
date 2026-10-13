@@ -253,20 +253,44 @@ run_clang_tidy() {
     # bugprone-branch-clone is excluded: the exhaustive enum switches here list
     # every enumerator on purpose so -Wswitch flags a newly added value, which
     # merging identical case bodies would defeat.
-    if "${CLANG_TIDY_CMD[@]}" \
-        --checks='-*,bugprone-*,cert-*,misc-*,performance-*,portability-*,-bugprone-easily-swappable-parameters,-bugprone-branch-clone,-cert-dcl37-c,-cert-dcl51-c,-cert-err33-c,-misc-unused-parameters,-misc-include-cleaner' \
-        "${src_files[@]}" \
-        -- -std=c99 -I"$REPO_ROOT/include" \
-           -DASX_PROFILE_CORE -DASX_CODEC_JSON -DASX_DETERMINISTIC=1 \
-        2>&1 | tee "$tmpfile" >/dev/null; then
-        capture_status=("${PIPESTATUS[@]}")
-    else
-        capture_status=("${PIPESTATUS[@]}")
-    fi
-    tidy_exit=${capture_status[0]}
-    if [[ ${capture_status[1]} -ne 0 ]]; then
-        tool_error "clang-tidy output capture" "${capture_status[1]}"
-    fi
+    # clang-analyzer-* (the path-sensitive checks, bd-9kll.16.4) runs with two
+    # exclusions: optin.performance.Padding reports struct padding, a layout
+    # the footprint budgets measure on purpose, not a defect; and
+    # optin.core.EnumCastOutOfRange rejects the zero of a C flag enum (an unused
+    # io slot holds interest 0), which C permits.
+    local tidy_checks='-*,bugprone-*,cert-*,misc-*,performance-*,portability-*,-bugprone-easily-swappable-parameters,-bugprone-branch-clone,-cert-dcl37-c,-cert-dcl51-c,-cert-err33-c,-misc-unused-parameters,-misc-include-cleaner,clang-analyzer-*,-clang-analyzer-optin.performance.Padding,-clang-analyzer-optin.core.EnumCastOutOfRange'
+    # The profile macros select different code, so the unit set is analyzed in
+    # both configurations: CORE (the kernel, the default build) and POSIX live
+    # (the OS adapters in src/platform/posix, which CORE compiles to nothing).
+    local tidy_configs=(
+        "-DASX_PROFILE_CORE -DASX_CODEC_JSON -DASX_DETERMINISTIC=1"
+        "-DASX_PROFILE_POSIX -DASX_CODEC_JSON -DASX_DETERMINISTIC=0"
+    )
+    local cfg_defs cfg_exit
+    local -a cfg_flags
+    : >"$tmpfile"
+    for cfg_defs in "${tidy_configs[@]}"; do
+        read -r -a cfg_flags <<<"$cfg_defs"
+        if "${CLANG_TIDY_CMD[@]}" \
+            --checks="$tidy_checks" \
+            "${src_files[@]}" \
+            -- -std=c99 -I"$REPO_ROOT/include" "${cfg_flags[@]}" \
+            2>&1 | tee -a "$tmpfile" >/dev/null; then
+            capture_status=("${PIPESTATUS[@]}")
+        else
+            capture_status=("${PIPESTATUS[@]}")
+        fi
+        cfg_exit=${capture_status[0]}
+        if [[ $cfg_exit -ne 0 ]]; then tidy_exit=$cfg_exit; fi
+        if [[ ${capture_status[1]} -ne 0 ]]; then
+            tool_error "clang-tidy output capture" "${capture_status[1]}"
+        fi
+    done
+    # A unit that compiles to the same diagnostic in both configurations is one
+    # finding, not two.
+    local parsed
+    parsed=$(mktemp)
+    sort -u "$tmpfile" >"$parsed"
 
     while IFS= read -r line; do
         if [[ "$line" =~ ^[^:]+:[0-9]+:[0-9]+:\ (warning|error): ]]; then
@@ -288,7 +312,7 @@ run_clang_tidy() {
                 fi
             fi
         fi
-    done < "$tmpfile"
+    done < "$parsed"
 
     # Compiler errors are reported as error: lines and counted above, so a
     # non-zero exit with nothing parsed means clang-tidy itself failed.

@@ -33,7 +33,7 @@ scheduler's pick path, or a restructure of a loop that is correct, is not.
 | lane | tool (pinned) | scope | configurations | where | make target |
 |---|---|---|---|---|---|
 | cppcheck | cppcheck 2.22.0 | all of `src/` | its own (all `#ifdef` branches) | `check` job | `lint-static-analysis` |
-| clang-tidy | clang-tidy 18.1.8: `bugprone-*`, `cert-*`, `misc-*`, `performance-*`, `portability-*` (minus the exclusions in `tools/ci/run_static_analysis.sh`) | all of `src/` | CORE, JSON, deterministic | `check` job | `lint-static-analysis` |
+| clang-tidy | clang-tidy 18.1.8: `bugprone-*`, `cert-*`, `misc-*`, `performance-*`, `portability-*` and `clang-analyzer-*` (minus the exclusions in `tools/ci/run_static_analysis.sh`: `optin.performance.Padding`, `optin.core.EnumCastOutOfRange`) | all of `src/` | CORE (JSON, deterministic) and POSIX live (JSON, `DETERMINISTIC=0`): the profile macros select different code, and CORE compiles `src/platform/posix` to nothing | `check` job | `lint-static-analysis` |
 | GCC `-fanalyzer` | GCC 15.2 (the `gcc:15.2.0` image) | every `src/` unit of `make build` | `CORE` (`PROFILE=CORE DETERMINISTIC=1`) and `POSIX_LIVE` (`PROFILE=POSIX DETERMINISTIC=0`), the build's own flags | `gcc-analyzer` job | `lint-gcc-analyzer` |
 
 `tools/ci/run_gcc_analyzer.sh` takes its compile commands from
@@ -74,7 +74,29 @@ names the function.
 | `src/runtime/blocking.c`, `pool_lock` | infinite loop | CORE | in a single-thread build the compare-exchange can fail only if `pool_lock` re-entered itself, which no caller does |
 | `src/platform/posix/signal_posix.c`, `sig_ensure_pipe` | leak of file descriptor `fds[1]` | POSIX live | the write end is stored in `g_pipe_wr`, a `volatile sig_atomic_t` the signal handler reads; the analyzer does not follow that store |
 
-### cppcheck and clang-tidy
+### clang-tidy with `clang-analyzer-*`, CORE and POSIX live (2026-10-13)
+
+Adding the path-sensitive checks and the POSIX configuration to the clang-tidy
+lane found 25 distinct unwaived locations across the two configurations at
+`d0f1b40` (24 in POSIX live, one more in CORE) and 3 more in `process_posix.c`
+when it was re-run at `76ba65c`, after the journal's wrappers landed. Each was
+fixed in the code unless it is a feature-test macro or a check that is noise by
+construction, per the rule that a diagnostic the code can stop provoking is
+must-fix.
+
+| location | check | resolution |
+|---|---|---|
+| `src/net/websocket.c`, `asx_ws_engine_recv` | `core.NonNullParamChecker` | fixed: `ws->msg_len` is read once; `len` is a caller's `uint32_t *` that may alias the field, so the check and the copy could see different values |
+| `src/net/net.c`, `parse_ipv6_host` | `deadcode.DeadStores` | fixed: the dead `p = end` after the dotted-quad tail is gone |
+| `src/runtime/journal.c`, `asx_journal_ring_sink` (2 locations) | `core.NonNullParamChecker` | fixed: a zero-length write returns before `memcpy(..., NULL, 0)`, which is undefined for a NULL pointer; the argument check allows `bytes == NULL` when `len == 0` |
+| `src/runtime/hooks.c`, `asx_codec_buffer_append_bytes` (through `reserve`) | `core.NonNullParamChecker` | fixed: `asx_codec_buffer_reserve` no longer counts a NULL `data` as room, so a hand-built buffer with `cap > 0` allocates |
+| `src/platform/posix/net_posix.c`, `native_tcp_accept_impl`, `native_udp_recv_impl`, `native_refresh_local` (one line, `native_from_sockaddr`) | `core.UndefinedBinaryOperatorResult` | fixed: the address is zeroed before `accept`, `recvfrom` and `getsockname`, which write only the length they report |
+| `src/platform/posix/process_posix.c`, `native_process_spawn_impl` (3 locations) | `core.NullDereference` | fixed: the backend returns `ASX_E_INVALID_ARGUMENT` for a NULL `cmd` or `out`; the callers in `src/process` check, but the journal's wrapper (`asx_native_process_spawn`) passes both through, so the backend is reachable with NULL |
+| `src/platform/posix/net_posix.c` (12 casts) | `bugprone-casting-through-void` | fixed: `sockaddr_storage` is the type POSIX defines for casting to the specific `sockaddr` types, so the casts are direct |
+| `src/runtime/io_driver.c`, interest 0 for a free slot | `optin.core.EnumCastOutOfRange` | check excluded in the lane: C permits the zero of a flag enum |
+| `fs_posix.c` (2), `hooks.c`, `net_posix.c`, `process_posix.c`, `signal_posix.c` under `src/platform/posix` | `bugprone-reserved-identifier`, `cert-dcl51-cpp` | waived: `_GNU_SOURCE` and `_FILE_OFFSET_BITS` are feature-test macros the platform headers require a program to define; the waiver is a trailing comment on the `#define` |
+
+### cppcheck and the rest of clang-tidy
 
 Their waivers are the `ASX_ANALYZER_WAIVER` comments in the source, each with
 its reason (`grep -rn ASX_ANALYZER_WAIVER src`). The two lanes fail on any
@@ -88,3 +110,5 @@ copy them.
 | 2026-10-10 | `c0c2fab` | `-fanalyzer` over the library, gcc 13 and 15, CORE and POSIX live | 4 findings, all false positives (`lab_dispatch.c` group, `signal_posix.c` fd, `blocking.c` loop, `trace.c` text on gcc 13 only). No lane added: findings differ across GCC releases and a blocking lane needs a pinned compiler |
 | 2026-10-11 | | clang-tidy 18.1.8 with `clang-analyzer-*` only, over core, runtime, channel, time, sync, actor | 13 findings: 10 `optin.performance.Padding` notes, 1 `EnumCastOutOfRange` on `io_driver`'s flag enum, 2 path findings (a codec buffer with `data` NULL and `cap` > 0, which init and reset never produce; `tasks_per_shard` 0, which `normalize_locality_config` prevents and `parallel.c` now guards) |
 | 2026-10-13 | `ac534ab` | `-fanalyzer`, gcc 15.2, whole `src/`, CORE and POSIX live | 7 locations, all false positives; waived in section 4; the `gcc-analyzer` lane pins gcc 15.2 and blocks new ones |
+| 2026-10-13 | `d0f1b40` | clang-tidy 18.1.8, the lane's checks plus `clang-analyzer-*`, whole `src/`, CORE and POSIX live | 25 distinct unwaived locations; 5 were edge-case undefined behaviour or indeterminate reads (a zero-length `memcpy` of NULL in two places, an unzeroed `accept` address, an aliasable length, a NULL-data buffer with room), the rest style checks; all fixed or, for the feature-test macros and the flag-enum check, waived or excluded (section 4). The POSIX adapters had never been analyzed by clang-tidy |
+| 2026-10-13 | `76ba65c` | the same lane re-run with the fixes | 3 more locations, all in `process_posix.c` (a NULL `cmd`/`out` reaching the backend through the journal's wrapper), and the same `ss` read through two more callers; fixed. cppcheck reports 3 `moduloofone` at `hindsight.c:103,154,155` (a capacity of 1): not part of this change, for the file's owner |

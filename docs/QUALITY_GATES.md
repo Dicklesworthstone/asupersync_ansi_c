@@ -331,7 +331,7 @@ and documentation enforcement.
 | `GATE-LINT-DOCS` | `lint-docs` | `check` | `tools/ci/check_api_docs.sh` | Public API documentation coverage |
 | `GATE-LINT-CHECKPOINT` | `lint-checkpoint` | `check` | `tools/ci/check_checkpoint_coverage.sh` | Kernel loop checkpoint coverage |
 | `GATE-LINT-EVIDENCE` | `lint-evidence` | `check` | `tools/ci/check_evidence_linkage.sh` | Per-bead evidence linkage validation |
-| `GATE-STATIC-ANALYSIS` | `lint-static-analysis` | `check` | `tools/ci/run_static_analysis.sh` | Section 10.7 deep static analysis |
+| `GATE-STATIC-ANALYSIS` | `lint-static-analysis` | `check` | `tools/ci/run_static_analysis.sh` | Section 10.7 deep static analysis: cppcheck, and clang-tidy (`bugprone-*`, `cert-*`, `misc-*`, `performance-*`, `portability-*`, `clang-analyzer-*`) in CORE and POSIX live; triage in `docs/STATIC_ANALYSIS_TRIAGE.md` |
 | `GATE-GCC-ANALYZER` | `lint-gcc-analyzer` | `gcc-analyzer` | `tools/ci/run_gcc_analyzer.sh` | GCC 15.2 `-fanalyzer` over `src/` in CORE and POSIX live; every diagnostic is fixed or carries an `ASX_ANALYZER_WAIVER` listed in `docs/STATIC_ANALYSIS_TRIAGE.md` (no backlog class); a unit that does not compile fails the lane |
 | `GATE-MODEL-CHECK` | `model-check` | `check` | `tests/invariant/model_check/test_bounded_model.c` | Bounded state machine verification |
 | `GATE-UNIT` | `test-unit` | `unit-invariant` | (compiled test binaries) | Module-level correctness |
