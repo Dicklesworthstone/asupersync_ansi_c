@@ -1,12 +1,12 @@
 # =============================================================================
 # nightly.yml — Nightly extended fuzzing + e2e + schema validation (bd-15k)
 #
-# Runs on a daily schedule and manual dispatch. Exercises longer-running
-# test suites that are impractical for PR-level CI.
+# Runs on a daily schedule and manual dispatch. Exercises longer-running test suites that are impractical for PR-level CI.
 #
 # Jobs:
 #   fuzz-nightly             Extended C differential fuzzing (100K iterations)
 #   fuzz-rust-differential   Rust-vs-C differential fuzzing over DSL v2 (bd-ij9w)
+#   fuzz-metamorphic         M1-M4 over generated scenarios, 5 x 50000 cases (bd-9kll.12.1)
 #   e2e-extended             Full e2e suite including vertical lanes
 #   schema-check             Strict schema validation of all fixtures
 # =============================================================================
@@ -83,6 +83,62 @@ jobs:
         with:
           name: fuzz-rust-differential-${{ env.ASX_CI_RUN_TAG }}
           path: build/fuzz_v2/
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # fuzz-metamorphic — the metamorphic relations M1 to M4 over scenarios
+  # generated now (bd-9kll.12.1), 250000 cases per relation a night. A push
+  # runs 10000 of seed 12100 (ci.yml); this explores new seeds. The 250000
+  # are 5 shards of 50000, one runner each, because one run is about 2.8 h at
+  # the worker's rate (401 s per 10000 cases, one core) and a runner's rate
+  # is not measured: a shard is about 33 min at the worker's rate, and its
+  # timeout stops a hang or a slow runner instead of the 6 h limit.
+  # The seed is printed and replays with
+  # `make fuzz-metamorphic MM_FUZZ_SEED=<seed> MM_FUZZ_CASES=50000`.
+  # Exit 1 is a violation (the ddmin-reduced scenario is uploaded, a
+  # candidate fixture); exit 2 is a stream that ended short of the cases
+  # (the generator did not run or produced too little): both fail the shard.
+  # ---------------------------------------------------------------------------
+  fuzz-metamorphic:
+    name: "fuzz: metamorphic relations (shard ${{ matrix.shard }}, 50000 cases each)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain (rust-toolchain.toml pin)
+        run: rustup toolchain install
+
+      - name: Cache twin_run build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            tools/twin_run/target
+          key: twin-run-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'tools/twin_run/Cargo.lock') }}
+
+      - name: twin_run release build
+        run: make twin-run-build
+
+      - name: Metamorphic relations M1-M4 (seed per day and shard, 50000 cases each)
+        run: |
+          day=$(( $(date -u +%s) / 86400 ))
+          seed=$(( day * 5 + ${{ matrix.shard }} ))
+          echo "== seed $seed"
+          make fuzz-metamorphic MM_FUZZ_SEED=$seed MM_FUZZ_CASES=50000 \
+            ASX_TWIN_BIN=tools/twin_run/target/release/twin_run
+
+      - name: Upload minimized scenarios
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-metamorphic-${{ matrix.shard }}-${{ env.ASX_CI_RUN_TAG }}
+          path: build/metamorphic/
           if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------

@@ -2560,7 +2560,7 @@ verification, and risk documents, among them:
 
 ## CI Pipeline Architecture
 
-The primary CI workflow (`.github/workflows/ci.yml`) runs <!-- fact:ci_jobs -->17<!-- /fact --> top-level jobs on
+The primary CI workflow (`.github/workflows/ci.yml`) runs <!-- fact:ci_jobs -->18<!-- /fact --> top-level jobs on
 pushes and PRs:
 
 | Job | Runs |
@@ -2572,6 +2572,7 @@ pushes and PRs:
 | `profile-parity` | every v2 Rust fixture executed under eight host profiles, recorded legacy digests, and parallel-worker parity scenarios executed at worker counts 1, 2, 8 and 64 |
 | `fuzz-parity` | fuzz smoke and artifact validation |
 | `fuzz-rust-differential` | 200 generated scenarios (a fixed seed, so a regression gate) executed by asupersync's LabRuntime (`tools/twin_run`) and by the C runtime, which must match each one exactly; divergences are reduced by `twin_run minimize` and uploaded. The nightly workflow explores new seeds daily |
+| `fuzz-metamorphic` | the metamorphic relations M1 to M4 (`make fuzz-metamorphic`) over scenarios `tools/twin_run` generates on the run, 10000 compared cases per relation at a fixed seed; a violation is reduced by ddmin to a minimal scenario (uploaded), and a stream that ended short of the cases (exit 2) fails the job, with a control step showing it does |
 | `compiler-matrix` | GCC and Clang × CORE/POSIX/FREESTANDING/EMBEDDED_ROUTER, plus Clang 21 on CORE and POSIX; the POSIX legs also run the live unit suite and native I/O |
 | `sanitizers` | the unit suite under ASan+UBSan (deterministic and live POSIX) and TSan (live POSIX) |
 | `cross-qemu` | the unit suite and the Rust fixture replay, cross-compiled for mipsel, big-endian mips, armv7, aarch64 and riscv64 (Debian glibc, static) and run under QEMU user mode |
@@ -2583,15 +2584,16 @@ pushes and PRs:
 | `gcc-analyzer` | GCC 15.2 `-fanalyzer` over `src/` in CORE and POSIX live; every diagnostic is fixed or carries a reasoned waiver (`docs/STATIC_ANALYSIS_TRIAGE.md`) |
 | `gate-scripts` | the integration tests and smoke lanes no other job runs: the fuzz gates' integration tests (counterexample replay, controls, minimizer pipeline, the harnesses under ASan+UBSan), the foundational contract evidence script, the combinator and actor-supervision harnesses, the POSIX adapter smoke, strict schema validation, the embedded portability proof, and the installer smoke |
 
-None of the <!-- fact:ci_jobs -->17<!-- /fact --> jobs is marked `continue-on-error`, so a failure in any of
+None of the <!-- fact:ci_jobs -->18<!-- /fact --> jobs is marked `continue-on-error`, so a failure in any of
 them fails the workflow. A nightly workflow (`nightly.yml`) runs the C fuzzer
 for 100K iterations, Rust-vs-C differential fuzzing on a new seed each day,
-the full e2e suite with the conformance and parity gates, and strict fixture
-schema validation. The perf workflow (`perf.yml`, pushes to `main`) runs the
-benchmarks and the SLO and size gates. The release workflow is tag-triggered
-(`v*`) and is written to build `linux-x86_64` binary and source bundles with
-SHA-256 checksums, provenance files and Sigstore (cosign) signatures; it has
-not run, because no tag exists.
+the metamorphic relations over 250000 generated cases each (five shards of
+50000, new seeds daily), the full e2e suite with the conformance and parity
+gates, and strict fixture schema validation. The perf workflow (`perf.yml`,
+pushes to `main`) runs the benchmarks and the SLO and size gates. The release
+workflow is tag-triggered (`v*`) and is written to build `linux-x86_64` binary
+and source bundles with SHA-256 checksums, provenance files and Sigstore
+(cosign) signatures; it has not run, because no tag exists.
 
 ## Troubleshooting
 

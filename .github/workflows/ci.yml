@@ -1229,6 +1229,81 @@ jobs:
           if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------
+  # fuzz-metamorphic — the metamorphic relations M1 to M4 over scenarios
+  # generated on the run (bd-9kll.12.1). twin_run generate --shape meta
+  # streams scenarios into the C relation checker (tests/unit/conformance/
+  # test_metamorphic.c --fuzz), which checks each until every relation has
+  # 10000 compared cases. No Rust capture is involved: twin_run is only the
+  # generator, so the job needs its build and nothing of the Rust lab.
+  #   exit 0  every relation held over its cases
+  #   exit 1  a violation: ddmin reduces the scenario (build/metamorphic/
+  #           mm-<relation>-min-NNN-001.json, uploaded), a candidate fixture
+  #   exit 2  the stream ended short of the cases (the generator did not run,
+  #           or produced too little): a run that checked nothing is no
+  #           proof, so it fails the job like a violation. A control step
+  #           below shows the target does fail that way.
+  # It is a job of its own, not a step of fuzz-parity (C only, no Rust
+  # toolchain, a manifest of its steps) or fuzz-rust-differential (a 60 minute
+  # budget): it takes 401 s on the swarm's worker (one core), so it runs
+  # beside them. The seed is fixed, so it is a regression gate; new seeds are
+  # explored by nightly.yml (fuzz-metamorphic, 5 shards of 50000 cases).
+  # Replay a failure with
+  # `make fuzz-metamorphic MM_FUZZ_SEED=12100 MM_FUZZ_CASES=10000`.
+  # ---------------------------------------------------------------------------
+  fuzz-metamorphic:
+    name: "fuzz: metamorphic relations M1-M4 (10000 cases each)"
+    runs-on: ubuntu-latest
+    needs: [check]
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain (rust-toolchain.toml pin)
+        run: rustup toolchain install
+
+      - name: Cache twin_run build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            tools/twin_run/target
+          key: twin-run-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'tools/twin_run/Cargo.lock') }}
+
+      - name: twin_run release build
+        run: make twin-run-build
+
+      # A generator that emits nothing (here /bin/true) must fail the target
+      # with exit 2 and say so. This also builds test_metamorphic.
+      - name: Control, a stream that ends short fails the target (exit 2)
+        run: |
+          if out=$(make fuzz-metamorphic ASX_TWIN_BIN=/bin/true MM_FUZZ_CASES=10 2>&1); then
+            echo "$out"
+            echo "control FAILED: the target passed on a generator that emitted nothing"
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'fuzz-metamorphic: FAIL (exit 2;'; then
+            echo "$out"
+            echo "control FAILED: the target failed, but not with exit 2 (stream ended short)"
+            exit 1
+          fi
+          echo "$out" | tail -3
+          echo "control ok: an empty stream fails the target with exit 2"
+
+      - name: Metamorphic relations M1-M4 over generated scenarios (seed 12100, 10000 cases each)
+        run: |
+          make fuzz-metamorphic MM_FUZZ_SEED=12100 MM_FUZZ_CASES=10000 \
+            ASX_TWIN_BIN=tools/twin_run/target/release/twin_run
+
+      - name: Upload minimized scenarios
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-metamorphic-${{ github.run_id }}
+          path: build/metamorphic/
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
   # gate-scripts — integration tests and smoke lanes that no other job ran
   # (bd-grub). Each is a step of its own, so a failure names it:
   #   - the fuzz gates' integration tests: the counterexample replay, the
