@@ -175,8 +175,12 @@
 #include <asx/cli/cli.h>
 #endif
 
-/* Testing infrastructure */
+/* Testing infrastructure: a hosted helper (FILE, fopen, time, gmtime). A
+ * build with no C library defines ASX_NO_TESTING_LOG to leave it out (the
+ * freestanding wasm32 lane, tools/wasm); nothing in the library uses it. */
+#ifndef ASX_NO_TESTING_LOG
 #include <asx/testing/log.h>
+#endif
 
 /* Operator and testing support */
 #if ASX_HAS_NATIVE_RUNTIME_SURFACES

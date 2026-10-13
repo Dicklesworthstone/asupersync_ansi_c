@@ -204,7 +204,6 @@ CORE_SRC := \
 	src/core/circuit_breaker.c \
 	src/core/join_set.c \
 	src/core/config_types.c \
-	src/core/epoch_combinators.c \
 	src/core/det_hash.c
 
 RUNTIME_SRC := \
@@ -604,6 +603,7 @@ E2E_VERTICAL_SCRIPTS := \
 .PHONY: release release-artifacts release-install-smoke bench
 .PHONY: build-gcc build-clang build-msvc build-32 build-64
 .PHONY: build-posix build-win32 build-parallel build-browser test-win32-hooks-build
+.PHONY: build-wasm32 wasm32-module
 .PHONY: build-embedded-mipsel build-embedded-armv7 build-embedded-aarch64
 .PHONY: cross-baremetal-arm-m4-free cross-baremetal-arm-m0-free
 .PHONY: cross-baremetal-riscv32-free cross-baremetal-riscv64-free
@@ -3015,6 +3015,92 @@ build-embedded-aarch64:
 	else \
 		echo "[asx] build-embedded-aarch64: SKIP (toolchain not found)"; \
 	fi
+
+# ---------------------------------------------------------------------------
+# build-wasm32 — the runtime as wasm32 modules (bd-9kll.15.4)
+#
+# clang --target=wasm32 -ffreestanding, linked with wasm-ld. The build box
+# has no sysroot, no libc and no compiler-rt (worker B: clang and wasm-ld
+# only), so the lane compiles the library against the declaration-only shim
+# headers in tools/wasm/include and links exactly the C library symbols the
+# library calls, defined in tools/wasm/wasm32_libc.c (the allocator is the
+# static arena of src/runtime/hooks.c). wasm-ld runs without
+# --allow-undefined: a new libc reference is a link error, not a stub.
+# src/cli and src/console are the hosted stdio surfaces and stay out; the
+# modules have no imports.
+#
+# One module per variant, build/wasm32/<variant>/asx.wasm:
+#   core             PROFILE=CORE          deterministic single-thread kernel
+#   freestanding     PROFILE=FREESTANDING  user hooks, static arena
+#   browser          PROFILE=BROWSER       browser profile, extended
+#   browser-minimal  PROFILE=BROWSER with ASX_BROWSER_PROFILE_MINIMAL
+#
+# Usage: make build-wasm32 [WASM32_CC=clang-21 WASM32_LD=wasm-ld-21]
+# STRICT_GATES=1 fails (instead of SKIP) when the toolchain or node is
+# missing. node only validates each module and instantiates it with no
+# imports; the lane does not need it to build.
+# ---------------------------------------------------------------------------
+WASM32_CC ?= clang
+WASM32_LD ?= wasm-ld
+WASM32_NODE ?= node
+WASM32_STACK_BYTES ?= 1048576
+WASM32_DIR := $(BUILD_DIR)/wasm32
+
+build-wasm32:
+	@echo "[asx] build-wasm32: core, freestanding, browser, browser-minimal..."
+	@if command -v $(WASM32_CC) >/dev/null 2>&1 && command -v $(WASM32_LD) >/dev/null 2>&1 && \
+	    $(WASM32_CC) --print-targets 2>/dev/null | grep -q wasm32; then \
+		$(MAKE) --no-print-directory wasm32-module PROFILE=CORE WASM32_VARIANT=core && \
+		$(MAKE) --no-print-directory wasm32-module PROFILE=FREESTANDING WASM32_VARIANT=freestanding && \
+		$(MAKE) --no-print-directory wasm32-module PROFILE=BROWSER WASM32_VARIANT=browser && \
+		$(MAKE) --no-print-directory wasm32-module PROFILE=BROWSER WASM32_VARIANT=browser-minimal \
+		        WASM32_VARIANT_DEFS=-DASX_BROWSER_PROFILE_MINIMAL; \
+	elif [ "$(FAIL_ON_MISSING_CROSS_TOOLCHAINS)" = "1" ]; then \
+		echo "[asx] build-wasm32: FAIL ($(WASM32_CC) with the wasm32 target and $(WASM32_LD) not found; strict mode)"; \
+		exit 1; \
+	else \
+		echo "[asx] build-wasm32: SKIP ($(WASM32_CC) with the wasm32 target and $(WASM32_LD) not found)"; \
+	fi
+
+ifneq ($(WASM32_VARIANT),)
+WASM32_VARIANT_DEFS ?=
+WASM32_OBJ_DIR := $(WASM32_DIR)/$(WASM32_VARIANT)/obj
+WASM32_MODULE := $(WASM32_DIR)/$(WASM32_VARIANT)/asx.wasm
+WASM32_SRC := $(filter-out $(CLI_SRC) $(CONSOLE_SRC),$(LIB_SRC))
+WASM32_OBJ := $(patsubst src/%.c,$(WASM32_OBJ_DIR)/%.o,$(WASM32_SRC)) $(WASM32_OBJ_DIR)/wasm32_libc.o
+WASM32_CFLAGS := --target=wasm32 -ffreestanding $(STD_FLAGS) $(WARN_FLAGS) -O2 -DNDEBUG \
+                 -ffunction-sections -fdata-sections \
+                 $(INC_FLAGS) -I$(CURDIR)/src -isystem $(CURDIR)/tools/wasm/include \
+                 $(PROFILE_DEF) $(CODEC_DEF) $(DET_DEF) $(CLASS_DEF) -DASX_NO_TESTING_LOG=1 \
+                 $(WASM32_VARIANT_DEFS)
+
+$(WASM32_OBJ_DIR)/%.o: src/%.c
+	@mkdir -p $(@D)
+	$(WASM32_CC) $(WASM32_CFLAGS) $(DEP_FLAGS) -c $< -o $@
+
+# -fno-builtin: the loops in the libc are the shape LLVM turns back into calls
+# to memcpy, memset and memmove, which there would be calls to themselves.
+$(WASM32_OBJ_DIR)/wasm32_libc.o: tools/wasm/wasm32_libc.c
+	@mkdir -p $(@D)
+	$(WASM32_CC) $(WASM32_CFLAGS) $(DEP_FLAGS) -fno-builtin -c $< -o $@
+
+$(WASM32_MODULE): $(WASM32_OBJ)
+	$(WASM32_LD) --no-entry --export-all --error-limit=0 -z stack-size=$(WASM32_STACK_BYTES) \
+	             -o $@ $(WASM32_OBJ)
+
+wasm32-module: $(WASM32_MODULE)
+	@echo "[asx] wasm32 $(WASM32_VARIANT): $(WASM32_MODULE) $$(wc -c < $(WASM32_MODULE)) bytes, $(words $(WASM32_OBJ)) objects, no undefined symbols"
+	@if command -v $(WASM32_NODE) >/dev/null 2>&1; then \
+		$(WASM32_NODE) tools/wasm/validate.js $(WASM32_MODULE); \
+	elif [ "$(FAIL_ON_MISSING_RUNNERS)" = "1" ]; then \
+		echo "[asx] wasm32 $(WASM32_VARIANT): FAIL ($(WASM32_NODE) not found to validate the module; strict mode)"; \
+		exit 1; \
+	else \
+		echo "[asx] wasm32 $(WASM32_VARIANT): SKIP validation ($(WASM32_NODE) not found)"; \
+	fi
+
+-include $(WASM32_OBJ:.o=.d)
+endif
 
 # ---------------------------------------------------------------------------
 # Bare-metal cross-compilation targets (bd-aw69.4)
