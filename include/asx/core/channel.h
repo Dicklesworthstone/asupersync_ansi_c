@@ -394,7 +394,7 @@ ASX_API asx_status asx_channel_wait_cancel(asx_channel_id id, asx_task_id task);
 /* ------------------------------------------------------------------ */
 
 /* Reset all channel state. For tests only. */
-ASX_API void asx_channel_reset(void);
+ASX_API void asx_channel_reset(const asx_runtime *rt);
 
 #ifdef __cplusplus
 }

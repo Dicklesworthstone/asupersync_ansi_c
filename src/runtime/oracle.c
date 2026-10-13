@@ -620,13 +620,13 @@ const char *asx_channel_accounting_defect_internal(const asx_channel_accounting 
 static asx_oracle_result check_channel_atomicity(const asx_kernel *k) {
     const char *first = NULL;
     uint32_t bad = 0;
-    uint32_t n = asx_channel_slot_count_internal();
+    uint32_t n = asx_channel_slot_count_internal(k);
     uint32_t i;
     for (i = 0; i < n; i++) {
         asx_channel_accounting a;
         const char *why;
         /* ASX_CHECKPOINT_WAIVER("bounded: the channel table's high-water mark") */
-        if (!asx_channel_accounting_get_internal(i, &a)) continue;
+        if (!asx_channel_accounting_get_internal(k, i, &a)) continue;
         if (a.region != ASX_INVALID_ID && asx_handle_runtime_tag(a.region) != k->tag) continue;
         why = asx_channel_accounting_defect_internal(&a);
         if (why != NULL) {

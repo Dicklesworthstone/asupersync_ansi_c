@@ -147,6 +147,7 @@ void asx_runtime_clear_internal(asx_kernel *k) {
     asx_once_reset_internal(k);
     asx_notify_reset_internal(k);
     asx_pool_reset_internal(k);
+    asx_channel_reset_internal(k);
     if (asx_kernel_other_held(k)) { /* the subsystems below are process-wide */
         asx_trace_reset_internal(k);
         return;
@@ -156,7 +157,6 @@ void asx_runtime_clear_internal(asx_kernel *k) {
     asx_scheduler_event_reset();
     asx_lab_dispatch_reset_internal();
     asx_parallel_reset();
-    asx_channel_reset();
     asx_oneshot_reset();
     asx_watch_reset();
     asx_broadcast_reset();

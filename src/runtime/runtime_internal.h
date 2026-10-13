@@ -10,6 +10,7 @@
 #ifndef ASX_RUNTIME_INTERNAL_H
 #define ASX_RUNTIME_INTERNAL_H
 
+#include "../channel/channel_state.h"
 #include "../sync/sync_state.h"
 #include "fnv_fold.h"
 #include <asx/asx_config.h>
@@ -490,6 +491,8 @@ typedef struct asx_kernel {
     asx_notify_state notifies;
     asx_pool_state pools;
     asx_cm_state cmutexes;
+    /* The bounded MPSC channels (channel/channel_state.h). */
+    asx_mpsc_arena channels;
     /* The runtime's trace: ring, digest, counters, observer. */
     asx_trace_state trace;
     uint32_t rt_generation; /* nonzero while an initialized runtime holds it */
@@ -573,7 +576,6 @@ void asx_kernel_release_internal(uint16_t tag);
  * state a second runtime would share. Each is defined with its subsystem;
  * rt.c evaluates them at a second initialization and names the first that
  * answers nonzero. */
-int asx_channel_in_use_internal(void);
 int asx_oneshot_in_use_internal(void);
 int asx_watch_in_use_internal(void);
 int asx_broadcast_in_use_internal(void);
@@ -659,6 +661,10 @@ void asx_once_reset_internal(asx_kernel *k);
 void asx_notify_reset_internal(asx_kernel *k);
 void asx_pool_reset_internal(asx_kernel *k);
 void asx_contended_mutex_reset_internal(asx_kernel *k);
+
+/* Drop what kernel `k`'s channels still queue and empty their arena (a
+ * clear). Defined in channel/mpsc.c. */
+void asx_channel_reset_internal(asx_kernel *k);
 
 /* Initialize the scheduling fields of a freshly allocated task slot. */
 void asx_task_sched_init_internal(asx_task_slot *task);
@@ -1333,11 +1339,12 @@ typedef struct {
     uint32_t has_in_use;
 } asx_channel_accounting;
 
-/* One past the highest channel slot created since the last reset. */
-uint32_t asx_channel_slot_count_internal(void);
-/* The accounting of live channel slot `index`: 1 and *out filled, or 0 for a
- * slot that is not alive or past the high-water mark. */
-int asx_channel_accounting_get_internal(uint32_t index, asx_channel_accounting *out);
+/* One past the highest channel slot kernel `k` created since the last reset. */
+uint32_t asx_channel_slot_count_internal(const asx_kernel *k);
+/* The accounting of live channel slot `index` of kernel `k`: 1 and *out
+ * filled, or 0 for a slot that is not alive or past the high-water mark. */
+int asx_channel_accounting_get_internal(const asx_kernel *k, uint32_t index,
+                                        asx_channel_accounting *out);
 /* The first way `a` is inconsistent as a static message, or NULL when its
  * counters agree (oracle.c). */
 const char *asx_channel_accounting_defect_internal(const asx_channel_accounting *a);

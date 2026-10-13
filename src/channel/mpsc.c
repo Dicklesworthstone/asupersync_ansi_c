@@ -41,88 +41,13 @@
 #undef ASX_INTERNAL_TRACE_FAMILY_ACCESS
 #include <string.h>
 
-#ifndef ASX_CHANNEL_BACKEND_LOCKFREE
-#if (defined(ASX_PROFILE_POSIX) || defined(ASX_PROFILE_PARALLEL)) && !ASX_LOCKFREE_SINGLE_THREAD
-#define ASX_CHANNEL_BACKEND_LOCKFREE 1
-#else
-#define ASX_CHANNEL_BACKEND_LOCKFREE 0
-#endif
-#endif
-
 /* ------------------------------------------------------------------ */
 /* Internal channel slot                                              */
 /* ------------------------------------------------------------------ */
 
-#if ASX_CHANNEL_BACKEND_LOCKFREE
-typedef struct {
-    asx_atomic_u32 sequence;
-    uint64_t value;
-} asx_channel_lf_cell;
-
-typedef struct {
-    asx_channel_lf_cell cells[ASX_CHANNEL_MAX_CAPACITY];
-    asx_atomic_u32 enqueue_pos;
-    uint32_t dequeue_pos;
-    asx_atomic_u32 committed;
-    asx_atomic_u32 in_use; /* committed messages + outstanding reserves */
-} asx_channel_lf_queue;
-#endif
-
-typedef struct {
-    asx_channel_state state;
-    asx_region_id region;
-    uint16_t generation;
-    int alive;
-    /* Live senders (Rust ChannelShared::sender_count, mpsc.rs:302): 1 at
-     * create, +1 per asx_channel_sender_clone, -1 per
-     * asx_channel_close_sender / asx_channel_sender_drop; the sender side
-     * closes at 0. Rust's Sender is an owned value, dropped once; the
-     * identities below make that true here: the creator's sender is
-     * `primary_dropped` once dropped, and each live clone holds a nonzero
-     * token in `sender_tokens` until its drop clears it, so a second drop
-     * of either is refused before it can lower the count. */
-    uint32_t sender_count;
-    int primary_dropped;
-    uint32_t sender_tokens[ASX_CHANNEL_MAX_SENDERS];
-    uint32_t next_sender_token;
-    /* The receiver was dropped (asx_channel_close_receiver). A seal closes
-     * the receiver side but keeps the receiver (Rust's close vs drop,
-     * mpsc.rs:1698, :2122). */
-    int receiver_dropped;
-    /* Created by asx_channel_create_unbounded: its senders never wait. The
-     * ring is the channel's whole arena slice, and exhausting it is
-     * ASX_E_RESOURCE_EXHAUSTED rather than a full channel to park on. */
-    int unbounded;
-    asx_channel_discard_fn discard_fn; /* asx_channel_set_discard */
-    void *discard_ctx;
-
-    /* Bounded ring buffer */
-    uint32_t capacity;
-    uint64_t queue[ASX_CHANNEL_MAX_CAPACITY];
-    uint32_t queue_head; /* next read position */
-    uint32_t queue_len;  /* committed messages in queue */
-
-    /* Two-phase accounting */
-    asx_atomic_u32 reserved;                                /* outstanding permits */
-    asx_atomic_u32 next_token;                              /* monotonic permit token */
-    asx_atomic_u32 permit_tokens[ASX_CHANNEL_MAX_CAPACITY]; /* 0 = free */
-
-#if ASX_CHANNEL_BACKEND_LOCKFREE
-    asx_channel_lf_queue lf_queue;
-#endif
-
-    /* Parked tasks (scheduler-thread state; FIFO by arrival) */
-    asx_wait_queue recv_waiters;    /* waiting for a committed message */
-    asx_wait_queue reserve_waiters; /* waiting for free capacity */
-    asx_wait_queue closed_waiters;  /* senders waiting for the receiver to close */
-} asx_channel_slot;
-
-static asx_channel_slot g_channels[ASX_MAX_CHANNELS];
-static uint32_t g_channel_count;
-/* One past the highest slot created since the last reset. A slot from here
- * up was never created, so it is not alive and asx_channel_create()
- * initialises every field it uses: the reset need not visit it. */
-static uint32_t g_channel_hwm;
+/* The slot type and the arena are the kernels' (asx_kernel.channels,
+ * channel/channel_state.h): a channel id carries the runtime tag of the
+ * region it was created in. */
 static uint32_t channel_discard_queue(asx_channel_slot *s, uint64_t *out);
 static void channel_run_discard(asx_channel_slot *s, const uint64_t *values, uint32_t n);
 
@@ -133,6 +58,7 @@ static void channel_run_discard(asx_channel_slot *s, const uint64_t *values, uin
 static asx_status channel_slot_lookup(asx_channel_id id, asx_channel_slot **out) {
     uint16_t slot_idx;
     uint16_t gen;
+    asx_kernel *k;
     asx_channel_slot *s;
 
     if (!asx_handle_is_valid(id)) { return ASX_E_INVALID_ARGUMENT; }
@@ -141,9 +67,10 @@ static asx_status channel_slot_lookup(asx_channel_id id, asx_channel_slot **out)
     slot_idx = asx_handle_slot(id);
     gen = asx_handle_generation(id);
 
-    if (slot_idx >= ASX_MAX_CHANNELS) { return ASX_E_NOT_FOUND; }
+    k = asx_kernel_of(id);
+    if (k == NULL || slot_idx >= ASX_MAX_CHANNELS) { return ASX_E_NOT_FOUND; }
 
-    s = &g_channels[slot_idx];
+    s = &k->channels.slots[slot_idx];
     if (!s->alive) { return ASX_E_NOT_FOUND; }
     if (s->generation != gen) { return ASX_E_STALE_HANDLE; }
 
@@ -151,9 +78,10 @@ static asx_status channel_slot_lookup(asx_channel_id id, asx_channel_slot **out)
     return ASX_OK;
 }
 
-static asx_channel_id channel_make_handle(uint16_t slot_idx, uint16_t gen) {
+/* The id of slot `slot_idx` of kernel `k`: its runtime tag in the handle. */
+static asx_channel_id channel_make_handle(const asx_kernel *k, uint16_t slot_idx, uint16_t gen) {
     uint32_t index = asx_handle_pack_index(gen, slot_idx);
-    return asx_handle_pack(ASX_TYPE_CHANNEL, 0, index);
+    return asx_handle_with_runtime_tag(asx_handle_pack(ASX_TYPE_CHANNEL, 0, index), k->tag);
 }
 
 /* A channel starts with its creator's sender and no clone. */
@@ -391,14 +319,14 @@ static int channel_take_oldest(asx_channel_slot *s, uint64_t *out_value) {
 static void channel_reap_queue(asx_wait_queue *q);
 
 /* Empty every queue, returning their nodes to the pool. */
-static void channel_waiters_init(asx_channel_slot *s) {
-    asx_wait_queue_init(&s->recv_waiters, channel_reap_queue, 0u);
-    asx_wait_queue_init(&s->reserve_waiters, channel_reap_queue, 0u);
-    asx_wait_queue_init(&s->closed_waiters, channel_reap_queue, 0u);
+static void channel_waiters_init(asx_channel_slot *s, uint16_t tag) {
+    asx_wait_queue_init(&s->recv_waiters, channel_reap_queue, tag);
+    asx_wait_queue_init(&s->reserve_waiters, channel_reap_queue, tag);
+    asx_wait_queue_init(&s->closed_waiters, channel_reap_queue, tag);
 }
 
 /* Committed messages ready for try_recv. */
-static uint32_t channel_message_count(asx_channel_slot *s) {
+static uint32_t channel_message_count(const asx_channel_slot *s) {
 #if ASX_CHANNEL_BACKEND_LOCKFREE
     return channel_atomic_load(&s->lf_queue.committed);
 #else
@@ -436,9 +364,11 @@ static void channel_settle(asx_channel_slot *s) {
  * future, whose cleanup passes a wake on): drop the dead entry and
  * re-settle. */
 static void channel_reap_queue(asx_wait_queue *q) {
+    asx_kernel *k = asx_kernel_for_tag(q->tag);
     uint16_t i;
+    if (k == NULL) return;
     for (i = 0; i < ASX_MAX_CHANNELS; i++) {
-        asx_channel_slot *s = &g_channels[i];
+        asx_channel_slot *s = &k->channels.slots[i];
         ASX_CHECKPOINT_WAIVER("bounded: ASX_MAX_CHANNELS constant");
         if (q != &s->recv_waiters && q != &s->reserve_waiters && q != &s->closed_waiters) {
             continue;
@@ -460,13 +390,11 @@ static void channel_wake_everyone(asx_channel_slot *s) {
 /* Channel lifecycle                                                  */
 /* ------------------------------------------------------------------ */
 
-/* Whether any channel was created since the last reset: a second runtime
- * would share the table. */
-int asx_channel_in_use_internal(void) { return g_channel_hwm != 0u; }
-
+/* A channel belongs to the runtime of the region it is created in. */
 static asx_status channel_create_impl(asx_region_id region, uint32_t capacity, int unbounded,
                                       asx_channel_id *out_id) {
     uint16_t i;
+    asx_kernel *k;
     asx_channel_slot *s;
     asx_region_state region_state;
     asx_status st;
@@ -475,10 +403,11 @@ static asx_status channel_create_impl(asx_region_id region, uint32_t capacity, i
     if (capacity == 0 || capacity > ASX_CHANNEL_MAX_CAPACITY) { return ASX_E_INVALID_ARGUMENT; }
     if (!asx_handle_is_valid(region)) { return ASX_E_INVALID_ARGUMENT; }
     if (asx_handle_type_tag(region) != ASX_TYPE_REGION) { return ASX_E_INVALID_ARGUMENT; }
-    if (asx_runtime_shared_state_refused_internal("channels")) { return ASX_E_INVALID_STATE; }
 
     st = asx_region_get_state(region, &region_state);
     if (st != ASX_OK) { return st; }
+    k = asx_kernel_of(region);
+    if (k == NULL) { return ASX_E_NOT_FOUND; }
     /* Rust's channels belong to no region: only a closed one refuses
      * (a server spawned by a task of a closing region still gets its
      * mailbox; its admission then refuses the task). */
@@ -487,10 +416,11 @@ static asx_status channel_create_impl(asx_region_id region, uint32_t capacity, i
     for (i = 0; i < ASX_MAX_CHANNELS; i++) {
         /* A fully closed channel is free once drained: a sealed one keeps
          * its queue receivable (asx_channel_seal). */
-        if (!g_channels[i].alive || (g_channels[i].state == ASX_CHANNEL_FULLY_CLOSED &&
-                                     channel_message_count(&g_channels[i]) == 0u)) {
-            s = &g_channels[i];
-            if ((uint32_t)i >= g_channel_hwm) { g_channel_hwm = (uint32_t)i + 1u; }
+        asx_channel_slot *cand = &k->channels.slots[i];
+        if (!cand->alive ||
+            (cand->state == ASX_CHANNEL_FULLY_CLOSED && channel_message_count(cand) == 0u)) {
+            s = cand;
+            if ((uint32_t)i >= k->channels.hwm) { k->channels.hwm = (uint32_t)i + 1u; }
 
             s->generation++;
             if (s->generation == 0) s->generation = 1;
@@ -513,9 +443,9 @@ static asx_status channel_create_impl(asx_region_id region, uint32_t capacity, i
 #if ASX_CHANNEL_BACKEND_LOCKFREE
             channel_lf_init(s);
 #endif
-            channel_waiters_init(s);
-            g_channel_count++;
-            *out_id = channel_make_handle(i, s->generation);
+            channel_waiters_init(s, k->tag);
+            k->channels.count++;
+            *out_id = channel_make_handle(k, i, s->generation);
             return ASX_OK;
         }
     }
@@ -610,7 +540,7 @@ static asx_status channel_sender_dropped(asx_channel_slot *s) {
         s->state = ASX_CHANNEL_FULLY_CLOSED;
         channel_wake_everyone(s);
         /* Nobody waits on a fully closed channel again. */
-        channel_waiters_init(s);
+        channel_waiters_init(s, s->recv_waiters.tag);
         return ASX_OK;
     case ASX_CHANNEL_SENDER_CLOSED:
     case ASX_CHANNEL_FULLY_CLOSED: return ASX_E_INVALID_STATE;
@@ -685,7 +615,7 @@ asx_status asx_channel_close_receiver(asx_channel_id id) {
     n_dropped = channel_discard_queue(s, dropped);
     channel_wake_everyone(s);
     /* Nobody waits on a fully closed channel again. */
-    if (s->state == ASX_CHANNEL_FULLY_CLOSED) channel_waiters_init(s);
+    if (s->state == ASX_CHANNEL_FULLY_CLOSED) channel_waiters_init(s, s->recv_waiters.tag);
     channel_run_discard(s, dropped, n_dropped);
     return ASX_OK;
 }
@@ -944,7 +874,8 @@ asx_status asx_send_permit_send(asx_send_permit *permit, uint64_t value) {
     s->queue[write_pos] = value;
     s->queue_len++;
 #endif
-    asx_trace_emit_ctx_internal(ASX_TRACE_CHANNEL_SEND, (uint64_t)permit->channel_id, value);
+    asx_trace_emit_internal(asx_kernel_of(permit->channel_id), ASX_TRACE_CHANNEL_SEND,
+                            (uint64_t)permit->channel_id, value);
     channel_permit_resolve(permit, 1, ASX_OBLIGATION_ABORT_NONE);
     channel_settle(s); /* one more message for a parked receiver */
 
@@ -1165,7 +1096,7 @@ asx_status asx_channel_send_evict_oldest_where(asx_channel_id id, uint64_t value
     s->queue[write_pos] = value;
     s->queue_len++;
 #endif
-    asx_trace_emit_ctx_internal(ASX_TRACE_CHANNEL_SEND, (uint64_t)id, value);
+    asx_trace_emit_internal(asx_kernel_of(id), ASX_TRACE_CHANNEL_SEND, (uint64_t)id, value);
     channel_settle(s); /* one more message for a parked receiver */
 
     *out_evicted = evicted;
@@ -1204,7 +1135,8 @@ static asx_status channel_recv_impl(asx_channel_id id, uint64_t *out_value, int 
     if (st != ASX_OK) { return st; }
 
     if (channel_take_oldest(s, out_value)) {
-        asx_trace_emit_ctx_internal(ASX_TRACE_CHANNEL_RECV, (uint64_t)id, *out_value);
+        asx_trace_emit_internal(asx_kernel_of(id), ASX_TRACE_CHANNEL_RECV, (uint64_t)id,
+                                *out_value);
         channel_recv_done(s);
         return ASX_OK;
     }
@@ -1330,7 +1262,8 @@ asx_status asx_channel_recv_many(asx_channel_id id, asx_cx *cx, uint64_t *out_va
 
     while (n < limit && channel_take_oldest(s, &out_values[n])) {
         ASX_CHECKPOINT_WAIVER("bounded: at most the channel capacity is queued");
-        asx_trace_emit_ctx_internal(ASX_TRACE_CHANNEL_RECV, (uint64_t)id, out_values[n]);
+        asx_trace_emit_internal(asx_kernel_of(id), ASX_TRACE_CHANNEL_RECV, (uint64_t)id,
+                                out_values[n]);
         n++;
     }
     if (n > 0u) {
@@ -1384,39 +1317,46 @@ asx_status asx_channel_closed(asx_channel_id id) {
 /* Reset (test support)                                               */
 /* ------------------------------------------------------------------ */
 
-void asx_channel_reset(void) {
+void asx_channel_reset_internal(asx_kernel *k) {
+    asx_mpsc_arena *ar = &k->channels;
     uint32_t i;
 
-    for (i = 0; i < g_channel_hwm; i++) {
+    for (i = 0; i < ar->hwm; i++) {
+        asx_channel_slot *s = &ar->slots[i];
         uint64_t dropped[ASX_CHANNEL_MAX_CAPACITY];
         uint32_t n_dropped;
-        /* ASX_CHECKPOINT_WAIVER("bounded: g_channel_hwm <= ASX_MAX_CHANNELS") */
-        if (g_channels[i].alive) {
+        /* ASX_CHECKPOINT_WAIVER("bounded: hwm <= ASX_MAX_CHANNELS") */
+        if (s->alive) {
             /* What a live channel still queues is dropped unreceived. */
-            n_dropped = channel_discard_queue(&g_channels[i], dropped);
-            channel_run_discard(&g_channels[i], dropped, n_dropped);
-            g_channels[i].generation++;
+            n_dropped = channel_discard_queue(s, dropped);
+            channel_run_discard(s, dropped, n_dropped);
+            s->generation++;
         }
-        g_channels[i].alive = 0;
-        g_channels[i].state = ASX_CHANNEL_OPEN;
-        g_channels[i].receiver_dropped = 0;
-        channel_sender_ids_reset(&g_channels[i]);
-        g_channels[i].unbounded = 0;
-        g_channels[i].discard_fn = NULL;
-        g_channels[i].discard_ctx = NULL;
-        g_channels[i].queue_head = 0;
-        g_channels[i].queue_len = 0;
-        channel_atomic_store(&g_channels[i].reserved, 0u);
-        channel_atomic_store(&g_channels[i].next_token, 1u);
-        memset(g_channels[i].queue, 0, sizeof(g_channels[i].queue));
-        channel_token_clear_all(&g_channels[i]);
+        s->alive = 0;
+        s->state = ASX_CHANNEL_OPEN;
+        s->receiver_dropped = 0;
+        channel_sender_ids_reset(s);
+        s->unbounded = 0;
+        s->discard_fn = NULL;
+        s->discard_ctx = NULL;
+        s->queue_head = 0;
+        s->queue_len = 0;
+        channel_atomic_store(&s->reserved, 0u);
+        channel_atomic_store(&s->next_token, 1u);
+        memset(s->queue, 0, sizeof(s->queue));
+        channel_token_clear_all(s);
 #if ASX_CHANNEL_BACKEND_LOCKFREE
-        channel_lf_init(&g_channels[i]);
+        channel_lf_init(s);
 #endif
-        channel_waiters_init(&g_channels[i]);
+        channel_waiters_init(s, k->tag);
     }
-    g_channel_hwm = 0;
-    g_channel_count = 0;
+    ar->hwm = 0;
+    ar->count = 0;
+}
+
+void asx_channel_reset(const asx_runtime *rt) {
+    asx_kernel *k = asx_kernel_of_runtime(rt);
+    if (k != NULL) asx_channel_reset_internal(k);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1474,14 +1414,17 @@ static void channel_run_discard(asx_channel_slot *s, const uint64_t *values, uin
 /* Accounting view (bd-9kll.9.2, the channel_atomicity oracle)         */
 /* ------------------------------------------------------------------ */
 
-uint32_t asx_channel_slot_count_internal(void) { return g_channel_hwm; }
+uint32_t asx_channel_slot_count_internal(const asx_kernel *k) { return k->channels.hwm; }
 
-int asx_channel_accounting_get_internal(uint32_t index, asx_channel_accounting *out) {
-    asx_channel_slot *s;
+int asx_channel_accounting_get_internal(const asx_kernel *k, uint32_t index,
+                                        asx_channel_accounting *out) {
+    const asx_channel_slot *s;
     uint32_t i;
 
-    if (out == NULL || index >= g_channel_hwm || index >= (uint32_t)ASX_MAX_CHANNELS) { return 0; }
-    s = &g_channels[index];
+    if (out == NULL || index >= k->channels.hwm || index >= (uint32_t)ASX_MAX_CHANNELS) {
+        return 0;
+    }
+    s = &k->channels.slots[index];
     if (!s->alive) return 0;
 
     memset(out, 0, sizeof(*out));

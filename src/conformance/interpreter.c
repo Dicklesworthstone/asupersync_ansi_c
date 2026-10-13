@@ -5133,7 +5133,7 @@ static int channel_extra_senders(uint32_t d, it_channel *c) {
 static void setup_channels(uint32_t scenario, asx_region_id root) {
     uint32_t list = asx_json_get(g_in, scenario, "channels");
     uint32_t i;
-    asx_channel_reset();
+    asx_channel_reset(&g_rt);
     asx_oneshot_reset();
     asx_broadcast_reset();
     asx_watch_reset();
