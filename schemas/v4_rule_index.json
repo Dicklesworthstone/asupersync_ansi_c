@@ -37,7 +37,7 @@
       "construct": "CANCEL-DRAIN",
       "kind": "rule",
       "index_line": 30,
-      "scenario_tag": null
+      "scenario_tag": "rule.cancel.drain"
     },
     {
       "name": "rule.cancel.finalize",
@@ -46,7 +46,7 @@
       "construct": "CANCEL-FINALIZE",
       "kind": "rule",
       "index_line": 31,
-      "scenario_tag": null
+      "scenario_tag": "rule.cancel.finalize"
     },
     {
       "name": "inv.cancel.idempotence",
@@ -91,7 +91,7 @@
       "construct": "PROG-CANCEL; §3.2.3 Bounded cleanup",
       "kind": "progress",
       "index_line": 36,
-      "scenario_tag": null
+      "scenario_tag": "prog.cancel.drains"
     },
     {
       "name": "rule.cancel.checkpoint_masked",
@@ -199,7 +199,7 @@
       "construct": "PROG-OBLIGATION",
       "kind": "progress",
       "index_line": 48,
-      "scenario_tag": null
+      "scenario_tag": "prog.obligation.resolves"
     },
     {
       "name": "rule.region.close_begin",
@@ -388,7 +388,7 @@
       "construct": "LAW-JOIN-ASSOC",
       "kind": "law",
       "index_line": 69,
-      "scenario_tag": null
+      "scenario_tag": "law.join.assoc"
     },
     {
       "name": "law.race.comm",
@@ -397,7 +397,7 @@
       "construct": "LAW-RACE-COMM",
       "kind": "law",
       "index_line": 70,
-      "scenario_tag": null
+      "scenario_tag": "law.race.comm"
     },
     {
       "name": "inv.capability.no_ambient",
