@@ -303,7 +303,7 @@ typedef struct {
 static asx_status poll_flaky(void *user_data, asx_task_id self) {
     retry_flaky *f = (retry_flaky *)user_data;
     (void)self;
-    if (f->calls < 8u) f->at[f->calls] = asx_runtime_virtual_now();
+    if (f->calls < 8u) f->at[f->calls] = asx_runtime_virtual_now(test_runtime());
     f->calls++;
     return f->calls > f->fail_first ? ASX_OK : ASX_E_INVALID_STATE;
 }
@@ -445,7 +445,7 @@ TEST(retry_cancel_during_the_delay_starts_no_attempt) {
     /* Rust's next_attempt counts attempt 2 when its delay begins. */
     ASSERT_EQ(asx_retry_attempts(&rt.rs), 2u);
     ASSERT_EQ(asx_retry_total_delay_ns(&rt.rs), (uint64_t)100000000u);
-    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)10000000u);
+    ASSERT_EQ(asx_runtime_virtual_now(&runtime), (asx_time)10000000u);
     asx_runtime_reset(&runtime);
 }
 
@@ -1104,7 +1104,7 @@ TEST(hedge_delay_wakes_a_parked_owner) {
     ASSERT_EQ(h.polls, 2u);
     ASSERT_EQ(h.result, ASX_OK);
     ASSERT_EQ(asx_hedge_winner(&h.hs), 1);
-    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)5000000u);
+    ASSERT_EQ(asx_runtime_virtual_now(&rt), (asx_time)5000000u);
     asx_runtime_reset(&rt);
 }
 

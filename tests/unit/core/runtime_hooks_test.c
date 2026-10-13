@@ -5,6 +5,7 @@
  */
 
 #include "../../test_harness.h"
+#include "../../test_runtime.h"
 #include <asx/asx.h>
 
 static int g_wait_calls = 0;
@@ -76,7 +77,7 @@ TEST(runtime_random_seeded_entropy_ok) {
     hooks.entropy.random_u64_fn = test_entropy_u64;
     hooks.deterministic_seeded_prng = 1;
     ASSERT_EQ(asx_runtime_set_hooks(&hooks), ASX_OK);
-    ASSERT_EQ(asx_runtime_random_u64(&out), ASX_OK);
+    ASSERT_EQ(asx_runtime_random_u64(test_runtime(), &out), ASX_OK);
     ASSERT_EQ(out, (uint64_t)42U);
 }
 

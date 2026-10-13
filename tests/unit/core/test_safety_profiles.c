@@ -9,6 +9,7 @@
  */
 
 #include "../../test_harness.h"
+#include "../../test_runtime.h"
 #include <asx/asx_config.h>
 #include <string.h>
 
@@ -119,7 +120,7 @@ TEST(fault_clock_skew_adds_offset) {
     asx_fault_clear();
 
     /* Without fault: should get logical time */
-    ASSERT_EQ(asx_runtime_now_ns(&now), ASX_OK);
+    ASSERT_EQ(asx_runtime_now_ns(test_runtime(), &now), ASX_OK);
     ASSERT_EQ(now, g_logical_time);
 
     /* Install clock skew: +5000 ns */
@@ -128,7 +129,7 @@ TEST(fault_clock_skew_adds_offset) {
     f.param = 5000;
     ASSERT_EQ(asx_fault_inject(&f), ASX_OK);
 
-    ASSERT_EQ(asx_runtime_now_ns(&now), ASX_OK);
+    ASSERT_EQ(asx_runtime_now_ns(test_runtime(), &now), ASX_OK);
     ASSERT_EQ(now, g_logical_time + 5000u);
 
     asx_fault_clear();
@@ -150,7 +151,7 @@ TEST(fault_clock_reverse_subtracts_offset) {
     f.param = 3000;
     ASSERT_EQ(asx_fault_inject(&f), ASX_OK);
 
-    ASSERT_EQ(asx_runtime_now_ns(&now), ASX_OK);
+    ASSERT_EQ(asx_runtime_now_ns(test_runtime(), &now), ASX_OK);
     ASSERT_EQ(now, (asx_time)7000);
 
     asx_fault_clear();
@@ -171,7 +172,7 @@ TEST(fault_clock_reverse_clamps_to_zero) {
     f.param = 500; /* larger than time value */
     ASSERT_EQ(asx_fault_inject(&f), ASX_OK);
 
-    ASSERT_EQ(asx_runtime_now_ns(&now), ASX_OK);
+    ASSERT_EQ(asx_runtime_now_ns(test_runtime(), &now), ASX_OK);
     ASSERT_EQ(now, (asx_time)0);
 
     asx_fault_clear();
@@ -189,7 +190,7 @@ TEST(fault_entropy_const_overrides_prng) {
     g_entropy_seq = 0;
 
     /* Without fault: should get incrementing sequence */
-    ASSERT_EQ(asx_runtime_random_u64(&val), ASX_OK);
+    ASSERT_EQ(asx_runtime_random_u64(test_runtime(), &val), ASX_OK);
     ASSERT_EQ(val, (uint64_t)1); /* first call returns 1 */
 
     /* Install constant entropy fault */
@@ -198,11 +199,11 @@ TEST(fault_entropy_const_overrides_prng) {
     f.param = 0xDEADBEEFULL;
     ASSERT_EQ(asx_fault_inject(&f), ASX_OK);
 
-    ASSERT_EQ(asx_runtime_random_u64(&val), ASX_OK);
+    ASSERT_EQ(asx_runtime_random_u64(test_runtime(), &val), ASX_OK);
     ASSERT_EQ(val, (uint64_t)0xDEADBEEFULL);
 
     /* Repeated calls give same constant */
-    ASSERT_EQ(asx_runtime_random_u64(&val), ASX_OK);
+    ASSERT_EQ(asx_runtime_random_u64(test_runtime(), &val), ASX_OK);
     ASSERT_EQ(val, (uint64_t)0xDEADBEEFULL);
 
     asx_fault_clear();
@@ -251,14 +252,14 @@ TEST(fault_trigger_after_delays_activation) {
     ASSERT_EQ(asx_fault_inject(&f), ASX_OK);
 
     /* First two calls: no skew */
-    ASSERT_EQ(asx_runtime_now_ns(&now), ASX_OK);
+    ASSERT_EQ(asx_runtime_now_ns(test_runtime(), &now), ASX_OK);
     ASSERT_EQ(now, g_logical_time);
 
-    ASSERT_EQ(asx_runtime_now_ns(&now), ASX_OK);
+    ASSERT_EQ(asx_runtime_now_ns(test_runtime(), &now), ASX_OK);
     ASSERT_EQ(now, g_logical_time);
 
     /* Third call: skew active */
-    ASSERT_EQ(asx_runtime_now_ns(&now), ASX_OK);
+    ASSERT_EQ(asx_runtime_now_ns(test_runtime(), &now), ASX_OK);
     ASSERT_EQ(now, g_logical_time + 9999u);
 
     asx_fault_clear();
@@ -283,15 +284,15 @@ TEST(fault_trigger_count_limits_injections) {
     ASSERT_EQ(asx_fault_inject(&f), ASX_OK);
 
     /* First call: constant */
-    ASSERT_EQ(asx_runtime_random_u64(&val), ASX_OK);
+    ASSERT_EQ(asx_runtime_random_u64(test_runtime(), &val), ASX_OK);
     ASSERT_EQ(val, (uint64_t)42);
 
     /* Second call: constant */
-    ASSERT_EQ(asx_runtime_random_u64(&val), ASX_OK);
+    ASSERT_EQ(asx_runtime_random_u64(test_runtime(), &val), ASX_OK);
     ASSERT_EQ(val, (uint64_t)42);
 
     /* Third call: back to normal */
-    ASSERT_EQ(asx_runtime_random_u64(&val), ASX_OK);
+    ASSERT_EQ(asx_runtime_random_u64(test_runtime(), &val), ASX_OK);
     ASSERT_NE(val, (uint64_t)42);
 
     asx_fault_clear();
@@ -311,12 +312,12 @@ TEST(fault_injection_deterministic_replay) {
     f.kind = ASX_FAULT_CLOCK_SKEW;
     f.param = 777;
     asx_fault_inject(&f);
-    asx_runtime_now_ns(&t1);
+    asx_runtime_now_ns(test_runtime(), &t1);
 
     /* Run 2: same setup, same result */
     asx_fault_clear();
     asx_fault_inject(&f);
-    asx_runtime_now_ns(&t2);
+    asx_runtime_now_ns(test_runtime(), &t2);
 
     ASSERT_EQ(t1, t2);
 

@@ -172,7 +172,7 @@ TEST(retry_timeout_expires_during_the_delay) {
     ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
     ASSERT_EQ(t.result, ASX_E_TIMED_OUT);
     ASSERT_EQ(asx_retry_timeout_attempts(&t.rt), 2u); /* attempt 2's delay had begun */
-    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)30000000u);
+    ASSERT_EQ(asx_runtime_virtual_now(&rt), (asx_time)30000000u);
     asx_runtime_reset(&rt);
 }
 
@@ -214,7 +214,7 @@ TEST(retry_timeout_releases_the_attempt_it_abandons) {
     ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
     ASSERT_EQ(t.result, ASX_E_TIMED_OUT);
     ASSERT_EQ(attempt, 101); /* polled once, released once */
-    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)30000000u);
+    ASSERT_EQ(asx_runtime_virtual_now(&rt), (asx_time)30000000u);
     asx_runtime_reset(&rt);
 }
 

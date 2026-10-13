@@ -102,13 +102,13 @@ TEST(fault_clock_backward_budget_not_past_deadline) {
 
     /* Clock at 1 second — not past deadline */
     g_clock_value = 1000000000ULL;
-    ASSERT_EQ(asx_runtime_now_ns(&now), ASX_OK);
+    ASSERT_EQ(asx_runtime_now_ns(test_runtime(), &now), ASX_OK);
     ASSERT_EQ(now, 1000000000ULL);
     ASSERT_FALSE(asx_budget_is_past_deadline(&budget, now));
 
     /* Clock jumps backward to 500ms — still not past deadline */
     g_clock_value = 500000000ULL;
-    ASSERT_EQ(asx_runtime_now_ns(&now), ASX_OK);
+    ASSERT_EQ(asx_runtime_now_ns(test_runtime(), &now), ASX_OK);
     ASSERT_EQ(now, 500000000ULL);
     ASSERT_FALSE(asx_budget_is_past_deadline(&budget, now));
 }
@@ -121,7 +121,7 @@ TEST(fault_clock_overflow_boundary) {
 
     /* Near-max clock value */
     g_clock_value = UINT64_MAX - 1000u;
-    ASSERT_EQ(asx_runtime_now_ns(&now), ASX_OK);
+    ASSERT_EQ(asx_runtime_now_ns(test_runtime(), &now), ASX_OK);
     ASSERT_EQ(now, UINT64_MAX - 1000u);
 
     /* Budget with deadline at max — not past */
@@ -142,7 +142,7 @@ TEST(fault_clock_zero_no_deadline) {
 
     /* Clock at zero */
     g_clock_value = 0;
-    ASSERT_EQ(asx_runtime_now_ns(&now), ASX_OK);
+    ASSERT_EQ(asx_runtime_now_ns(test_runtime(), &now), ASX_OK);
     ASSERT_EQ(now, (asx_time)0);
 
     /* An unconstrained budget (ASX_TIME_INFINITE) is never past, even at
@@ -176,16 +176,16 @@ TEST(fault_entropy_deterministic_sequence) {
     /* First run */
     g_entropy_value = 0x5DEECE66DULL;
     g_entropy_sequence = 0;
-    ASSERT_EQ(asx_runtime_random_u64(&v1), ASX_OK);
-    ASSERT_EQ(asx_runtime_random_u64(&v2), ASX_OK);
-    ASSERT_EQ(asx_runtime_random_u64(&v3), ASX_OK);
+    ASSERT_EQ(asx_runtime_random_u64(test_runtime(), &v1), ASX_OK);
+    ASSERT_EQ(asx_runtime_random_u64(test_runtime(), &v2), ASX_OK);
+    ASSERT_EQ(asx_runtime_random_u64(test_runtime(), &v3), ASX_OK);
 
     /* Second run with same seed — must produce identical sequence */
     g_entropy_value = 0x5DEECE66DULL;
     g_entropy_sequence = 0;
-    ASSERT_EQ(asx_runtime_random_u64(&r1), ASX_OK);
-    ASSERT_EQ(asx_runtime_random_u64(&r2), ASX_OK);
-    ASSERT_EQ(asx_runtime_random_u64(&r3), ASX_OK);
+    ASSERT_EQ(asx_runtime_random_u64(test_runtime(), &r1), ASX_OK);
+    ASSERT_EQ(asx_runtime_random_u64(test_runtime(), &r2), ASX_OK);
+    ASSERT_EQ(asx_runtime_random_u64(test_runtime(), &r3), ASX_OK);
 
     ASSERT_EQ(v1, r1);
     ASSERT_EQ(v2, r2);
@@ -199,7 +199,7 @@ TEST(fault_entropy_constant_value) {
 
     /* Entropy hook returns constant — degenerate but deterministic */
     g_entropy_value = 0xDEADBEEFCAFEBABEULL;
-    ASSERT_EQ(asx_runtime_random_u64(&v1), ASX_OK);
+    ASSERT_EQ(asx_runtime_random_u64(test_runtime(), &v1), ASX_OK);
     /* fault_entropy increments sequence but returns same base value */
     ASSERT_TRUE(v1 != 0); /* Non-zero value returned */
 }

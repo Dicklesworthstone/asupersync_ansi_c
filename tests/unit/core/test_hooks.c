@@ -8,6 +8,7 @@
  */
 
 #include "../../test_harness.h"
+#include "../../test_runtime.h"
 #include <asx/asx_config.h>
 #include <stdlib.h>
 #include <string.h>
@@ -197,7 +198,7 @@ TEST(hooks_clock_dispatch) {
     hooks.clock.logical_now_ns_fn = test_logical_clock;
     asx_runtime_set_hooks(&hooks);
 
-    ASSERT_EQ(asx_runtime_now_ns(&now), ASX_OK);
+    ASSERT_EQ(asx_runtime_now_ns(test_runtime(), &now), ASX_OK);
     /* Deterministic builds read the logical clock; live builds the wall
      * clock hook (asx_runtime_now_ns). */
 #if ASX_DETERMINISTIC
@@ -252,9 +253,9 @@ TEST(hooks_entropy_forbidden_without_prng) {
     /* No entropy function: a configuration error in deterministic builds,
      * a missing hook in live ones (asx_runtime_random_u64). */
 #if ASX_DETERMINISTIC
-    ASSERT_EQ(asx_runtime_random_u64(&val), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_runtime_random_u64(test_runtime(), &val), ASX_E_INVALID_STATE);
 #else
-    ASSERT_EQ(asx_runtime_random_u64(&val), ASX_E_HOOK_MISSING);
+    ASSERT_EQ(asx_runtime_random_u64(test_runtime(), &val), ASX_E_HOOK_MISSING);
 #endif
 }
 

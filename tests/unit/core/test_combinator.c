@@ -648,7 +648,7 @@ TEST(race_timeout_wakes_a_parked_owner_at_its_deadline) {
     ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
     ASSERT_EQ(c.polls, 2u);
     ASSERT_EQ(c.result, ASX_E_TIMED_OUT);
-    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)5000000u);
+    ASSERT_EQ(asx_runtime_virtual_now(&g_rt), (asx_time)5000000u);
     ASSERT_EQ(rts.race.dropped, 1u);
     teardown_runtime();
 }

@@ -307,12 +307,12 @@ static void commit_reports_held_time_body(void *ctx) {
     ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_OK);
 
     /* Still reserved: nothing held yet, however much time has passed. */
-    asx_runtime_virtual_advance(3000u);
+    asx_runtime_virtual_advance(test_runtime(), 3000u);
     ASSERT_EQ(asx_obligation_get_info(oid, &info), ASX_OK);
     ASSERT_EQ(info.state, ASX_OBLIGATION_RESERVED);
     ASSERT_EQ(info.held_ns, (asx_time)0u);
 
-    asx_runtime_virtual_advance(6000u);
+    asx_runtime_virtual_advance(test_runtime(), 6000u);
     ASSERT_EQ(asx_obligation_commit(oid), ASX_OK);
     ASSERT_EQ(asx_obligation_get_info(oid, &info), ASX_OK);
     ASSERT_EQ(info.state, ASX_OBLIGATION_COMMITTED);
@@ -324,7 +324,7 @@ TEST(obligation_commit_reports_held_time) {
     asx_region_id rid;
 
     asx_runtime_reset(test_runtime());
-    asx_runtime_virtual_advance(1000u);
+    asx_runtime_virtual_advance(test_runtime(), 1000u);
     ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(test_run_in_task(rid, commit_reports_held_time_body, &rid), ASX_OK);
 }
@@ -335,7 +335,7 @@ static void abort_reports_held_time_body(void *ctx) {
     asx_obligation_info info;
 
     ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_OK);
-    asx_runtime_virtual_advance(2100u);
+    asx_runtime_virtual_advance(test_runtime(), 2100u);
     ASSERT_EQ(asx_obligation_abort(oid), ASX_OK);
     ASSERT_EQ(asx_obligation_get_info(oid, &info), ASX_OK);
     ASSERT_EQ(info.state, ASX_OBLIGATION_ABORTED);
@@ -346,7 +346,7 @@ TEST(obligation_abort_reports_held_time) {
     asx_region_id rid;
 
     asx_runtime_reset(test_runtime());
-    asx_runtime_virtual_advance(100u);
+    asx_runtime_virtual_advance(test_runtime(), 100u);
     ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(test_run_in_task(rid, abort_reports_held_time_body, &rid), ASX_OK);
 }
@@ -367,7 +367,7 @@ TEST(obligation_resolved_at_the_reserve_instant_was_held_for_zero) {
     asx_region_id rid;
 
     asx_runtime_reset(test_runtime());
-    asx_runtime_virtual_advance(4242u);
+    asx_runtime_virtual_advance(test_runtime(), 4242u);
     ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(test_run_in_task(rid, resolved_at_the_reserve_instant_body, &rid), ASX_OK);
 }
@@ -379,11 +379,11 @@ static void held_time_is_per_obligation_body(void *ctx) {
     asx_obligation_info info;
 
     ASSERT_EQ(asx_obligation_reserve(rid, &first), ASX_OK);
-    asx_runtime_virtual_advance(500u);
+    asx_runtime_virtual_advance(test_runtime(), 500u);
     ASSERT_EQ(asx_obligation_reserve(rid, &second), ASX_OK);
-    asx_runtime_virtual_advance(800u);
+    asx_runtime_virtual_advance(test_runtime(), 800u);
     ASSERT_EQ(asx_obligation_commit(first), ASX_OK);
-    asx_runtime_virtual_advance(1500u);
+    asx_runtime_virtual_advance(test_runtime(), 1500u);
     ASSERT_EQ(asx_obligation_abort(second), ASX_OK);
 
     ASSERT_EQ(asx_obligation_get_info(first, &info), ASX_OK);
@@ -412,7 +412,7 @@ static asx_status poll_hold_then_complete(void *user_data, asx_task_id self) {
     holding_task *h = (holding_task *)user_data;
     (void)self;
     if (asx_obligation_reserve(h->region, &h->ob) != ASX_OK) return ASX_E_INVALID_STATE;
-    asx_runtime_virtual_advance(h->advance_to);
+    asx_runtime_virtual_advance(test_runtime(), h->advance_to);
     return ASX_OK;
 }
 
