@@ -1,0 +1,542 @@
+/*
+ * e2e_native_record_replay.c — RP3: a real native HTTP server run, recorded
+ * to a journal and replayed without sockets (bd-9kll.11.3)
+ *
+ * One binary, three modes, driven by native_record_replay.sh. Built against
+ * a live POSIX library (DETERMINISTIC=0).
+ *
+ *   record JOURNAL
+ *       Run the HTTP server (GET /hello, POST /echo) on a loopback port with
+ *       the platform hooks wrapped by a journal that streams to JOURNAL. It
+ *       serves until SIGTERM, then drains and exits. Prints "LISTENING
+ *       <port>" once bound, "DRAIN" when the drain starts, and at exit
+ *       "STATS served=N accepted=N ...", "DIGEST <hex>" (the trace digest of
+ *       the run) and "JOURNAL <bytes>".
+ *
+ *   load PORT
+ *       A small deterministic client: a keep-alive connection with two
+ *       requests, a mid-request disconnect, a connection reset (RST) in the
+ *       middle of a request, and a keep-alive connection held open until the
+ *       drain closes it. Prints "READY" when every client but the last is
+ *       done (the script then sends SIGTERM) and "DRAINED" at the end.
+ *
+ *   replay JOURNAL DIGEST SERVED [RUST_REV]
+ *       Run the same server program under asx_journal_replay(): no socket is
+ *       opened (the adapters' real-call counter is checked), and the trace
+ *       digest and the number of requests served must equal the recorded
+ *       ones. Prints "REPLAY_DIGEST", "REPLAY_SERVED", "REAL_NET_CALLS" and
+ *       "REPLAY_OK", or "REPLAY_REFUSED <error> seq=N kind=K what=...".
+ *
+ * Exit status: 0 on success, 1 on a failure, 2 on a usage error.
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
+
+#include "../../src/net/net_native.h"
+#include <arpa/inet.h>
+#include <asx/asx.h>
+#include <asx/net/http.h>
+#include <asx/net/server.h>
+#include <asx/platform/posix.h>
+#include <asx/runtime/journal.h>
+#include <asx/runtime/journal_replay.h>
+#include <asx/runtime/trace.h>
+#include <asx/signal/signal.h>
+#include <errno.h>
+#include <netinet/in.h>
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <strings.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <sys/types.h>
+#include <unistd.h>
+
+#ifndef MSG_NOSIGNAL
+#define MSG_NOSIGNAL 0
+#endif
+
+/* The pinned asupersync revision the journal header names, and the build
+ * tag; replay passes both so the identity check is part of the proof. */
+#define RR_RUST_REV "5e60b1c4c"
+#define RR_BUILD_TAG "e2e-native-record-replay"
+
+/* ------------------------------------------------------------------ */
+/* The server program (the same function records and replays)          */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    int announce; /* record: print LISTENING and DRAIN; replay: stay quiet */
+    uint64_t digest;
+    uint32_t served;
+    uint32_t accepted;
+    uint32_t timed_out;
+    uint32_t drain_closed;
+    uint32_t rejected;
+    asx_status run_status;
+} serve_ctx;
+
+static asx_server g_srv;
+static asx_http_server g_hs;
+static asx_http_router g_router;
+static asx_signal_subscription g_sub;
+static asx_task_id g_server_task;
+static int g_announce;
+
+static asx_status h_hello(asx_http_request_context *ctx, asx_http_response *resp, void *ud) {
+    (void)ctx;
+    (void)ud;
+    asx_http_response_init(resp, ASX_HTTP_200_OK);
+    return asx_http_body_set_bytes(&resp->body, "hello", 5u);
+}
+
+static asx_status h_echo(asx_http_request_context *ctx, asx_http_response *resp, void *ud) {
+    (void)ud;
+    asx_http_response_init(resp, ASX_HTTP_200_OK);
+    return asx_http_body_set_bytes(&resp->body, ctx->request->body.data, ctx->request->body.len);
+}
+
+static asx_status server_task(void *ud, asx_task_id self) {
+    (void)ud;
+    (void)self;
+    return asx_http_server_poll(&g_hs);
+}
+
+/* SIGTERM starts the graceful drain; the server task finishes it. */
+static asx_status signal_task(void *ud, asx_task_id self) {
+    uint32_t count = 0u;
+    asx_status st;
+    (void)ud;
+    (void)self;
+    st = asx_signal_poll(g_sub, &count);
+    if (st != ASX_OK) return st;
+    if (asx_server_shutdown(&g_srv) != ASX_OK) return ASX_E_INVALID_STATE;
+    if (g_announce) {
+        printf("DRAIN\n");
+        fflush(stdout);
+    }
+    return asx_task_wake(g_server_task);
+}
+
+static asx_status serve_program(void *obs) {
+    serve_ctx *c = (serve_ctx *)obs;
+    asx_server_config scfg;
+    asx_http_server_config hcfg;
+    asx_socket_addr bound;
+    asx_region_id region;
+    asx_task_id sig_task;
+    asx_budget budget;
+    asx_status st;
+
+    g_announce = c->announce;
+    asx_http_router_init(&g_router);
+    st = asx_http_router_add_route(&g_router, ASX_HTTP_GET, "/hello", h_hello, NULL, NULL, NULL);
+    if (st != ASX_OK) return st;
+    st = asx_http_router_add_route(&g_router, ASX_HTTP_POST, "/echo", h_echo, NULL, NULL, NULL);
+    if (st != ASX_OK) return st;
+
+    asx_server_config_init(&scfg);
+    scfg.listen_addr = asx_socket_addr_loopback(0u);
+    scfg.drain_timeout_ms = 3000u;
+    asx_server_init(&g_srv, &scfg);
+    st = asx_server_listen(&g_srv);
+    if (st != ASX_OK) return st;
+    st = asx_tcp_listener_local_addr(g_srv.listener, &bound);
+    if (st != ASX_OK) return st;
+
+    asx_http_server_config_init(&hcfg, &g_router);
+    hcfg.idle_timeout_ms = 0u; /* no timers: the run is driven by its I/O */
+    st = asx_http_server_init(&g_hs, &g_srv, &hcfg);
+    if (st != ASX_OK) return st;
+    st = asx_signal_subscribe(&g_sub, ASX_SIGNAL_TERM);
+    if (st != ASX_OK) return st;
+
+    st = asx_region_open(&region);
+    if (st != ASX_OK) return st;
+    st = asx_task_spawn(region, server_task, NULL, &g_server_task);
+    if (st != ASX_OK) return st;
+    st = asx_task_spawn(region, signal_task, NULL, &sig_task);
+    if (st != ASX_OK) return st;
+
+    if (c->announce) {
+        printf("LISTENING %u\n", (unsigned)bound.port);
+        fflush(stdout);
+    }
+    budget = asx_budget_infinite();
+    c->run_status = asx_scheduler_run(region, &budget);
+
+    c->digest = asx_trace_digest();
+    c->served = asx_http_server_requests_served(&g_hs);
+    c->accepted = asx_server_total_accepted(&g_srv);
+    c->timed_out = g_hs.connections_timed_out;
+    c->drain_closed = g_hs.connections_drain_closed;
+    c->rejected = asx_server_total_rejected(&g_srv);
+    st = asx_signal_unsubscribe(g_sub);
+    if (c->run_status != ASX_OK) return c->run_status;
+    return st;
+}
+
+/* ------------------------------------------------------------------ */
+/* record                                                              */
+/* ------------------------------------------------------------------ */
+
+#define STAGE_BYTES 65536u
+
+static uint8_t g_stage[STAGE_BYTES];
+
+static asx_status file_sink(void *ctx, const uint8_t *bytes, uint32_t len) {
+    return fwrite(bytes, 1u, (size_t)len, (FILE *)ctx) == (size_t)len ? ASX_OK
+                                                                      : ASX_E_RESOURCE_EXHAUSTED;
+}
+
+static int fail(const char *what, asx_status st) {
+    fprintf(stderr, "e2e_native_record_replay: %s: %s\n", what, asx_status_str(st));
+    return 1;
+}
+
+static int run_record(const char *journal_path) {
+    asx_runtime rt;
+    asx_runtime_config cfg;
+    asx_runtime_hooks hooks;
+    asx_journal journal;
+    asx_journal_config jcfg;
+    serve_ctx ctx;
+    asx_status st;
+    asx_status js;
+    FILE *jf;
+    long bytes;
+
+    jf = fopen(journal_path, "wb");
+    if (jf == NULL) {
+        fprintf(stderr, "e2e_native_record_replay: cannot open %s\n", journal_path);
+        return 1;
+    }
+    memset(&jcfg, 0, sizeof(jcfg));
+    jcfg.sink_fn = file_sink;
+    jcfg.sink_ctx = jf;
+    jcfg.buffer = g_stage;
+    jcfg.buffer_cap = STAGE_BYTES;
+    jcfg.config_fingerprint = ASX_CONFIG_FINGERPRINT;
+    jcfg.rust_rev_hash = asx_journal_text_hash(RR_RUST_REV);
+    jcfg.build_hash = asx_journal_text_hash(RR_BUILD_TAG);
+
+    st = asx_posix_hooks_install(&hooks);
+    if (st == ASX_OK) st = asx_runtime_config_init(&cfg);
+    if (st == ASX_OK) st = asx_journal_init(&journal, &jcfg);
+    if (st == ASX_OK) st = asx_journal_wrap_hooks(&journal, &hooks);
+    if (st == ASX_OK) st = asx_runtime_init(&rt, &cfg, &hooks);
+    if (st != ASX_OK) {
+        asx_journal_uninstall();
+        (void)fclose(jf);
+        return fail("journal and runtime setup", st);
+    }
+    if (asx_net_get_backend() != ASX_NET_BACKEND_NATIVE) {
+        fprintf(stderr, "e2e_native_record_replay: needs a live POSIX build (native sockets)\n");
+        asx_runtime_shutdown(&rt);
+        asx_journal_uninstall();
+        (void)fclose(jf);
+        return 1;
+    }
+
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.announce = 1;
+    st = serve_program(&ctx);
+    asx_runtime_shutdown(&rt);
+    asx_journal_uninstall();
+    js = asx_journal_finish(&journal);
+    bytes = ftell(jf);
+    if (fclose(jf) != 0 && js == ASX_OK) js = ASX_E_RESOURCE_EXHAUSTED;
+
+    printf("STATS served=%u accepted=%u timed_out=%u drain_closed=%u rejected=%u\n",
+           (unsigned)ctx.served, (unsigned)ctx.accepted, (unsigned)ctx.timed_out,
+           (unsigned)ctx.drain_closed, (unsigned)ctx.rejected);
+    printf("DIGEST %016llx\n", (unsigned long long)ctx.digest);
+    printf("JOURNAL %ld\n", bytes);
+    fflush(stdout);
+    if (st != ASX_OK) return fail("server run", st);
+    if (js != ASX_OK) return fail("journal", js);
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* replay                                                              */
+/* ------------------------------------------------------------------ */
+
+static const char *error_name(asx_replay_error e) {
+    switch (e) {
+    case ASX_REPLAY_OK: return "OK";
+    case ASX_REPLAY_E_BUILD_MISMATCH: return "BUILD_MISMATCH";
+    case ASX_REPLAY_E_INCOMPLETE: return "INCOMPLETE";
+    case ASX_REPLAY_E_CORRUPT: return "CORRUPT";
+    case ASX_REPLAY_E_UNSUPPORTED: return "UNSUPPORTED";
+    case ASX_REPLAY_E_DIVERGED: return "DIVERGED";
+    case ASX_REPLAY_E_EXHAUSTED: return "EXHAUSTED";
+    case ASX_REPLAY_E_RUNTIME: return "RUNTIME";
+    default: return "?";
+    }
+}
+
+static uint8_t *read_file(const char *path, size_t *out_len) {
+    FILE *f = fopen(path, "rb");
+    uint8_t *buf;
+    long size;
+    if (f == NULL) return NULL;
+    size = fseek(f, 0L, SEEK_END) == 0 ? ftell(f) : -1L;
+    if (size < 0 || fseek(f, 0L, SEEK_SET) != 0) {
+        (void)fclose(f);
+        return NULL;
+    }
+    buf = (uint8_t *)malloc(size > 0 ? (size_t)size : 1u);
+    if (buf == NULL || fread(buf, 1u, (size_t)size, f) != (size_t)size) {
+        free(buf);
+        (void)fclose(f);
+        return NULL;
+    }
+    (void)fclose(f);
+    *out_len = (size_t)size;
+    return buf;
+}
+
+static int run_replay(const char *journal_path, const char *digest_hex, const char *served_text,
+                      const char *rust_rev) {
+    size_t len = 0u;
+    uint8_t *bytes = read_file(journal_path, &len);
+    asx_replay_identity id;
+    asx_replay_report rep;
+    asx_replay_error err;
+    asx_status ps = ASX_OK;
+    serve_ctx ctx;
+    unsigned long long want_digest = strtoull(digest_hex, NULL, 16);
+    unsigned long want_served = strtoul(served_text, NULL, 10);
+    uint32_t calls_before;
+    uint32_t calls;
+
+    if (bytes == NULL) {
+        fprintf(stderr, "e2e_native_record_replay: cannot read %s\n", journal_path);
+        return 1;
+    }
+    id.rust_rev_hash = asx_journal_text_hash(rust_rev != NULL ? rust_rev : RR_RUST_REV);
+    id.build_hash = asx_journal_text_hash(RR_BUILD_TAG);
+    memset(&ctx, 0, sizeof(ctx));
+    memset(&rep, 0, sizeof(rep));
+    ctx.announce = 0;
+
+    calls_before = asx_native_net_real_calls();
+    err = asx_journal_replay(bytes, len, &id, NULL, serve_program, &ctx, &ps, &rep);
+    calls = asx_native_net_real_calls() - calls_before;
+    free(bytes);
+
+    printf("REPLAY_DIGEST %016llx\n", (unsigned long long)ctx.digest);
+    printf("REPLAY_SERVED %u\n", (unsigned)ctx.served);
+    printf("REAL_NET_CALLS %u\n", (unsigned)calls);
+    if (err != ASX_REPLAY_OK) {
+        printf("REPLAY_REFUSED %s seq=%llu kind=%u what=%s program_status=%s\n", error_name(err),
+               (unsigned long long)rep.seq, (unsigned)rep.expected_kind,
+               rep.what != NULL ? rep.what : "", asx_status_str(ps));
+        fflush(stdout);
+        return 1;
+    }
+    if ((unsigned long long)ctx.digest != want_digest || (unsigned long)ctx.served != want_served ||
+        calls != 0u || ps != ASX_OK) {
+        printf("REPLAY_MISMATCH digest=%s served=%s real_calls=%u program_status=%s\n",
+               (unsigned long long)ctx.digest == want_digest ? "equal" : "DIFFERENT",
+               (unsigned long)ctx.served == want_served ? "equal" : "DIFFERENT", (unsigned)calls,
+               asx_status_str(ps));
+        fflush(stdout);
+        return 1;
+    }
+    printf("REPLAY_OK\n");
+    fflush(stdout);
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* load: the clients                                                   */
+/* ------------------------------------------------------------------ */
+
+static int dial(uint16_t port, int timeout_s) {
+    struct sockaddr_in a;
+    struct timeval tv;
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return -1;
+    memset(&a, 0, sizeof(a));
+    a.sin_family = AF_INET;
+    a.sin_port = htons(port);
+    a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    tv.tv_sec = timeout_s;
+    tv.tv_usec = 0;
+    (void)setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    if (connect(fd, (struct sockaddr *)&a, sizeof(a)) != 0) {
+        (void)close(fd);
+        return -1;
+    }
+    return fd;
+}
+
+static int send_all(int fd, const char *s) {
+    size_t n = strlen(s);
+    size_t off = 0u;
+    while (off < n) {
+        ssize_t w = send(fd, s + off, n - off, MSG_NOSIGNAL);
+        if (w <= 0) return 0;
+        off += (size_t)w;
+    }
+    return 1;
+}
+
+/* Read one response: its status and body (at most cap - 1 bytes, NUL
+ * terminated). 1 on success. */
+static int read_response(int fd, int *status, char *body, size_t cap) {
+    char head[2048];
+    size_t n = 0u;
+    size_t want = 0u;
+    size_t got = 0u;
+    const char *p;
+    int complete = 0;
+
+    while (n < sizeof(head) - 1u) {
+        ssize_t r = recv(fd, head + n, 1u, 0);
+        if (r <= 0) return 0;
+        n += (size_t)r;
+        head[n] = '\0';
+        if (n >= 4u && memcmp(head + n - 4u, "\r\n\r\n", 4u) == 0) {
+            complete = 1;
+            break;
+        }
+    }
+    if (!complete) return 0;
+    if (sscanf(head, "HTTP/%*d.%*d %d", status) != 1) return 0;
+    for (p = head; (p = strstr(p, "\r\n")) != NULL;) {
+        p += 2;
+        if (strncasecmp(p, "content-length:", 15u) == 0) want = (size_t)strtoul(p + 15, NULL, 10);
+    }
+    if (want >= cap) return 0;
+    while (got < want) {
+        ssize_t r = recv(fd, body + got, want - got, 0);
+        if (r <= 0) return 0;
+        got += (size_t)r;
+    }
+    body[got] = '\0';
+    return 1;
+}
+
+static int expect_get(int fd, const char *what) {
+    char body[64];
+    int status = 0;
+    if (!send_all(fd, "GET /hello HTTP/1.1\r\nHost: t\r\n\r\n") ||
+        !read_response(fd, &status, body, sizeof(body)) || status != 200 ||
+        strcmp(body, "hello") != 0) {
+        printf("LOAD_FAIL %s: GET /hello\n", what);
+        return 0;
+    }
+    return 1;
+}
+
+static int run_load(uint16_t port) {
+    char body[64];
+    int status = 0;
+    int fd;
+    struct linger lg;
+    int held;
+
+    (void)signal(SIGPIPE, SIG_IGN);
+
+    /* A: a keep-alive connection, two requests, then a normal close. */
+    fd = dial(port, 5);
+    if (fd < 0) {
+        printf("LOAD_FAIL A: connect\n");
+        return 1;
+    }
+    if (!expect_get(fd, "A")) return 1;
+    if (!send_all(fd, "POST /echo HTTP/1.1\r\nHost: t\r\nContent-Length: 9\r\n\r\nping-pong") ||
+        !read_response(fd, &status, body, sizeof(body)) || status != 200 ||
+        strcmp(body, "ping-pong") != 0) {
+        printf("LOAD_FAIL A: POST /echo\n");
+        return 1;
+    }
+    (void)close(fd);
+
+    /* B: a mid-request disconnect: half a request line, then FIN. */
+    fd = dial(port, 5);
+    if (fd < 0) {
+        printf("LOAD_FAIL B: connect\n");
+        return 1;
+    }
+    if (!send_all(fd, "GET /hel")) {
+        printf("LOAD_FAIL B: send\n");
+        return 1;
+    }
+    (void)close(fd);
+
+    /* C: a request answered, then a connection reset in the middle of the
+     * next one: SO_LINGER {1,0} makes close() send RST. */
+    fd = dial(port, 5);
+    if (fd < 0) {
+        printf("LOAD_FAIL C: connect\n");
+        return 1;
+    }
+    if (!expect_get(fd, "C")) return 1;
+    if (!send_all(fd, "POST /echo HTTP/1.1\r\nHost: t\r\nContent-Length: 100\r\n\r\npart")) {
+        printf("LOAD_FAIL C: send\n");
+        return 1;
+    }
+    lg.l_onoff = 1;
+    lg.l_linger = 0;
+    (void)setsockopt(fd, SOL_SOCKET, SO_LINGER, &lg, sizeof(lg));
+    (void)close(fd);
+
+    /* D: a keep-alive connection held open: the SIGTERM drain closes it. */
+    held = dial(port, 10);
+    if (held < 0) {
+        printf("LOAD_FAIL D: connect\n");
+        return 1;
+    }
+    if (!expect_get(held, "D")) return 1;
+    printf("READY\n");
+    fflush(stdout);
+    {
+        char b;
+        ssize_t r = recv(held, &b, 1u, 0);
+        if (r != 0) {
+            printf("LOAD_FAIL D: the drain did not close the idle connection (recv=%ld errno=%d)\n",
+                   (long)r, errno);
+            return 1;
+        }
+    }
+    (void)close(held);
+    printf("DRAINED\n");
+    fflush(stdout);
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* main                                                                */
+/* ------------------------------------------------------------------ */
+
+static int usage(const char *argv0) {
+    fprintf(stderr,
+            "usage: %s record JOURNAL\n"
+            "       %s load PORT\n"
+            "       %s replay JOURNAL DIGEST SERVED [RUST_REV]\n",
+            argv0, argv0, argv0);
+    return 2;
+}
+
+int main(int argc, char **argv) {
+    if (argc >= 3 && strcmp(argv[1], "record") == 0) return run_record(argv[2]);
+    if (argc >= 3 && strcmp(argv[1], "load") == 0) {
+        unsigned long port = strtoul(argv[2], NULL, 10);
+        if (port == 0ul || port > 65535ul) return usage(argv[0]);
+        return run_load((uint16_t)port);
+    }
+    if (argc >= 5 && strcmp(argv[1], "replay") == 0) {
+        return run_replay(argv[2], argv[3], argv[4], argc >= 6 ? argv[5] : NULL);
+    }
+    return usage(argv[0]);
+}

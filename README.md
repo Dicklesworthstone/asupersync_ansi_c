@@ -10,13 +10,13 @@
 ![No external deps](https://img.shields.io/badge/dependencies-none-brightgreen)
 ![Deterministic replay](https://img.shields.io/badge/replay-deterministic-orange)
 ![Public API declarations](https://img.shields.io/badge/public%20API-2%2C210%20declarations-blue)
-![C test programs](https://img.shields.io/badge/tests-235%20programs-brightgreen)
+![C test programs](https://img.shields.io/badge/tests-236%20programs-brightgreen)
 ![9 profiles](https://img.shields.io/badge/profiles-9%20deployment%20targets-blue)
 [![License: MIT+Rider](https://img.shields.io/badge/License-MIT%2BOpenAI%2FAnthropic%20Rider-blue.svg)](./LICENSE)
 
 </div>
 
-Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->2,210<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->235<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
+Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->2,210<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->236<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
 
 <div align="center">
 <h3>Quick Source Build</h3>
@@ -69,7 +69,7 @@ The port targets asupersync commit `5e60b1c4c` (2026-10).
 | **<!-- fact:status_codes -->67<!-- /fact --> typed error codes with recovery guidance** | Each error has a category, recoverability class, recovery action, and backoff hints |
 | **Resource contracts instead of silent degradation** | Explicit memory/queue/timer ceilings with deterministic failure taxonomy per resource class (R1/R2/R3) |
 | **9 deployment profiles** | CORE, POSIX, WIN32, FREESTANDING, EMBEDDED_ROUTER, HFT, AUTOMOTIVE, PARALLEL, BROWSER |
-| **<!-- fact:test_programs -->235<!-- /fact --> tracked C test programs across 7 categories** | <!-- fact:test_unit -->173<!-- /fact --> unit, <!-- fact:test_e2e -->23<!-- /fact --> e2e, <!-- fact:test_invariant -->3<!-- /fact --> invariant, <!-- fact:test_vignettes -->12<!-- /fact --> vignette, <!-- fact:test_conformance -->6<!-- /fact --> conformance, <!-- fact:test_fuzz -->5<!-- /fact --> fuzz, and <!-- fact:test_formal -->13<!-- /fact --> formal files in the current tree |
+| **<!-- fact:test_programs -->236<!-- /fact --> tracked C test programs across 7 categories** | <!-- fact:test_unit -->173<!-- /fact --> unit, <!-- fact:test_e2e -->24<!-- /fact --> e2e, <!-- fact:test_invariant -->3<!-- /fact --> invariant, <!-- fact:test_vignettes -->12<!-- /fact --> vignette, <!-- fact:test_conformance -->6<!-- /fact --> conformance, <!-- fact:test_fuzz -->5<!-- /fact --> fuzz, and <!-- fact:test_formal -->13<!-- /fact --> formal files in the current tree |
 | **Cross-profile checks** | Profiles are meant to change limits and defaults, never semantics. `make profile-parity` executes every Rust-captured fixture under CORE, POSIX, FREESTANDING, EMBEDDED_ROUTER, HFT, AUTOMOTIVE, PARALLEL and BROWSER builds, each compared with the same Rust captures; CI also runs them under EMBEDDED_ROUTER on five ISAs (QEMU) and on 32-bit x86 |
 
 The current repository is library-first: it ships the static library, public
@@ -948,7 +948,7 @@ The tree holds <!-- fact:header_files -->131<!-- /fact --> public headers
 C sources (<!-- fact:sources_core -->19<!-- /fact --> in `core/`,
 <!-- fact:sources_runtime -->43<!-- /fact --> in `runtime/`,
 <!-- fact:sources_platform -->7<!-- /fact --> in `platform/`),
-<!-- fact:test_programs -->235<!-- /fact --> C test programs and
+<!-- fact:test_programs -->236<!-- /fact --> C test programs and
 <!-- fact:examples -->14<!-- /fact --> examples (`make lint-docs` checks these numbers
 against `tools/count_inventory.sh`).
 
@@ -1025,7 +1025,7 @@ make profile-parity
 
 ## Testing and Quality Gates
 
-`asx` currently ships with <!-- fact:test_programs -->235<!-- /fact --> tracked C test programs across 7 categories in
+`asx` currently ships with <!-- fact:test_programs -->236<!-- /fact --> tracked C test programs across 7 categories in
 the checked-in `tests/` tree. Individual assertion counts evolve over time; see
 `tests/TEST.md` for the current indexed suite inventory and per-suite case
 totals where tracked.
@@ -1033,7 +1033,7 @@ totals where tracked.
 | Category | Files | Coverage |
 |---|---|---|
 | **Unit tests** | <!-- fact:test_unit -->173<!-- /fact --> | Broad public API and subsystem coverage across the current tree |
-| **End-to-end scenarios** | <!-- fact:test_e2e -->23<!-- /fact --> | Core lifecycle, automotive, HFT, codec parity, continuity, network surfaces, POSIX adapter, HTTP server on real sockets (browser and CLI lanes are shell families) |
+| **End-to-end scenarios** | <!-- fact:test_e2e -->24<!-- /fact --> | Core lifecycle, automotive, HFT, codec parity, continuity, network surfaces, POSIX adapter, HTTP server on real sockets, native record and lab replay (browser and CLI lanes are shell families) |
 | **Invariant tests** | <!-- fact:test_invariant -->3<!-- /fact --> | Lifecycle transition legality, quiescence, obligation linearity |
 | **API vignettes** | <!-- fact:test_vignettes -->12<!-- /fact --> | Ergonomics and usage pattern demonstrations |
 | **Conformance** | <!-- fact:test_conformance -->6<!-- /fact --> | Codec round-trip equivalence, profile-variant fixture equivalence, parallel worker-count parity, API misuse, resource-pressure failure atomicity (the Rust parity runner is `tools/conformance/runner.c`) |
@@ -2129,7 +2129,7 @@ Vignettes are self-contained programs that demonstrate one API pattern each with
 | `vignette_console.c` | Doctor and inspection rendering |
 | `vignette_plan.c` | Plan DAG and rewrite certificates |
 
-### End-to-End Scenarios (<!-- fact:test_e2e -->23<!-- /fact --> programs in `tests/e2e/`)
+### End-to-End Scenarios (<!-- fact:test_e2e -->24<!-- /fact --> programs in `tests/e2e/`)
 
 E2E programs exercise full runtime paths. Each has a shell family script; `tests/e2e/run_all.sh` (`make test-e2e`) runs all of them except the POSIX adapter smoke, which CI's compiler-matrix job runs on its POSIX legs:
 
@@ -2144,6 +2144,7 @@ E2E programs exercise full runtime paths. Each has a shell family script; `tests
 | `e2e_posix_adapter_smoke.c` | POSIX hook installation: clock, entropy, runtime init |
 | `e2e_server_shutdown.c` | Native server bootstrap and shutdown |
 | `e2e_http_robustness.c` | A live HTTP server on real sockets, driven by `http_robustness.sh` (needs a live POSIX build) |
+| `e2e_native_record_replay.c` | A live HTTP server run (keep-alive, half request, connection reset, SIGTERM drain) recorded to a boundary journal and replayed with no socket opened, driven by `native_record_replay.sh`; the replay must reproduce the trace digest bit for bit |
 | `e2e_hft_microburst.c` | HFT admission under load, overload handling, fairness, mass cancellation |
 | `e2e_market_open_burst.c` | HFT market-open admission spike and recovery |
 | `e2e_automotive_watchdog.c` | Checkpoints under deadlines, degraded mode, watchdog containment |
