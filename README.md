@@ -1123,6 +1123,10 @@ A registration more than the maximum timer duration (7 days, `asx_timer_set_max_
 
 Differences from Rust that cannot change what fires or in which order: a cancelled timer leaves its slot at once (Rust discards it when the slot is visited), the arena is fixed (Rust's grows), and coalescing, off by default in Rust, is not modelled.
 
+### DelayQueue and Interval
+
+`asx_delay_queue` (`include/asx/time/sleep.h`) is Rust's `DelayQueue`: a caller-owned queue of 16 `uint64_t` values that each come due at their own deadline. Entries come out earliest deadline first with ties in insertion order, `asx_delay_queue_reset()` moves an entry and counts as a new insertion (it orders after peers already due at that time), and a key dies with its entry even when its slot is reused. `asx_delay_queue_poll_at()` takes the time; `asx_delay_queue_poll()` reads the runtime clock and waits on the task's traced sleep timer for the earliest deadline, sharing that one timer slot with the task's other sleeps. `asx_interval_tick_at()` is `Interval::tick` as a pure transition: one tick per call, and the deadline moves by the missed-tick behavior (Burst a period on, so a late interval is ticked once per missed tick; Delay a period after the tick's time; Skip to the first boundary after it) only when a tick is due. Both are exercised against Rust by the DSL's `interval_*` and `delay_queue_*` steps, none of which suspends.
+
 ### Ghost Monitors (Debug-Mode Safety Net)
 
 Ghost monitors are compile-time gated behind `ASX_DEBUG_GHOST`, with zero overhead in release builds. They provide four classes of runtime verification:

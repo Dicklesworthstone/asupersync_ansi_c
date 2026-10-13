@@ -562,6 +562,41 @@ supervisor its owner did not join is aborted when the owner's program
 ends, as dropping a `ManagedSupervisorHandle` aborts the controller
 (`supervision.rs:3446`); the controller then drains every generation.
 
+### 3.9 Interval and DelayQueue
+
+Rust's `Interval` and `DelayQueue` (`time/interval.rs`,
+`time/delay_queue.rs`) are held by the task that makes them under a name.
+None of these steps suspends: they read the clock (`cx.now()` for the
+interval; the queue's `wall_now()`, virtual under the lab) and leave waiting
+to the program's own `sleep` / `sleep_until` steps. So no timer is
+registered on their behalf and no timer event appears for them. (Rust's
+queue owns a `Sleep` that a pending poll would register; C's queue shares
+the task's one sleep timer slot, so a pending poll is outside the DSL.)
+
+| op | Fields | Rust | C | Observation |
+|---|---|---|---|---|
+| `interval_new` | `as`, `period_ns` (at least 1), optional `start_ns`, optional `behavior` (`burst` default, `delay`, `skip`) | `interval(cx.now(), period)` or `interval_at(Time::from_nanos(start_ns), period)` (`interval.rs:443`, `:470`), then `set_missed_tick_behavior` (`:228`) | `asx_interval_init_at` (start = now without `start_ns`) + `asx_interval_set_missed_tick_behavior` | `ASX_OK`, no value |
+| `interval_tick` | `interval` | `iv.poll_tick(cx.now())` (`:261`): `Some(t)` is due, `None` leaves the deadline unmoved (what `tick` returns, `:293`) | `asx_interval_tick_at` | `ASX_OK`; `value` `{"time_ns": <the deadline before the call>, "due": <bool>}`. A due tick moves the deadline by the behavior: Burst one period on (a late interval is ticked once per missed tick), Delay a period after `now`, Skip to the first period boundary after `now`. |
+| `delay_queue_new` | `as` | `DelayQueue::new()` | `asx_delay_queue_init` | `ASX_OK` |
+| `delay_queue_insert` | `queue`, `as` (the key's name), `value`, `timeout_ns` | `q.insert(value, Duration::from_nanos(timeout_ns))` (`:139`), saturating at the last representable time | `asx_delay_queue_insert` | `ASX_OK`. C holds `ASX_DELAY_QUEUE_CAPACITY` (16) entries; a scenario stays under it (a harness error otherwise). |
+| `delay_queue_insert_at` | `queue`, `as`, `value`, `deadline_ns` | `q.insert_at(value, Time::from_nanos(deadline_ns))` (`:144`) | `asx_delay_queue_insert_at` | `ASX_OK` |
+| `delay_queue_reset` / `delay_queue_reset_at` | `queue`, `key`, `timeout_ns` / `deadline_ns` | `q.reset(&key, d)` / `q.reset_at(&key, t)` (`:190`, `:202`): the key stays valid and the entry orders as a new insertion | `asx_delay_queue_reset` / `asx_delay_queue_reset_at` | `ASX_OK`. A dead key panics in Rust: a harness error. |
+| `delay_queue_remove` | `queue`, `key` | `q.try_remove(&key)` (`:170`) | `asx_delay_queue_remove` | `ASX_OK` with `{"value", "deadline_ns"}`, or `ASX_E_NOT_FOUND` for a dead key |
+| `delay_queue_contains` | `queue`, `key` | `q.contains(&key)` (`:231`) | `asx_delay_queue_contains` | `ASX_OK`, boolean `value` |
+| `delay_queue_deadline` | `queue`, `key` | `q.deadline(&key)` (`:221`) | `asx_delay_queue_deadline` | `ASX_OK`, u64 `value`; a dead key panics in Rust: a harness error |
+| `delay_queue_len` | `queue` | `q.len()` (`:237`) | `asx_delay_queue_len` | `ASX_OK`, u64 `value` |
+| `delay_queue_clear` | `queue` | `q.clear()` (`:248`) | `asx_delay_queue_clear` | `ASX_OK`; every key is dead afterwards |
+| `delay_queue_poll` | `queue` | `poll_expired(cx)` once (`:260`) | `asx_delay_queue_poll_at` | the next due entry earliest first, ties in insertion order: `ASX_OK` with `{"value", "deadline_ns"}`; an empty queue: `ASX_E_CHANNEL_EMPTY` (Rust `Ready(None)`). Nothing due yet is a harness error: sleep until an entry is due first. |
+
+A key's name stays bound after its entry expired or was removed (the key is
+dead, not unknown), and a name is bound once per task. Scenarios:
+`interval-missed-tick-burst-001`, `interval-missed-tick-delay-001`,
+`interval-missed-tick-skip-001`, `interval-start-at-001`,
+`delay-queue-order-reset-remove-001`, `delay-queue-reset-ties-saturate-001`.
+A standalone `time::timeout` is not a step yet: its inner future and its own
+`Sleep` register two timers that twin_run names as one, and C waits for both
+on the task's one sleep timer slot.
+
 ## 4. Driver operations (`script`)
 
 Each entry is `{"at_ns": t, "op": {...}}`. It is applied after the run goes

@@ -2494,6 +2494,288 @@ static void race_refused_wrapper(it_task *t, asx_task_id self, uint32_t idx, it_
 
 /* watch_send_modify's closure: `*value += add`, wrapping (Rust's
  * wrapping_add on u64). */
+/* Interval and DelayQueue objects (DSL §3.9), held by the task that made
+ * them under a name. They live in global pools so a task's frame stays
+ * small; a key name stays bound after its entry expired (the key is then
+ * stale, not unknown). */
+#define IT_MAX_INTERVALS 8u
+#define IT_MAX_DELAY_QUEUES 4u
+#define IT_MAX_DELAY_KEYS 32u
+
+typedef struct {
+    const char *name;
+    uint32_t owner; /* index in g_tasks */
+    asx_interval_state state;
+} it_interval;
+
+typedef struct {
+    const char *name;
+    uint32_t owner;
+    asx_delay_queue queue;
+} it_delay_queue;
+
+typedef struct {
+    const char *name;
+    uint32_t owner;
+    uint32_t queue; /* index in g_delay_queues */
+    asx_delay_key key;
+} it_delay_key;
+
+static it_interval g_intervals[IT_MAX_INTERVALS];
+static uint32_t g_n_intervals;
+static it_delay_queue g_delay_queues[IT_MAX_DELAY_QUEUES];
+static uint32_t g_n_delay_queues;
+static it_delay_key g_delay_keys[IT_MAX_DELAY_KEYS];
+static uint32_t g_n_delay_keys;
+
+static it_interval *interval_of(const it_task *t, const char *name) {
+    uint32_t i;
+    for (i = 0; name != NULL && i < g_n_intervals; i++) {
+        if (g_intervals[i].owner == (uint32_t)(t - g_tasks) &&
+            strcmp(g_intervals[i].name, name) == 0) {
+            return &g_intervals[i];
+        }
+    }
+    return NULL;
+}
+
+static it_delay_queue *delay_queue_of(const it_task *t, const char *name) {
+    uint32_t i;
+    for (i = 0; name != NULL && i < g_n_delay_queues; i++) {
+        if (g_delay_queues[i].owner == (uint32_t)(t - g_tasks) &&
+            strcmp(g_delay_queues[i].name, name) == 0) {
+            return &g_delay_queues[i];
+        }
+    }
+    return NULL;
+}
+
+static it_delay_key *delay_key_of(const it_task *t, const char *name) {
+    uint32_t i;
+    for (i = 0; name != NULL && i < g_n_delay_keys; i++) {
+        if (g_delay_keys[i].owner == (uint32_t)(t - g_tasks) &&
+            strcmp(g_delay_keys[i].name, name) == 0) {
+            return &g_delay_keys[i];
+        }
+    }
+    return NULL;
+}
+
+/* An expired or removed entry as an observation value. */
+static uint32_t delay_expired_value(const asx_delay_expired *e) {
+    uint32_t o = asx_json_new_object(g_out);
+    asx_json_set(g_out, o, "value", asx_json_new_u64(g_out, e->value));
+    asx_json_set(g_out, o, "deadline_ns", asx_json_new_u64(g_out, e->deadline));
+    return o;
+}
+
+/* The interval and DelayQueue steps (DSL §3.9), none of which suspends:
+ * they read the clock (Rust cx.now() / wall_now(), virtual under the lab)
+ * and leave any waiting to the program's own sleep steps. Returns 1 when
+ * `op` is one of them, with the step's result in *out. */
+static int exec_time_op(it_task *t, uint32_t step, uint32_t idx, const char *label, const char *op,
+                        step_result *out) {
+    uint32_t me = (uint32_t)(t - g_tasks);
+    asx_time now = 0;
+    uint64_t n = 0;
+    asx_status st;
+
+    *out = STEP_NEXT;
+    if (strncmp(op, "interval_", 9) != 0 && strncmp(op, "delay_queue_", 12) != 0) return 0;
+    if (asx_runtime_now_ns(&now) != ASX_OK) {
+        it_fail_task(t, idx, "the runtime clock is not readable");
+        *out = STEP_END;
+        return 1;
+    }
+
+    if (strcmp(op, "interval_new") == 0) {
+        /* interval(cx.now(), period) / interval_at(start_ns, period), then
+         * set_missed_tick_behavior (time/interval.rs:443, :470, :228). */
+        const char *as = it_str(step, "as");
+        const char *behavior = it_str(step, "behavior");
+        asx_missed_tick_behavior mode = ASX_MISSED_TICK_BURST;
+        asx_time start = now;
+        it_interval *iv;
+        if (as == NULL || g_n_intervals >= IT_MAX_INTERVALS || interval_of(t, as) != NULL ||
+            !asx_json_u64(g_in, asx_json_get(g_in, step, "period_ns"), &n) || n == 0u) {
+            it_fail_task(t, idx, "interval_new needs a fresh name and a period_ns above 0");
+            *out = STEP_END;
+            return 1;
+        }
+        (void)asx_json_u64(g_in, asx_json_get(g_in, step, "start_ns"), &start);
+        if (behavior != NULL && strcmp(behavior, "delay") == 0) mode = ASX_MISSED_TICK_DELAY;
+        if (behavior != NULL && strcmp(behavior, "skip") == 0) mode = ASX_MISSED_TICK_SKIP;
+        iv = &g_intervals[g_n_intervals];
+        st = asx_interval_init_at(&iv->state, start, n, 0u);
+        if (st == ASX_OK) st = asx_interval_set_missed_tick_behavior(&iv->state, mode);
+        if (st != ASX_OK) {
+            it_fail_task(t, idx, "asx_interval_init_at failed");
+            *out = STEP_END;
+            return 1;
+        }
+        iv->name = as;
+        iv->owner = me;
+        g_n_intervals++;
+        observe_status(t, idx, label, ASX_OK);
+        return 1;
+    }
+    if (strcmp(op, "interval_tick") == 0) {
+        /* poll_tick(now), or the unmoved deadline when nothing is due
+         * (interval.rs:261, :293): {time_ns, due} */
+        it_interval *iv = interval_of(t, it_str(step, "interval"));
+        asx_time tick_time = 0;
+        int due = 0;
+        uint32_t value;
+        if (iv == NULL || asx_interval_tick_at(&iv->state, now, &tick_time, &due) != ASX_OK) {
+            it_fail_task(t, idx, "interval_tick on an interval this task does not hold");
+            *out = STEP_END;
+            return 1;
+        }
+        value = asx_json_new_object(g_out);
+        asx_json_set(g_out, value, "time_ns", asx_json_new_u64(g_out, tick_time));
+        asx_json_set(g_out, value, "due", asx_json_new_bool(g_out, due ? 1 : 0));
+        observe(t, idx, label, status_node(ASX_OK), value);
+        return 1;
+    }
+    if (strcmp(op, "delay_queue_new") == 0) {
+        const char *as = it_str(step, "as");
+        if (as == NULL || g_n_delay_queues >= IT_MAX_DELAY_QUEUES ||
+            delay_queue_of(t, as) != NULL) {
+            it_fail_task(t, idx, "delay_queue_new needs a fresh name and a free queue");
+            *out = STEP_END;
+            return 1;
+        }
+        st = asx_delay_queue_init(&g_delay_queues[g_n_delay_queues].queue);
+        g_delay_queues[g_n_delay_queues].name = as;
+        g_delay_queues[g_n_delay_queues].owner = me;
+        g_n_delay_queues++;
+        observe_status(t, idx, label, st);
+        return 1;
+    }
+
+    /* Every other step names a queue the task holds. */
+    {
+        it_delay_queue *dq = delay_queue_of(t, it_str(step, "queue"));
+        it_delay_key *named = delay_key_of(t, it_str(step, "key"));
+        const char *keyword = op + 12;
+        asx_delay_expired e;
+        asx_delay_poll_state state = ASX_DELAY_EMPTY;
+        if (dq == NULL) {
+            it_fail_task(t, idx, "a DelayQueue step names a queue this task does not hold");
+            *out = STEP_END;
+            return 1;
+        }
+        if (strcmp(keyword, "insert") == 0 || strcmp(keyword, "insert_at") == 0) {
+            /* insert(value, timeout) / insert_at(value, deadline) (delay_queue.rs:139, :144) */
+            const char *as = it_str(step, "as");
+            const int at = strcmp(keyword, "insert_at") == 0;
+            uint64_t value = 0;
+            asx_delay_key key;
+            if (as == NULL || delay_key_of(t, as) != NULL || g_n_delay_keys >= IT_MAX_DELAY_KEYS ||
+                !asx_json_u64(g_in, asx_json_get(g_in, step, "value"), &value) ||
+                !asx_json_u64(g_in, asx_json_get(g_in, step, at ? "deadline_ns" : "timeout_ns"),
+                              &n)) {
+                it_fail_task(t, idx,
+                             "a DelayQueue insert needs a fresh key name, a value and a time");
+                *out = STEP_END;
+                return 1;
+            }
+            st = at ? asx_delay_queue_insert_at(&dq->queue, value, n, &key)
+                    : asx_delay_queue_insert(&dq->queue, now, value, n, &key);
+            if (st != ASX_OK) {
+                it_fail_task(t, idx, "the DelayQueue is full (C holds ASX_DELAY_QUEUE_CAPACITY)");
+                *out = STEP_END;
+                return 1;
+            }
+            g_delay_keys[g_n_delay_keys].name = as;
+            g_delay_keys[g_n_delay_keys].owner = me;
+            g_delay_keys[g_n_delay_keys].queue = (uint32_t)(dq - g_delay_queues);
+            g_delay_keys[g_n_delay_keys].key = key;
+            g_n_delay_keys++;
+            observe_status(t, idx, label, ASX_OK);
+            return 1;
+        }
+        if (strcmp(keyword, "len") == 0) {
+            observe(t, idx, label, status_node(ASX_OK),
+                    asx_json_new_u64(g_out, asx_delay_queue_len(&dq->queue)));
+            return 1;
+        }
+        if (strcmp(keyword, "clear") == 0) {
+            observe_status(t, idx, label, asx_delay_queue_clear(&dq->queue));
+            return 1;
+        }
+        if (strcmp(keyword, "poll") == 0) {
+            /* poll_expired(cx) (delay_queue.rs:260): a due entry, the end of
+             * an empty queue (ASX_E_CHANNEL_EMPTY), or a wait the scenario
+             * must not ask for: it would register the queue's own Sleep. */
+            st = asx_delay_queue_poll_at(&dq->queue, now, &state, &e);
+            if (st != ASX_OK || state == ASX_DELAY_WAITING) {
+                it_fail_task(t, idx,
+                             "delay_queue_poll with nothing due: sleep until an entry is due");
+                *out = STEP_END;
+                return 1;
+            }
+            if (state == ASX_DELAY_EMPTY) {
+                observe_status(t, idx, label, ASX_E_CHANNEL_EMPTY);
+            } else {
+                observe(t, idx, label, status_node(ASX_OK), delay_expired_value(&e));
+            }
+            return 1;
+        }
+        if (named == NULL || named->queue != (uint32_t)(dq - g_delay_queues)) {
+            it_fail_task(t, idx, "a DelayQueue step names a key of another queue or none");
+            *out = STEP_END;
+            return 1;
+        }
+        if (strcmp(keyword, "remove") == 0) {
+            /* try_remove(&key) (:170): the entry, or None for a dead key */
+            st = asx_delay_queue_remove(&dq->queue, &named->key, &e);
+            observe(t, idx, label, status_node(st),
+                    st == ASX_OK ? delay_expired_value(&e) : ASX_JSON_NONE);
+            return 1;
+        }
+        if (strcmp(keyword, "contains") == 0) {
+            observe(t, idx, label, status_node(ASX_OK),
+                    asx_json_new_bool(g_out, asx_delay_queue_contains(&dq->queue, &named->key)));
+            return 1;
+        }
+        if (strcmp(keyword, "deadline") == 0) {
+            /* deadline(&key) (:221) panics on a dead key: a harness error */
+            asx_time d = 0;
+            if (asx_delay_queue_deadline(&dq->queue, &named->key, &d) != ASX_OK) {
+                it_fail_task(t, idx, "delay_queue_deadline of a dead key (Rust panics)");
+                *out = STEP_END;
+                return 1;
+            }
+            observe(t, idx, label, status_node(ASX_OK), asx_json_new_u64(g_out, d));
+            return 1;
+        }
+        if (strcmp(keyword, "reset") == 0 || strcmp(keyword, "reset_at") == 0) {
+            /* reset(&key, timeout) / reset_at(&key, deadline) (:190, :202); a
+             * dead key panics in Rust: a harness error */
+            const int at = strcmp(keyword, "reset_at") == 0;
+            if (!asx_json_u64(g_in, asx_json_get(g_in, step, at ? "deadline_ns" : "timeout_ns"),
+                              &n)) {
+                it_fail_task(t, idx, "a DelayQueue reset needs a time");
+                *out = STEP_END;
+                return 1;
+            }
+            st = at ? asx_delay_queue_reset_at(&dq->queue, &named->key, n)
+                    : asx_delay_queue_reset(&dq->queue, &named->key, now, n);
+            if (st != ASX_OK) {
+                it_fail_task(t, idx, "delay_queue_reset of a dead key (Rust panics)");
+                *out = STEP_END;
+                return 1;
+            }
+            observe_status(t, idx, label, ASX_OK);
+            return 1;
+        }
+    }
+    it_fail_task(t, idx, "unknown interval or DelayQueue step");
+    *out = STEP_END;
+    return 1;
+}
+
 static void watch_add_fn(void *ctx, uint64_t *value) { *value += *(const uint64_t *)ctx; }
 
 /* The watch steps that never suspend (DSL §3.6). Returns 1 when `op` is one
@@ -2960,6 +3242,11 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
     /* Non-blocking oneshot, broadcast and watch sends (DSL §3.6). */
     if (strcmp(op, "oneshot_send") == 0 || strcmp(op, "broadcast_send") == 0 ||
         strcmp(op, "watch_send") == 0) {
+    /* Interval and DelayQueue steps (DSL §3.9). */
+    {
+        step_result res;
+        if (exec_time_op(t, step, idx, label, op, &res)) return res;
+    }
         it_ch_type type = op[0] == 'o'   ? IT_CH_ONESHOT
                           : op[0] == 'b' ? IT_CH_BROADCAST
                                          : IT_CH_WATCH;
@@ -4914,6 +5201,9 @@ static asx_status conformance_run(const asx_json_doc *in, uint32_t scenario, asx
     g_n_sups = 0;
     g_n_regions = 0;
     g_n_events = 0;
+    g_n_intervals = 0;
+    g_n_delay_queues = 0;
+    g_n_delay_keys = 0;
     g_text_used = 0;
     g_n_obl_names = 0;
     if (error != NULL && error_cap > 0u) error[0] = '\0';
