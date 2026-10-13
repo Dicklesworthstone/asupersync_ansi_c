@@ -651,7 +651,7 @@ asx_status asx_task_poll_current_internal(asx_task_slot *t, asx_task_id tid);
 
 /* The virtual clock of kernel `k`: read, advance (no-op unless `to` is in
  * the future) and set (backwards too, a lab snapshot restore). Defined in
- * hooks.c. asx_runtime_virtual_now/advance of the public API are kernel 0's. */
+ * hooks.c. asx_runtime_virtual_now/advance of the public API take a runtime. */
 asx_time asx_kernel_virtual_now(const asx_kernel *k);
 void asx_kernel_virtual_advance(asx_kernel *k, asx_time to);
 void asx_kernel_virtual_set_internal(asx_kernel *k, asx_time to);
@@ -1234,5 +1234,47 @@ static inline void asx_region_budgets_inherit_internal(asx_region_slot *child,
     child->budget = parent->budget;
     child->capability_budget = parent->capability_budget;
 }
+
+/* Whose clock and entropy. The public asx_runtime_now_ns and its kin take the
+ * runtime object: asx_kernel_of_runtime is its kernel, NULL for NULL or a tag
+ * no runtime holds. The still process-wide subsystems (application timers and
+ * deadlines, the network and web surfaces, epochs, streams, supervisors) hold
+ * state only while at most one runtime is live (a second init and the
+ * acquisition of state while two are live are refused), so their clock is
+ * that runtime's: asx_kernel_process_scope is the kernel of the one live
+ * runtime, else the library's static kernel (a zeroed runtime object).
+ * Code with a task or other handle in hand reads that handle's kernel;
+ * asx_kernel_of_or_scope falls back to the process scope for a handle no
+ * runtime holds (an invalid id, a host call). Library code that has neither
+ * a handle nor a runtime object (a deadline, a throttle, an epoch) reads
+ * asx_kernel_context: the kernel of the task being polled
+ * (asx_task_current()), else the process scope. */
+static inline asx_kernel *asx_kernel_of_runtime(const asx_runtime *rt) {
+    return rt != NULL ? asx_kernel_for_tag(rt->tag) : NULL;
+}
+
+static inline asx_kernel *asx_kernel_process_scope(void) {
+    asx_kernel *only = NULL;
+    uint32_t i;
+    for (i = 0; i < ASX_MAX_RUNTIMES; i++) {
+        if (g_kernels[i] != NULL && g_kernels[i]->rt_generation != 0u) {
+            if (only != NULL) return g_kernels[0];
+            only = g_kernels[i];
+        }
+    }
+    return only != NULL ? only : g_kernels[0];
+}
+
+static inline asx_kernel *asx_kernel_of_or_scope(uint64_t handle) {
+    asx_kernel *k = asx_kernel_of(handle);
+    return k != NULL ? k : asx_kernel_process_scope();
+}
+
+static inline asx_kernel *asx_kernel_context(void) {
+    return asx_kernel_of_or_scope(asx_task_current());
+}
+
+/* asx_runtime_random_secure_u64 as runtime `k` sees it. Defined in hooks.c. */
+asx_status asx_kernel_random_secure_u64(asx_kernel *k, uint64_t *out_value);
 
 #endif /* ASX_RUNTIME_INTERNAL_H */

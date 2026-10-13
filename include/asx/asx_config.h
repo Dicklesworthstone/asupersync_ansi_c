@@ -1496,9 +1496,9 @@ ASX_API asx_status asx_runtime_realloc(void *ptr, size_t size, void **out_ptr);
  * ASX_E_HOOK_MISSING if no allocator. */
 ASX_API asx_status asx_runtime_free(void *ptr);
 
-/* Read current time via clock hook. Returns ASX_OK on success,
- * ASX_E_HOOK_MISSING if no clock hook installed. */
-ASX_API asx_status asx_runtime_now_ns(asx_time *out_now);
+/* Read the time rt sees via the clock hook (the default clock is rt's own virtual
+ * time). ASX_E_INVALID_STATE if no runtime holds rt's tag, ASX_E_HOOK_MISSING if no hook. */
+ASX_API asx_status asx_runtime_now_ns(const asx_runtime *rt, asx_time *out_now);
 
 /* Returns nonzero when the effective clock is the runtime's virtual clock
  * (no hooks installed, or the default clock stubs are active). Virtual
@@ -1506,19 +1506,19 @@ ASX_API asx_status asx_runtime_now_ns(asx_time *out_now);
  * jumps to the earliest armed task timer. */
 ASX_API int asx_runtime_clock_is_virtual(void);
 
-/* Current virtual time in nanoseconds (0 after runtime reset). */
-ASX_API asx_time asx_runtime_virtual_now(void);
+/* rt's virtual time in nanoseconds (0 after its reset, or if no runtime holds its tag). */
+ASX_API asx_time asx_runtime_virtual_now(const asx_runtime *rt);
 
-/* Advance virtual time to `to` (no-op if `to` is not in the future). */
-ASX_API void asx_runtime_virtual_advance(asx_time to);
+/* Advance rt's virtual time to `to` (no-op if `to` is not in the future). */
+ASX_API void asx_runtime_virtual_advance(const asx_runtime *rt, asx_time to);
 
-/* Read random u64 via the configured entropy stream.
+/* Read random u64 via the entropy stream rt sees (the default stream is rt's own).
  * Returns ASX_OK on success, ASX_E_HOOK_MISSING if hooks are not installed
- * (or, in a live build, no entropy hook is), ASX_E_INVALID_STATE when a
- * deterministic build's hook table does not provide a deterministic entropy
- * source, and the source's own status when a fallible source
+ * (or, in a live build, no entropy hook is), ASX_E_INVALID_STATE when no runtime
+ * holds rt's tag or a deterministic build's hook table has no deterministic
+ * entropy source, and the source's own status when a fallible source
  * (asx_entropy_hooks.try_u64_fn) fails, with *out_value untouched. */
-ASX_API asx_status asx_runtime_random_u64(uint64_t *out_value);
+ASX_API asx_status asx_runtime_random_u64(const asx_runtime *rt, uint64_t *out_value);
 
 /* Read a random u64 that protects something: a WebSocket client key or
  * frame mask, a session ID, a CSRF token. Live builds (ASX_DETERMINISTIC=0)
@@ -1530,10 +1530,10 @@ ASX_API asx_status asx_runtime_random_u64(uint64_t *out_value);
  *   ASX_E_HOOK_INVALID  the installed source is that built-in PRNG.
  * Profiles with no platform source (FREESTANDING, EMBEDDED_ROUTER, HFT,
  * AUTOMOTIVE) install one through the hook table or the builder. A source
- * the application installs is its own to vouch for. Deterministic builds
- * keep the seeded stream by design (replay needs it) and behave as
- * asx_runtime_random_u64. */
-ASX_API ASX_MUST_USE asx_status asx_runtime_random_secure_u64(uint64_t *out_value);
+ * the application installs is its own to vouch for. Deterministic builds keep
+ * the seeded stream by design (replay needs it), as asx_runtime_random_u64 does. */
+ASX_API ASX_MUST_USE asx_status asx_runtime_random_secure_u64(const asx_runtime *rt,
+                                                              uint64_t *out_value);
 /* Wait for reactor readiness. Returns ready count via out_ready_count.
  * Prefers the native reactor wait hook when one is installed; otherwise,
  * deterministic builds fall back to the ghost reactor hook.

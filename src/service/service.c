@@ -10,15 +10,17 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../runtime/runtime_internal.h"
 #include <asx/asx_config.h>
 #include <asx/service/service.h>
 #include <string.h>
 
-/* Helper: read current monotonic time via the runtime clock. Returns
- * 0 if the runtime clock is not yet initialized. */
+/* Helper: read current monotonic time via the runtime clock (of the task
+ * being polled, else the process scope). Returns 0 if the runtime clock is
+ * not yet initialized. */
 static uint64_t service_now_ns(void) {
     asx_time now = 0;
-    asx_runtime_now_ns(&now);
+    (void)asx_kernel_now_ns(asx_kernel_context(), &now);
     return now;
 }
 

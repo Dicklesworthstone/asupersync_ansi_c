@@ -45,9 +45,9 @@ typedef struct {
 ASX_API ASX_MUST_USE asx_status asx_deadline_init(asx_deadline *dl, asx_time target_ns);
 
 /* Create a deadline relative to the current runtime time.
- * Reads the clock via asx_runtime_now_ns() and adds duration_ns,
- * saturating at UINT64_MAX as Rust's deadline arithmetic does (a target
- * that overflows the clock never comes; it is not an error).
+ * Reads the clock of the task being polled (else the live runtime's) and
+ * adds duration_ns, saturating at UINT64_MAX as Rust's deadline arithmetic
+ * does (a target that overflows the clock never comes; it is not an error).
  * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if dl is NULL,
  *   ASX_E_HOOK_MISSING if clock hooks are not installed. */
 ASX_API ASX_MUST_USE asx_status asx_deadline_after(asx_deadline *dl, uint64_t duration_ns);
@@ -72,7 +72,7 @@ ASX_API ASX_MUST_USE asx_status asx_deadline_disarm(asx_deadline *dl);
  * ------------------------------------------------------------------- */
 
 /* Check if the deadline has expired by comparing against current time.
- * Reads the clock via asx_runtime_now_ns(). Caches the result.
+ * Reads the clock as asx_deadline_after does. Caches the result.
  * Returns 1 if expired (now >= target), 0 otherwise.
  * Returns 0 if dl is NULL or clock is unavailable. */
 ASX_API int asx_deadline_is_expired(asx_deadline *dl);

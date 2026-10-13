@@ -235,7 +235,7 @@ static void retry_start_next(asx_retry_state *state, asx_task_id self) {
     state->total_delay_ns =
         UINT64_MAX - state->total_delay_ns < delay ? UINT64_MAX : state->total_delay_ns + delay;
     /* Sleep::after(now, delay): the deadline saturates. */
-    if (asx_runtime_now_ns(&now) != ASX_OK) now = 0;
+    if (asx_kernel_now_ns(asx_kernel_context(), &now) != ASX_OK) now = 0;
     {
         asx_status st =
             asx_sleep_init_until(&state->sleep,
@@ -675,7 +675,7 @@ asx_status asx_hedge_poll(void *user_data, asx_task_id self) {
          * starts. */
         if (!state->deadline_armed) {
             asx_time now;
-            asx_status dst = asx_runtime_now_ns(&now);
+            asx_status dst = asx_kernel_now_ns(asx_kernel_of_or_scope(self), &now);
             if (dst == ASX_OK) {
                 dst = asx_deadline_init(&state->deadline, state->deadline_ns > UINT64_MAX - now
                                                               ? UINT64_MAX

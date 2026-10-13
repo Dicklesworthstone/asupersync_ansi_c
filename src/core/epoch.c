@@ -6,12 +6,10 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../runtime/runtime_internal.h"
 #include <asx/core/epoch.h>
 #include <asx/runtime/runtime.h>
 #include <string.h>
-/* Forward-declare clock query (defined in runtime/hooks.c, which runtime.h
- * does not declare); runtime.h gives the reset registry. */
-asx_status asx_runtime_now_ns(uint64_t *out_now);
 
 /* ------------------------------------------------------------------ */
 /* Internal slot                                                       */
@@ -206,7 +204,7 @@ uint64_t asx_epoch_duration_ns(asx_epoch_handle handle) {
     asx_time now = 0;
 
     if (s == NULL) return 0u;
-    asx_runtime_now_ns(&now);
+    (void)asx_kernel_now_ns(asx_kernel_context(), &now);
     return now > s->created_ns ? now - s->created_ns : 0u;
 }
 
@@ -248,7 +246,7 @@ int asx_epoch_is_expired(asx_epoch_handle handle) {
 
     if (s == NULL) return 0;
     if (s->timeout_ns == 0u) return 0; /* no timeout */
-    asx_runtime_now_ns(&now);
+    (void)asx_kernel_now_ns(asx_kernel_context(), &now);
     if (now < s->created_ns) return 0;
     return (now - s->created_ns) >= s->timeout_ns;
 }

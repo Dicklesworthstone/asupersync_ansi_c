@@ -37,6 +37,7 @@
 #endif
 
 #include "../../process/process_native.h"
+#include "../../runtime/runtime_internal.h"
 #include <asx/runtime/io_driver.h>
 #include <asx/runtime/journal.h>
 #include <asx/runtime/journal_replay.h>
@@ -400,7 +401,7 @@ static asx_status proc_wait_exit(native_proc *p, int park) {
         /* Registration failed (e.g. IO driver unavailable): use a timer. */
         proc_fd_close(&p->exitfd);
     }
-    if (asx_runtime_now_ns(&now) == ASX_OK &&
+    if (asx_kernel_now_ns(asx_kernel_of_or_scope(self), &now) == ASX_OK &&
         asx_task_arm_timer(self, now + (asx_time)p->backoff_ms * 1000000u) == ASX_OK) {
         st = asx_task_park(self);
         (void)st;

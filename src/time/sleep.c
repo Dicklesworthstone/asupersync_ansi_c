@@ -89,7 +89,7 @@ asx_status asx_sleep_poll(void *user_data, asx_task_id self) {
 
     /* Due (or a zero-length sleep): done. Otherwise wait on the timer;
      * a later poll (timer fired or spurious wake) re-checks. */
-    st = asx_runtime_now_ns(&now);
+    st = asx_kernel_now_ns(asx_kernel_of_or_scope(self), &now);
     if (st != ASX_OK) return st;
     if (asx_deadline_is_expired_at(&s->deadline, now)) {
         /* Completed at its deadline: the sleep records the fire (Rust
@@ -138,7 +138,7 @@ asx_status asx_timeout_poll(void *user_data, asx_task_id self) {
     /* A repoll after completion fails closed (TimeoutFuture::poll). */
     if (s->completed) return ASX_E_TIMED_OUT;
 
-    st = asx_runtime_now_ns(&now);
+    st = asx_kernel_now_ns(asx_kernel_of_or_scope(self), &now);
     if (st != ASX_OK) return st;
 
     /* Past the deadline: its Sleep is ready; the inner is not polled. */
@@ -255,7 +255,7 @@ asx_status asx_interval_poll(void *user_data, asx_task_id self) {
     if (s == NULL) return ASX_E_INVALID_ARGUMENT;
     if (s->max_ticks > 0u && s->ticks >= s->max_ticks) return ASX_OK; /* completed */
 
-    st = asx_runtime_now_ns(&now);
+    st = asx_kernel_now_ns(asx_kernel_of_or_scope(self), &now);
     if (st != ASX_OK) return st;
 
     /* First poll: the first tick is at the start (Rust Interval::new). */
@@ -525,7 +525,7 @@ asx_status asx_delay_queue_poll_at(asx_delay_queue *queue, asx_time now,
 asx_status asx_delay_queue_poll(asx_delay_queue *queue, asx_task_id self,
                                 asx_delay_poll_state *out_state, asx_delay_expired *out) {
     asx_time now;
-    asx_status st = asx_runtime_now_ns(&now);
+    asx_status st = asx_kernel_now_ns(asx_kernel_of_or_scope(self), &now);
 
     if (st != ASX_OK) return st;
     st = asx_delay_queue_poll_at(queue, now, out_state, out);

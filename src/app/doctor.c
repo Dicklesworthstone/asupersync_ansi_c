@@ -236,17 +236,17 @@ static void check_net_backend(asx_doctor_report *r) {
  * stuck (a nanosecond clock advances within a handful). */
 #define DOCTOR_CLOCK_READ_LIMIT 1000000u
 
-static void probe_clock(asx_doctor_report *r) {
+static void probe_clock(const asx_runtime *rt, asx_doctor_report *r) {
     asx_time first = 0;
     asx_time now = 0;
     uint32_t i;
 
-    if (asx_runtime_now_ns(&first) != ASX_OK) {
+    if (asx_runtime_now_ns(rt, &first) != ASX_OK) {
         add_check(r, "clock", ASX_DOCTOR_FAIL, "clock hook failed", 0, 0);
         return;
     }
     for (i = 0; i < DOCTOR_CLOCK_READ_LIMIT; i++) {
-        if (asx_runtime_now_ns(&now) != ASX_OK) {
+        if (asx_runtime_now_ns(rt, &now) != ASX_OK) {
             add_check(r, "clock", ASX_DOCTOR_FAIL, "clock hook failed", 0, 0);
             return;
         }
@@ -266,11 +266,11 @@ static void probe_clock(asx_doctor_report *r) {
     }
 }
 
-static void probe_entropy(asx_doctor_report *r) {
+static void probe_entropy(const asx_runtime *rt, asx_doctor_report *r) {
     uint64_t a = 0;
     uint64_t b = 0;
 
-    if (asx_runtime_random_u64(&a) != ASX_OK || asx_runtime_random_u64(&b) != ASX_OK) {
+    if (asx_runtime_random_u64(rt, &a) != ASX_OK || asx_runtime_random_u64(rt, &b) != ASX_OK) {
         add_check(r, "entropy", ASX_DOCTOR_FAIL, "entropy source unavailable", 0, 0);
     } else if (a == b) {
         add_check(r, "entropy", ASX_DOCTOR_FAIL, "entropy source repeats its value", 0, 0);
@@ -453,6 +453,7 @@ static int blocking_uses_worker_threads(void) {
 /* The task probes share one region and one bounded scheduler run. A
  * probe that spawns no task carries its verdict from the start. */
 typedef struct {
+    const asx_runtime *rt; /* the runtime under test: its clock, its stream */
     asx_region_id region;
     int have_region;
     asx_task_id spawned[DOCTOR_PROBE_MAX_TASKS];
@@ -473,11 +474,11 @@ typedef struct {
 } doctor_probe_ctx;
 
 /* Budget of a probe run: a poll quota and ASX_DOCTOR_PROBE_TIMEOUT_NS. */
-static asx_budget probe_budget(void) {
+static asx_budget probe_budget(const asx_runtime *rt) {
     asx_budget b = asx_budget_from_polls(DOCTOR_PROBE_POLLS);
     asx_time now = 0;
 
-    if (asx_runtime_now_ns(&now) == ASX_OK) b.deadline = now + ASX_DOCTOR_PROBE_TIMEOUT_NS;
+    if (asx_runtime_now_ns(rt, &now) == ASX_OK) b.deadline = now + ASX_DOCTOR_PROBE_TIMEOUT_NS;
     return b;
 }
 
@@ -641,7 +642,7 @@ static void probe_cleanup(doctor_probe_ctx *p) {
             st = asx_region_cancel(p->region, &reason, NULL);
             (void)st;
         }
-        budget = probe_budget();
+        budget = probe_budget(p->rt);
         st = asx_region_drain(p->region, &budget);
         (void)st;
         for (i = 0; i < p->tasks; i++) {
@@ -688,8 +689,9 @@ asx_status asx_doctor_probe(asx_runtime *rt, asx_doctor_report *report) {
     }
 
     memset(&p, 0, sizeof(p));
-    probe_clock(report);
-    probe_entropy(report);
+    p.rt = rt;
+    probe_clock(rt, report);
+    probe_entropy(rt, report);
     p.have_region = asx_region_open(rt, &p.region) == ASX_OK;
     probe_socket_start(&p, report);
     probe_blocking_start(&p);
@@ -698,7 +700,7 @@ asx_status asx_doctor_probe(asx_runtime *rt, asx_doctor_report *report) {
      * job: only the reactor and the pool's completion can wake them. The
      * run ends when they are done or at the probe deadline. */
     if (p.tasks > 0u) {
-        budget = probe_budget();
+        budget = probe_budget(rt);
         st = asx_scheduler_run(p.region, &budget);
         (void)st; /* the verdicts are in the tasks' results */
     }

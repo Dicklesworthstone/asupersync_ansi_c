@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../runtime/runtime_internal.h"
 #include <asx/asx_config.h>
 #include <asx/time/deadline.h>
 #include <stdint.h>
@@ -29,7 +30,7 @@ asx_status asx_deadline_after(asx_deadline *dl, uint64_t duration_ns) {
 
     if (dl == NULL) return ASX_E_INVALID_ARGUMENT;
 
-    st = asx_runtime_now_ns(&now);
+    st = asx_kernel_now_ns(asx_kernel_context(), &now);
     if (st != ASX_OK) return st;
 
     /* Saturating, as Rust's deadline arithmetic is (Sleep::after,
@@ -55,7 +56,9 @@ asx_status asx_deadline_arm(asx_deadline *dl, void *waker_data) {
          * is clamped relative to now; otherwise every arm would be
          * clamped to the stale wheel time plus 7 days, in the past once
          * the clock is beyond that. Advancing keeps pending timers. */
-        if (asx_runtime_now_ns(&now) == ASX_OK) asx_timer_advance(wheel, now);
+        if (asx_kernel_now_ns(asx_kernel_context(), &now) == ASX_OK) {
+            asx_timer_advance(wheel, now);
+        }
         st = asx_timer_register(wheel, dl->target_ns, waker_data, &dl->timer);
         if (st != ASX_OK) return st;
     }
@@ -84,7 +87,7 @@ int asx_deadline_is_expired(asx_deadline *dl) {
     if (dl == NULL) return 0;
     if (dl->expired) return 1;
 
-    if (asx_runtime_now_ns(&now) != ASX_OK) return 0;
+    if (asx_kernel_now_ns(asx_kernel_context(), &now) != ASX_OK) return 0;
 
     return asx_deadline_is_expired_at(dl, now);
 }

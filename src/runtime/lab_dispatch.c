@@ -427,7 +427,7 @@ int asx_task_random_u64_internal(asx_task_id self, uint64_t *out) {
         *out = lab_xorshift(&t->lab_ent.rng);
         return 1;
     }
-    return asx_runtime_random_u64(out) == ASX_OK;
+    return asx_kernel_random_u64(asx_kernel_of_or_scope(self), out) == ASX_OK;
 }
 
 int asx_lab_dispatch_active(void) { return g_lab_active; }

@@ -7,6 +7,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../runtime/runtime_internal.h"
 #include <asx/asx_config.h>
 #include <asx/core/broadcast.h>
 #include <asx/core/channel.h>
@@ -722,14 +723,14 @@ static asx_stream_result throttle_poll(void *state, const asx_waker *waker, void
 
     /* Check if enough time has passed */
     if (!ts->first) {
-        asx_runtime_now_ns(&now);
+        (void)asx_kernel_now_ns(asx_kernel_context(), &now);
         if ((uint64_t)now < ts->last_yield + ts->interval_ns) { return ASX_STREAM_PENDING; }
     }
 
     r = asx_stream_poll_next(&ts->inner, waker, out_item);
     if (r == ASX_STREAM_READY) {
         if (ts->first) {
-            asx_runtime_now_ns(&now);
+            (void)asx_kernel_now_ns(asx_kernel_context(), &now);
             ts->first = 0;
         }
         ts->last_yield = (uint64_t)now;

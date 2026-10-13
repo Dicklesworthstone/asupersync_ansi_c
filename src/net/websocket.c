@@ -12,6 +12,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../runtime/runtime_internal.h"
 #include <asx/asx_config.h>
 #include <asx/net/websocket.h>
 #include <asx/portable.h>
@@ -667,7 +668,7 @@ static asx_status ws_queue_frame(asx_ws_engine *ws, uint32_t opcode, int fin,
  * stream anyone can recompute. */
 static asx_status ws_runtime_entropy(void *ctx, uint64_t *out) {
     (void)ctx;
-    return asx_runtime_random_secure_u64(out);
+    return asx_kernel_random_secure_u64(asx_kernel_context(), out);
 }
 
 /* Default random source: runtime entropy hook whitened via SHA-256. */

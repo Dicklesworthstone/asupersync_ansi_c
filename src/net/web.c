@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../runtime/runtime_internal.h"
 #include <asx/asx_config.h>
 #include <asx/net/web.h>
 #include <asx/portable.h>
@@ -291,7 +292,7 @@ static const char k_web_csrf_label[] = "asupersync::web::csrf-token:v1";
  * secure one: a live build with no real entropy source fails closed. */
 static asx_status web_runtime_entropy(void *ctx, uint64_t *out) {
     (void)ctx;
-    return asx_runtime_random_secure_u64(out);
+    return asx_kernel_random_secure_u64(asx_kernel_context(), out);
 }
 
 /* Write hex_len unpredictable lowercase hex chars plus NUL into out:

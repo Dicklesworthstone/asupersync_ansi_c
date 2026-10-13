@@ -233,8 +233,7 @@ static uint32_t next_gen(uint32_t g) {
 }
 
 static asx_time sup_now(void) {
-    asx_time now;
-    if (asx_runtime_now_ns(&now) != ASX_OK) now = asx_runtime_virtual_now();
+    asx_time now = asx_kernel_now_or_virtual_internal(asx_kernel_context());
     return now;
 }
 

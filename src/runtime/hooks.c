@@ -287,9 +287,15 @@ void asx_kernel_virtual_advance(asx_kernel *k, asx_time to) {
 
 void asx_kernel_virtual_set_internal(asx_kernel *k, asx_time to) { k->virtual_now = to; }
 
-asx_time asx_runtime_virtual_now(void) { return asx_kernel_virtual_now(g_kernels[0]); }
+asx_time asx_runtime_virtual_now(const asx_runtime *rt) {
+    const asx_kernel *k = asx_kernel_of_runtime(rt);
+    return k != NULL ? asx_kernel_virtual_now(k) : 0u;
+}
 
-void asx_runtime_virtual_advance(asx_time to) { asx_kernel_virtual_advance(g_kernels[0], to); }
+void asx_runtime_virtual_advance(const asx_runtime *rt, asx_time to) {
+    asx_kernel *k = asx_kernel_of_runtime(rt);
+    if (k != NULL) asx_kernel_virtual_advance(k, to);
+}
 
 /* The default seeded entropy stream (an LCG; real deployments install
  * their own source). It restarts with the runtime, as the virtual clock
@@ -720,8 +726,11 @@ asx_status asx_kernel_now_ns(const asx_kernel *k, asx_time *out_now) {
     return ASX_OK;
 }
 
-asx_status asx_runtime_now_ns(asx_time *out_now) {
-    return asx_kernel_now_ns(g_kernels[0], out_now);
+asx_status asx_runtime_now_ns(const asx_runtime *rt, asx_time *out_now) {
+    const asx_kernel *k = asx_kernel_of_runtime(rt);
+    if (rt == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (k == NULL) return ASX_E_INVALID_STATE;
+    return asx_kernel_now_ns(k, out_now);
 }
 
 asx_time asx_kernel_now_or_virtual_internal(const asx_kernel *k) {
@@ -792,11 +801,21 @@ asx_status asx_kernel_random_u64(asx_kernel *k, uint64_t *out_value) {
     return ASX_OK;
 }
 
-asx_status asx_runtime_random_u64(uint64_t *out_value) {
-    return asx_kernel_random_u64(g_kernels[0], out_value);
+asx_status asx_runtime_random_u64(const asx_runtime *rt, uint64_t *out_value) {
+    asx_kernel *k = asx_kernel_of_runtime(rt);
+    if (rt == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (k == NULL) return ASX_E_INVALID_STATE;
+    return asx_kernel_random_u64(k, out_value);
 }
 
-asx_status asx_runtime_random_secure_u64(uint64_t *out_value) {
+asx_status asx_runtime_random_secure_u64(const asx_runtime *rt, uint64_t *out_value) {
+    asx_kernel *k = asx_kernel_of_runtime(rt);
+    if (rt == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (k == NULL) return ASX_E_INVALID_STATE;
+    return asx_kernel_random_secure_u64(k, out_value);
+}
+
+asx_status asx_kernel_random_secure_u64(asx_kernel *k, uint64_t *out_value) {
     if (!out_value) return ASX_E_INVALID_ARGUMENT;
     if (!g_hooks_installed) return ASX_E_HOOK_MISSING;
 
@@ -817,7 +836,7 @@ asx_status asx_runtime_random_secure_u64(uint64_t *out_value) {
         return ASX_E_HOOK_INVALID;
     }
 #endif
-    return asx_runtime_random_u64(out_value);
+    return asx_kernel_random_u64(k, out_value);
 }
 
 asx_status asx_runtime_reactor_wait(uint32_t timeout_ms, uint32_t *out_ready_count,

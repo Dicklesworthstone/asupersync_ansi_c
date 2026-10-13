@@ -9,6 +9,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../runtime/runtime_internal.h"
 #include <asx/fs/fs.h>
 #include <asx/net/http.h>
 #include <asx/runtime/browser_boundary.h>
@@ -2603,7 +2604,7 @@ static void http_wr_connection(http_writer *w, asx_http_connection_directive dir
 static int http_current_date(char *out, uint32_t out_size) {
     asx_time now = 0u;
 
-    if (asx_runtime_now_ns(&now) != ASX_OK) return 0;
+    if (asx_kernel_now_ns(asx_kernel_context(), &now) != ASX_OK) return 0;
     return asx_http_format_date((uint64_t)(now / 1000000000u), out, out_size) == ASX_OK;
 }
 
@@ -3358,7 +3359,7 @@ void asx_http_server_config_init(asx_http_server_config *cfg, asx_http_router *r
 
 /* Start a new idle-timeout window now (no window without a runtime clock). */
 static void http_server_window_restart(asx_http_server_conn *c) {
-    c->window_open = (uint8_t)(asx_runtime_now_ns(&c->window_start) == ASX_OK);
+    c->window_open = (uint8_t)(asx_kernel_now_ns(asx_kernel_context(), &c->window_start) == ASX_OK);
 }
 
 asx_status asx_http_server_conn_init(asx_http_server_conn *c, asx_tcp_stream stream,
@@ -3660,8 +3661,8 @@ asx_status asx_http_server_conn_poll(asx_http_server_conn *c) {
     if (c == NULL) return ASX_E_INVALID_ARGUMENT;
     if (c->state == ASX_HTTP_CONN_CLOSED) return ASX_OK;
 
-    if (http_server_deadline(c, &deadline) && asx_runtime_now_ns(&now) == ASX_OK &&
-        now >= deadline) {
+    if (http_server_deadline(c, &deadline) &&
+        asx_kernel_now_ns(asx_kernel_context(), &now) == ASX_OK && now >= deadline) {
         c->timed_out = 1u;
         http_server_close(c);
         return ASX_E_TIMED_OUT;
@@ -3754,7 +3755,7 @@ static void http_server_enforce_drain(asx_http_server *hs) {
 
     if (asx_server_drain_deadline(hs->server, &deadline) != ASX_OK) return;
     if (asx_http_server_active_conns(hs) == 0u) return;
-    if (asx_runtime_now_ns(&now) != ASX_OK) return;
+    if (asx_kernel_now_ns(asx_kernel_context(), &now) != ASX_OK) return;
     if (now < deadline) {
         asx_status armed = asx_task_arm_timer(asx_task_current(), deadline);
         (void)armed;

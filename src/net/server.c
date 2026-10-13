@@ -8,6 +8,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../runtime/runtime_internal.h"
 #include <asx/net/server.h>
 #include <asx/runtime/browser_boundary.h>
 #include <string.h>
@@ -142,7 +143,7 @@ asx_status asx_server_shutdown(asx_server *srv) {
     {
         asx_time now;
         srv->drain_has_deadline = 0u;
-        if (asx_runtime_now_ns(&now) == ASX_OK) {
+        if (asx_kernel_now_ns(asx_kernel_context(), &now) == ASX_OK) {
             srv->drain_deadline = now + (asx_time)srv->config.drain_timeout_ms * 1000000u;
             srv->drain_has_deadline = 1u;
         }

@@ -2493,7 +2493,7 @@ static asx_cancel_reason make_reason(asx_cancel_kind kind, asx_region_id origin_
     r.kind = kind;
     r.origin_region = origin_region;
     r.origin_task = origin_task;
-    r.timestamp = asx_runtime_virtual_now();
+    r.timestamp = asx_runtime_virtual_now(&g_rt);
     r.message = message;
     r.cause = NULL;
     r.truncated = 0;
@@ -2548,7 +2548,7 @@ static void exec_race_deadline(it_task *t, asx_task_id self, uint32_t step, uint
         uint32_t off;
         asx_task_id id = ASX_INVALID_ID;
         if (!asx_json_u64(g_in, asx_json_get(g_in, step, "deadline_ns"), &d) ||
-            asx_runtime_now_ns(&now) != ASX_OK || d > UINT64_MAX - now) {
+            asx_runtime_now_ns(&g_rt, &now) != ASX_OK || d > UINT64_MAX - now) {
             it_fail_task(t, idx, "race deadline_ns must be a reachable integer");
             *out = STEP_END;
             return;
@@ -2607,7 +2607,7 @@ static void exec_race_deadline(it_task *t, asx_task_id self, uint32_t step, uint
             return;
         }
         if (t->phase == 2u) return;
-        if (asx_checkpoint(self, &cr) != ASX_OK || asx_runtime_now_ns(&now) != ASX_OK) {
+        if (asx_checkpoint(self, &cr) != ASX_OK || asx_runtime_now_ns(&g_rt, &now) != ASX_OK) {
             it_fail_task(t, idx, "race deadline checkpoint failed");
             *out = STEP_END;
             return;
@@ -2722,7 +2722,7 @@ static void race_refused_wrapper(it_task *t, asx_task_id self, uint32_t idx, it_
         return;
     }
     if (t->phase == 1u) {
-        if (asx_checkpoint(self, &cr) != ASX_OK || asx_runtime_now_ns(&now) != ASX_OK) {
+        if (asx_checkpoint(self, &cr) != ASX_OK || asx_runtime_now_ns(&g_rt, &now) != ASX_OK) {
             it_fail_task(t, idx, "race deadline checkpoint failed");
             *out = STEP_END;
             return;
@@ -2832,7 +2832,7 @@ static int exec_time_op(it_task *t, uint32_t step, uint32_t idx, const char *lab
 
     *out = STEP_NEXT;
     if (strncmp(op, "interval_", 9) != 0 && strncmp(op, "delay_queue_", 12) != 0) return 0;
-    if (asx_runtime_now_ns(&now) != ASX_OK) {
+    if (asx_runtime_now_ns(&g_rt, &now) != ASX_OK) {
         it_fail_task(t, idx, "the runtime clock is not readable");
         *out = STEP_END;
         return 1;
@@ -5270,7 +5270,7 @@ static void apply_driver_op(uint32_t op, uint32_t step) {
             it_fail("advance without ns", NULL);
             return;
         }
-        asx_runtime_virtual_advance(asx_runtime_virtual_now() + ns);
+        asx_runtime_virtual_advance(&g_rt, asx_runtime_virtual_now(&g_rt) + ns);
         return;
     }
     if (strcmp(name, "region_limits") == 0) {
@@ -5804,7 +5804,7 @@ static uint32_t build_snapshot(uint32_t obligations) {
             if (st != NULL && strcmp(st, "Reserved") == 0) quiescent = 0;
         }
     }
-    asx_json_set(g_out, snap, "now_ns", asx_json_new_u64(g_out, asx_runtime_virtual_now()));
+    asx_json_set(g_out, snap, "now_ns", asx_json_new_u64(g_out, asx_runtime_virtual_now(&g_rt)));
     asx_json_set(g_out, snap, "quiescent", asx_json_new_bool(g_out, quiescent));
     asx_json_set(g_out, snap, "tasks", tasks);
     asx_json_set(g_out, snap, "regions", regions);
@@ -6297,7 +6297,7 @@ static asx_status conformance_run(const asx_json_doc *in, uint32_t scenario, asx
             it_fail("script entry without at_ns", NULL);
             break;
         }
-        if (at > asx_runtime_virtual_now()) asx_runtime_virtual_advance(at);
+        if (at > asx_runtime_virtual_now(&g_rt)) asx_runtime_virtual_advance(&g_rt, at);
         apply_driver_op(asx_json_get(in, entry, "op"), i + 1u);
     }
 
