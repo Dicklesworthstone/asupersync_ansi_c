@@ -333,7 +333,7 @@ v4 does not define leak policies: v4 §3.4 LEAK says only "In lab: panic or reco
 
 Rust enum: `ObligationLeakResponse` (`src/runtime/config.rs:1319-1333`). Defaults: `Panic` in `RuntimeConfig` (`src/runtime/config.rs:2242`) and in `RuntimeState`'s internal constructor (`src/runtime/state.rs:2338`); the lab uses `Panic` when `panic_on_obligation_leak` is set and `Log` otherwise (`src/lab/runtime.rs:2435-2439`).
 
-**C status:** enum `asx_leak_response` (`include/asx/asx_config.h:1304-1309`), default `ASX_LEAK_PANIC` (`src/runtime/lifecycle.c:130`, reset at `:180`), as in Rust (owner decision bd-9kll.2.19, DEC-007; row `rule.obligation.leak`). Code that leaks on purpose sets another response. The Recover abort reason is Rust's `Error` since bd-9kll.3.6. Rust parity under `Log`: `leak-policy-leak-reported-001` (`panic_on_leak: false`, which the conformance interpreter maps to LOG). Unit tests: `tests/unit/runtime/test_budget_obligation.c` `recover_policy_aborts_leaked_obligation`, `panic_policy_routes_leak_through_containment`.
+**C status:** enum `asx_leak_response` (`include/asx/asx_config.h:1301-1306`), default `ASX_LEAK_PANIC` (`src/runtime/lifecycle.c:130`, reset at `:180`), as in Rust (owner decision bd-9kll.2.19, DEC-007; row `rule.obligation.leak`). Code that leaks on purpose sets another response. The Recover abort reason is Rust's `Error` since bd-9kll.3.6. Rust parity under `Log`: `leak-policy-leak-reported-001` (`panic_on_leak: false`, which the conformance interpreter maps to LOG). Unit tests: `tests/unit/runtime/test_budget_obligation.c` `recover_policy_aborts_leaked_obligation`, `panic_policy_routes_leak_through_containment`.
 
 ### 5.2 Escalation Policy
 
@@ -345,7 +345,7 @@ C:
 typedef struct {
     uint64_t threshold;
     asx_leak_response escalate_to;
-} asx_leak_escalation_config;   /* include/asx/asx_config.h:1210-1213 */
+} asx_leak_escalation_config;   /* include/asx/asx_config.h:1207-1210 */
 ```
 
 **C status:** the count includes the whole leak batch before its response is picked (`obligation_leak_batch_policy`, `src/runtime/lifecycle.c:480-485`). Explicit token-drop and holder-completion leaks are counted individually, as each dropped Rust token posts its own leak (`state.rs:7036-7042`); C has no destructors, so it cannot tell a dropped token from an obligation Rust's completion audit batches (`state.rs:8354`). The finalization audit counts all remaining Reserved obligations together before choosing one policy response (`src/runtime/lifecycle.c:656-668`). Tests: `leak_escalation_switches_policy_at_threshold`, `leak_escalation_threshold_zero_escalates_the_first_leak`, `region_close_leak_audit_is_one_batch`.
@@ -411,7 +411,7 @@ impl Future for MaskedFinalizer {
 
 A finalizer task gets `finalizer_budget()` (poll quota 100, `src/record/finalizer.rs:53-78`) with a deadline 5 s after it is spawned (`src/runtime/state.rs:8879-8882`), and is wrapped in `BudgetedFinalizer` (`:8923-8928`), which enforces a region shutdown ceiling when one is set (`src/record/finalizer.rs:402-431`). An overrun is advisory at the task's own `Cx`: the lab charges one poll per poll and a poll past the quota raises a PollQuota cancel on the `Cx` (`src/lab/runtime.rs:4661-4669`); the finalizer is masked, so it is never delivered and the finalizer runs on. The deadline arms no timer for a cleanup task (`src/runtime/state.rs:4401`). Only the region's shutdown ceiling (`BudgetedFinalizer`, `src/record/finalizer.rs:423-640`) retires a finalizer for its budget, and it is `None` unless a close with a budget set it (`close_region_command_with_budget`, `src/runtime/state.rs:4938`); neither the lab's DSL close nor its cancel sets one.
 
-**C status:** `asx_runtime_config.finalizer_poll_budget` and `finalizer_time_budget_ns` (`include/asx/asx_config.h:1336-1337`, defaults 100 and 5 s at `src/runtime/hooks.c:891-892`; `rt.c` rejects a zero poll budget) are installed by init and reload and read when an async finalizer is spawned (`asx_region_admit_finalizers_internal`, `src/runtime/quiescence.c`): the task's budget is that poll quota at priority 128 with that deadline after the spawn, so the advisory behavior above is the same in C. C has no region shutdown ceiling, so there is no counterpart of `BudgetedFinalizer`'s enforcement.
+**C status:** `asx_runtime_config.finalizer_poll_budget` and `finalizer_time_budget_ns` (`include/asx/asx_config.h:1333-1334`, defaults 100 and 5 s at `src/runtime/hooks.c:891-892`; `rt.c` rejects a zero poll budget) are installed by init and reload and read when an async finalizer is spawned (`asx_region_admit_finalizers_internal`, `src/runtime/quiescence.c`): the task's budget is that poll quota at priority 128 with that deadline after the spawn, so the advisory behavior above is the same in C. C has no region shutdown ceiling, so there is no counterpart of `BudgetedFinalizer`'s enforcement.
 
 ### 6.5 Finalizer Escalation Policies
 
@@ -423,7 +423,7 @@ A finalizer task gets `finalizer_budget()` (poll quota 100, `src/record/finalize
 
 Correction: at `5e60b1c4c` this enum is stored in `FinalizerStack` (`src/record/finalizer.rs:199-204`) but no runtime code outside `src/record/finalizer.rs` reads it (`git grep` finds only the re-export in `src/record/mod.rs:20`), so the policy described here is not wired into finalizer execution.
 
-**C status:** `asx_finalizer_escalation` (`include/asx/asx_config.h:1312-1316`), default `ASX_FINALIZER_BOUNDED_LOG` (`src/runtime/hooks.c:940`), validated at `src/runtime/rt.c:161-162`, installed at init and reload and read by an async finalizer task's poll (`asx_finalizer_task_poll`, `src/runtime/quiescence.c`) when it is polled past its poll budget or deadline: `SOFT` does nothing, `BOUNDED_LOG` (the default) writes one log line and lets it run on, as Rust's masked finalizer does, and `BOUNDED_PANIC` is a C-only opt-in that completes the task PANICKED at that poll. Rust has no counterpart of the third; the first two are Rust's behavior, since it never consults the enum.
+**C status:** `asx_finalizer_escalation` (`include/asx/asx_config.h:1309-1313`), default `ASX_FINALIZER_BOUNDED_LOG` (`src/runtime/hooks.c:940`), validated at `src/runtime/rt.c:161-162`, installed at init and reload and read by an async finalizer task's poll (`asx_finalizer_task_poll`, `src/runtime/quiescence.c`) when it is polled past its poll budget or deadline: `SOFT` does nothing, `BOUNDED_LOG` (the default) writes one log line and lets it run on, as Rust's masked finalizer does, and `BOUNDED_PANIC` is a C-only opt-in that completes the task PANICKED at that poll. Rust has no counterpart of the third; the first two are Rust's behavior, since it never consults the enum.
 
 ### 6.6 Registration Rejection
 
@@ -479,7 +479,7 @@ This is a C design from the port plan (Section 6.8.D), not a Rust structure. The
 
 Correction to the earlier version: Rust never force-completes a task whose cleanup exceeds its budget, and has no `cleanup_budget_exceeded` flag (`git grep` finds no such identifier at `5e60b1c4c`). In the lab, a poll with no poll quota left only strengthens the task's cancel reason to `PollQuota` (`src/lab/runtime.rs:4663-4671`). The multi-worker scheduler does not charge a task in its cancellation cleanup phase at all: its cleanup budget stays advisory (`consume_budget_poll` and its doc comment, `src/runtime/scheduler/three_lane.rs:1266-1301`). v4 §3.2.3 is a proof sketch that assumes sufficient budgets, and v4 §6 PROG-CANCEL lists the premises (rule `prog.cancel.drains`, #9; C status row `prog.cancel.drains`, Partial).
 
-**C status:** the default matches Rust (`cleanup_hard_bound = 0`, `src/runtime/hooks.c:790`; semantics in `include/asx/asx_config.h:1232-1242`). With the opt-in hard bound, the round-robin scheduler force-completes a cancelled, unmasked task whose cleanup polls are spent as Cancelled with `ASX_SCHED_EVENT_CANCEL_FORCED` (`src/runtime/scheduler.c:1631-1648`), a deliberate deviation excluded from parity. It sets no extra flag, and it does not force-abort obligations: completion goes through `sched_complete` (`src/runtime/scheduler.c:761`), whose completion hook (`:776`) leaks still-held obligations under the leak policy (section 4.2).
+**C status:** the default matches Rust (`cleanup_hard_bound = 0`, `src/runtime/hooks.c:790`; semantics in `include/asx/asx_config.h:1229-1239`). With the opt-in hard bound, the round-robin scheduler force-completes a cancelled, unmasked task whose cleanup polls are spent as Cancelled with `ASX_SCHED_EVENT_CANCEL_FORCED` (`src/runtime/scheduler.c:1887-1905`), a deliberate deviation excluded from parity. It sets no extra flag, and it does not force-abort obligations: completion goes through `sched_complete` (`src/runtime/scheduler.c:761`), whose completion hook (`:776`) leaks still-held obligations under the leak policy (section 4.2).
 
 ### 7.5 Exhaustion During Cleanup
 
@@ -849,7 +849,7 @@ All of these are declared in `include/asx/asx_status.h`. Codes the close and adm
 | `max_cancel_chain_depth` | `uint16_t` | 16 (`src/runtime/hooks.c:788`) | `CancelAttributionConfig::DEFAULT_MAX_DEPTH` 16 (`src/types/cancel.rs:198`) | Validated non-zero (`src/runtime/rt.c:163`); no cancel code reads it |
 | `max_cancel_chain_memory` | `uint32_t` | 4096 (`src/runtime/hooks.c:789`) | `DEFAULT_MAX_MEMORY` 4096 (`src/types/cancel.rs:201`) | No cancel code reads it |
 
-Field declarations: `include/asx/asx_config.h:1225-1231`. The earlier names `max_chain_depth` / `max_chain_memory` are `max_cancel_chain_depth` / `max_cancel_chain_memory` in C.
+Field declarations: `include/asx/asx_config.h:1222-1228`. The earlier names `max_chain_depth` / `max_chain_memory` are `max_cancel_chain_depth` / `max_cancel_chain_memory` in C.
 
 ### 15.4 Invariant Schema Mapping
 

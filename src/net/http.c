@@ -581,6 +581,7 @@ asx_status asx_http_router_add_route(asx_http_router *router, asx_http_method me
 
     if (out_route != NULL) *out_route = NULL;
     if (router == NULL || pattern == NULL || handler == NULL) return ASX_E_INVALID_ARGUMENT;
+    if ((unsigned)method > (unsigned)ASX_HTTP_TRACE) return ASX_E_INVALID_ARGUMENT;
     if (router->count >= ASX_HTTP_MAX_ROUTES) return ASX_E_RESOURCE_EXHAUSTED;
 
     route = &router->routes[router->count];
@@ -1157,7 +1158,6 @@ asx_http_status asx_http_parse_error_status(asx_http_parse_error err) {
     case ASX_HTTP_PERR_TOO_MANY_HEADERS:
     case ASX_HTTP_PERR_HEADERS_TOO_LARGE: return ASX_HTTP_431_HEADER_FIELDS_TOO_LARGE;
     case ASX_HTTP_PERR_BODY_TOO_LARGE: return ASX_HTTP_413_CONTENT_TOO_LARGE;
-    case ASX_HTTP_PERR_UNKNOWN_METHOD:
     case ASX_HTTP_PERR_UNSUPPORTED_TRANSFER_CODING: return ASX_HTTP_501_NOT_IMPLEMENTED;
     case ASX_HTTP_PERR_UNSUPPORTED_VERSION: return ASX_HTTP_505_VERSION_NOT_SUPPORTED;
     case ASX_HTTP_PERR_BAD_START_LINE:
@@ -1189,7 +1189,6 @@ const char *asx_http_parse_error_str(asx_http_parse_error err) {
     switch (err) {
     case ASX_HTTP_PERR_NONE: return "none";
     case ASX_HTTP_PERR_BAD_START_LINE: return "bad-start-line";
-    case ASX_HTTP_PERR_UNKNOWN_METHOD: return "unknown-method";
     case ASX_HTTP_PERR_BAD_TARGET: return "bad-target";
     case ASX_HTTP_PERR_BAD_VERSION: return "bad-version";
     case ASX_HTTP_PERR_UNSUPPORTED_VERSION: return "unsupported-version";
@@ -1231,7 +1230,6 @@ static asx_status http_perr_status(asx_http_parse_error err) {
     case ASX_HTTP_PERR_BODY_TOO_LARGE: return ASX_E_RESOURCE_EXHAUSTED;
     case ASX_HTTP_PERR_UNEXPECTED_EOF: return ASX_E_DISCONNECTED;
     case ASX_HTTP_PERR_BAD_START_LINE:
-    case ASX_HTTP_PERR_UNKNOWN_METHOD:
     case ASX_HTTP_PERR_BAD_TARGET:
     case ASX_HTTP_PERR_BAD_VERSION:
     case ASX_HTTP_PERR_UNSUPPORTED_VERSION:
@@ -1262,7 +1260,7 @@ static asx_status http_perr_status(asx_http_parse_error err) {
 
 /* Parser states (asx_http_parser.state). */
 enum {
-    HTTP_PS_START = 0,        /* expecting a start line (a request skips leading CRLFs) */
+    HTTP_PS_START = 0,        /* expecting the first byte of a start line */
     HTTP_PS_START_LINE,       /* accumulating the start line */
     HTTP_PS_HEADER_LINE,      /* accumulating a header field line */
     HTTP_PS_BODY_LENGTH,      /* Content-Length body */
@@ -1280,20 +1278,6 @@ enum {
     HTTP_PS_ERROR             /* sticky failure */
 };
 
-/* Chunk-extension sub-states (RFC 9112 section 7.1.1:
- * chunk-ext = *( BWS ";" BWS chunk-ext-name [ BWS "=" BWS chunk-ext-val ] )). */
-enum {
-    HTTP_EXT_NEED_SEMI = 0, /* whitespace seen; only more BWS or ';' may follow */
-    HTTP_EXT_NAME_START,    /* after ';' */
-    HTTP_EXT_NAME,          /* inside a name token (line may end here) */
-    HTTP_EXT_AFTER_NAME,    /* BWS after a name */
-    HTTP_EXT_VALUE_START,   /* after '=' */
-    HTTP_EXT_VALUE_TOKEN,   /* inside a token value (line may end here) */
-    HTTP_EXT_QUOTED,        /* inside a quoted-string value */
-    HTTP_EXT_QUOTED_ESCAPE, /* after a backslash in a quoted-string */
-    HTTP_EXT_AFTER_QUOTED   /* closing quote seen (line may end here) */
-};
-
 static asx_status http_parser_fail(asx_http_parser *p, asx_http_parse_error err) {
     p->error = err;
     p->state = HTTP_PS_ERROR;
@@ -1306,7 +1290,6 @@ static void http_parser_begin_message(asx_http_parser *p) {
     p->line_start = 0u;
     p->line_len = 0u;
     p->section_bytes = 0u;
-    p->empty_lines = 0u;
     p->header_count = 0u;
     p->trailer_count = 0u;
     p->content_length = 0u;
@@ -1409,32 +1392,77 @@ static asx_http_parse_error http_parse_version(const uint8_t *s, uint32_t n,
     return ASX_HTTP_PERR_UNSUPPORTED_VERSION;
 }
 
+/* The request-target rules are asupersync's validate_request_target_name and
+ * validate_connect_authority (src/http/h1/codec.rs at 5e60b1c4c), form by form,
+ * so the two parsers refuse the same targets (bd-9kll.16.2.2, .3, .4: align to
+ * Rust, the delta budget is 0). The bytes are 0x21 to 0x7e already. */
+
+/* authority-form (CONNECT): host ":" port with a non-empty all-digit port; the
+ * host is a bracketed literal, or has no ':' and no bracket; no '/', '?' or
+ * '#' anywhere (so no scheme, path or query). */
+static int http_connect_authority_ok(const uint8_t *t, uint32_t n) {
+    uint32_t i;
+    uint32_t colon = n; /* the port separator */
+
+    for (i = 0u; i < n; i++) {
+        if (t[i] == '/' || t[i] == '?' || t[i] == '#') return 0;
+    }
+    if (t[0] == '[') {
+        i = 1u;
+        while (i < n && t[i] != ']') i++;
+        if (i >= n || i == 1u) return 0; /* no ']', or an empty host */
+        if (i + 1u >= n || t[i + 1u] != ':') return 0;
+        colon = i + 1u;
+    } else {
+        for (i = 0u; i < n; i++) {
+            if (t[i] == ':') colon = i; /* the last one */
+        }
+        if (colon == n || colon == 0u) return 0; /* no port, or an empty host */
+        for (i = 0u; i < colon; i++) {
+            if (t[i] == ':' || t[i] == '[' || t[i] == ']') return 0;
+        }
+    }
+    if (colon + 1u >= n) return 0; /* an empty port */
+    for (i = colon + 1u; i < n; i++) {
+        if (!http_is_digit(t[i])) return 0;
+    }
+    return 1;
+}
+
+/* absolute-form: an alphabetic scheme, "://", and a non-empty authority (the
+ * text up to the next '/', '?' or '#'; RFC 9110 section 4.2.1). */
+static int http_absolute_form_ok(const uint8_t *t, uint32_t n) {
+    uint32_t i;
+    uint32_t j;
+
+    for (i = 0u; i + 3u <= n; i++) {
+        if (t[i] == ':' && t[i + 1u] == '/' && t[i + 2u] == '/') break;
+    }
+    if (i + 3u > n || i == 0u) return 0; /* no "://", or no scheme */
+    for (j = 0u; j < i; j++) {
+        if (!((t[j] >= 'a' && t[j] <= 'z') || (t[j] >= 'A' && t[j] <= 'Z'))) return 0;
+    }
+    i += 3u;
+    return i < n && t[i] != '/' && t[i] != '?' && t[i] != '#';
+}
+
 /* Validate the request-target form against the method (RFC 9112 section 3.2). */
 static int http_target_form_ok(asx_http_method method, const uint8_t *t, uint32_t n) {
+    if (n == 0u) return 0;
+    if (n == 1u && t[0] == '*') return method == ASX_HTTP_OPTIONS; /* asterisk-form */
+    if (method == ASX_HTTP_CONNECT) return http_connect_authority_ok(t, n);
+    if (t[0] == '/') return !(n >= 2u && t[1] == '/'); /* origin-form, not "//" */
+    return http_absolute_form_ok(t, n);
+}
+
+static void http_reverse(uint8_t *s, uint32_t n) {
     uint32_t i;
 
-    if (method == ASX_HTTP_CONNECT) {
-        /* authority-form: host ":" port */
-        int has_colon = 0;
-        for (i = 0u; i < n; i++) {
-            if (t[i] == '/' || t[i] == '?' || t[i] == '#' || t[i] == '@') return 0;
-            if (t[i] == ':') has_colon = 1;
-        }
-        return has_colon && t[0] != ':';
+    for (i = 0u; i < n / 2u; i++) {
+        uint8_t t = s[i];
+        s[i] = s[n - 1u - i];
+        s[n - 1u - i] = t;
     }
-    if (t[0] == '/') return 1;                                     /* origin-form */
-    if (n == 1u && t[0] == '*') return method == ASX_HTTP_OPTIONS; /* asterisk-form */
-    /* absolute-form: scheme "://" ... */
-    if (!((t[0] >= 'a' && t[0] <= 'z') || (t[0] >= 'A' && t[0] <= 'Z'))) return 0;
-    for (i = 1u; i < n; i++) {
-        uint8_t c = t[i];
-        if (c == ':') return (n - i) > 3u && t[i + 1u] == '/' && t[i + 2u] == '/';
-        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || http_is_digit(c) || c == '+' ||
-              c == '-' || c == '.')) {
-            return 0;
-        }
-    }
-    return 0;
 }
 
 static asx_status http_parse_request_line(asx_http_parser *p) {
@@ -1444,6 +1472,7 @@ static asx_status http_parse_request_line(asx_http_parser *p) {
     uint32_t m_end;
     uint32_t t_start;
     uint32_t t_len;
+    asx_http_method method;
     asx_http_parse_error verr;
 
     while (i < n && line[i] != ' ') {
@@ -1463,11 +1492,28 @@ static asx_status http_parse_request_line(asx_http_parser *p) {
     i++;
     verr = http_parse_version(line + i, n - i, &p->version);
     if (verr != ASX_HTTP_PERR_NONE) return http_parser_fail(p, verr);
-    if (!http_method_from_token(line, m_end, &p->method)) {
-        return http_parser_fail(p, ASX_HTTP_PERR_UNKNOWN_METHOD);
-    }
-    if (!http_target_form_ok(p->method, line + t_start, t_len)) {
+    /* Any other token is an extension method, as asupersync's Method::Extension
+     * takes it (parse_method_ref, src/http/h1/codec.rs at 5e60b1c4c); RFC 9110
+     * section 9.1 leaves refusing it to the server's 501, which the connection
+     * answers (bd-9kll.16.2.7: align to Rust, the delta budget is 0). */
+    if (!http_method_from_token(line, m_end, &method)) method = ASX_HTTP_EXTENSION;
+    if (!http_target_form_ok(method, line + t_start, t_len)) {
         return http_parser_fail(p, ASX_HTTP_PERR_BAD_TARGET);
+    }
+    p->method = method;
+    if (method == ASX_HTTP_EXTENSION) {
+        /* [method SP target ...] becomes [target NUL method NUL]: the first
+         * method + SP + target bytes rotate left by method + SP (three
+         * reversals), then the method moves up one byte to open the NUL. */
+        uint32_t span = m_end + 1u + t_len;
+        http_reverse(line, span);
+        http_reverse(line, t_len);
+        http_reverse(line + t_len, m_end + 1u);
+        memmove(line + t_len + 1u, line + t_len, m_end);
+        line[t_len] = '\0';
+        line[t_len + 1u + m_end] = '\0';
+        p->head_len = t_len + 1u + m_end + 1u;
+        return ASX_OK;
     }
     memmove(p->head_buf, line + t_start, t_len);
     p->head_buf[t_len] = '\0';
@@ -1625,7 +1671,7 @@ static void http_parser_enter_chunk_size(asx_http_parser *p) {
     p->chunk_size = 0u;
     p->chunk_digits = 0u;
     p->chunk_line_len = 0u;
-    p->ext_state = HTTP_EXT_NEED_SEMI;
+    p->ext_state = 0u;
 }
 
 /* A response whose body framing its status or the request method fixes: 1xx,
@@ -1784,111 +1830,75 @@ static asx_status http_finish_head(asx_http_parser *p) {
     return ASX_OK;
 }
 
-/* Process one byte of a chunk extension. Returns ASX_OK or a failure status. */
+/* One byte of strict UTF-8 (RFC 3629: no overlongs, surrogates or code points
+ * above U+10FFFF). `s` is the state: 0 at a character boundary, 1 to 3 that
+ * many continuation bytes (80..BF) follow, 4 after E0 (A0..BF, then one),
+ * 5 after ED (80..9F, then one), 6 after F0 (90..BF, then two), 7 after F4
+ * (80..8F, then two). Returns 0 for a byte that cannot continue the text. */
+static int http_utf8_step(uint8_t *s, uint8_t b) {
+    switch (*s) {
+    case 0u:
+        if (b < 0x80u) return 1;
+        if (b >= 0xc2u && b <= 0xdfu) {
+            *s = 1u;
+        } else if (b == 0xe0u) {
+            *s = 4u;
+        } else if (b == 0xedu) {
+            *s = 5u;
+        } else if ((b >= 0xe1u && b <= 0xecu) || b == 0xeeu || b == 0xefu) {
+            *s = 2u;
+        } else if (b == 0xf0u) {
+            *s = 6u;
+        } else if (b >= 0xf1u && b <= 0xf3u) {
+            *s = 3u;
+        } else if (b == 0xf4u) {
+            *s = 7u;
+        } else {
+            return 0;
+        }
+        return 1;
+    case 4u:
+        if (b < 0xa0u || b > 0xbfu) return 0;
+        *s = 1u;
+        return 1;
+    case 5u:
+        if (b < 0x80u || b > 0x9fu) return 0;
+        *s = 1u;
+        return 1;
+    case 6u:
+        if (b < 0x90u || b > 0xbfu) return 0;
+        *s = 2u;
+        return 1;
+    case 7u:
+        if (b < 0x80u || b > 0x8fu) return 0;
+        *s = 2u;
+        return 1;
+    default:
+        if (b < 0x80u || b > 0xbfu) return 0;
+        (*s)--;
+        return 1;
+    }
+}
+
+/* Process one byte of a chunk-size line after its ';'. asupersync's chunked
+ * decoder takes everything there that is UTF-8 text with no control character
+ * but HTAB, and no more (parse_chunk_size_line, src/http/h1/codec.rs at
+ * 5e60b1c4c): the RFC 9112 section 7.1.1 chunk-ext grammar is not enforced, so
+ * `5;`, `5;a b` and `5;"x` all frame the same chunk. Only a bare CR or LF, the
+ * smuggling vector that decoder documents, is refused as a line ending
+ * (bd-9kll.16.2.8: align to Rust, the delta budget is 0). Returns ASX_OK or a
+ * failure status. */
 static asx_status http_chunk_ext_byte(asx_http_parser *p, uint8_t b) {
     if (b == '\r') {
-        if (p->ext_state == HTTP_EXT_NAME || p->ext_state == HTTP_EXT_VALUE_TOKEN ||
-            p->ext_state == HTTP_EXT_AFTER_QUOTED) {
-            p->state = HTTP_PS_CHUNK_SIZE_LF;
-            return ASX_OK;
-        }
-        return http_parser_fail(p, ASX_HTTP_PERR_BAD_CHUNK_EXTENSION);
+        if (p->ext_state != 0u) return http_parser_fail(p, ASX_HTTP_PERR_BAD_CHUNK_EXTENSION);
+        p->state = HTTP_PS_CHUNK_SIZE_LF;
+        return ASX_OK;
     }
     if (b == '\n') return http_parser_fail(p, ASX_HTTP_PERR_BAD_LINE_ENDING);
-
-    switch (p->ext_state) {
-    case HTTP_EXT_NEED_SEMI:
-        if (http_is_ows(b)) return ASX_OK;
-        if (b == ';') {
-            p->ext_state = HTTP_EXT_NAME_START;
-            return ASX_OK;
-        }
-        break;
-    case HTTP_EXT_NAME_START:
-        if (http_is_ows(b)) return ASX_OK;
-        if (http_is_tchar(b)) {
-            p->ext_state = HTTP_EXT_NAME;
-            return ASX_OK;
-        }
-        break;
-    case HTTP_EXT_NAME:
-        if (http_is_tchar(b)) return ASX_OK;
-        if (http_is_ows(b)) {
-            p->ext_state = HTTP_EXT_AFTER_NAME;
-            return ASX_OK;
-        }
-        if (b == '=') {
-            p->ext_state = HTTP_EXT_VALUE_START;
-            return ASX_OK;
-        }
-        if (b == ';') {
-            p->ext_state = HTTP_EXT_NAME_START;
-            return ASX_OK;
-        }
-        break;
-    case HTTP_EXT_AFTER_NAME:
-        if (http_is_ows(b)) return ASX_OK;
-        if (b == '=') {
-            p->ext_state = HTTP_EXT_VALUE_START;
-            return ASX_OK;
-        }
-        if (b == ';') {
-            p->ext_state = HTTP_EXT_NAME_START;
-            return ASX_OK;
-        }
-        break;
-    case HTTP_EXT_VALUE_START:
-        if (http_is_ows(b)) return ASX_OK;
-        if (b == '"') {
-            p->ext_state = HTTP_EXT_QUOTED;
-            return ASX_OK;
-        }
-        if (http_is_tchar(b)) {
-            p->ext_state = HTTP_EXT_VALUE_TOKEN;
-            return ASX_OK;
-        }
-        break;
-    case HTTP_EXT_VALUE_TOKEN:
-        if (http_is_tchar(b)) return ASX_OK;
-        if (http_is_ows(b)) {
-            p->ext_state = HTTP_EXT_NEED_SEMI;
-            return ASX_OK;
-        }
-        if (b == ';') {
-            p->ext_state = HTTP_EXT_NAME_START;
-            return ASX_OK;
-        }
-        break;
-    case HTTP_EXT_QUOTED:
-        if (b == '"') {
-            p->ext_state = HTTP_EXT_AFTER_QUOTED;
-            return ASX_OK;
-        }
-        if (b == '\\') {
-            p->ext_state = HTTP_EXT_QUOTED_ESCAPE;
-            return ASX_OK;
-        }
-        if (http_is_field_char(b)) return ASX_OK;
-        break;
-    case HTTP_EXT_QUOTED_ESCAPE:
-        if (http_is_field_char(b)) {
-            p->ext_state = HTTP_EXT_QUOTED;
-            return ASX_OK;
-        }
-        break;
-    case HTTP_EXT_AFTER_QUOTED:
-        if (http_is_ows(b)) {
-            p->ext_state = HTTP_EXT_NEED_SEMI;
-            return ASX_OK;
-        }
-        if (b == ';') {
-            p->ext_state = HTTP_EXT_NAME_START;
-            return ASX_OK;
-        }
-        break;
-    default: break;
+    if ((b < 0x20u && b != '\t') || b == 0x7fu || !http_utf8_step(&p->ext_state, b)) {
+        return http_parser_fail(p, ASX_HTTP_PERR_BAD_CHUNK_EXTENSION);
     }
-    return http_parser_fail(p, ASX_HTTP_PERR_BAD_CHUNK_EXTENSION);
+    return ASX_OK;
 }
 
 /* Shared body-delivery path: emit `n` bytes starting at in+pos. */
@@ -1946,31 +1956,18 @@ asx_status asx_http_parser_feed(asx_http_parser *p, const void *data, uint32_t l
         case HTTP_PS_START:
             if (pos >= len) goto need_more;
             b = in[pos];
-            if (p->cr_seen) {
-                pos++;
-                p->cr_seen = 0u;
-                if (b != '\n') return http_parser_fail(p, ASX_HTTP_PERR_BAD_LINE_ENDING);
-                p->empty_lines++;
-                if (p->empty_lines > ASX_HTTP_MAX_LEADING_EMPTY_LINES) {
-                    return http_parser_fail(p, ASX_HTTP_PERR_BAD_START_LINE);
-                }
-                break;
-            }
-            if ((b == '\r' || b == '\n') && p->kind == ASX_HTTP_PARSE_RESPONSE) {
+            if (b == '\r' || b == '\n') {
                 /* RFC 9112 section 2.2 lets a server skip empty lines before
-                 * a request-line and says nothing of a status-line. asupersync's
-                 * client codec reads the empty line as the status-line and
-                 * refuses it (parse_status_line, src/http/h1/client.rs at
-                 * 5e60b1c4c), so a response starts at its first byte
-                 * (bd-9kll.16.2.9: align to Rust, the delta budget is 0). */
+                 * a request-line (a SHOULD) and says nothing of a status-line.
+                 * asupersync's codecs read the empty line as the start line
+                 * and refuse it (a request line is the bytes up to the first
+                 * CRLF and an empty one fails parse_request_line_ref_slow,
+                 * src/http/h1/codec.rs; parse_status_line, client.rs; both at
+                 * 5e60b1c4c), so a message starts at its first byte
+                 * (bd-9kll.16.2.1 and .9: align to Rust, the delta budget is
+                 * 0). */
                 return http_parser_fail(p, ASX_HTTP_PERR_BAD_START_LINE);
             }
-            if (b == '\r') {
-                pos++;
-                p->cr_seen = 1u;
-                break;
-            }
-            if (b == '\n') return http_parser_fail(p, ASX_HTTP_PERR_BAD_LINE_ENDING);
             p->state = HTTP_PS_START_LINE;
             p->line_start = 0u;
             p->line_len = 0u;
@@ -2070,10 +2067,9 @@ asx_status asx_http_parser_feed(asx_http_parser *p, const void *data, uint32_t l
             if (b == '\r') {
                 p->state = HTTP_PS_CHUNK_SIZE_LF;
             } else if (b == ';') {
-                p->ext_state = HTTP_EXT_NAME_START;
-                p->state = HTTP_PS_CHUNK_EXT;
-            } else if (http_is_ows(b)) {
-                p->ext_state = HTTP_EXT_NEED_SEMI;
+                /* No whitespace before it: the size part of the line holds
+                 * hex digits and nothing else (bd-9kll.16.2.8). */
+                p->ext_state = 0u;
                 p->state = HTTP_PS_CHUNK_EXT;
             } else if (b == '\n') {
                 return http_parser_fail(p, ASX_HTTP_PERR_BAD_LINE_ENDING);
@@ -2190,7 +2186,7 @@ asx_status asx_http_parser_finish(asx_http_parser *p, asx_http_event *ev) {
 int asx_http_parser_is_idle(const asx_http_parser *p) {
     if (p == NULL) return 0;
     if (p->state == HTTP_PS_DONE) return 1;
-    return p->state == HTTP_PS_START && !p->cr_seen && p->empty_lines == 0u;
+    return p->state == HTTP_PS_START;
 }
 
 int asx_http_parser_is_upgraded(const asx_http_parser *p) {
@@ -2207,6 +2203,18 @@ int asx_http_parser_head_complete(const asx_http_parser *p) { return p != NULL &
 asx_http_method asx_http_parser_method(const asx_http_parser *p) {
     if (p == NULL) return ASX_HTTP_GET;
     return p->method;
+}
+
+const char *asx_http_parser_method_token(const asx_http_parser *p) {
+    const char *target;
+
+    if (p == NULL || p->kind != ASX_HTTP_PARSE_REQUEST || p->method != ASX_HTTP_EXTENSION) {
+        return NULL;
+    }
+    if (p->state == HTTP_PS_START || p->state == HTTP_PS_START_LINE) return NULL;
+    /* [target NUL method NUL ...] (http_parse_request_line) */
+    target = (const char *)p->head_buf;
+    return target + strlen(target) + 1u;
 }
 
 const char *asx_http_parser_target(const asx_http_parser *p) {
@@ -3503,8 +3511,17 @@ static void http_server_dispatch(asx_http_server_conn *c) {
     }
 
     asx_http_response_init(&c->response, ASX_HTTP_200_OK);
-    st = asx_http_router_dispatch(c->config.router, &c->request, &c->response, c->config.session,
-                                  c->config.security, NULL);
+    if (original == ASX_HTTP_EXTENSION) {
+        /* RFC 9110 section 9.1: a method the server does not implement is
+         * answered 501 (no route names an extension method), and the
+         * connection closes as it did when the parser refused the method. */
+        asx_http_response_init(&c->response, ASX_HTTP_501_NOT_IMPLEMENTED);
+        keep = 0;
+        st = ASX_OK;
+    } else {
+        st = asx_http_router_dispatch(c->config.router, &c->request, &c->response,
+                                      c->config.session, c->config.security, NULL);
+    }
     if (st == ASX_E_NOT_FOUND && head_request) {
         /* RFC 9110 section 9.3.2: HEAD mirrors GET without the content. */
         c->request.method = ASX_HTTP_GET;

@@ -779,8 +779,15 @@ static void diff_complete(const asx_http_parser *p, asx_http_parse_kind kind, ui
                           uint64_t body_fnv, uint32_t consumed) {
     fputs("{\"kind\":\"complete\",", stdout);
     if (kind == ASX_HTTP_PARSE_REQUEST) {
+        asx_http_method method = asx_http_parser_method(p);
+        const char *token = asx_http_parser_method_token(p);
+
+        /* an extension method has no name of its own: its text is the token */
+        if ((method == ASX_HTTP_EXTENSION) != (token != NULL)) {
+            fuzz_fail("http method token exactly for an extension method");
+        }
         fputs("\"method\":", stdout);
-        diff_put_cstr(asx_http_method_str(asx_http_parser_method(p)));
+        diff_put_cstr(token != NULL ? token : asx_http_method_str(method));
         fputs(",\"target\":", stdout);
         diff_put_cstr(asx_http_parser_target(p));
     } else {

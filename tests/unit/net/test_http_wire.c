@@ -303,21 +303,178 @@ TEST(parse_pipelined_requests) {
     }
 }
 
-TEST(parse_leading_empty_lines_bounded) {
-    ASSERT_EQ(parse_with(ASX_HTTP_PARSE_REQUEST, NULL,
-                         LIT("\r\n\r\nGET / HTTP/1.1\r\nHost: a\r\n\r\n"), 0u),
-              ASX_OK);
+/* bd-9kll.16.2.1. A request starts at its first byte too: RFC 9112 section
+ * 2.2's allowance to skip an empty line before the request-line is a SHOULD,
+ * and asupersync's codec refuses one (src/http/h1/codec.rs at 5e60b1c4c), so
+ * the parser does and the tolerance knob is gone. A message after a complete
+ * one starts the same way. */
+TEST(parse_message_starts_at_its_first_byte) {
+    static const char *const bad[] = {"\r\nGET / HTTP/1.1\r\nHost: a\r\n\r\n",
+                                      "\r\n\r\nGET / HTTP/1.1\r\nHost: a\r\n\r\n",
+                                      "\nGET / HTTP/1.1\r\nHost: a\r\n\r\n",
+                                      "\rGET / HTTP/1.1\r\nHost: a\r\n\r\n"};
+    uint32_t i;
+    uint32_t step;
+
+    for (step = 0u; step < 2u; step++) {
+        for (i = 0u; i < (uint32_t)(sizeof(bad) / sizeof(bad[0])); i++) {
+            ASSERT_EQ(parse_with(ASX_HTTP_PARSE_REQUEST, NULL, bad[i], (uint32_t)strlen(bad[i]),
+                                 step),
+                      ASX_E_INVALID_ARGUMENT);
+            ASSERT_EQ(asx_http_parser_error(&g_parser), ASX_HTTP_PERR_BAD_START_LINE);
+            ASSERT_EQ(g_cap.completes, 0u);
+        }
+    }
+    /* the second message of a connection: the first one's CRLF is its own */
+    ASSERT_EQ(
+        parse_with(ASX_HTTP_PARSE_REQUEST, NULL,
+                   LIT("GET /a HTTP/1.1\r\nHost: a\r\n\r\n\r\nGET /b HTTP/1.1\r\nHost: a\r\n\r\n"),
+                   0u),
+        ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_http_parser_error(&g_parser), ASX_HTTP_PERR_BAD_START_LINE);
     ASSERT_EQ(g_cap.completes, 1u);
+}
+
+/* bd-9kll.16.2.7. A request-line method that is a token but none of the
+ * nine is an extension method, as asupersync's Method::Extension takes it
+ * (RFC 9110 section 9.1): the parser reports ASX_HTTP_EXTENSION and keeps the
+ * text, and the rest of the request parses as for any method. */
+TEST(parse_extension_methods_keep_their_text) {
+    static const char *const methods[] = {"BREW",
+                                          "get",
+                                          "a",
+                                          "PURGE",
+                                          "M-SEARCH",
+                                          "a!#$%&'*+.^_`|~",
+                                          "PROPFIND0123456789012345678901234"};
+    uint32_t i;
+    uint32_t step;
+
+    for (i = 0u; i < (uint32_t)(sizeof(methods) / sizeof(methods[0])); i++) {
+        char msg[160];
+        int n =
+            snprintf(msg, sizeof(msg),
+                     "%s /x?y=1 HTTP/1.1\r\nHost: a\r\nContent-Length: 3\r\n\r\nabc", methods[i]);
+
+        ASSERT_TRUE(n > 0 && (size_t)n < sizeof(msg));
+        for (step = 0u; step < 3u; step++) {
+            ASSERT_EQ(parse_with(ASX_HTTP_PARSE_REQUEST, NULL, msg, (uint32_t)n, step), ASX_OK);
+            ASSERT_EQ(g_cap.completes, 1u);
+            ASSERT_EQ(asx_http_parser_method(&g_parser), ASX_HTTP_EXTENSION);
+            ASSERT_STR_EQ(asx_http_parser_method_token(&g_parser), methods[i]);
+            ASSERT_STR_EQ(asx_http_parser_target(&g_parser), "/x?y=1");
+            ASSERT_STR_EQ(asx_http_parser_header(&g_parser, "host"), "a");
+            ASSERT_TRUE(cap_body_is(0u, "abc"));
+        }
+    }
+    /* a known method has no token, and the name of an extension is not one */
+    ASSERT_EQ(parse_with(ASX_HTTP_PARSE_REQUEST, NULL, LIT("GET / HTTP/1.1\r\nHost: a\r\n\r\n"),
+                         0u),
+              ASX_OK);
+    ASSERT_EQ(asx_http_parser_method(&g_parser), ASX_HTTP_GET);
+    ASSERT_TRUE(asx_http_parser_method_token(&g_parser) == NULL);
+    ASSERT_STR_EQ(asx_http_method_str(ASX_HTTP_EXTENSION), "UNKNOWN");
+    /* the target rules apply to an extension method as to the others */
+    ASSERT_EQ(parse_with(ASX_HTTP_PARSE_REQUEST, NULL, LIT("PURGE * HTTP/1.1\r\nHost: a\r\n\r\n"),
+                         0u),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_http_parser_error(&g_parser), ASX_HTTP_PERR_BAD_TARGET);
     ASSERT_EQ(parse_with(ASX_HTTP_PARSE_REQUEST, NULL,
-                         LIT("\r\n\r\n\r\n\r\n\r\nGET / HTTP/1.1\r\nHost: a\r\n\r\n"), 0u),
+                         LIT("PURGE a:80 HTTP/1.1\r\nHost: a\r\n\r\n"), 0u),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_http_parser_error(&g_parser), ASX_HTTP_PERR_BAD_TARGET);
+    ASSERT_EQ(parse_with(ASX_HTTP_PARSE_REQUEST, NULL,
+                         LIT("PURGE http://h/p HTTP/1.1\r\nHost: a\r\n\r\n"), 0u),
+              ASX_OK);
+    ASSERT_STR_EQ(asx_http_parser_method_token(&g_parser), "PURGE");
+    ASSERT_STR_EQ(asx_http_parser_target(&g_parser), "http://h/p");
+    /* a name that is not a token is still a bad start line */
+    ASSERT_EQ(parse_with(ASX_HTTP_PARSE_REQUEST, NULL,
+                         LIT("G\xc3\xa9T / HTTP/1.1\r\nHost: a\r\n\r\n"), 0u),
               ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_http_parser_error(&g_parser), ASX_HTTP_PERR_BAD_START_LINE);
+}
+
+/* bd-9kll.16.2.2 to .4. The request-target forms are asupersync's
+ * (validate_request_target_name, validate_connect_authority): what is
+ * refused is in g_rejects, what a first reading of the RFC might refuse and
+ * Rust takes is here. */
+TEST(parse_request_targets_follow_rust) {
+    static const struct {
+        const char *line;
+        const char *target;
+    } ok[] = {
+        {"GET /a/b?c=d#e HTTP/1.1", "/a/b?c=d#e"},
+        {"GET /./..//x HTTP/1.1", "/./..//x"},
+        {"GET http://h HTTP/1.1", "http://h"},
+        {"GET HtTp://u@h:80/p?q HTTP/1.1", "HtTp://u@h:80/p?q"},
+        {"GET x://h/ HTTP/1.1", "x://h/"},
+        {"GET http://h:/p HTTP/1.1", "http://h:/p"},
+        {"OPTIONS * HTTP/1.1", "*"},
+        {"CONNECT h:443 HTTP/1.1", "h:443"},
+        {"CONNECT 1.2.3.4:8080 HTTP/1.1", "1.2.3.4:8080"},
+        {"CONNECT a@b:80 HTTP/1.1", "a@b:80"},
+        {"CONNECT [::1]:443 HTTP/1.1", "[::1]:443"},
+        {"CONNECT [a:b]:0 HTTP/1.1", "[a:b]:0"},
+    };
+    uint32_t i;
+
+    for (i = 0u; i < (uint32_t)(sizeof(ok) / sizeof(ok[0])); i++) {
+        char msg[160];
+        int n = snprintf(msg, sizeof(msg), "%s\r\nHost: a\r\n\r\n", ok[i].line);
+
+        ASSERT_TRUE(n > 0 && (size_t)n < sizeof(msg));
+        ASSERT_EQ(parse_with(ASX_HTTP_PARSE_REQUEST, NULL, msg, (uint32_t)n, 0u), ASX_OK);
+        ASSERT_STR_EQ(asx_http_parser_target(&g_parser), ok[i].target);
+    }
+}
+
+/* bd-9kll.16.2.8. The chunk-size line is asupersync's parse_chunk_size_line
+ * (src/http/h1/codec.rs at 5e60b1c4c): hex digits and nothing else before the
+ * first ';', and after it anything that is UTF-8 with no control character but
+ * HTAB, so the chunk-ext grammar of RFC 9112 section 7.1.1 is not enforced.
+ * g_rejects holds what is refused. */
+TEST(parse_chunk_size_line_follows_rust) {
+    static const char *const lines[] = {
+        "5;",
+        "5;a=",
+        "5;a=\"x",
+        "5;a=b c",
+        "5;;",
+        "5; ;",
+        "5;\t",
+        "5;a=\"b;c\"",
+        "5;\xc3\xa9",
+        "5;\xe2\x82\xac=\xf0\x9f\x98\x80",
+        "5;\xf4\x8f\xbf\xbf",
+        "5;\xed\x9f\xbf",
+        "5;\xef\xbf\xbd",
+        "05;x",
+        "5;a;b=c;\"d\"",
+    };
+    uint32_t i;
+    uint32_t step;
+
+    for (i = 0u; i < (uint32_t)(sizeof(lines) / sizeof(lines[0])); i++) {
+        char msg[200];
+        int n = snprintf(msg, sizeof(msg),
+                         "POST / HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: chunked\r\n\r\n"
+                         "%s\r\nhello\r\n0\r\n\r\n",
+                         lines[i]);
+
+        ASSERT_TRUE(n > 0 && (size_t)n < sizeof(msg));
+        for (step = 0u; step < 3u; step++) {
+            ASSERT_EQ(parse_with(ASX_HTTP_PARSE_REQUEST, NULL, msg, (uint32_t)n, step), ASX_OK);
+            ASSERT_EQ(g_cap.completes, 1u);
+            ASSERT_TRUE(cap_body_is(0u, "hello"));
+        }
+    }
 }
 
 TEST(parse_chunk_extensions_and_trailers) {
     static const char msg[] = "POST /w HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: Chunked\r\n\r\n"
                               "4;a\r\nWiki\r\n"
-                              "5 ;b=c ; d = \"e f\"\r\npedia\r\n"
+                              "5;b=c ; d = \"e f\"\r\npedia\r\n"
                               "E;q=\"x;y \\\" z\"\r\n in\r\n\r\nchunks.\r\n"
                               "0;last\r\n"
                               "X-Trailer-A: one\r\n"
@@ -391,7 +548,8 @@ static const reject_vector g_rejects[] = {
     RV("GET / HTTP/1.1\r\nHost: a\r\n\n", ASX_HTTP_PERR_BAD_LINE_ENDING),
     RV("GET / HTTP/1.1\r\nHost: a\rX: b\r\n\r\n", ASX_HTTP_PERR_BAD_LINE_ENDING),
     RV("GET / HTTP/1.1\r\r\nHost: a\r\n\r\n", ASX_HTTP_PERR_BAD_LINE_ENDING),
-    RV("\nGET / HTTP/1.1\r\nHost: a\r\n\r\n", ASX_HTTP_PERR_BAD_LINE_ENDING),
+    RV("\nGET / HTTP/1.1\r\nHost: a\r\n\r\n", ASX_HTTP_PERR_BAD_START_LINE),
+    RV("\r\nGET / HTTP/1.1\r\nHost: a\r\n\r\n", ASX_HTTP_PERR_BAD_START_LINE),
     /* Field syntax. */
     RV("GET / HTTP/1.1\r\nHost : a\r\n\r\n", ASX_HTTP_PERR_BAD_HEADER_NAME),
     RV("GET / HTTP/1.1\r\nHost: a\r\n: b\r\n\r\n", ASX_HTTP_PERR_BAD_HEADER_NAME),
@@ -405,8 +563,6 @@ static const reject_vector g_rejects[] = {
     RV("GET / HTTP/1.1\r\n\r\n", ASX_HTTP_PERR_MISSING_HOST),
     RV("GET / HTTP/1.1\r\nHost: a\r\nHost: b\r\n\r\n", ASX_HTTP_PERR_DUPLICATE_HOST),
     /* Request line. */
-    RV("BREW /pot HTTP/1.1\r\nHost: a\r\n\r\n", ASX_HTTP_PERR_UNKNOWN_METHOD),
-    RV("get / HTTP/1.1\r\nHost: a\r\n\r\n", ASX_HTTP_PERR_UNKNOWN_METHOD),
     RV("GE(T / HTTP/1.1\r\nHost: a\r\n\r\n", ASX_HTTP_PERR_BAD_START_LINE),
     RV("GET  / HTTP/1.1\r\nHost: a\r\n\r\n", ASX_HTTP_PERR_BAD_START_LINE),
     RV("GET /\r\nHost: a\r\n\r\n", ASX_HTTP_PERR_BAD_START_LINE),
@@ -420,6 +576,29 @@ static const reject_vector g_rejects[] = {
     RV("GET a HTTP/1.1\r\nHost: a\r\n\r\n", ASX_HTTP_PERR_BAD_TARGET),
     RV("GET * HTTP/1.1\r\nHost: a\r\n\r\n", ASX_HTTP_PERR_BAD_TARGET),
     RV("CONNECT /x HTTP/1.1\r\nHost: a\r\n\r\n", ASX_HTTP_PERR_BAD_TARGET),
+    /* Request-target forms asupersync refuses (bd-9kll.16.2.2 to .4). */
+    RV("GET // HTTP/1.1\r\nHost: a\r\n\r\n", ASX_HTTP_PERR_BAD_TARGET),
+    RV("GET //x/y HTTP/1.1\r\nHost: a\r\n\r\n", ASX_HTTP_PERR_BAD_TARGET),
+    RV("GET http:///p HTTP/1.1\r\nHost: a\r\n\r\n", ASX_HTTP_PERR_BAD_TARGET),
+    RV("GET http://?q HTTP/1.1\r\nHost: a\r\n\r\n", ASX_HTTP_PERR_BAD_TARGET),
+    RV("GET http://#f HTTP/1.1\r\nHost: a\r\n\r\n", ASX_HTTP_PERR_BAD_TARGET),
+    RV("GET http:// HTTP/1.1\r\nHost: a\r\n\r\n", ASX_HTTP_PERR_BAD_TARGET),
+    RV("GET a:/// HTTP/1.1\r\nHost: a\r\n\r\n", ASX_HTTP_PERR_BAD_TARGET),
+    RV("GET ://h/ HTTP/1.1\r\nHost: a\r\n\r\n", ASX_HTTP_PERR_BAD_TARGET),
+    RV("GET h2://h/ HTTP/1.1\r\nHost: a\r\n\r\n", ASX_HTTP_PERR_BAD_TARGET),
+    RV("GET a+b://h/ HTTP/1.1\r\nHost: a\r\n\r\n", ASX_HTTP_PERR_BAD_TARGET),
+    RV("CONNECT a: HTTP/1.1\r\nHost: a\r\n\r\n", ASX_HTTP_PERR_BAD_TARGET),
+    RV("CONNECT :80 HTTP/1.1\r\nHost: a\r\n\r\n", ASX_HTTP_PERR_BAD_TARGET),
+    RV("CONNECT a HTTP/1.1\r\nHost: a\r\n\r\n", ASX_HTTP_PERR_BAD_TARGET),
+    RV("CONNECT a:8x HTTP/1.1\r\nHost: a\r\n\r\n", ASX_HTTP_PERR_BAD_TARGET),
+    RV("CONNECT a:b:80 HTTP/1.1\r\nHost: a\r\n\r\n", ASX_HTTP_PERR_BAD_TARGET),
+    RV("CONNECT [::1] HTTP/1.1\r\nHost: a\r\n\r\n", ASX_HTTP_PERR_BAD_TARGET),
+    RV("CONNECT []:80 HTTP/1.1\r\nHost: a\r\n\r\n", ASX_HTTP_PERR_BAD_TARGET),
+    RV("CONNECT [::1:80 HTTP/1.1\r\nHost: a\r\n\r\n", ASX_HTTP_PERR_BAD_TARGET),
+    RV("CONNECT [::1]: HTTP/1.1\r\nHost: a\r\n\r\n", ASX_HTTP_PERR_BAD_TARGET),
+    RV("CONNECT a]:80 HTTP/1.1\r\nHost: a\r\n\r\n", ASX_HTTP_PERR_BAD_TARGET),
+    RV("CONNECT http://a:80 HTTP/1.1\r\nHost: a\r\n\r\n", ASX_HTTP_PERR_BAD_TARGET),
+    RV("OPTIONS ** HTTP/1.1\r\nHost: a\r\n\r\n", ASX_HTTP_PERR_BAD_TARGET),
     /* Chunk-size line. */
     RV(CH "zz\r\n", ASX_HTTP_PERR_BAD_CHUNK_SIZE),
     RV(CH " 5\r\nhello\r\n0\r\n\r\n", ASX_HTTP_PERR_BAD_CHUNK_SIZE),
@@ -430,12 +609,24 @@ static const reject_vector g_rejects[] = {
     RV(CH "\r\n", ASX_HTTP_PERR_BAD_CHUNK_SIZE),
     RV(CH "10000000000000000\r\n", ASX_HTTP_PERR_CHUNK_SIZE_OVERFLOW),
     RV(CH "fffffffffffffffff\r\n", ASX_HTTP_PERR_CHUNK_SIZE_OVERFLOW),
-    RV(CH "5 \r\nhello\r\n0\r\n\r\n", ASX_HTTP_PERR_BAD_CHUNK_EXTENSION),
-    RV(CH "5;\r\nhello\r\n", ASX_HTTP_PERR_BAD_CHUNK_EXTENSION),
-    RV(CH "5;a=\r\nhello\r\n", ASX_HTTP_PERR_BAD_CHUNK_EXTENSION),
-    RV(CH "5;a=\"x\r\nhello\r\n", ASX_HTTP_PERR_BAD_CHUNK_EXTENSION),
+    /* Whitespace in the size part (before ';' or at the end) is not a digit. */
+    RV(CH "5 \r\nhello\r\n0\r\n\r\n", ASX_HTTP_PERR_BAD_CHUNK_SIZE),
+    RV(CH "5 ;a\r\nhello\r\n0\r\n\r\n", ASX_HTTP_PERR_BAD_CHUNK_SIZE),
+    RV(CH "5\t;a\r\nhello\r\n0\r\n\r\n", ASX_HTTP_PERR_BAD_CHUNK_SIZE),
+    /* After ';' anything but a control character other than HTAB, and
+     * anything that is not UTF-8 (bd-9kll.16.2.8). */
     RV(CH "5;a\x01\r\nhello\r\n", ASX_HTTP_PERR_BAD_CHUNK_EXTENSION),
-    RV(CH "5;a=b c\r\nhello\r\n", ASX_HTTP_PERR_BAD_CHUNK_EXTENSION),
+    RV(CH "5;a\x7f\r\nhello\r\n", ASX_HTTP_PERR_BAD_CHUNK_EXTENSION),
+    RV(CH "5;a\x0c\r\nhello\r\n", ASX_HTTP_PERR_BAD_CHUNK_EXTENSION),
+    RV(CH "5;a\0b\r\nhello\r\n", ASX_HTTP_PERR_BAD_CHUNK_EXTENSION),
+    RV(CH "5;\xff\r\nhello\r\n", ASX_HTTP_PERR_BAD_CHUNK_EXTENSION),
+    RV(CH "5;\xc3\r\nhello\r\n", ASX_HTTP_PERR_BAD_CHUNK_EXTENSION),
+    RV(CH "5;\xc3(\r\nhello\r\n", ASX_HTTP_PERR_BAD_CHUNK_EXTENSION),
+    RV(CH "5;\xc0\x80\r\nhello\r\n", ASX_HTTP_PERR_BAD_CHUNK_EXTENSION),
+    RV(CH "5;\xe0\x80\x80\r\nhello\r\n", ASX_HTTP_PERR_BAD_CHUNK_EXTENSION),
+    RV(CH "5;\xed\xa0\x80\r\nhello\r\n", ASX_HTTP_PERR_BAD_CHUNK_EXTENSION),
+    RV(CH "5;\xf4\x90\x80\x80\r\nhello\r\n", ASX_HTTP_PERR_BAD_CHUNK_EXTENSION),
+    RV(CH "5;\xe2\x82\r\nhello\r\n", ASX_HTTP_PERR_BAD_CHUNK_EXTENSION),
     RV(CH "5\nhello\r\n0\r\n\r\n", ASX_HTTP_PERR_BAD_LINE_ENDING),
     RV(CH "5;a\nhello\r\n", ASX_HTTP_PERR_BAD_LINE_ENDING),
     /* Chunk data terminator. */
@@ -486,9 +677,11 @@ TEST(rejection_status_mapping_examples) {
                          LIT(RQ "Content-Length: 1\r\nTransfer-Encoding: chunked\r\n\r\n"), 0u),
               ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_http_parse_error_status(asx_http_parser_error(&g_parser)), 400u);
-    ASSERT_EQ(parse_with(ASX_HTTP_PARSE_REQUEST, NULL, LIT("BREW / HTTP/1.1\r\nHost: a\r\n\r\n"),
-                         0u),
-              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(
+        parse_with(ASX_HTTP_PARSE_REQUEST, NULL,
+                   LIT("POST /e HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: gzip, chunked\r\n\r\n"),
+                   0u),
+        ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_http_parse_error_status(asx_http_parser_error(&g_parser)), 501u);
     ASSERT_EQ(parse_with(ASX_HTTP_PARSE_REQUEST, NULL, LIT("GET / HTTP/3.0\r\nHost: a\r\n\r\n"),
                          0u),
@@ -897,7 +1090,7 @@ TEST(parse_response_with_fixed_framing_does_not_read_its_framing_fields) {
  * codec reads an empty first line as the status-line and refuses it
  * (parse_status_line, src/http/h1/client.rs at 5e60b1c4c). RFC 9112 section
  * 2.2's allowance to skip empty lines is for a request-line, and a request
- * still skips them (parse_leading_empty_lines_bounded). */
+ * no longer skips them either (parse_message_starts_at_its_first_byte). */
 TEST(parse_response_starts_at_its_first_byte) {
     ASSERT_EQ(parse_with(ASX_HTTP_PARSE_RESPONSE, NULL,
                          LIT("\r\nHTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"), 0u),
@@ -2278,7 +2471,10 @@ int main(void) {
     RUN_TEST(parse_chunked_at_every_split_point);
     RUN_TEST(parse_content_length_body_byte_at_a_time);
     RUN_TEST(parse_pipelined_requests);
-    RUN_TEST(parse_leading_empty_lines_bounded);
+    RUN_TEST(parse_message_starts_at_its_first_byte);
+    RUN_TEST(parse_extension_methods_keep_their_text);
+    RUN_TEST(parse_request_targets_follow_rust);
+    RUN_TEST(parse_chunk_size_line_follows_rust);
     RUN_TEST(parse_chunk_extensions_and_trailers);
 
     /* Rejections and limits */

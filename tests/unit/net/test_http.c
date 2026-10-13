@@ -159,7 +159,6 @@ TEST(parse_error_status_mapping) {
     ASSERT_EQ(asx_http_parse_error_status(ASX_HTTP_PERR_START_LINE_TOO_LONG), 414u);
     ASSERT_EQ(asx_http_parse_error_status(ASX_HTTP_PERR_TOO_MANY_HEADERS), 431u);
     ASSERT_EQ(asx_http_parse_error_status(ASX_HTTP_PERR_HEADERS_TOO_LARGE), 431u);
-    ASSERT_EQ(asx_http_parse_error_status(ASX_HTTP_PERR_UNKNOWN_METHOD), 501u);
     ASSERT_EQ(asx_http_parse_error_status(ASX_HTTP_PERR_UNSUPPORTED_TRANSFER_CODING), 501u);
     ASSERT_EQ(asx_http_parse_error_status(ASX_HTTP_PERR_UNSUPPORTED_VERSION), 505u);
     ASSERT_STR_EQ(asx_http_parse_error_str(ASX_HTTP_PERR_OBS_FOLD), "obs-fold");

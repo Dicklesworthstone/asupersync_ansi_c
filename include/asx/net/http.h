@@ -50,10 +50,16 @@ typedef enum {
     ASX_HTTP_HEAD = 5,
     ASX_HTTP_OPTIONS = 6,
     ASX_HTTP_CONNECT = 7,
-    ASX_HTTP_TRACE = 8
+    ASX_HTTP_TRACE = 8,
+    /* A request-line method that is a token but none of the nine above
+     * (RFC 9110 section 9.1: `PURGE`, `get`). Only the parser produces it, with
+     * the text from asx_http_parser_method_token(); a request is never built or
+     * routed with it, and a server answers 501. */
+    ASX_HTTP_EXTENSION = 9
 } asx_http_method;
 
-/* Return the method name as a string (e.g. "GET"). */
+/* Return the method name as a string (e.g. "GET"); "UNKNOWN" for
+ * ASX_HTTP_EXTENSION, whose text only the parser holds. */
 ASX_API const char *asx_http_method_str(asx_http_method method);
 
 /* -------------------------------------------------------------------
@@ -370,8 +376,6 @@ ASX_API asx_status asx_http_parse_multipart(const asx_http_request *req,
 
 /* Maximum number of header + trailer fields one parser instance can index. */
 /* Default parser limits (see asx_http_limits_init). */
-/* Leading empty lines tolerated before a request-line (RFC 9112 section 2.2);
- * a response starts at its first byte, as asupersync's client codec reads it. */
 /* Configurable fail-closed parser limits. */
 typedef struct {
     uint32_t max_start_line;   /* request-line / status-line bytes, excluding CRLF */
@@ -394,7 +398,6 @@ typedef enum { ASX_HTTP_PARSE_REQUEST = 0, ASX_HTTP_PARSE_RESPONSE = 1 } asx_htt
 typedef enum {
     ASX_HTTP_PERR_NONE = 0,
     ASX_HTTP_PERR_BAD_START_LINE = 1,               /* 400 */
-    ASX_HTTP_PERR_UNKNOWN_METHOD = 2,               /* 501: valid token, unsupported method */
     ASX_HTTP_PERR_BAD_TARGET = 3,                   /* 400 */
     ASX_HTTP_PERR_BAD_VERSION = 4,                  /* 400: malformed HTTP-version */
     ASX_HTTP_PERR_UNSUPPORTED_VERSION = 5,          /* 505: well-formed but not 1.0/1.1 */
@@ -471,7 +474,6 @@ typedef struct {
     uint32_t line_start;
     uint32_t line_len;
     uint32_t section_bytes;
-    uint32_t empty_lines;
     asx_http_field_span fields[ASX_HTTP_PARSER_MAX_FIELDS];
     uint32_t header_count;
     uint32_t trailer_count;
@@ -545,6 +547,10 @@ ASX_API int asx_http_parser_head_complete(const asx_http_parser *p);
 
 /* Return the parsed request method (requests only). */
 ASX_API asx_http_method asx_http_parser_method(const asx_http_parser *p);
+
+/* Return the method token of a request whose method is ASX_HTTP_EXTENSION as a
+ * NUL-terminated string, valid until the next message starts; NULL otherwise. */
+ASX_API const char *asx_http_parser_method_token(const asx_http_parser *p);
 
 /* Return the parsed request-target as a NUL-terminated string ("" before HEAD). */
 ASX_API const char *asx_http_parser_target(const asx_http_parser *p);

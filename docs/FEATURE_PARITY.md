@@ -195,6 +195,24 @@ the corresponding specs, tests, and implementation evidence.
 | `U-OVERLOAD-SLO-DEMO` | Large-swarm SLO baselines and user-facing acceptance proof bundle | `docs/QUALITY_GATES.md` `GATE-OVERLOAD-SLO-DEMO`; `tools/ci/slo_baselines.json`; `tests/bench/bench_runtime.c`; `tests/e2e/wave_c_acceptance_demo.sh` | `parallel-bench-gate` with RCH worker-count rows, R1/R2/R3 footprint rows, warn/block SLO summary; `wave-c-acceptance-demo` with replay command, profile report, benchmark summary, incident evidence, expected-output manifest, and fail-closed unsupported-live diagnostic | SLO/admission changing semantics, stale README claims, unsupported platforms hidden as success | `acceptance-demo-gate`. Rust parity: not applicable | `bd-v12u.14`, `bd-v12u.15` |
 | `U-RAPTORQ-RFC6330` | RFC 6330 RaptorQ systematic FEC codec (block encode/decode, OTI, source-block/sub-block partitioning) | RFC 6330; upstream `src/raptorq/{rfc6330,gf256,systematic,decoder}.rs`; `include/asx/raptorq/raptorq.h`; `src/raptorq/raptorq.c`; `docs/DEFERRED_SURFACE_REGISTER.md` DS-D05 | `tests/unit/raptorq/test_raptorq.c` golden vectors bit-identical to an independent RFC 6330 implementation (K = 1..8192, far/max ESIs, Z>1 objects with N>1 sub-blocks, OTI wire bytes); round trips with random loss, repair-only and K=8192 blocks; `tests/e2e/raptorq_erasure.sh` | rank-deficient or fewer-than-K symbol sets return `ASX_E_RESOURCE_EXHAUSTED` without writing output; duplicate ESIs, undersized workspaces/buffers and invalid OTI fields fail closed | `impl-complete`: golden vectors in `tests/unit/raptorq/test_raptorq.c` were produced by the crates.io `raptorq` 2.0.1 crate (file header). Rust parity with asupersync not fixture-checked | DS-D05 |
 
+### 2.2 Approved deviations from the Rust reference
+
+The semantic delta budget is 0 and Rust is the reference. These are the
+places where the C port refuses what the pinned asupersync (5e60b1c4c) takes
+because an RFC MUST makes the Rust behaviour fail open, approved as
+exceptions by AmberSummit (owner-delegated) on 2026-10-13. Each stays in
+`tools/ci/parser_differential_known.txt` with its reason, is an upstream
+candidate, and is found again by `make parser-differential` if it changes.
+Every other family the HTTP, WebSocket and RaptorQ differentials found
+(bd-9kll.16.2.1 to .4, .7 to .10, .12 to .15 and .8) was aligned to Rust in
+C and has no entry.
+
+| Surface | C | Rust (asupersync at 5e60b1c4c) | RFC | Bead |
+|---|---|---|---|---|
+| A request with two Host fields | `ASX_HTTP_PERR_DUPLICATE_HOST`, 400 | accepted: the request head check has no Host rule (`src/http/h1/codec.rs:1345-1484`) | RFC 9112 section 3.2: a server MUST answer 400 | `bd-9kll.16.2.5` |
+| An HTTP/1.1 request with no Host field | `ASX_HTTP_PERR_MISSING_HOST`, 400 (`asx_http_limits.require_host`, on by default) | accepted: the same head check (`src/http/h1/codec.rs:1345-1484`) | RFC 9112 section 3.2: a server MUST answer 400 | `bd-9kll.16.2.6` |
+| An HTTP/1.0 response with `Transfer-Encoding: chunked` | `ASX_HTTP_PERR_BAD_TRANSFER_ENCODING`, the response is refused | decoded as chunked: the version is read (`src/http/h1/client.rs:174-181`) and the Transfer-Encoding branch takes it with no version check (`src/http/h1/client.rs:366-372`) | RFC 9112 section 6.1: treat as faulty framing | `bd-9kll.16.2.11` |
+
 ## 3. Phase 1 Exit Review Gate Checklist
 
 A semantic unit may be marked Phase 1 complete only when:

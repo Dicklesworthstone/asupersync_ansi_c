@@ -13,48 +13,37 @@
 # target=double-slash, target=absolute-empty-authority,
 # target=authority-empty-port).
 #
+# Rust is the reference and the semantic delta budget is 0: where the
+# differential found the two parsers apart, the C parser was aligned to
+# asupersync's (bd-9kll.16.2.1 to .4, .7 to .10, .12 to .15 and .8: the
+# request line must start at the first byte and its target and method are
+# the ones Rust takes, a response starts at its first byte and takes the
+# statuses, framing fields and Transfer-Encoding Rust takes, a chunk-size
+# line is hex digits then anything UTF-8 without a control character after a
+# semicolon, and the WebSocket header checks and close codes are Rust's), and
+# the entries went. What is left is what the owner approved as exceptions
+# (AmberSummit, owner-delegated, 2026-10-13): three places where an RFC MUST
+# makes the C parser refuse what Rust takes, so C stays fail-closed. Each is
+# a row of the deviation table in docs/FEATURE_PARITY.md section 2.2 with the
+# Rust file and line, and an upstream candidate.
+#
 # First recorded from seed 1 / 2000 inputs (C defaults) and seed 7 / 20000
 # inputs (--c-require-host 0), asupersync 5e60b1c4c against the C parser at
-# 3846ec4. No both-accept:* family was found: on the ~4000 requests both
-# parsers accept, method, target, version, headers, trailers, body and
-# bytes used agree.
+# 3846ec4. No both-accept:* family was found: on the requests, responses and
+# frames both parsers accept, method, status, target, version, headers,
+# trailers, body, close code and bytes used agree.
 #
 # A response key starts with `response@<METHOD> ` (the request method the
 # response is decoded against: GET, HEAD, CONNECT), and the bracketed shape
 # adds the status class (status=1xx, status=204, status=304) when a bodyless
-# status splits a reason. Responses were first recorded from seed 3 / 6000
-# inputs (the CI step) and seed 1 / 2000 inputs with 29 families, all in five
-# root causes (bd-9kll.16.2.9 to .13); the owner decided .9, .10, .12 and .13
-# are aligned to Rust (the semantic delta budget is 0 and Rust is the
-# reference), and the C parser was changed to match (src/net/http.c). What is
-# left of the response corpus is two families: .8 and .11, listed below.
-# No both-accept:* family was ever found: on the ~5400 (response, method)
-# pairs both parsers accept, status, reason, version, headers, trailers, body
-# length and digest, and bytes used agree.
-#
-# A WebSocket frame key starts with `ws-frame@<role> ` (the receiver, client or
-# server), and the bracketed shape reads the first two bytes of the minimized
-# frame (rsv, opcode=reserved, control, fin=0, len=16bit, len=64bit). The two
-# families found (bd-9kll.16.2.14, .15: the close code of an oversized control
-# frame and of a close reason that is not UTF-8) were aligned to Rust in
-# src/net/websocket.c, which also fails a frame on its first two bytes as
-# asupersync's codec does; no entry is left, and no accept/reject split or
-# both-accept:* family was ever found (about 2500 frame and role pairs agree
-# on fin, rsv, opcode, mask, key, payload length and digest, bytes used).
+# status splits a reason. A WebSocket frame key starts with `ws-frame@<role> `
+# (the receiver, client or server); none is listed.
 #
 # `raptorq` (a dual oracle: C, asupersync's encoder and decoder, the crates.io
 # raptorq 2.0.1 crate) has no entry on purpose: the three agree on every
 # repair symbol and on whether each set of encoding symbols decodes (500000
 # cases over ten seeds), and the CI step gates, so a first difference fails.
 
-c-accepts/rust-rejects:BadRequestLine [leading-empty-line] | bd-9kll.16.2.1 | RFC 9112 2.2 SHOULD ignore a leading empty line: Rust deviates, C follows
-c-accepts/rust-rejects:BadRequestLine [leading-empty-line,target=authority-empty-port] | bd-9kll.16.2.1 | the leading empty line hides bd-9kll.16.2.4
-c-accepts/rust-rejects:BadRequestLine [target=double-slash] | bd-9kll.16.2.2 | origin-form // : Rust hardening, C accepts
-c-accepts/rust-rejects:BadRequestLine [target=absolute-empty-authority] | bd-9kll.16.2.3 | http:///p : C bug, RFC 9110 4.2.1
-c-accepts/rust-rejects:BadRequestLine [target=authority-empty-port] | bd-9kll.16.2.4 | CONNECT a: : C lenient
-rust-accepts/c-rejects:duplicate-host | bd-9kll.16.2.5 | RFC 9112 3.2 MUST 400: Rust never checks Host, C correct
-rust-accepts/c-rejects:missing-host | bd-9kll.16.2.6 | RFC 9112 3.2 MUST 400: C default policy, Rust never checks Host
-rust-accepts/c-rejects:unknown-method | bd-9kll.16.2.7 | extension methods: Rust accepts, C has a closed set (501)
-rust-accepts/c-rejects:bad-chunk-extension | bd-9kll.16.2.8 | chunk-ext 5; : Rust accepts an invalid chunk-ext, C correct
-response@GET rust-accepts/c-rejects:bad-chunk-extension [no-reason] | bd-9kll.16.2.8 | chunk-ext 5; in a response: the same shared chunk decoder
-response@GET rust-accepts/c-rejects:bad-transfer-encoding [no-reason] | bd-9kll.16.2.11 | HTTP/1.0 response with Transfer-Encoding chunked: Rust accepts, C rejects (RFC 9112 6.1 MUST); owner decision pending, C kept
+rust-accepts/c-rejects:duplicate-host | bd-9kll.16.2.5 | approved exception (AmberSummit, owner-delegated, 2026-10-13): RFC 9112 3.2 MUST 400; Rust inspect_request_head_parts (src/http/h1/codec.rs:1345-1484) has no Host rule; C stays fail-closed
+rust-accepts/c-rejects:missing-host | bd-9kll.16.2.6 | approved exception (AmberSummit, owner-delegated, 2026-10-13): RFC 9112 3.2 MUST 400; Rust inspect_request_head_parts (src/http/h1/codec.rs:1345-1484) has no Host rule; C stays fail-closed
+response@GET rust-accepts/c-rejects:bad-transfer-encoding [no-reason] | bd-9kll.16.2.11 | approved exception (AmberSummit, owner-delegated, 2026-10-13): RFC 9112 6.1 MUST treat HTTP/1.0 + Transfer-Encoding as faulty framing; Rust client.rs decode_inner:366-372 takes chunked with no version check; C stays fail-closed

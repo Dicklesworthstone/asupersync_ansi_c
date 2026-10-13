@@ -370,8 +370,23 @@ const SPECIALS: [&[u8]; 18] = [
     b"%", b"#", b"/", b"?", b"=",
 ];
 
-const METHODS: [&[u8]; 9] = [
-    b"GET", b"POST", b"get", b"PATCH", b"FOO", b"G E T", b"", b"TRACE", b"CONNECT",
+const METHODS: [&[u8]; 16] = [
+    b"GET",
+    b"POST",
+    b"get",
+    b"PATCH",
+    b"FOO",
+    b"G E T",
+    b"",
+    b"TRACE",
+    b"CONNECT",
+    b"PURGE",
+    b"M-SEARCH",
+    b"a",
+    b"G#ET",
+    b"G\xc3\xa9T",
+    b"OPTIONS",
+    b"HEAD",
 ];
 
 const VERSIONS: [&[u8]; 7] = [
@@ -425,8 +440,12 @@ fn replace_range(data: &mut Vec<u8>, from: usize, to: usize, with: &[u8]) {
 
 /// Request-target forms the structured mutations substitute: origin, asterisk,
 /// dot segments, percent-encoding, query and fragment, absolute with and
-/// without an authority, authority form, and non-ASCII and control bytes.
-const TARGETS: [&[u8]; 14] = [
+/// without an authority, authority form, and non-ASCII and control bytes;
+/// the scheme and authority edges of an absolute form (digits, an empty
+/// scheme, a missing authority before `?` or `#`) and of a CONNECT authority
+/// (a bracketed literal, userinfo, a second colon, an empty or non-numeric
+/// port, an empty host).
+const TARGETS: [&[u8]; 32] = [
     b"/",
     b"*",
     b"/a/../b",
@@ -441,6 +460,24 @@ const TARGETS: [&[u8]; 14] = [
     b"/a;b=c",
     b"/\xc3\xa9",
     b"/\x7f",
+    b"http://",
+    b"http://?q",
+    b"a1://h/",
+    b"a+b://h/",
+    b"://h/",
+    b"//x",
+    b"http://u@h:80",
+    b"[::1]:80",
+    b"a@b:80",
+    b"a:b:80",
+    b"a:",
+    b":80",
+    b"a:80/",
+    b"a:8x",
+    b"[::1]",
+    b"**",
+    b"http://h:",
+    b"x://h",
 ];
 
 /// Content-Length value forms: zero, leading zero, surrounding whitespace, a
@@ -448,8 +485,36 @@ const TARGETS: [&[u8]; 14] = [
 const CL_VALUES: [&[u8]; 8] = [b"0", b"05", b"5 ", b" 5", b"5,5", b"+5", b"-0", b"5\t"];
 
 /// First chunk-size line forms: extensions, a leading zero, trailing space,
-/// a bare semicolon, lowercase hex, a quoted extension value.
-const CHUNK_SIZES: [&[u8]; 6] = [b"5;ext=1", b"05", b"5 ", b"5;", b"a", b"5;x=\"y\""];
+/// a bare semicolon, lowercase hex, a quoted extension value; whitespace
+/// before the semicolon, extension text that is not a chunk-ext (a space, an
+/// empty name, an open quote, a bare semicolon), UTF-8 and non-UTF-8 bytes,
+/// control bytes, a sign, a prefix, whitespace before the size.
+const CHUNK_SIZES: [&[u8]; 24] = [
+    b"5;ext=1",
+    b"05",
+    b"5 ",
+    b"5;",
+    b"a",
+    b"5;x=\"y\"",
+    b"5 ;ext",
+    b"5\t;ext",
+    b"5;ext = v",
+    b"5;a;b=c",
+    b"5;a=\"b c\"",
+    b"5;a=\"unterminated",
+    b"5;;",
+    b"5; ;",
+    b"5;\t",
+    b"5;\xc3\xa9",
+    b"5;\xff",
+    b"5;\xc3",
+    b"5;\x01",
+    b"5;\x7f",
+    b"+5",
+    b" 5",
+    b"0x5",
+    b"5;a=b c",
+];
 
 /// Well-formed header lines the structured mutations add.
 const EXTRA_HEADERS: [&[u8]; 8] = [

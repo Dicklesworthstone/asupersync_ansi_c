@@ -767,9 +767,6 @@ ASX_API asx_resource_limits asx_resource_limits_for_class(asx_resource_class cls
 #ifndef ASX_HTTP_DEFAULT_MAX_BODY
 #define ASX_HTTP_DEFAULT_MAX_BODY 16777216u /* 16 MiB */
 #endif
-#ifndef ASX_HTTP_MAX_LEADING_EMPTY_LINES
-#define ASX_HTTP_MAX_LEADING_EMPTY_LINES 4u
-#endif
 #ifndef ASX_HTTP_CONN_HEAD_MAX
 #define ASX_HTTP_CONN_HEAD_MAX 8192u
 #endif
@@ -1852,7 +1849,6 @@ static inline uint64_t asx_header_config_fingerprint(void) {
         ASX_HTTP_DEFAULT_MAX_HEADER_BYTES,
         ASX_HTTP_DEFAULT_MAX_CHUNK_LINE,
         ASX_HTTP_DEFAULT_MAX_BODY,
-        ASX_HTTP_MAX_LEADING_EMPTY_LINES,
         ASX_HTTP_CONN_HEAD_MAX,
         ASX_HTTP_CONN_TX_MAX,
         ASX_HTTP_CLIENT_TX_MAX,
