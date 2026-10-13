@@ -1025,8 +1025,9 @@ TEST(open_child_region_needs_the_spawn_capability) {
     cap_region_with_envelopes();
     ASSERT_EQ(asx_cx_init(&cx, CAP_REGION, 9, ASX_CAP_CLOCK_READ), ASX_OK);
     g_stub_open_calls = 0;
+    /* Rust: the runtime mask lacks SPAWN, ChildRegionError::RuntimeUnavailable (cx.rs:4499) */
     ASSERT_EQ(asx_cx_open_child_region(&cx, NULL, NULL, NULL, &child, NULL),
-              ASX_E_PERMISSION_DENIED);
+              ASX_E_SCHEDULER_UNAVAILABLE);
     ASSERT_EQ(g_stub_open_calls, 0u); /* refused before the runtime is asked */
 
     /* The permitted near-identical case: the same Cx with SPAWN. */

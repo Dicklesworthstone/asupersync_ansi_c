@@ -226,7 +226,7 @@ try_recv() -> Result<T, RecvError>
 | `RecvError::Cancelled` | Cancellation checkpoint triggered |
 | `RecvError::Empty` | Queue empty (`try_recv` only), senders still alive |
 
-**C status:** mapped to status codes: `ASX_E_DISCONNECTED` (`include/asx/asx_status.h:64`), `ASX_E_CANCELLED` (`asx_status.h:56`), `ASX_E_CHANNEL_FULL` (`asx_status.h:66`, from `asx_channel_try_reserve`), `ASX_E_PENDING` (waiting reserve/send/recv), `ASX_E_WOULD_BLOCK` (`asx_channel_try_recv` on an empty channel; `ASX_E_CHANNEL_EMPTY`, `asx_status.h:69`, is not returned by `mpsc.c`). C does not return values with errors (messages are `uint64_t` passed by the caller). There is no `Admission` error from permit registration: a refused obligation leaves the permit untracked (`src/channel/mpsc.c:1049-1056`). A tracked permit carrying a credit bound to a different channel/token is refused before capacity or ledger mutation (`src/channel/mpsc.c:759-763`, `:822-826`).
+**C status:** mapped to status codes: `ASX_E_DISCONNECTED` (`include/asx/asx_status.h:63`), `ASX_E_CANCELLED` (`asx_status.h:55`), `ASX_E_CHANNEL_FULL` (`asx_status.h:65`, from `asx_channel_try_reserve`), `ASX_E_PENDING` (waiting reserve/send/recv), `ASX_E_WOULD_BLOCK` (`asx_channel_try_recv` on an empty channel; `ASX_E_CHANNEL_EMPTY`, `asx_status.h:67`, is not returned by `mpsc.c`). C does not return values with errors (messages are `uint64_t` passed by the caller). There is no `Admission` error from permit registration: a refused obligation leaves the permit untracked (`src/channel/mpsc.c:1049-1056`). A tracked permit carrying a credit bound to a different channel/token is refused before capacity or ledger mutation (`src/channel/mpsc.c:759-763`, `:822-826`).
 
 ### 1.8 Cancellation Interaction
 

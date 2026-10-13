@@ -40,11 +40,11 @@ TEST(status_str_errors_not_null) {
     /* Every known error code must produce a non-"unknown" string */
     ASSERT_NE(asx_status_str(ASX_E_INVALID_ARGUMENT), asx_status_str((asx_status)99999));
     ASSERT_NE(asx_status_str(ASX_E_INVALID_TRANSITION), asx_status_str((asx_status)99999));
-    ASSERT_NE(asx_status_str(ASX_E_REGION_NOT_FOUND), asx_status_str((asx_status)99999));
-    ASSERT_NE(asx_status_str(ASX_E_TASK_NOT_FOUND), asx_status_str((asx_status)99999));
+    ASSERT_NE(asx_status_str(ASX_E_NOT_FOUND), asx_status_str((asx_status)99999));
+    ASSERT_NE(asx_status_str(ASX_E_REGION_CLOSED), asx_status_str((asx_status)99999));
     ASSERT_NE(asx_status_str(ASX_E_CANCELLED), asx_status_str((asx_status)99999));
     ASSERT_NE(asx_status_str(ASX_E_DISCONNECTED), asx_status_str((asx_status)99999));
-    ASSERT_NE(asx_status_str(ASX_E_TIMER_NOT_FOUND), asx_status_str((asx_status)99999));
+    ASSERT_NE(asx_status_str(ASX_E_TIMED_OUT), asx_status_str((asx_status)99999));
     ASSERT_NE(asx_status_str(ASX_E_STALE_HANDLE), asx_status_str((asx_status)99999));
 }
 
@@ -83,7 +83,7 @@ TEST(status_names_round_trip_for_every_code) {
         ASSERT_TRUE(asx_status_from_name(name, &parsed));
         ASSERT_EQ((int)parsed, code);
     }
-    ASSERT_TRUE(named >= 67);
+    ASSERT_TRUE(named >= 54);
 }
 
 TEST(status_from_name_rejects_near_misses) {

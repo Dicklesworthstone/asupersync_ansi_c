@@ -217,7 +217,7 @@ const char *asx_incident_bundle_failure_class(asx_status status, int unsupported
         return ASX_INCIDENT_BUNDLE_FAILURE_UNSUPPORTED;
     }
     if (status == ASX_E_RESOURCE_EXHAUSTED || status == ASX_E_OVERLOADED ||
-        status == ASX_E_COST_QUOTA_EXHAUSTED || status == ASX_E_POLL_QUOTA_EXHAUSTED) {
+        status == ASX_E_COST_QUOTA_EXHAUSTED) {
         return ASX_INCIDENT_BUNDLE_FAILURE_RESOURCE;
     }
     if (status == ASX_E_EQUIVALENCE_MISMATCH || status == ASX_E_REPLAY_MISMATCH) {

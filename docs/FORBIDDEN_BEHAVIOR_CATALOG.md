@@ -62,9 +62,9 @@ This catalog defines semantic behaviors that must fail or emit explicit determin
 
 | fb_id | Forbidden behavior | Expected result |
 |---|---|---|
-| `FB-QS-001` | Quiescence success while active tasks remain | quiescence failure (`ASX_E_TASKS_STILL_ACTIVE`) |
-| `FB-QS-002` | Quiescence success while timers pending | quiescence failure (`ASX_E_TIMERS_PENDING`) |
-| `FB-QS-003` | Quiescence success while channels undrained | quiescence failure (`ASX_E_CHANNEL_NOT_DRAINED`) |
+| `FB-QS-001` | Quiescence success while active tasks remain | quiescence failure (`ASX_E_QUIESCENCE_TASKS_LIVE`) |
+| `FB-QS-002` | Quiescence success while timers pending | not a Rust or C rule: a region's quiescence does not count timers (`docs/LIFECYCLE_TRANSITION_TABLES.md`), and no status names it |
+| `FB-QS-003` | Quiescence success while channels undrained | not a Rust or C rule: a region's quiescence does not count channels, and no status names it |
 | `FB-QS-004` | Cleanup-budget overrun handled silently | deterministic cleanup violation |
 
 ## 3. Mapping Rules to Scenario DSL Fixtures

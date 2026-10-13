@@ -27,7 +27,7 @@ Plain C block comments. No Doxygen tags.
  * or an error.
  *
  * Preconditions: region must be OPEN, poll_fn must not be NULL.
- * Returns ASX_OK on success, ASX_E_REGION_NOT_OPEN if closed,
+ * Returns ASX_OK on success, ASX_E_REGION_CLOSED if closed,
  * ASX_E_REGION_POISONED if poisoned, ASX_E_RESOURCE_EXHAUSTED if arena full.
  * Thread-safety: not thread-safe; single-threaded mode only. */
 ASX_API ASX_MUST_USE asx_status asx_task_spawn(asx_region_id region,

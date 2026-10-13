@@ -330,8 +330,6 @@ TEST(affinity_status_strings) {
     ASSERT_STR_EQ(asx_status_str(ASX_E_AFFINITY_NOT_BOUND), "entity not bound to affinity domain");
     ASSERT_STR_EQ(asx_status_str(ASX_E_AFFINITY_ALREADY_BOUND),
                   "entity already bound to different domain");
-    ASSERT_STR_EQ(asx_status_str(ASX_E_AFFINITY_TRANSFER_REQUIRED),
-                  "cross-domain transfer required");
     ASSERT_STR_EQ(asx_status_str(ASX_E_AFFINITY_TABLE_FULL), "affinity tracking table full");
 }
 

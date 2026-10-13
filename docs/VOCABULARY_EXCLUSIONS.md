@@ -35,7 +35,7 @@ stated.
 | `FuturelockDetected` (233) | A lab diagnostic (`src/lab/runtime.rs:5702-5714`). **Excluded only when the scenario does not declare it.** Such a run keeps Rust's defaults (threshold 10000, `panic_on_futurelock` on), so a futurelock there is a harness failure, not a semantic event. A scenario that declares `lab.futurelock_max_idle_steps` (DSL §1) and `expect` kind `futurelock` runs with that threshold and `panic_on_futurelock` off, and both engines project the event as `futurelock.detected` (`docs/CANONICAL_VOCABULARY_V2.md` §3). | Undeclared: the twin-run harness fails the scenario. Declared: the events themselves, and the scenario fails if there is none. |
 | `ChaosInjection` (235) | Chaos is disabled in conformance runs (`LabConfig` without `with_chaos`). | — (a chaos run is not a conformance run). |
 | `MonitorCreated` (239), `MonitorDropped` (241), `DownDelivered` (243), `LinkCreated` (245), `LinkDropped` (247), `ExitDelivered` (249) | No production emitter at the pinned rev. | — (added with the actor/supervision vocabulary when Rust emits them). |
-| `BudgetInstalled` (256), `BudgetConsumed` (259) | Emitted only by web request regions (`src/web/request_region.rs:1069`, `:1108`). | Budget effects: task outcomes and statuses (`ASX_E_POLL_QUOTA_EXHAUSTED`, `ASX_E_COST_QUOTA_EXHAUSTED`, `ASX_E_TIMED_OUT`). |
+| `BudgetInstalled` (256), `BudgetConsumed` (259) | Emitted only by web request regions (`src/web/request_region.rs:1069`, `:1108`). | Budget effects: task outcomes and statuses (`ASX_E_COST_QUOTA_EXHAUSTED`, `ASX_E_TIMED_OUT`). |
 
 ## Fields of projected events that are not compared
 

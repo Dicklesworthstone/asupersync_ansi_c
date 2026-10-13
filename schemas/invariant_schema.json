@@ -98,9 +98,9 @@
         {"from": "Draining", "to": "Closed", "error": "ASX_E_INVALID_TRANSITION", "reason": "skip_finalize"}
       ],
       "admission_gates": [
-        {"operation": "create_child_task", "allowed_states": ["Open", "Finalizing"], "error": "ASX_E_REGION_NOT_OPEN"},
-        {"operation": "create_child_region", "allowed_states": ["Open"], "error": "ASX_E_REGION_NOT_OPEN"},
-        {"operation": "create_obligation", "allowed_states": ["Open"], "error": "ASX_E_REGION_NOT_OPEN"},
+        {"operation": "create_child_task", "allowed_states": ["Open", "Finalizing"], "error": "ASX_E_REGION_CLOSED"},
+        {"operation": "create_child_region", "allowed_states": ["Open"], "error": "ASX_E_REGION_CLOSED"},
+        {"operation": "create_obligation", "allowed_states": ["Open"], "error": "ASX_E_REGION_CLOSED"},
         {"operation": "close_region", "allowed_states": ["Open"], "error": "ASX_E_INVALID_TRANSITION"},
         {"operation": "query_status", "allowed_states": ["Open", "Closing", "Draining", "Finalizing", "Closed"], "error": null},
         {"operation": "access_arena", "allowed_states": ["Open", "Closing", "Draining", "Finalizing"], "error": "ASX_E_REGION_CLOSED"}
@@ -409,11 +409,9 @@
         "channel structures drained (no deliverable buffered work)"
       ],
       "diagnostics": [
-        "ASX_E_TASKS_STILL_ACTIVE",
+        "ASX_E_QUIESCENCE_TASKS_LIVE",
         "ASX_E_OBLIGATIONS_UNRESOLVED",
-        "ASX_E_REGIONS_NOT_CLOSED",
-        "ASX_E_TIMERS_PENDING",
-        "ASX_E_CHANNEL_NOT_DRAINED"
+        "ASX_E_QUIESCENCE_NOT_REACHED"
       ],
       "invariants": [
         {"id": "INV-QU-01", "rule": "Quiescence requires ALL five conditions simultaneously", "category": "completeness"},

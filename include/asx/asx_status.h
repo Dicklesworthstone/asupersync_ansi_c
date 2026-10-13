@@ -32,17 +32,16 @@ typedef enum {
     /* Transition errors (2xx) */
     ASX_E_INVALID_TRANSITION = 200,
 
-    /* Region errors (3xx) */
-    ASX_E_REGION_NOT_FOUND = 300,
+    /* Region errors (3xx). A handle that names no region is ASX_E_NOT_FOUND
+     * (ASX_E_STALE_HANDLE for a reclaimed slot), and a full region arena is
+     * ASX_E_RESOURCE_EXHAUSTED: no code of its own. */
     ASX_E_REGION_CLOSED = 301,
-    ASX_E_REGION_AT_CAPACITY = 302,
-    ASX_E_REGION_NOT_OPEN = 303,
     ASX_E_ADMISSION_CLOSED = 304,
     ASX_E_ADMISSION_LIMIT = 305,
     ASX_E_REGION_POISONED = 306, /* region poisoned after safety violation */
 
     /* Task errors (4xx) */
-    ASX_E_TASK_NOT_FOUND = 400,
+    /* Rust SpawnError::RuntimeUnavailable: the Cx's mask lacks SPAWN */
     ASX_E_SCHEDULER_UNAVAILABLE = 401,
     ASX_E_NAME_CONFLICT = 402,
     ASX_E_TASK_NOT_COMPLETED = 403,
@@ -64,13 +63,10 @@ typedef enum {
     ASX_E_DISCONNECTED = 700,
     ASX_E_WOULD_BLOCK = 701,
     ASX_E_CHANNEL_FULL = 702,
-    ASX_E_CHANNEL_NOT_DRAINED = 703,
     ASX_E_LAGGED = 704,        /* broadcast receiver fell behind */
     ASX_E_CHANNEL_EMPTY = 705, /* channel has no messages (distinct from WOULD_BLOCK) */
 
     /* Timer errors (8xx) */
-    ASX_E_TIMER_NOT_FOUND = 800,
-    ASX_E_TIMERS_PENDING = 801,
     ASX_E_TIMER_DURATION_EXCEEDED = 802,
     ASX_E_TIMED_OUT = 803,         /* operation exceeded deadline */
     ASX_E_THRESHOLD_TIMEOUT = 804, /* quorum/threshold not met within deadline */
@@ -78,8 +74,6 @@ typedef enum {
     /* Quiescence errors (9xx) */
     ASX_E_TASKS_STILL_ACTIVE = 900,
     ASX_E_OBLIGATIONS_UNRESOLVED = 901,
-    ASX_E_REGIONS_NOT_CLOSED = 902,
-    ASX_E_INCOMPLETE_CHILDREN = 903,
     ASX_E_QUIESCENCE_NOT_REACHED = 904,
     ASX_E_QUIESCENCE_TASKS_LIVE = 905,
 
@@ -87,7 +81,6 @@ typedef enum {
     ASX_E_RESOURCE_EXHAUSTED = 1000,
     ASX_E_OVERLOADED = 1001,           /* service rejected due to backpressure/load shedding */
     ASX_E_COST_QUOTA_EXHAUSTED = 1002, /* cost budget depleted */
-    ASX_E_POLL_QUOTA_EXHAUSTED = 1003, /* poll budget depleted (finer than POLL_BUDGET_EXHAUSTED) */
 
     /* Handle errors (11xx) */
     ASX_E_STALE_HANDLE = 1100,
@@ -99,17 +92,14 @@ typedef enum {
     ASX_E_ALLOCATOR_SEALED = 1203,
 
     /* Thread-affinity errors (13xx) */
-    ASX_E_AFFINITY_VIOLATION = 1300,         /* access from wrong domain */
-    ASX_E_AFFINITY_NOT_BOUND = 1301,         /* entity has no domain binding */
-    ASX_E_AFFINITY_ALREADY_BOUND = 1302,     /* entity already bound to a domain */
-    ASX_E_AFFINITY_TRANSFER_REQUIRED = 1303, /* cross-domain access without transfer */
-    ASX_E_AFFINITY_TABLE_FULL = 1304,        /* tracking table exhausted */
+    ASX_E_AFFINITY_VIOLATION = 1300,     /* access from wrong domain */
+    ASX_E_AFFINITY_NOT_BOUND = 1301,     /* entity has no domain binding */
+    ASX_E_AFFINITY_ALREADY_BOUND = 1302, /* entity already bound to a domain */
+    ASX_E_AFFINITY_TABLE_FULL = 1304,    /* tracking table exhausted */
 
     /* Codec equivalence errors (14xx) */
     ASX_E_EQUIVALENCE_MISMATCH = 1400, /* cross-codec semantic mismatch */
     ASX_E_DUPLICATE_SYMBOL = 1401,     /* RaptorQ: duplicate source symbol */
-    ASX_E_OBJECT_MISMATCH = 1402,      /* RaptorQ: symbol does not belong to object */
-    ASX_E_CORRUPTED_SYMBOL = 1403,     /* RaptorQ: symbol integrity check failed */
 
     /* Trace/replay errors (15xx) */
     ASX_E_REPLAY_MISMATCH = 1500, /* replay continuity check failed */

@@ -66,7 +66,7 @@ The port targets asupersync commit `5e60b1c4c` (2026-10).
 | **Async combinators** | Poll-based join, race, select, timeout, retry, bracket, pipeline, quorum, first-ok, hedge and map-reduce (plus race and retry with a timeout), and bulkhead and rate-limit admission counters |
 | **Circuit breaker and epoch-based execution** | Failure containment with open/half-open/closed states; phase-scoped execution with barrier triggers |
 | **Dual codecs (JSON + binary)** | JSON for debugging and diffing, binary for compact encoding; both encode the same canonical fixture model, and round trips through each are checked to agree |
-| **<!-- fact:status_codes -->68<!-- /fact --> typed error codes with recovery guidance** | Each error has a category, recoverability class, recovery action, and backoff hints |
+| **<!-- fact:status_codes -->55<!-- /fact --> typed error codes with recovery guidance** | Each error has a category, recoverability class, recovery action, and backoff hints |
 | **Resource contracts instead of silent degradation** | Explicit memory/queue/timer ceilings with deterministic failure taxonomy per resource class (R1/R2/R3) |
 | **9 deployment profiles** | CORE, POSIX, WIN32, FREESTANDING, EMBEDDED_ROUTER, HFT, AUTOMOTIVE, PARALLEL, BROWSER |
 | **<!-- fact:test_programs -->239<!-- /fact --> tracked C test programs across 7 categories** | <!-- fact:test_unit -->175<!-- /fact --> unit, <!-- fact:test_e2e -->24<!-- /fact --> e2e, <!-- fact:test_invariant -->3<!-- /fact --> invariant, <!-- fact:test_vignettes -->12<!-- /fact --> vignette, <!-- fact:test_conformance -->6<!-- /fact --> conformance, <!-- fact:test_fuzz -->5<!-- /fact --> fuzz, and <!-- fact:test_formal -->14<!-- /fact --> formal files in the current tree |

@@ -90,7 +90,7 @@ The error column is C's: every pair outside the table fails `asx_region_transiti
 | Register finalizer | C: Open and unpoisoned, from the host or a task of the region, via `asx_region_defer_sync` / `asx_region_defer_async` (`src/runtime/quiescence.c`, `asx_region_finalizer_target`) | C `ASX_E_REGION_CLOSED` / `ASX_E_REGION_POISONED` / `ASX_E_PERMISSION_DENIED` (a task of another region) |
 | Unregister finalizer | none: Rust's `Scope::defer_sync` has no such operation (C removed `asx_region_unregister_finalizer`, `bd-9kll.3.26`); `asx_cleanup_pop` takes an entry of a standalone stack back | `ASX_E_NOT_FOUND` if the entry is invalid or already consumed (`src/core/cleanup.c`) |
 
-`ASX_E_REGION_NOT_OPEN` and `ASX_E_ADMISSION_CLOSED`, which the first extraction listed here, are never returned by the kernel admission paths (`src/runtime/lifecycle.c`); `ASX_E_ADMISSION_CLOSED` appears only outside the kernel (for example `src/runtime/adapter.c`).
+`ASX_E_REGION_NOT_OPEN` (removed, `bd-udlh`) and `ASX_E_ADMISSION_CLOSED`, which the first extraction listed here, are never returned by the kernel admission paths (`src/runtime/lifecycle.c`); `ASX_E_ADMISSION_CLOSED` appears only outside the kernel (for example `src/runtime/adapter.c`).
 
 **Note:** Normal tasks are rejected in `Finalizing`; explicit cleanup tasks are admitted in both engines. C preserves the distinction through deferred lab admission and tests borrowed/captured spawns in all five region states (`task_spawn_admission_matrix`, `region_finalizing_admits_only_cleanup_work`). Child regions and obligations remain `Open`-only. The existing Rust fixture DSL does not express finalizer registration or cleanup spawn; direct C tests establish this change's behavior without claiming fixture coverage (`bd-9kll.3.5`).
 
@@ -362,7 +362,7 @@ Rust's `CancelWitness::validate_transition` (`src/types/cancel.rs:382`) accepts 
 
 ### 4.3 Forbidden Phase Transitions
 
-Phase transitions where `next.phase.rank() < prev.phase.rank()`. Rust reports `CancelWitnessError::PhaseRegression` (`src/types/cancel.rs:414`). C never returns `ASX_E_WITNESS_PHASE_REGRESSION` (declared, unused): `asx_cancel_witness_advance` returns `ASX_E_INVALID_TRANSITION` for any advance that does not strictly increase the phase, a repeated phase included (`src/core/cancel.c:151`). Recorded in `bd-9kll.3.7` ("Witness: no region or epoch; rejects a repeated phase").
+Phase transitions where `next.phase.rank() < prev.phase.rank()`. Rust reports `CancelWitnessError::PhaseRegression` (`src/types/cancel.rs:414`). `asx_cancel_witness_advance` does not return `ASX_E_WITNESS_PHASE_REGRESSION` (`asx_cancel_witness_validate_transition` does, `src/core/cancel.c:358`): it returns `ASX_E_INVALID_TRANSITION` for any advance that does not strictly increase the phase, a repeated phase included (`src/core/cancel.c:151`). Recorded in `bd-9kll.3.7` ("Witness: no region or epoch; rejects a repeated phase").
 
 | From | To | Expected Error | Rationale |
 |------|----|----------------|-----------|
@@ -422,12 +422,12 @@ Rust's witness (`CancelWitness`, `src/types/cancel.rs:323`) carries the fields b
 
 ### 4.6 Witness Validation Rules
 
-A witness transition from `prev` to `next` is valid when ALL hold. The checks are Rust's (`validate_transition`, `src/types/cancel.rs:382`; error enum `src/types/cancel.rs:414`). C defines the `ASX_E_WITNESS_*` codes (`include/asx/asx_status.h:57`) but never returns them; `docs/CANONICAL_VOCABULARY_V2.md` §5 lists them as C-only.
+A witness transition from `prev` to `next` is valid when ALL hold. The checks are Rust's (`validate_transition`, `src/types/cancel.rs:382`; error enum `src/types/cancel.rs:414`). C defines the `ASX_E_WITNESS_*` codes (`include/asx/asx_status.h:56`) and `asx_cancel_witness_validate_transition` (`src/core/cancel.c:350`) returns them; `docs/CANONICAL_VOCABULARY_V2.md` §5 lists them as C-only statuses.
 
 | Rule | Check | Error on Violation |
 |------|-------|-------------------|
-| Same task | `prev.task_id == next.task_id` | Rust `TaskMismatch` (C code `ASX_E_WITNESS_TASK_MISMATCH`, unused) |
-| Same region | `prev.region_id == next.region_id` | Rust `RegionMismatch` (C code `ASX_E_WITNESS_REGION_MISMATCH`, unused) |
+| Same task | `prev.task_id == next.task_id` | Rust `TaskMismatch` (C `ASX_E_WITNESS_TASK_MISMATCH` from `asx_cancel_witness_validate_transition`) |
+| Same region | `prev.region_id == next.region_id` | Rust `RegionMismatch` (C `ASX_E_WITNESS_REGION_MISMATCH` from `asx_cancel_witness_validate_transition`) |
 | Same epoch | `prev.epoch == next.epoch` | Rust `EpochMismatch` (C `ASX_E_WITNESS_EPOCH_MISMATCH` from `asx_cancel_witness_validate_transition`) |
 | Phase monotone | `next.phase.rank >= prev.phase.rank` | Rust `PhaseRegression`; C `asx_cancel_witness_validate_transition` returns `ASX_E_WITNESS_PHASE_REGRESSION` and allows an equal phase; `asx_cancel_witness_advance` returns `ASX_E_INVALID_TRANSITION` and also rejects an equal phase (the step API, pinned by the formal harness) |
 | Severity monotone | `next.reason.severity >= prev.reason.severity` | Rust `ReasonWeakened` (C `ASX_E_WITNESS_REASON_WEAKENED` from `asx_cancel_witness_validate_transition`) |
@@ -619,11 +619,11 @@ C has two region-level checks: `asx_quiescence_check` (`src/runtime/quiescence.c
 
 | Check | Condition | Error if Violated |
 |-------|-----------|-------------------|
-| Task quiescence | the region has no live task | `ASX_E_QUIESCENCE_TASKS_LIVE` (`src/runtime/quiescence.c:156`) [`ASX_E_TASKS_STILL_ACTIVE`: declared, never returned, `bd-udlh`] |
+| Task quiescence | the region has no live task | `ASX_E_QUIESCENCE_TASKS_LIVE` (`src/runtime/quiescence.c:156`) [`ASX_E_TASKS_STILL_ACTIVE` is the actor name registry's (`src/actor/actor.c:1422`), not a region check] |
 | Obligation quiescence | no `Reserved` obligation in the region | `ASX_E_OBLIGATIONS_UNRESOLVED` (`src/runtime/quiescence.c:62`) |
-| Region quiescence | the region is `Closed` and its cleanup stack drained | `ASX_E_QUIESCENCE_NOT_REACHED` (`src/runtime/quiescence.c:155`) [`ASX_E_REGIONS_NOT_CLOSED`: declared, never returned] |
-| Timer quiescence | not checked by C or Rust | [`ASX_E_TIMERS_PENDING`: declared, never returned] |
-| Channel quiescence | not checked by C or Rust | [`ASX_E_CHANNEL_NOT_DRAINED`: declared, never returned] |
+| Region quiescence | the region is `Closed` and its cleanup stack drained | `ASX_E_QUIESCENCE_NOT_REACHED` (`src/runtime/quiescence.c:155`) |
+| Timer quiescence | not checked by C or Rust | none (`ASX_E_TIMERS_PENDING` was removed, `bd-udlh`) |
+| Channel quiescence | not checked by C or Rust | none (`ASX_E_CHANNEL_NOT_DRAINED` was removed, `bd-udlh`) |
 
 ### 7.3 Quiescence and Runtime Shutdown
 
@@ -703,7 +703,7 @@ Each transition rule and forbidden behavior maps to candidate fixture IDs for co
 | region-lifecycle-004 | Region close with unresolved obligations | Leak detection and reporting | No Rust fixture for an obligation still Reserved at close (both leak-audit it, §1.5); C tests `tests/invariant/lifecycle/skeleton_test.c` (`region_drain_leak_audits_unresolved_obligations`), `tests/unit/runtime/test_budget_obligation.c` (`region_close_*`) |
 | region-lifecycle-005 | Attempted backward transition (Closing -> Open) | Must fail with `ASX_E_INVALID_TRANSITION` | C test `tests/unit/core/test_transition.c` (`region_forbidden_backward`) |
 | region-lifecycle-006 | Attempted skip transition (Open -> Draining) | Must fail with `ASX_E_INVALID_TRANSITION` | C test `tests/unit/core/test_transition.c` (`region_forbidden_skip`) |
-| region-lifecycle-007 | Create task in non-Open region | Must fail with `ASX_E_REGION_CLOSED` (was `ASX_E_REGION_NOT_OPEN`) | `spawn-into-cancelled-region-step-001`, `region-lifecycle-closed-child-spawn-001` |
+| region-lifecycle-007 | Create task in non-Open region | Must fail with `ASX_E_REGION_CLOSED` (the first extraction said `ASX_E_REGION_NOT_OPEN`, removed) | `spawn-into-cancelled-region-step-001`, `region-lifecycle-closed-child-spawn-001` |
 | region-lifecycle-008 | Region arena access after Closed | Must fail with `ASX_E_REGION_CLOSED` | None |
 | region-lifecycle-009 | Empty region close (no children) | Closing -> Finalizing -> Closed at once | `region-lifecycle-closed-child-spawn-001` (an empty child region closes as soon as its parent is cancelled) |
 | region-lifecycle-010 | Region close under resource exhaustion | Failure-atomic close behavior | None (C-only resource plane) |
@@ -739,7 +739,7 @@ Each transition rule and forbidden behavior maps to candidate fixture IDs for co
 | obligation-lifecycle-007 | Abort then commit | Must fail; C `ASX_E_INVALID_TRANSITION` | Same file (`obligation_abort_then_commit_rejected`) |
 | obligation-lifecycle-008 | No Reserved obligation at region close | Leak-audited, then closed (C and Rust) | C tests `tests/invariant/lifecycle/skeleton_test.c` (`region_drain_leak_audits_unresolved_obligations`), `tests/unit/runtime/test_budget_obligation.c` (`region_close_audit_leaks_obligations_still_reserved`) |
 | obligation-lifecycle-009 | Multiple obligations in single region | Independent lifecycle tracking | `obligation-abort-reasons-001` (three obligations) |
-| obligation-lifecycle-010 | Obligation in non-Open region | Must fail with `ASX_E_REGION_CLOSED` (was `ASX_E_REGION_NOT_OPEN`) | `obligation-reserve-closed-region-must-fail-001` |
+| obligation-lifecycle-010 | Obligation in non-Open region | Must fail with `ASX_E_REGION_CLOSED` (the first extraction said `ASX_E_REGION_NOT_OPEN`, removed) | `obligation-reserve-closed-region-must-fail-001` |
 
 ### 9.4 Cancellation Fixtures
 
@@ -831,19 +831,22 @@ Values are from `include/asx/asx_status.h`. "Never returned" means no code under
 | Error Code | Value | Description |
 |-----------|-------|-------------|
 | `ASX_E_INVALID_TRANSITION` | 200 | Attempted illegal state transition (every C table check; dropping a resolved obligation). Commit/abort of a resolved obligation returns 500 (§3.3) |
-| `ASX_E_REGION_NOT_OPEN` | 303 | Declared; never returned. Admission failures return `ASX_E_REGION_CLOSED` |
 | `ASX_E_REGION_CLOSED` | 301 | Spawn, child region, obligation or captured spawn refused by a region that is not admitting (§1.4) |
 | `ASX_E_OBLIGATION_ALREADY_RESOLVED` | 500 | Commit or abort of a resolved obligation (Rust `ObligationAlreadyResolved`) |
 | `ASX_E_OBLIGATION_LEAKED` | — | Does not exist in C |
 | `ASX_E_UNRESOLVED_OBLIGATIONS` | 501 | PANIC leak fault: task-completion leakage routes it to region containment; the Finalizing region audit returns it before closing (§1.5) |
-| `ASX_E_INCOMPLETE_CHILDREN` | 903 | Declared; never returned (`bd-udlh`) |
 | `ASX_E_STALE_HANDLE` | 1100 | Handle generation mismatch (use-after-free defense); `ASX_E_NOT_FOUND` (102) when the slot is free |
 | `ASX_E_RESOURCE_EXHAUSTED` | 1000 | Resource contract ceiling exceeded |
-| `ASX_E_TASKS_STILL_ACTIVE` | 900 | Declared; never returned (`bd-udlh`). Region checks return `ASX_E_QUIESCENCE_TASKS_LIVE` (905) |
+| `ASX_E_TASKS_STILL_ACTIVE` | 900 | A named actor's name released while the actor is alive (`src/actor/actor.c`). Region checks return `ASX_E_QUIESCENCE_TASKS_LIVE` (905) |
 | `ASX_E_OBLIGATIONS_UNRESOLVED` | 901 | Region still has a Reserved obligation (`asx_region_obligations_resolved` (`src/runtime/quiescence.c:53`), used by the quiescence check); finalization now audits remaining obligations (§1.5) |
-| `ASX_E_REGIONS_NOT_CLOSED` | 902 | Declared; never returned. Region checks return `ASX_E_QUIESCENCE_NOT_REACHED` (904) |
-| `ASX_E_TIMERS_PENDING` | 801 | Declared; never returned |
-| `ASX_E_CHANNEL_NOT_DRAINED` | 703 | Declared; never returned |
+
+Removed with `bd-udlh` (2026-10-13), nothing returned them: `ASX_E_REGION_NOT_FOUND`
+(300), `ASX_E_REGION_AT_CAPACITY` (302), `ASX_E_REGION_NOT_OPEN` (303; admission
+failures return `ASX_E_REGION_CLOSED`), `ASX_E_TASK_NOT_FOUND` (400), `ASX_E_CHANNEL_NOT_DRAINED`
+(703), `ASX_E_TIMER_NOT_FOUND` (800), `ASX_E_TIMERS_PENDING` (801), `ASX_E_REGIONS_NOT_CLOSED` (902;
+region checks return `ASX_E_QUIESCENCE_NOT_REACHED` (904)), `ASX_E_INCOMPLETE_CHILDREN` (903),
+`ASX_E_POLL_QUOTA_EXHAUSTED` (1003), `ASX_E_AFFINITY_TRANSFER_REQUIRED` (1303), `ASX_E_OBJECT_MISMATCH`
+(1402) and `ASX_E_CORRUPTED_SYMBOL` (1403).
 
 ---
 

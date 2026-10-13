@@ -283,7 +283,9 @@ replaces the whole reason, so an equal-severity reason can change the kind
 ## 5. Status vocabulary
 
 Statuses are encoded by C status **name** (`include/asx/asx_status.h`). The
-table covers all 67 C codes. Each row is one of three things:
+table covers all 55 C codes; a code that nothing returned was removed
+(bd-udlh) and a Rust condition without a C counterpart is listed after the
+table. Each row is one of three things:
 - **exact**: a one-to-one Rust counterpart;
 - **lossy**: several Rust values map here, or this code maps to several
   Rust values, with the rule stated;
@@ -296,49 +298,39 @@ table covers all 67 C codes. Each row is one of three things:
 | `ASX_E_PENDING` (1) | `Poll::Pending`, or `try_join` → `Ok(None)` | exact |
 | `ASX_E_INVALID_ARGUMENT` (100) | `ErrorKind::InvalidInput` (`src/error.rs:46`) | exact |
 | `ASX_E_INVALID_STATE` (101) | `ErrorKind::InvalidStateTransition`; every `PolledAfterCompletion` variant (oneshot/watch/broadcast `RecvError`, `JoinError`, `LockError`, `AcquireError`, `RwLockError`, `BarrierWaitError`); `LockError::Poisoned` | lossy: all misuse-after-terminal maps here |
-| `ASX_E_NOT_FOUND` (102) | — | DSL v2 (both engines): a step names an obligation, guard or permit the task does not hold (SCENARIO_DSL_V2 §3). Otherwise C-only: handle lookup miss (Rust handles are typed) |
+| `ASX_E_NOT_FOUND` (102) | `SpawnError::RegionNotFound` (`src/runtime/state.rs:1626`), `RegionCreateError::ParentNotFound` | DSL v2 (both engines): a step names an obligation, guard or permit the task does not hold (SCENARIO_DSL_V2 §3). A handle that names no region, task or obligation of any runtime (`ASX_E_STALE_HANDLE` for a reclaimed slot): lossy, one code for every entity kind (Rust handles are typed) |
 | `ASX_E_ALREADY_EXISTS` (103) | — | C-only |
 | `ASX_E_BUFFER_TOO_SMALL` (104) | — | C-only: caller-supplied buffers |
 | `ASX_E_INVALID_TRANSITION` (200) | `ErrorKind::InvalidStateTransition` (lifecycle tables) | exact for lifecycle-table rejections |
-| `ASX_E_REGION_NOT_FOUND` (300) | `SpawnError::RegionNotFound` (`src/runtime/state.rs:1626`) | exact |
 | `ASX_E_REGION_CLOSED` (301) | `ErrorKind::RegionClosed`; `SpawnError::RegionClosed`; `AdmissionError::Closed` (`src/record/region.rs:269`); `ObligationAdmissionError::RegionClosed`; `ErrorKind::RegionFinalized` | lossy: every closed/finalized-region rejection |
-| `ASX_E_REGION_AT_CAPACITY` (302) | — | C-only: fixed arena full (Rust allocates) |
-| `ASX_E_REGION_NOT_OPEN` (303) | `ErrorKind::AdmissionDenied` on a closing region | lossy |
 | `ASX_E_ADMISSION_CLOSED` (304) | `ErrorKind::AdmissionDenied` | exact |
 | `ASX_E_ADMISSION_LIMIT` (305) | `AdmissionError::LimitReached{kind,limit,live}`; `ObligationAdmissionError::LimitReached` | lossy: `kind`/`limit` go to the observation's `value` |
 | `ASX_E_REGION_POISONED` (306) | — | C-only |
-| `ASX_E_TASK_NOT_FOUND` (400) | — | C-only: handle lookup miss |
-| `ASX_E_SCHEDULER_UNAVAILABLE` (401) | `SpawnError::RuntimeUnavailable`, `SpawnError::LocalSchedulerUnavailable`; `ObligationAdmissionError::RuntimeUnavailable` | lossy |
+| `ASX_E_SCHEDULER_UNAVAILABLE` (401) | `SpawnError::RuntimeUnavailable`, `SpawnError::LocalSchedulerUnavailable`; `ChildRegionError::RuntimeUnavailable`; `ObligationAdmissionError::RuntimeUnavailable` | lossy: C returns it where the Cx's mask lacks SPAWN, `asx_cx_open_child_region` (`src/cx/cx.c`, `src/cx/cx.rs:4499` in Rust); the other Rust causes (no spawn gateway, no local worker, a stopped runtime) have no C state |
 | `ASX_E_NAME_CONFLICT` (402) | — | C-only |
 | `ASX_E_TASK_NOT_COMPLETED` (403) | `try_join` → `Ok(None)` on a running task | exact (observation-level) |
 | `ASX_E_POLL_BUDGET_EXHAUSTED` (404) | the driver's step limit (`LabConfig::max_steps`) | C-only as a status; Rust reports a step-limit harness failure |
 | `ASX_E_OBLIGATION_ALREADY_RESOLVED` (500) | `ErrorKind::ObligationAlreadyResolved` | exact |
 | `ASX_E_UNRESOLVED_OBLIGATIONS` (501) | `ErrorKind::ObligationLeak` at close | lossy |
 | `ASX_E_CANCELLED` (600) | `ErrorKind::Cancelled`; `Cancelled` variants of mpsc/oneshot/broadcast/watch errors, `LockError`, `AcquireError`, `RwLockError`, `BarrierWaitError`, `OnceCellError`, `PoolError`; `JoinError::Cancelled` | exact as a status; the reason is compared separately |
-| `ASX_E_WITNESS_PHASE_REGRESSION` … `ASX_E_WITNESS_EPOCH_MISMATCH` (601–605) | — | C-only: cancel-witness checks (Rust enforces these by types) |
+| `ASX_E_WITNESS_PHASE_REGRESSION` … `ASX_E_WITNESS_EPOCH_MISMATCH` (601–605) | — | C-only as statuses: returned by `asx_cancel_witness_validate_transition` (Rust `CancelWitnessError`, `src/types/cancel.rs:414`), which no DSL v2 step calls |
 | `ASX_E_DISCONNECTED` (700) | `ErrorKind::ChannelClosed`; `SendError::Disconnected`, `RecvError::Disconnected` (mpsc); oneshot `SendError::Disconnected`, `RecvError::Closed`, `TryRecvError::Closed`; broadcast/watch `Closed`; `AcquireError::Closed`; `PoolError::Closed` | lossy: every closed-peer result |
 | `ASX_E_WOULD_BLOCK` (701) | `TryLockError::Locked`, `TryAcquireError`, `TryReadError::Locked`, `TryWriteError::Locked` | lossy: sync try-ops only (channels use 702/705) |
 | `ASX_E_CHANNEL_FULL` (702) | `ErrorKind::ChannelFull`; mpsc `SendError::Full` | exact |
-| `ASX_E_CHANNEL_NOT_DRAINED` (703) | — | C-only |
 | `ASX_E_LAGGED` (704) | broadcast `RecvError::Lagged(n)` / `TryRecvError::Lagged(n)` (`src/channel/broadcast.rs:102-139`) | exact; `n` goes to the observation's `value` |
 | `ASX_E_CHANNEL_EMPTY` (705) | `ErrorKind::ChannelEmpty`; mpsc `RecvError::Empty`; oneshot/broadcast `TryRecvError::Empty` | exact |
-| `ASX_E_TIMER_NOT_FOUND` (800) | — | C-only |
-| `ASX_E_TIMERS_PENDING` (801) | — | C-only: quiescence diagnostics (snapshot `timers_pending`) |
 | `ASX_E_TIMER_DURATION_EXCEEDED` (802) | `TimerDurationExceeded{duration,max}` (`src/time/wheel.rs:216`) | inexact: C returns it only from `asx_interval_poll`, when no later tick exists (`src/time/sleep.c:279`); `asx_deadline_after` saturates as Rust does, so a timer registration never reports it |
 | `ASX_E_TIMED_OUT` (803) | `time::Elapsed` (`src/time/elapsed.rs:26`); `TimeoutError`; `TimedError::TimedOut`; `LockError::TimedOut`; `PoolError::Timeout`; `ErrorKind::DeadlineExceeded` | lossy: every deadline expiry |
 | `ASX_E_THRESHOLD_TIMEOUT` (804) | `ErrorKind::ThresholdTimeout` | exact |
-| `ASX_E_TASKS_STILL_ACTIVE` … `ASX_E_QUIESCENCE_TASKS_LIVE` (900–905) | — | C-only as statuses; quiescence is compared through the snapshot (`quiescent`, live counts) |
+| `ASX_E_TASKS_STILL_ACTIVE`, `ASX_E_OBLIGATIONS_UNRESOLVED`, `ASX_E_QUIESCENCE_NOT_REACHED`, `ASX_E_QUIESCENCE_TASKS_LIVE` (900, 901, 904, 905) | — | C-only as statuses; quiescence is compared through the snapshot (`quiescent`, live counts) |
 | `ASX_E_RESOURCE_EXHAUSTED` (1000) | `ObligationAdmissionError::CapacityExhausted` | lossy: C arena exhaustion has no Rust analogue except the obligation mailbox |
 | `ASX_E_OVERLOADED` (1001) | `ErrorKind::RateLimited` | lossy |
 | `ASX_E_COST_QUOTA_EXHAUSTED` (1002) | `ErrorKind::CostQuotaExhausted` | exact |
-| `ASX_E_POLL_QUOTA_EXHAUSTED` (1003) | `ErrorKind::PollQuotaExhausted` | exact |
 | `ASX_E_STALE_HANDLE` (1100) | — | C-only: generation mismatch |
 | `ASX_E_HOOK_MISSING` … `ASX_E_ALLOCATOR_SEALED` (1200–1203) | — | C-only: platform hooks |
-| `ASX_E_AFFINITY_VIOLATION` … `ASX_E_AFFINITY_TABLE_FULL` (1300–1304) | — | C-only: thread affinity (Rust `Send`/`Sync`) |
+| `ASX_E_AFFINITY_VIOLATION`, `ASX_E_AFFINITY_NOT_BOUND`, `ASX_E_AFFINITY_ALREADY_BOUND`, `ASX_E_AFFINITY_TABLE_FULL` (1300–1302, 1304) | — | C-only: thread affinity (Rust `Send`/`Sync`) |
 | `ASX_E_EQUIVALENCE_MISMATCH` (1400) | — | C-only |
 | `ASX_E_DUPLICATE_SYMBOL` (1401) | `ErrorKind::DuplicateSymbol` | exact |
-| `ASX_E_OBJECT_MISMATCH` (1402) | `ErrorKind::ObjectMismatch` | exact |
-| `ASX_E_CORRUPTED_SYMBOL` (1403) | `ErrorKind::CorruptedSymbol` | exact |
 | `ASX_E_REPLAY_MISMATCH` (1500) | — | C-only |
 | `ASX_E_CONFIG_FROZEN`, `ASX_E_CONFIG_RESTART_REQ`, `ASX_E_CONFIG_MISMATCH` (1600–1602) | `ErrorKind::ConfigError` | lossy; build mismatch is a C startup error outside scenario execution |
 | `ASX_E_PERMISSION_DENIED` (1700) | — | C-only: capability masks (Rust's `Cx::spawn` mask returns `RuntimeUnavailable`, row 401) |
@@ -348,6 +340,17 @@ Rust values reachable through DSL v2 that have no row above, and how they
 are handled:
 - `ErrorKind::CancelTimeout` (E301) maps to `ASX_E_TIMED_OUT` (lossy).
 - `ErrorKind::TaskNotOwned` maps to `ASX_E_INVALID_STATE` (lossy).
+- No C status (the code was removed, bd-udlh, because C has no condition for
+  it; a scenario that reaches one fails the capture, `status_of_error`):
+  - `ErrorKind::PollQuotaExhausted`: Rust raises it only from the bounded
+    finalizer shutdown ceiling (`BudgetedFinalizer`,
+    `FinalizerBudgetError::PollQuota`, `src/runtime/state.rs:8945`). C's
+    finalizer budget is advisory and a close has no ceiling.
+  - `ErrorKind::ObjectMismatch`, `ErrorKind::CorruptedSymbol`: Rust raises
+    them for object transfer (`src/atp`, `src/distributed`) and for a
+    symbol that fails authentication (`DecodingError::AuthenticationFailed`,
+    `src/decoding.rs:79`). C's RaptorQ decoder takes bare (ESI, bytes)
+    symbols with no object id and no authentication tag.
 - `ObligationAdmissionError::HolderNotLive` and `HolderMismatch` map to
   `ASX_E_INVALID_STATE` (lossy).
 - `JoinError::Panicked` is not a status: it is the `panicked` outcome (§4).

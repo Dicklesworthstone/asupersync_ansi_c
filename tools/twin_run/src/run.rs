@@ -364,7 +364,6 @@ fn status_of_error(err: &asupersync::error::Error) -> RunResult<String> {
     Ok(match err.kind() {
         K::Cancelled => "ASX_E_CANCELLED",
         K::CancelTimeout | K::DeadlineExceeded => "ASX_E_TIMED_OUT",
-        K::PollQuotaExhausted => "ASX_E_POLL_QUOTA_EXHAUSTED",
         K::CostQuotaExhausted => "ASX_E_COST_QUOTA_EXHAUSTED",
         K::ChannelClosed => "ASX_E_DISCONNECTED",
         K::ChannelFull => "ASX_E_CHANNEL_FULL",
@@ -378,8 +377,6 @@ fn status_of_error(err: &asupersync::error::Error) -> RunResult<String> {
         K::InvalidStateTransition => "ASX_E_INVALID_STATE",
         K::RateLimited => "ASX_E_OVERLOADED",
         K::DuplicateSymbol => "ASX_E_DUPLICATE_SYMBOL",
-        K::ObjectMismatch => "ASX_E_OBJECT_MISMATCH",
-        K::CorruptedSymbol => "ASX_E_CORRUPTED_SYMBOL",
         other => {
             return Err(format!(
                 "Rust ErrorKind::{other:?} has no status in vocabulary §5"
@@ -2380,7 +2377,7 @@ fn child_region_status(err: &asupersync::cx::ChildRegionError) -> RunResult<Stri
     use asupersync::runtime::region_table::RegionCreateError as C;
     Ok(match err {
         E::NoRuntimeGateway | E::RuntimeUnavailable => "ASX_E_SCHEDULER_UNAVAILABLE",
-        E::Create(C::ParentNotFound(_)) => "ASX_E_REGION_NOT_FOUND",
+        E::Create(C::ParentNotFound(_)) => "ASX_E_NOT_FOUND",
         E::Create(C::ParentClosed { .. }) => "ASX_E_REGION_CLOSED",
         E::Create(C::ParentAtCapacity { .. }) => "ASX_E_ADMISSION_LIMIT",
         E::Create(C::CapabilityBudgetRefused { .. }) => "ASX_E_CAPABILITY_BUDGET_REFUSED",
@@ -2398,7 +2395,7 @@ fn spawn_status(err: &asupersync::runtime::state::SpawnError) -> RunResult<Strin
     use asupersync::runtime::state::SpawnError as E;
     Ok(match err {
         E::RuntimeUnavailable | E::LocalSchedulerUnavailable => "ASX_E_SCHEDULER_UNAVAILABLE",
-        E::RegionNotFound(_) => "ASX_E_REGION_NOT_FOUND",
+        E::RegionNotFound(_) => "ASX_E_NOT_FOUND",
         E::RegionClosed(_) => "ASX_E_REGION_CLOSED",
         E::RegionAtCapacity { .. } => "ASX_E_ADMISSION_LIMIT",
         #[allow(unreachable_patterns)]

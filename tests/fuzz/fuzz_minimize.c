@@ -542,7 +542,7 @@ static asx_status min_execute_one_op(const min_op *op, min_handle_state *hs) {
             st = asx_region_open(test_runtime(), &rid);
             if (st == ASX_OK) hs->regions[hs->region_count++] = rid;
         } else {
-            st = ASX_E_REGION_AT_CAPACITY;
+            st = ASX_E_RESOURCE_EXHAUSTED; /* the arena-full status of asx_region_open */
         }
         break;
     }
@@ -716,7 +716,7 @@ static asx_status min_execute_one_op(const min_op *op, min_handle_state *hs) {
         if (hs->timer_count > 0u) {
             int c = asx_timer_cancel(asx_timer_wheel_global(test_runtime()),
                                      &hs->timers[op->idx_a % hs->timer_count]);
-            st = c ? ASX_OK : ASX_E_TIMER_NOT_FOUND;
+            st = c ? ASX_OK : ASX_E_NOT_FOUND;
         } else {
             st = ASX_E_NOT_FOUND;
         }

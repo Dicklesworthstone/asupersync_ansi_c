@@ -488,7 +488,7 @@ asx_status asx_cx_open_child_region(const asx_cx *cx, const asx_budget *budget,
     asx_capability_budget request;
     if (cx == NULL || out_child == NULL) return ASX_E_INVALID_ARGUMENT;
     if (!asx_cx_is_valid(cx)) return ASX_E_INVALID_STATE;
-    if (!asx_cx_has_cap(cx, ASX_CAP_SPAWN)) return ASX_E_PERMISSION_DENIED;
+    if (!asx_cx_has_cap(cx, ASX_CAP_SPAWN)) return ASX_E_SCHEDULER_UNAVAILABLE; /* cx.rs:4499 */
         /* cx.rs:4514-4516: the Cx's own envelope met with the spec's; the mint
          * meets the parent record's with it. */
 #ifdef ASX_MUTANT_CAPABILITY_CX_OPEN_IGNORES_CX

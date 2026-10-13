@@ -874,7 +874,7 @@ static void m1_variant(const char *label, const asx_json_doc *d, uint32_t sc, ui
  * baseline's do not. */
 static int capacity_effect(const asx_json_doc *da, uint32_t ra, const asx_json_doc *db,
                            uint32_t rb) {
-    static const char *const names[] = {"ASX_E_REGION_AT_CAPACITY", "ASX_E_RESOURCE_EXHAUSTED"};
+    static const char *const names[] = {"ASX_E_RESOURCE_EXHAUSTED"};
     const char *a = canon_into(da, asx_json_get(da, ra, "observations"), g_canon);
     const char *b = canon_into(db, asx_json_get(db, rb, "observations"), g_canon2);
     size_t i;

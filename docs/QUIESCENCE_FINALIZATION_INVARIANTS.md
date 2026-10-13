@@ -454,7 +454,7 @@ Rust admits cleanup tasks into a Finalizing region through `add_cleanup_task` (`
 | `ParentCancelled` / `ResourceUnavailable` | 200 | 220 |
 | `Shutdown` | 50 | 255 |
 
-Rust source: `CancelReason::cleanup_budget` (`src/types/cancel.rs:1027-1043`). In `cancel_request_in` each task gets this budget, met with the region's shutdown-budget ceiling when one is set (`src/runtime/state.rs:7832-7833`), through `request_cancel_with_budget_and_publication`. Correction: the earlier version cited `CancelTokenState` in `src/cancel/symbol_cancel.rs`; that struct (`:80-107`, cleanup budget field at `:95`) belongs to the symbol-cancellation subsystem, not to task cancellation.
+Rust source: `CancelReason::cleanup_budget` (`src/types/cancel.rs:1027-1043`). In `cancel_request_in` each task gets this budget, met with the region's shutdown-budget ceiling when one is set (`src/runtime/state.rs:7832-7833`), through `request_cancel_with_budget_and_publication`. C meets it the same way for a cancel that carries a ceiling (`asx_region_cancel_ceiling_internal`; the region keeps the tightest one and its descendants inherit it, `record/region.rs:1214`, `state.rs:7662-7686`); the only caller that sets one is a supervised child's drain (`asx_child_spec.shutdown_budget`, bd-9kll.8.6), and the ceiling does not reach region finalizers yet. Correction: the earlier version cited `CancelTokenState` in `src/cancel/symbol_cancel.rs`; that struct (`:80-107`, cleanup budget field at `:95`) belongs to the symbol-cancellation subsystem, not to task cancellation.
 
 **C status:** same values, indexed by severity tier (`asx_cancel_cleanup_budget`, `src/core/cancel.c:15-42`). Rust parity of the snapshot's cleanup budget: `region-lifecycle-draining-with-child-region-001` (a Shutdown-cancelled task with poll quota 50, priority 255) and `cancel-request-event-reason-001` (PollQuota: 300, 215). No v2 fixture shows the other rows.
 
@@ -520,7 +520,7 @@ Rust admission (doc comment `src/record/region.rs:166-206`): (1) an atomic fast-
 | `SpawnError::RegionNotFound` (`src/runtime/state.rs:1622-1660`) | stale or unknown region | `ASX_E_NOT_FOUND` or `ASX_E_STALE_HANDLE` (`asx_region_slot_lookup`, `src/runtime/lifecycle.c:190-207`) |
 | — | poisoned region | `ASX_E_REGION_POISONED` (`src/runtime/lifecycle.c:944`, `:1290`, `:1819`) |
 
-`ASX_E_ADMISSION_CLOSED` (`include/asx/asx_status.h:40`) is not returned by the region, task or obligation kernel; other modules use it (for example `src/runtime/adapter.c`). `ASX_E_REGION_NOT_FOUND` (`include/asx/asx_status.h:36`) is not returned by any file under `src/`.
+`ASX_E_ADMISSION_CLOSED` (`include/asx/asx_status.h:39`) is not returned by the region, task or obligation kernel; other modules use it (for example `src/runtime/adapter.c`). A handle that names no region is `ASX_E_NOT_FOUND` (`:28`); `ASX_E_REGION_NOT_FOUND` was removed with `bd-udlh`.
 
 ### 8.3 State-Gated Operations
 
@@ -537,7 +537,7 @@ Rust admission (doc comment `src/record/region.rs:166-206`): (1) an atomic fast-
 
 Rust `SpawnError` (`src/runtime/state.rs:1622-1660`): `RuntimeUnavailable`, `RegionNotFound`, `RegionClosed`, `LocalSchedulerUnavailable`, `NameRegistrationFailed`, `RegionAtCapacity`, `AuthorizationDenied`, `AdmissionSlotAlreadyReserved`.
 
-**C status:** `asx_task_spawn` (`src/runtime/lifecycle.c:1413-1416`) uses `task_spawn_impl` (`src/runtime/lifecycle.c:1232-1361`), returning `ASX_E_INVALID_ARGUMENT`, `ASX_E_NOT_FOUND` / `ASX_E_STALE_HANDLE`, `ASX_E_REGION_POISONED`, `ASX_E_REGION_CLOSED`, `ASX_E_ADMISSION_LIMIT`, or `ASX_E_RESOURCE_EXHAUSTED` when no task slot is free (`asx_task_slot_alloc`, `:389-405`). Explicit cleanup spawn preserves these errors; captured forms also report capture-arena exhaustion and restore arena usage on failed spawn. `ASX_E_REGION_AT_CAPACITY`, `ASX_E_SCHEDULER_UNAVAILABLE` and `ASX_E_NAME_CONFLICT` (`include/asx/asx_status.h:47`, `:46`, `:47`) are declared but not returned by any file under `src/`. Parity: `spawn-into-cancelled-region-step-001`, `region-lifecycle-closed-child-spawn-001` (`ASX_E_REGION_CLOSED`), `region-limits-admission-001` (`ASX_E_ADMISSION_LIMIT`).
+**C status:** `asx_task_spawn` (`src/runtime/lifecycle.c:1413-1416`) uses `task_spawn_impl` (`src/runtime/lifecycle.c:1232-1361`), returning `ASX_E_INVALID_ARGUMENT`, `ASX_E_NOT_FOUND` / `ASX_E_STALE_HANDLE`, `ASX_E_REGION_POISONED`, `ASX_E_REGION_CLOSED`, `ASX_E_ADMISSION_LIMIT`, or `ASX_E_RESOURCE_EXHAUSTED` when no task slot is free (`asx_task_slot_alloc`, `:389-405`). Explicit cleanup spawn preserves these errors; captured forms also report capture-arena exhaustion and restore arena usage on failed spawn. `ASX_E_SCHEDULER_UNAVAILABLE` (`include/asx/asx_status.h:45`) and `ASX_E_NAME_CONFLICT` (`include/asx/asx_status.h:46`) are not returned by the task spawn path (a Cx whose mask lacks SPAWN gets the first from `asx_cx_open_child_region`, and the actor name registry the second); a full arena is `ASX_E_RESOURCE_EXHAUSTED` (`ASX_E_REGION_AT_CAPACITY` was removed with `bd-udlh`). Parity: `spawn-into-cancelled-region-step-001`, `region-lifecycle-closed-child-spawn-001` (`ASX_E_REGION_CLOSED`), `region-limits-admission-001` (`ASX_E_ADMISSION_LIMIT`).
 
 ---
 
@@ -561,11 +561,11 @@ v4 has no rule tying timers or channels to quiescence, and neither engine's quie
 
 | Check | Error Code | Returned by C? |
 |-------|-----------|---|
-| Active tasks remain | `ASX_E_TASKS_STILL_ACTIVE` (`include/asx/asx_status.h:79`) | no (bd-udlh); C returns `ASX_E_QUIESCENCE_TASKS_LIVE` (`:84`) |
-| Obligations unresolved | `ASX_E_OBLIGATIONS_UNRESOLVED` (`:80`) | yes (`src/runtime/quiescence.c:62`) |
-| Regions not closed | `ASX_E_REGIONS_NOT_CLOSED` (`:81`) | no; C returns `ASX_E_QUIESCENCE_NOT_REACHED` (`:83`) for a region that is not Closed |
-| Timers pending | `ASX_E_TIMERS_PENDING` (`:73`) | no |
-| Channel not drained | `ASX_E_CHANNEL_NOT_DRAINED` (`:67`) | no |
+| Active tasks remain | `ASX_E_QUIESCENCE_TASKS_LIVE` (`include/asx/asx_status.h:78`) | yes (`src/runtime/quiescence.c:156`); the first extraction's `ASX_E_TASKS_STILL_ACTIVE` (`:75`) is the actor name registry's, not a quiescence result |
+| Obligations unresolved | `ASX_E_OBLIGATIONS_UNRESOLVED` (`:76`) | yes (`src/runtime/quiescence.c:62`) |
+| Regions not closed | `ASX_E_QUIESCENCE_NOT_REACHED` (`:77`) | yes: a region that is not Closed (the first extraction's `ASX_E_REGIONS_NOT_CLOSED` was removed, `bd-udlh`) |
+| Timers pending | none | not checked; `ASX_E_TIMERS_PENDING` was removed (`bd-udlh`) |
+| Channel not drained | none | not checked; `ASX_E_CHANNEL_NOT_DRAINED` was removed (`bd-udlh`) |
 
 ---
 
@@ -692,8 +692,8 @@ The variant names were checked; the one-line statements are carried over from th
 | QF-010 | Backward region state transition | CAS fails (`src/record/region.rs:310-319`) | `ASX_E_INVALID_TRANSITION` (`src/core/transition_tables.c:72-75`; the table at `:22-28`) |
 | QF-011 | Skip intermediate close state | No such CAS path exists | `ASX_E_INVALID_TRANSITION` (same table) |
 | QF-012 | Recursive leak detection | Allowed but deduplicated (`in_flight_leak_ids`) with deferred region advances (section 4.5) | Cannot happen (section 4.5) |
-| QF-013 | Quiescence report with pending timers | No timer conjunct (section 9.1) | `ASX_E_TIMERS_PENDING` is never returned (section 9.3) |
-| QF-014 | Quiescence report with undrained channels | No channel conjunct (section 9.2) | `ASX_E_CHANNEL_NOT_DRAINED` is never returned (section 9.3) |
+| QF-013 | Quiescence report with pending timers | No timer conjunct (section 9.1) | No timer status exists (`ASX_E_TIMERS_PENDING` was removed, section 9.3) |
+| QF-014 | Quiescence report with undrained channels | No channel conjunct (section 9.2) | No channel status exists (`ASX_E_CHANNEL_NOT_DRAINED` was removed, section 9.3) |
 | QF-015 | Silent cleanup-budget overrun | Not forbidden in Rust: the budget is advisory (section 7.4) | Default advisory; the opt-in hard bound emits `ASX_SCHED_EVENT_CANCEL_FORCED` (`src/runtime/scheduler.c:2006-2023`) |
 
 ### 13.2 Cross-Reference to bd-296.15 Lifecycle Tables
@@ -821,21 +821,16 @@ None of the candidate fixture IDs below exists in the repository: none is `fixtu
 |------------|---------|---|
 | `ASX_E_ADMISSION_CLOSED` | Region not accepting work | Not by the region kernel (section 8.2); C uses `ASX_E_REGION_CLOSED` |
 | `ASX_E_ADMISSION_LIMIT` | Capacity limit reached | Yes |
-| `ASX_E_REGION_NOT_FOUND` | Stale/invalid region handle | No; C uses `ASX_E_NOT_FOUND` / `ASX_E_STALE_HANDLE` |
 | `ASX_E_REGION_CLOSED` | Admission refused by a closing or closed region | Yes |
 | `ASX_E_UNRESOLVED_OBLIGATIONS` | Obligations remain at close attempt | Only as the fault passed to region containment by the PANIC leak policy (`src/runtime/lifecycle.c:683`, `:1653`) |
-| `ASX_E_INCOMPLETE_CHILDREN` | Children not complete at close attempt | No (bd-udlh) |
-| `ASX_E_TASKS_STILL_ACTIVE` | Tasks remain active (quiescence check) | No (bd-udlh); C uses `ASX_E_QUIESCENCE_TASKS_LIVE` |
+| `ASX_E_TASKS_STILL_ACTIVE` | Tasks remain active (quiescence check) | Not by a quiescence check (C uses `ASX_E_QUIESCENCE_TASKS_LIVE`); by the actor name registry |
 | `ASX_E_OBLIGATIONS_UNRESOLVED` | Obligations remain (quiescence check) | Yes (`src/runtime/quiescence.c:62`) |
-| `ASX_E_REGIONS_NOT_CLOSED` | Regions not closed (quiescence check) | No; C uses `ASX_E_QUIESCENCE_NOT_REACHED` |
-| `ASX_E_TIMERS_PENDING` | Timers remain (quiescence check) | No |
-| `ASX_E_CHANNEL_NOT_DRAINED` | Channel messages remain (quiescence check) | No |
 | `ASX_E_OBLIGATION_ALREADY_RESOLVED` | Double-resolve attempt | Yes: commit or abort of a resolved obligation |
 | `ASX_E_INVALID_TRANSITION` | Backward or skip state transition | Yes (`src/core/transition_tables.c:72-85`) |
-| `ASX_E_SCHEDULER_UNAVAILABLE` | No local scheduler | No |
-| `ASX_E_NAME_CONFLICT` | Named task conflict | No |
+| `ASX_E_SCHEDULER_UNAVAILABLE` | A Cx whose runtime mask lacks SPAWN | Yes: `asx_cx_open_child_region` (Rust `ChildRegionError::RuntimeUnavailable`) |
+| `ASX_E_NAME_CONFLICT` | Named task conflict | Yes: the actor name registry |
 
-All of these are declared in `include/asx/asx_status.h`. Codes the close and admission paths do return that the earlier table omitted: `ASX_E_QUIESCENCE_NOT_REACHED`, `ASX_E_QUIESCENCE_TASKS_LIVE` (`include/asx/asx_status.h:83-84`), `ASX_E_REGION_POISONED` (`:42`), `ASX_E_NOT_FOUND` (`:28`), `ASX_E_STALE_HANDLE` (`:93`), `ASX_E_PENDING` (Draining wait).
+The first extraction also listed `ASX_E_REGION_NOT_FOUND`, `ASX_E_INCOMPLETE_CHILDREN`, `ASX_E_REGIONS_NOT_CLOSED`, `ASX_E_TIMERS_PENDING` and `ASX_E_CHANNEL_NOT_DRAINED`; nothing returned them and `bd-udlh` removed them (a handle that names no region is `ASX_E_NOT_FOUND` / `ASX_E_STALE_HANDLE`; region checks return `ASX_E_QUIESCENCE_NOT_REACHED`). Codes the close and admission paths do return that the earlier table omitted: `ASX_E_QUIESCENCE_NOT_REACHED`, `ASX_E_QUIESCENCE_TASKS_LIVE` (`include/asx/asx_status.h:77-78`), `ASX_E_REGION_POISONED` (`:41`), `ASX_E_NOT_FOUND` (`:28`), `ASX_E_STALE_HANDLE` (`:86`), `ASX_E_PENDING` (Draining wait).
 
 ### 15.3 Configuration Surface
 
