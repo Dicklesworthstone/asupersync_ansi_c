@@ -3,16 +3,22 @@
 # run_fuzz_soak.sh — soak the libFuzzer parser harnesses (bd-9kll.16.3)
 #
 # Runs each given harness (built by `make fuzz-parsers`: clang, libFuzzer,
-# ASan + UBSan) for a fixed time from the committed corpus
-# (tests/fuzz/parsers_seeds/<TARGET>). A crash, sanitizer report or timeout
+# ASan + UBSan) for a fixed time from the committed seeds
+# (tests/fuzz/parsers_seeds/<TARGET>, the hand-written boundary inputs) and
+# the grown corpus (tests/fuzz/parsers_corpus/<TARGET>, what earlier soaks
+# found, `-merge=1` minimized). A crash, sanitizer report or timeout
 # ends one libFuzzer process; the harness is started again on the same grown
 # corpus until its time is spent (at most MAX_STARTS starts), so one finding
 # does not end its soak. Findings stay as crash-*/timeout-*/oom-* files in
 # <out>/<TARGET>/crashes; the grown corpus is <out>/<TARGET>/corpus (what
-# `-merge=1` folds into the committed seeds, see docs/QUALITY_GATES.md).
+# `-merge=1` folds into tests/fuzz/parsers_corpus, see docs/QUALITY_GATES.md).
 #
 # Usage: tools/ci/run_fuzz_soak.sh [--seconds N] [--out DIR] [--bin-dir DIR]
-#                                  [--seeds DIR] [--max-starts N] TARGET...
+#                                  [--seeds DIR]... [--max-starts N] TARGET...
+#   --seeds   a directory holding one <TARGET>/ per harness; repeatable, all
+#             are copied into the starting corpus. The first must have the
+#             harness's directory, a later one may lack it (default: the
+#             seeds, then the grown corpus).
 # Output: a table (starts, executions, coverage edges, features, corpus size,
 #         crashes) per target, also in <out>/summary.md.
 # Exit:   0 no finding, 1 a finding (or a harness that would not start after
@@ -26,7 +32,7 @@ set -u
 SECONDS_PER_TARGET=600
 OUT_DIR=build/fuzz-parsers/soak
 BIN_DIR=build/fuzz-parsers/bin
-SEEDS_DIR=tests/fuzz/parsers_seeds
+SEEDS_DIRS=()
 MAX_STARTS=10
 TARGETS=()
 
@@ -35,7 +41,7 @@ while [ $# -gt 0 ]; do
         --seconds)    SECONDS_PER_TARGET="$2"; shift 2 ;;
         --out)        OUT_DIR="$2"; shift 2 ;;
         --bin-dir)    BIN_DIR="$2"; shift 2 ;;
-        --seeds)      SEEDS_DIR="$2"; shift 2 ;;
+        --seeds)      SEEDS_DIRS+=("$2"); shift 2 ;;
         --max-starts) MAX_STARTS="$2"; shift 2 ;;
         -*)           echo "run_fuzz_soak: unknown option $1" >&2; exit 2 ;;
         *)            TARGETS+=("$1"); shift ;;
@@ -44,6 +50,9 @@ done
 if [ "${#TARGETS[@]}" -eq 0 ]; then
     echo "run_fuzz_soak: no TARGET given" >&2
     exit 2
+fi
+if [ "${#SEEDS_DIRS[@]}" -eq 0 ]; then
+    SEEDS_DIRS=(tests/fuzz/parsers_seeds tests/fuzz/parsers_corpus)
 fi
 
 mkdir -p "$OUT_DIR"
@@ -56,14 +65,18 @@ findings=0
 
 for t in "${TARGETS[@]}"; do
     bin="$BIN_DIR/$t"
-    seeds="$SEEDS_DIR/$t"
+    seeds="${SEEDS_DIRS[0]}/$t"
     run="$OUT_DIR/$t"
     if [ ! -x "$bin" ] || [ ! -d "$seeds" ]; then
         echo "run_fuzz_soak: $t: missing $bin or $seeds" >&2
         exit 2
     fi
     mkdir -p "$run/corpus" "$run/crashes"
-    cp "$seeds"/* "$run/corpus/"
+    for d in "${SEEDS_DIRS[@]}"; do
+        if [ -d "$d/$t" ]; then
+            find "$d/$t" -type f -exec cp {} "$run/corpus/" \;
+        fi
+    done
     : > "$run/log.txt"
     end=$(( $(date +%s) + SECONDS_PER_TARGET ))
     starts=0

@@ -2671,6 +2671,10 @@ FUZZ_PARSERS_CC ?= clang
 FUZZ_PARSERS_DIR := build/fuzz-parsers
 FUZZ_PARSERS_SECONDS ?= 60
 FUZZ_PARSERS_SEEDS := tests/fuzz/parsers_seeds
+# The grown corpus (bd-9kll.16.3): what soaks found, minimized with -merge=1.
+# The smoke, the replay and the soak start from it as well as from the seeds;
+# the mutant gate's discovery control starts from the seeds only.
+FUZZ_PARSERS_CORPUS := tests/fuzz/parsers_corpus
 FUZZ_PARSERS_SAN := -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer
 # Extra compiler flags for the instrumented library only (not the harnesses).
 # tests/gates/test_fuzz_parser_mutants.sh passes -DASX_MUTANT_<TARGET> here to
@@ -2703,6 +2707,7 @@ fuzz-parsers-smoke: fuzz-parsers
 	@for t in $(FUZZ_PARSER_TARGETS); do \
 		run=$(FUZZ_PARSERS_DIR)/run/$$t; mkdir -p $$run/corpus; \
 		cp $(FUZZ_PARSERS_SEEDS)/$$t/* $$run/corpus/ || exit 1; \
+		if [ -d $(FUZZ_PARSERS_CORPUS)/$$t ]; then cp $(FUZZ_PARSERS_CORPUS)/$$t/* $$run/corpus/ || exit 1; fi; \
 		echo "[asx] fuzz-parsers-smoke: $$t for $(FUZZ_PARSERS_SECONDS) s"; \
 		( cd $$run && ../../bin/$$t -max_total_time=$(FUZZ_PARSERS_SECONDS) -timeout=10 \
 			-rss_limit_mb=2048 -print_final_stats=1 corpus >>log.txt 2>&1 ) || \
@@ -2717,13 +2722,14 @@ fuzz-parsers-replay: $(LIB_A)
 		$(CC) $(ALL_CFLAGS) -DASX_FUZZ_STANDALONE -DASX_FUZZ_$$t \
 			-o $(BUILD_DIR)/fuzz-parsers-replay/$$t tests/fuzz/fuzz_parsers.c $(LIB_A) \
 			$(ALL_LDFLAGS) || exit 1; \
-		$(TEST_EXEC) $(BUILD_DIR)/fuzz-parsers-replay/$$t $(FUZZ_PARSERS_SEEDS)/$$t/* || \
+		$(TEST_EXEC) $(BUILD_DIR)/fuzz-parsers-replay/$$t $(FUZZ_PARSERS_SEEDS)/$$t/* \
+			$$(find $(FUZZ_PARSERS_CORPUS)/$$t -type f 2>/dev/null | sort) || \
 			{ echo "[asx] fuzz-parsers-replay: FAIL $$t"; exit 1; }; \
 	done
 	@echo "[asx] fuzz-parsers-replay: $(words $(FUZZ_PARSER_TARGETS)) harnesses ran their seeds"
 
 # fuzz-parsers-soak — the harnesses for FUZZ_PARSERS_SOAK_SECONDS each from the
-# committed seeds (bd-9kll.16.3, tools/ci/run_fuzz_soak.sh). A harness is
+# committed seeds and corpus (bd-9kll.16.3, tools/ci/run_fuzz_soak.sh). A harness is
 # started again after a crash so one finding does not end its time; the
 # findings are the files of $(FUZZ_PARSERS_DIR)/soak/<TARGET>/crashes (it
 # fails if there is one), the grown corpus is .../corpus, and the table of
@@ -2734,7 +2740,7 @@ FUZZ_PARSERS_SOAK_SECONDS ?= 600
 fuzz-parsers-soak: fuzz-parsers
 	@bash tools/ci/run_fuzz_soak.sh --seconds $(FUZZ_PARSERS_SOAK_SECONDS) \
 		--out $(FUZZ_PARSERS_DIR)/soak --bin-dir $(FUZZ_PARSERS_DIR)/bin \
-		--seeds $(FUZZ_PARSERS_SEEDS) $(FUZZ_PARSER_TARGETS)
+		--seeds $(FUZZ_PARSERS_SEEDS) --seeds $(FUZZ_PARSERS_CORPUS) $(FUZZ_PARSER_TARGETS)
 
 # parser-differential — the same bytes to asupersync's parser and to ours
 # (bd-9kll.16.2). twin_run parse-fuzz writes a seeded corpus and the Rust
