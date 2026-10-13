@@ -595,6 +595,64 @@ TEST(kernel_registry_names_only_the_kernels_runtimes_hold) {
     storage_block_free(&blk);
 }
 
+/* K18: a clear is per kernel. The kernel a query names is never "another
+ * runtime's", and a kernel another runtime holds keeps its hold and the
+ * process-wide subsystems it shares when this one is cleared. With one
+ * registry slot there is no other kernel; the second slot is filled by
+ * hand until initialization allocates tags. */
+TEST(kernel_clear_leaves_another_held_kernel_and_the_process_state_alone) {
+    asx_runtime rt;
+    asx_runtime_config cfg;
+    asx_runtime_hooks hooks;
+
+    asx_runtime_reset();
+    ASSERT_FALSE(asx_kernel_other_held(NULL));
+    ASSERT_FALSE(asx_kernel_other_held(g_kernels[0]));
+
+    make_valid_config(&cfg);
+    make_valid_hooks(&hooks);
+    MUST_OK(asx_runtime_init(&rt, &cfg, &hooks));
+    ASSERT_TRUE(asx_kernel_other_held(NULL));
+    ASSERT_FALSE(asx_kernel_other_held(g_kernels[0]));
+    ASSERT_EQ(asx_kernel_other_held(NULL), asx_kernel_any_held());
+
+#if ASX_MAX_RUNTIMES >= 2u
+    {
+        storage_block blk2;
+        asx_kernel *k2;
+        asx_region_id region;
+
+        ASSERT_TRUE(storage_block_make(&blk2, 0u));
+        k2 = (asx_kernel *)(void *)blk2.block;
+        k2->tag = 1u;
+        k2->rt_generation = 9u;
+        g_kernels[1] = k2;
+        ASSERT_TRUE(asx_kernel_other_held(g_kernels[0]));
+        ASSERT_TRUE(asx_kernel_other_held(k2));
+
+        /* Clearing kernel 0 drops its own hold and its arenas, and leaves
+         * the other kernel's hold and the process-wide trace alone. */
+        ASSERT_EQ(asx_region_open(&region), ASX_OK);
+        ASSERT_TRUE(asx_trace_emitted_total() != 0u);
+        asx_runtime_clear_internal(g_kernels[0]);
+        ASSERT_EQ(g_kernels[0]->rt_generation, 0u);
+        ASSERT_EQ(g_kernels[0]->region_count, 0u);
+        ASSERT_EQ(k2->rt_generation, 9u);
+        ASSERT_TRUE(asx_trace_emitted_total() != 0u);
+
+        /* With no other kernel held the clear is the last one's. */
+        k2->rt_generation = 0u;
+        ASSERT_FALSE(asx_kernel_other_held(g_kernels[0]));
+        asx_runtime_clear_internal(g_kernels[0]);
+        ASSERT_EQ(asx_trace_emitted_total(), 0u);
+        g_kernels[1] = NULL;
+        storage_block_free(&blk2);
+    }
+#endif
+    asx_runtime_shutdown(&rt);
+    asx_runtime_reset();
+}
+
 TEST(runtime_storage_refusals_bind_nothing_and_change_no_byte) {
     asx_runtime rt;
     asx_runtime before;
@@ -1796,6 +1854,7 @@ int main(void) {
     RUN_TEST(runtime_storage_size_and_alignment_are_published);
     RUN_TEST(runtime_arenas_live_in_the_callers_storage_and_return_to_the_static_block);
     RUN_TEST(kernel_registry_names_only_the_kernels_runtimes_hold);
+    RUN_TEST(kernel_clear_leaves_another_held_kernel_and_the_process_state_alone);
     RUN_TEST(runtime_storage_refusals_bind_nothing_and_change_no_byte);
     RUN_TEST(refused_storage_init_preserves_the_live_runtime_and_the_block);
     RUN_TEST(runtimes_in_turn_in_their_own_blocks_do_not_share_arenas);

@@ -494,13 +494,10 @@ asx_io_backend asx_runtime_io_backend(const asx_runtime *rt) {
 
 asx_io_backend asx_runtime_active_io_backend_selected(void) { return g_active_io_backend; }
 
-/* Raw reset is an explicit teardown, including the singleton bootstrap token.
- * Independent runtime-owned state remains a separate architecture change. */
-void asx_runtime_object_reset_internal(void) {
-    uint32_t i;
-
-    for (i = 0; i < ASX_MAX_RUNTIMES; i++) {
-        if (g_kernels[i] != NULL) g_kernels[i]->rt_generation = 0u;
-    }
-    g_active_io_backend = ASX_IO_BACKEND_GHOST;
+/* Raw reset is an explicit teardown of the runtime that holds `k`: its hold
+ * on the kernel goes, another runtime's does not. The io backend choice is
+ * process-wide and goes with the last held kernel. */
+void asx_runtime_object_reset_internal(asx_kernel *k) {
+    k->rt_generation = 0u;
+    if (!asx_kernel_other_held(k)) g_active_io_backend = ASX_IO_BACKEND_GHOST;
 }

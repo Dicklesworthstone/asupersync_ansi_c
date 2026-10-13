@@ -58,7 +58,7 @@ uint64_t asx_task_next_member_seq_internal(asx_kernel *k) { return ++k->member_s
 
 void asx_runtime_clear_internal(asx_kernel *k) {
     uint32_t i, j;
-    asx_runtime_object_reset_internal();
+    asx_runtime_object_reset_internal(k);
     for (i = 0; i < ASX_MAX_REGIONS; i++) {
         k->regions[i].state = ASX_REGION_OPEN;
         k->regions[i].parent_id = ASX_INVALID_ID;
@@ -134,7 +134,7 @@ void asx_runtime_clear_internal(asx_kernel *k) {
     k->member_seq = 0;
     asx_cancel_reset_internal(k->tag);
     asx_region_finalizers_reset_internal(k);
-    /* Reset ghost safety monitors */
+    if (asx_kernel_other_held(k)) return; /* the subsystems below are process-wide */
     asx_ghost_reset();
     asx_scheduler_event_reset();
     asx_scheduler_reset_internal();

@@ -430,14 +430,22 @@ static inline int asx_kernel_holds(uint16_t tag, uint32_t generation) {
     return k != NULL && k->rt_generation == generation;
 }
 
-/* Whether any kernel is held by an initialized runtime. */
-static inline int asx_kernel_any_held(void) {
+/* Whether a kernel other than `except` (NULL: any kernel) is held by an
+ * initialized runtime. A clear or a shutdown with no other kernel held is
+ * the last runtime's, and only that one also resets the process-wide
+ * subsystems no kernel owns yet. */
+static inline int asx_kernel_other_held(const asx_kernel *except) {
     uint32_t i;
     for (i = 0; i < ASX_MAX_RUNTIMES; i++) {
-        if (g_kernels[i] != NULL && g_kernels[i]->rt_generation != 0u) return 1;
+        if (g_kernels[i] != NULL && g_kernels[i] != except && g_kernels[i]->rt_generation != 0u) {
+            return 1;
+        }
     }
     return 0;
 }
+
+/* Whether any kernel is held by an initialized runtime. */
+static inline int asx_kernel_any_held(void) { return asx_kernel_other_held(NULL); }
 
 /* `rt` (its generation set) takes kernel 0. */
 static inline void asx_kernel_hold(asx_runtime *rt) {
@@ -921,8 +929,10 @@ void asx_waker_finish_block_internal(void);
 
 /* Reset private hook installation state during runtime teardown. */
 void asx_runtime_hooks_reset_internal(void);
-/* Invalidate the runtime object bootstrap token during explicit raw reset. */
-void asx_runtime_object_reset_internal(void);
+/* Invalidate the bootstrap token of the runtime that holds `k` during
+ * explicit raw reset; the process-wide io backend choice goes with the last
+ * held kernel. */
+void asx_runtime_object_reset_internal(asx_kernel *k);
 
 /* ------------------------------------------------------------------ */
 /* Constants pinned to Rust's (asupersync 5e60b1c4c). The values are     */
