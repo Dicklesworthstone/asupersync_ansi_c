@@ -17,10 +17,10 @@
  */
 
 #include <asx/fs/fs.h>
+#include <asx/runtime/runtime.h>
 #include <string.h>
 
 #if ASX_HAS_NATIVE_RUNTIME_SURFACES
-
 #if defined(ASX_PROFILE_POSIX)
 #include "fs_native.h"
 #define ASX_FS_HAS_NATIVE 1
@@ -33,6 +33,14 @@
 #define ASX_FS_DEFAULT_BACKEND ASX_FS_BACKEND_MEMORY
 
 static asx_fs_backend g_fs_backend = ASX_FS_DEFAULT_BACKEND;
+
+/* Registers asx_fs_reset with the runtime the first time this module can
+ * hold state a reset would clear: a backend choice, an entry, an open file
+ * or directory. A program that never uses the file system does not link
+ * this module (bd-dkfs). */
+static void fs_note_state(void) {
+    asx_runtime_reset_hook_register_internal(ASX_RESET_SLOT_FS, asx_fs_reset);
+}
 
 #if ASX_FS_HAS_NATIVE
 #define FS_NATIVE(h) asx_fs_slot_is_native((h).slot)
@@ -175,7 +183,9 @@ static uint32_t fs_mem_free_entry_count(void) {
 
 static asx_status fs_mem_create_entry(const asx_fs_path *path, asx_fs_entry_kind kind,
                                       int *out_index) {
-    int idx = fs_mem_free_entry_slot();
+    int idx;
+    fs_note_state();
+    idx = fs_mem_free_entry_slot();
     if (idx < 0) return ASX_E_RESOURCE_EXHAUSTED;
     memset(&g_entries[idx], 0, sizeof(g_entries[idx]));
     if ((uint32_t)idx >= g_entries_hwm) g_entries_hwm = (uint32_t)idx + 1u;
@@ -351,6 +361,7 @@ asx_status asx_fs_set_backend(asx_fs_backend backend) {
 #if !ASX_FS_HAS_NATIVE
     if (backend == ASX_FS_BACKEND_NATIVE) return ASX_E_PERMISSION_DENIED;
 #endif
+    fs_note_state();
     g_fs_backend = backend;
     return ASX_OK;
 }
@@ -601,6 +612,7 @@ asx_status asx_fs_dir_open(asx_fs_dir_handle *out, const asx_fs_path *path) {
     if (out == NULL) return ASX_E_INVALID_ARGUMENT;
     st = fs_path_check(path);
     if (st != ASX_OK) return st;
+    fs_note_state();
 #if ASX_FS_HAS_NATIVE
     if (FS_USE_NATIVE()) return asx_native_fs_dir_open(path, out);
 #endif
@@ -689,6 +701,7 @@ asx_status asx_fs_file_open(asx_file_handle *out, const asx_fs_path *path, uint3
     st = fs_path_check(path);
     if (st != ASX_OK) return st;
 
+    fs_note_state();
 #if ASX_FS_HAS_NATIVE
     if (FS_USE_NATIVE()) return asx_native_fs_open(path, flags, out);
 #endif

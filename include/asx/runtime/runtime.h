@@ -1418,6 +1418,41 @@ ASX_API ASX_MUST_USE asx_status asx_task_get_region(asx_task_id id, asx_region_i
  * or a lookup error for a bad handle. */
 ASX_API ASX_MUST_USE asx_status asx_task_get_cancel_epoch(asx_task_id id, uint32_t *out);
 
+/* -------------------------------------------------------------------
+ * Reset hooks of the optional subsystems (bd-dkfs)
+ *
+ * The kernel's reset (asx_runtime_reset, asx_runtime_init) clears its own
+ * tables and then runs, in slot order, the reset of each subsystem that
+ * has registered one. A subsystem registers the first time it can hold
+ * state (a socket, an entry, a process, a subscription, a backend choice),
+ * so the kernel names none of them: an application that never uses the
+ * network, the file system, child processes or signals does not link them,
+ * and a subsystem never used has no state a reset would clear.
+ * ------------------------------------------------------------------- */
+
+typedef enum {
+    ASX_RESET_SLOT_NET = 0,
+    ASX_RESET_SLOT_FS = 1,
+    ASX_RESET_SLOT_PROCESS = 2,
+    ASX_RESET_SLOT_SIGNAL = 3,
+    ASX_RESET_SLOT_COUNT = 4
+} asx_reset_slot;
+
+/* Runtime-internal: `hook` becomes the reset of `slot`. Idempotent; a slot
+ * out of range or a NULL hook is ignored. The registration survives
+ * asx_runtime_reset. */
+void asx_runtime_reset_hook_register_internal(asx_reset_slot slot, void (*hook)(void));
+
+/* Runtime-internal, test support: 1 when `slot` has a registered hook. */
+int asx_runtime_reset_hook_registered_internal(asx_reset_slot slot);
+
+/* Runtime-internal, test support: unregister every hook (state is left as
+ * it is), so a test can see which entry points register one again. */
+void asx_runtime_reset_hooks_forget_internal(void);
+
+/* Runtime-internal: run the registered hooks in slot order. */
+void asx_runtime_reset_hooks_run_internal(void);
+
 #ifdef __cplusplus
 }
 #endif

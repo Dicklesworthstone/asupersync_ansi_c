@@ -170,12 +170,12 @@ void asx_runtime_clear_internal(asx_kernel *k) {
     asx_once_reset();
     asx_actor_reset();
     asx_supervisor_reset();
-    asx_net_reset();
-#if ASX_HAS_NATIVE_RUNTIME_SURFACES
-    asx_fs_reset();
-    asx_process_reset();
-    asx_signal_reset();
-#endif
+    /* net, fs, process and signal: each registered its reset the first time
+     * it held state, and the hooks run here in slot order, where the four
+     * resets were called by name (bd-dkfs). The kernel names none of them,
+     * so an application that never uses one does not link it; a subsystem
+     * never used has nothing a reset would clear. */
+    asx_runtime_reset_hooks_run_internal();
     asx_diagnostic_reset();
 }
 
@@ -2198,4 +2198,42 @@ asx_status asx_obligation_get_state(asx_obligation_id id, asx_obligation_state *
 
     *out_state = o->state;
     return ASX_OK;
+}
+
+/* -------------------------------------------------------------------
+ * Reset hooks of the optional subsystems (bd-dkfs)
+ *
+ * One slot per subsystem the kernel does not name, filled by the subsystem
+ * itself the first time it can hold state and kept across resets: the
+ * table is process state like the subsystems' own arenas. Slot order is
+ * the order the resets were called in, so a registered subsystem is reset
+ * exactly where it was.
+ * ------------------------------------------------------------------- */
+
+static void (*g_reset_hooks[ASX_RESET_SLOT_COUNT])(void);
+
+void asx_runtime_reset_hook_register_internal(asx_reset_slot slot, void (*hook)(void)) {
+    if ((unsigned)slot >= (unsigned)ASX_RESET_SLOT_COUNT || hook == NULL) return;
+    g_reset_hooks[slot] = hook;
+}
+
+int asx_runtime_reset_hook_registered_internal(asx_reset_slot slot) {
+    if ((unsigned)slot >= (unsigned)ASX_RESET_SLOT_COUNT) return 0;
+    return g_reset_hooks[slot] != NULL;
+}
+
+void asx_runtime_reset_hooks_forget_internal(void) {
+    uint32_t i;
+    for (i = 0; i < (uint32_t)ASX_RESET_SLOT_COUNT; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded: one slot per optional subsystem") */
+        g_reset_hooks[i] = NULL;
+    }
+}
+
+void asx_runtime_reset_hooks_run_internal(void) {
+    uint32_t i;
+    for (i = 0; i < (uint32_t)ASX_RESET_SLOT_COUNT; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded: one slot per optional subsystem") */
+        if (g_reset_hooks[i] != NULL) g_reset_hooks[i]();
+    }
 }
