@@ -357,3 +357,27 @@ asx_status asx_cancel_witness_validate_transition(const asx_cancel_witness_info 
     }
     return ASX_OK;
 }
+
+/* -------------------------------------------------------------------
+ * Runtime reset (bd-f5bs)
+ * ------------------------------------------------------------------- */
+
+/* A witness is released when its task completes (asx_task_on_complete_internal),
+ * so the table holds one slot per task that was cancelled and has not
+ * completed. A runtime reset or init discards its tasks without completing
+ * them, and their witnesses would stay active for the life of the process:
+ * repeated resets exhausted the table. Ids are not reused (the counter only
+ * grows), so a stale id left in a cleared task slot names nothing. */
+void asx_cancel_reset_internal(uint16_t runtime_tag) {
+    uint32_t used = 0u;
+    uint32_t i;
+    asx_cancel_chain_limits_reset_internal();
+    for (i = 0; i < g_witness_count; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
+        if (g_witnesses[i].active && asx_handle_runtime_tag(g_witnesses[i].task) == runtime_tag) {
+            g_witnesses[i].active = 0;
+        }
+        if (g_witnesses[i].active) used = i + 1u;
+    }
+    g_witness_count = used;
+}

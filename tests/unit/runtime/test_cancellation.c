@@ -2462,6 +2462,82 @@ TEST(scheduler_refuses_to_complete_a_task_whose_state_is_corrupt) {
     slot->state = ASX_TASK_CREATED;
 }
 
+/* Take witnesses until the table refuses one; returns how many it gave. */
+static uint32_t take_all_witnesses(asx_status *refusal) {
+    asx_cancel_reason reason;
+    asx_cancel_witness_id w;
+    uint32_t n = 0u;
+    asx_status st;
+    memset(&reason, 0, sizeof(reason));
+    reason.kind = ASX_CANCEL_USER;
+    do {
+        st = asx_cancel_witness_create(&w, ASX_INVALID_ID, &reason);
+        if (st == ASX_OK) n++;
+    } while (st == ASX_OK && n <= (uint32_t)ASX_MAX_CANCEL_WITNESSES);
+    *refusal = st;
+    return n;
+}
+
+TEST(runtime_reset_releases_the_witnesses_of_tasks_cancelled_and_never_completed) {
+    /* bd-f5bs: a task cancelled and discarded by a reset never completes, so
+     * nothing released its witness, and repeated resets exhausted the
+     * process-wide table (at R1's 16 slots, one test run did). */
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_task_slot *slot;
+    asx_cancel_witness_id kept;
+    asx_status refusal = ASX_OK;
+    uint32_t round;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
+    ASSERT_EQ(asx_task_cancel(tid, ASX_CANCEL_USER), ASX_OK);
+    ASSERT_EQ(asx_task_slot_lookup(tid, &slot), ASX_OK);
+    kept = slot->cancel_witness;
+    ASSERT_TRUE(asx_cancel_witness_is_valid(kept));
+
+    /* The reset takes the witness with its task, and the table is whole. */
+    asx_runtime_reset();
+    ASSERT_TRUE(!asx_cancel_witness_is_valid(kept));
+
+    /* Exhaust it, reset, exhaust it again: the same capacity each round, and
+     * a refusal (not a silent success) once it is full. */
+    for (round = 0u; round < 3u; round++) {
+        ASSERT_EQ(take_all_witnesses(&refusal), (uint32_t)ASX_MAX_CANCEL_WITNESSES);
+        ASSERT_EQ(refusal, ASX_E_RESOURCE_EXHAUSTED);
+        asx_runtime_reset();
+    }
+    ASSERT_EQ(take_all_witnesses(&refusal), (uint32_t)ASX_MAX_CANCEL_WITNESSES);
+    asx_runtime_reset();
+}
+
+TEST(a_completion_the_scheduler_helper_did_not_see_still_releases_the_witness) {
+    /* The witness is released where every completion path meets
+     * (asx_task_on_complete_internal), not only in the scheduler's helper:
+     * complete a cancelled task by the bookkeeping alone. */
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_task_slot *slot;
+    asx_region_slot *region;
+    asx_cancel_witness_id w;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
+    ASSERT_EQ(asx_task_cancel(tid, ASX_CANCEL_USER), ASX_OK);
+    ASSERT_EQ(asx_task_slot_lookup(tid, &slot), ASX_OK);
+    ASSERT_EQ(asx_region_slot_lookup(rid, &region), ASX_OK);
+    w = slot->cancel_witness;
+    ASSERT_TRUE(asx_cancel_witness_is_valid(w));
+
+    slot->state = ASX_TASK_COMPLETED;
+    slot->outcome = asx_outcome_make(ASX_OUTCOME_CANCELLED);
+    asx_task_on_complete_internal(slot, region);
+    ASSERT_TRUE(!asx_cancel_witness_is_valid(w));
+    asx_runtime_reset();
+}
+
 int main(void) {
     test_log_open("unit", "runtime/cancellation", "test_cancellation");
     fprintf(stderr, "=== test_cancellation (runtime) ===\n");
@@ -2537,6 +2613,8 @@ int main(void) {
     RUN_TEST(cleanup_hard_bound_config_is_validated);
     RUN_TEST(task_state_write_applies_the_transition_table_in_every_build);
     RUN_TEST(scheduler_refuses_to_complete_a_task_whose_state_is_corrupt);
+    RUN_TEST(runtime_reset_releases_the_witnesses_of_tasks_cancelled_and_never_completed);
+    RUN_TEST(a_completion_the_scheduler_helper_did_not_see_still_releases_the_witness);
 
     TEST_REPORT();
     test_log_close();

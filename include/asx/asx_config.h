@@ -372,8 +372,15 @@ ASX_API asx_resource_limits asx_resource_limits_for_class(asx_resource_class cls
 #ifndef ASX_MAX_MASK_DEPTH
 #define ASX_MAX_MASK_DEPTH 64u
 #endif
+/* One witness per task that was cancelled and has not completed, so R1's 16
+ * tasks need at most 16 (bd-f5bs); R2, R3 and an unclassed build keep 64. */
+#define ASX_CLASS_R1_MAX_CANCEL_WITNESSES 16u
 #ifndef ASX_MAX_CANCEL_WITNESSES
+#if defined(ASX_RESOURCE_CLASS) && ASX_RESOURCE_CLASS == 1
+#define ASX_MAX_CANCEL_WITNESSES ASX_CLASS_R1_MAX_CANCEL_WITNESSES
+#else
 #define ASX_MAX_CANCEL_WITNESSES 64u
+#endif
 #endif
 /* Per-task error ledgers (asx_status.h's ASX_ERROR_LEDGER_DEPTH entries
  * each); a task past the last slot shares the fallback ledger. */

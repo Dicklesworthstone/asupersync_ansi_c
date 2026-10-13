@@ -94,6 +94,11 @@ ASX_API uint32_t asx_cancel_reason_chain_links(const asx_cancel_reason *r);
 ASX_API void asx_cancel_chain_limits_set_internal(uint32_t max_depth, uint32_t max_memory);
 /* The defaults (16 reasons, 4096 bytes) return at runtime reset. */
 ASX_API void asx_cancel_chain_limits_reset_internal(void);
+/* What the runtime's reset and init call (applications do not): the chain
+ * bounds return to their defaults, and every cancel witness of a task of the
+ * runtime with `runtime_tag` is released, so a task cancelled and discarded
+ * before it completed leaves no slot behind in the fixed witness table. */
+ASX_API void asx_cancel_reset_internal(uint16_t runtime_tag);
 
 /* -------------------------------------------------------------------
  * Cancel witness protocol — lifecycle and query

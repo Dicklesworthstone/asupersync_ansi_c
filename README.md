@@ -706,7 +706,7 @@ macro is `-DASX_RESOURCE_CLASS=N`). The six arenas in this table
 (`ASX_MAX_REGIONS`, `ASX_MAX_TASKS`, `ASX_MAX_TIMERS`, `ASX_MAX_OBLIGATIONS`,
 `ASX_MAX_CHANNELS`, `ASX_TRACE_CAPACITY`) are then sized from that class: the
 class limit is both the compiled capacity and the point where allocation
-fails with `ASX_E_RESOURCE_EXHAUSTED`. The seventeen capacities of the next
+fails with `ASX_E_RESOURCE_EXHAUSTED`. The eighteen capacities of the next
 table are tightened by R1 only; every other capacity keeps its default, and
 an explicit `-DASX_MAX_*` still overrides the class. The class is a build
 choice, independent of `PROFILE`. Without a class, the arenas keep the
@@ -737,6 +737,7 @@ the in-memory network arenas holds a 4 KiB buffer):
 | UDP datagram payload, bytes | `ASX_UDP_PAYLOAD_CAPACITY` | <!-- fact:class_r1_max_udp_payload -->1536<!-- /fact --> | 4096 (`ASX_BUF_CAPACITY`) |
 | Unix datagrams queued per socket | `ASX_UNIX_DGRAM_QUEUE_CAPACITY` | <!-- fact:class_r1_max_unix_dgram_queue -->2<!-- /fact --> | 4 |
 | Unix datagram payload, bytes | `ASX_UNIX_DGRAM_PAYLOAD_CAPACITY` | <!-- fact:class_r1_max_unix_dgram_payload -->1536<!-- /fact --> | 4096 (`ASX_BUF_CAPACITY`) |
+| Cancel witnesses (one per task cancelled and not completed) | `ASX_MAX_CANCEL_WITNESSES` | <!-- fact:class_r1_max_cancel_witnesses -->16<!-- /fact --> | 64 |
 
 With the first thirteen, the R1 kernel-only quickstart links with about 286
 KiB of bss (293,120 B) instead of 910 KiB (931,904 B) (`make size-report`,
