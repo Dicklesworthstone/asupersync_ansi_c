@@ -280,8 +280,8 @@ static asx_status replay_poll(void *ctx, uint32_t timeout_ms, asx_reactor_event 
     }
     for (i = 0; i < n; i++) {
         ASX_CHECKPOINT_WAIVER("bounded: n <= max_events");
-        events[i].token = asx_journal_get_u64(p + 12u + i * 12u);
-        events[i].ready = asx_journal_get_u32(p + 20u + i * 12u);
+        events[i].token = asx_journal_get_u64(p + 12u + (size_t)i * 12u);
+        events[i].ready = asx_journal_get_u32(p + 20u + (size_t)i * 12u);
     }
     consume(r);
     if (out_count != NULL) *out_count = n;
@@ -398,8 +398,8 @@ int asx_replay_serve_signal(uint32_t *counts, uint32_t kinds) {
     }
     for (i = 0; i < n; i++) {
         ASX_CHECKPOINT_WAIVER("bounded: n <= 255 recorded kinds");
-        uint32_t kind = p[1u + i * 5u];
-        if (kind < kinds) counts[kind] = asx_journal_get_u32(p + 2u + i * 5u);
+        uint32_t kind = p[1u + (size_t)i * 5u];
+        if (kind < kinds) counts[kind] = asx_journal_get_u32(p + 2u + (size_t)i * 5u);
     }
     consume(r);
     return 1;
@@ -436,7 +436,7 @@ int asx_replay_serve_resolve(uint64_t name_hash, int32_t *status, asx_journal_ad
     }
     for (i = 0; i < n; i++) {
         ASX_CHECKPOINT_WAIVER("bounded: n <= cap");
-        const uint8_t *a = p + 16u + i * 19u;
+        const uint8_t *a = p + 16u + (size_t)i * 19u;
         addrs[i].family = a[0];
         memcpy(addrs[i].bytes, a + 1, 16u);
         addrs[i].port = asx_journal_get_u16(a + 17);
