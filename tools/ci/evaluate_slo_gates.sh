@@ -175,6 +175,21 @@ def check_lower(bench_name; metric_name; actual; budget_obj):
         passed: (actual >= budget_obj.budget)
     };
 
+# Which sample a percentile metric is, counted from the largest: the bench
+# takes sorted[floor(p/100 * (n-1))] (bench_percentile), so p99_9 of 1000
+# samples is the 2nd largest and p99_99 of 10000 the 2nd largest. A violation
+# of a statistic that is one of the top few samples is one preemption, not a
+# distribution; the report says so, and the gate is not changed by it.
+def tail_info(metric_name; n):
+    ([metric_name | capture("^p(?<i>[0-9]+)(_(?<f>[0-9]+))?_ns$")] | .[0]) as $m |
+    if $m == null or n == null or n < 1 then
+        {samples: n, tail_rank: null}
+    else
+        (($m.i + (if $m.f != null then "." + $m.f else "" end)) | tonumber) as $p |
+        ((($p / 100) * (n - 1)) | floor) as $idx |
+        {samples: n, tail_rank: (n - $idx)}
+    end;
+
 def latency_delta(bench_name; metric_name; actual; budget_obj):
     (budget_obj.baseline // null) as $baseline |
     {
@@ -258,8 +273,10 @@ def latency_delta(bench_name; metric_name; actual; budget_obj):
     ($p.benchmarks // {} | to_entries[] | . as $bench_entry |
         $bench_entry.value | to_entries[] | . as $metric_entry |
         ($b.benchmarks[$bench_entry.key][$metric_entry.key] // null) as $actual |
+        ($b.benchmarks[$bench_entry.key].count // null) as $samples |
         if $actual != null then
             check_upper($bench_entry.key; $metric_entry.key; $actual; $metric_entry.value)
+            + tail_info($metric_entry.key; $samples)
         else
             empty
         end
@@ -397,7 +414,7 @@ echo "[asx] slo-gate: status=$status total=$total passed=$passed failed=$failed 
 
 if [ "$failed" -gt 0 ]; then
     echo "[asx] slo-gate: violations:" >&2
-    echo "$report" | jq -r '.violations[] | "  - \(.benchmark)/\(.metric): actual=\(.actual) budget=\(.budget) delta=\(.delta_vs_budget)"' >&2
+    echo "$report" | jq -r '.violations[] | "  - \(.benchmark)/\(.metric): actual=\(.actual) budget=\(.budget) delta=\(.delta_vs_budget)" + (if (.tail_rank // null) != null then " (statistic is sample #\(.tail_rank) from the top of \(.samples))" else "" end)' >&2
     echo "$report" | jq -r '.validation_failures[] | "  - validation/\(.check): \(. | @json)"' >&2
 fi
 
