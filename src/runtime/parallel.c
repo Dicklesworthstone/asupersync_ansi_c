@@ -1164,11 +1164,26 @@ static uint64_t asx_trace_task_transition_aux(asx_task_state from, asx_task_stat
  * task arena. A task that cannot be admitted (lane full, or admission
  * enforced) is not dropped silently: the run stops at the next round with
  * that status.
+ *
+ * Cost (bd-9kll.4.11). Admission is O(1) per task and nothing per round.
+ * The arena is walked once per run, to classify the tasks present at its
+ * start (O(ASX_MAX_TASKS); g_arena_scans counts it) and never again, however
+ * many tasks a poll spawns. What a round costs depends on L, the tasks in
+ * the run region's lanes (at most ASX_LANE_TASK_CAPACITY), not on the tasks
+ * ever admitted: the cancel promotion, the lane walk and the idle census
+ * are O(L) each, and a completion or a promotion is O(L) for the lane
+ * search and the shift that keeps the dispatch order. A run that admits m
+ * tasks mid-run therefore pays O(m) for the admissions and O(L) per round
+ * and per completion otherwise, the order of the sweep's per-round walk,
+ * with no rescan of the arena or of finished tasks.
  * ------------------------------------------------------------------- */
 
 static int g_run_active;
 static asx_region_id g_run_region;
 static asx_status g_run_admission_status;
+static uint32_t g_arena_scans;
+
+uint32_t asx_parallel_arena_scans_internal(void) { return g_arena_scans; }
 
 void asx_parallel_task_admitted_internal(asx_task_id tid) {
     const asx_kernel *k = asx_kernel_of(tid);
@@ -1179,7 +1194,8 @@ void asx_parallel_task_admitted_internal(asx_task_id tid) {
     asx_status st;
     uint32_t owner;
 
-#ifdef ASX_MUTANT_PARALLEL_NO_MIDRUN_ADMISSION
+#if defined(ASX_MUTANT_PARALLEL_NO_MIDRUN_ADMISSION) ||                                            \
+    defined(ASX_MUTANT_PARALLEL_RESCAN_ADMISSION)
     if (k != NULL) { return; } /* planted bug: a task spawned during a run joins no lane */
 #endif
     if (!g_run_active || k == NULL || slot_idx >= ASX_MAX_TASKS) { return; }
@@ -1208,6 +1224,27 @@ void asx_parallel_task_admitted_internal(asx_task_id tid) {
     if (owner < ASX_MAX_WORKERS) { g_worker_lane_depths[owner][(int)lc]++; }
 }
 
+#ifdef ASX_MUTANT_PARALLEL_RESCAN_ADMISSION
+/* Planted bug (gate-only): tasks spawned during a run join a lane by a walk
+ * of the whole arena after every poll, not at the spawn: the same lanes in
+ * the same order, at a cost of O(arena x lanes) per poll. */
+static void parallel_rescan_admit(const asx_kernel *k, asx_region_id region) {
+    uint32_t i;
+    sat_inc_u32(&g_arena_scans);
+    for (i = 0; i < k->task_count; i++) { /* ASX_CHECKPOINT_WAIVER("bounded by ASX_MAX_TASKS") */
+        const asx_task_slot *t = &k->tasks[i];
+        uint32_t lane;
+        uint32_t pos;
+
+        if (!t->alive || t->region != region || asx_task_is_terminal(t->state)) { continue; }
+        if (parallel_find_task_lane((uint16_t)i, t->generation, &lane, &pos)) { continue; }
+        lane_assign_internal(asx_handle_mint(k, ASX_TYPE_TASK, (uint16_t)(1u << (unsigned)t->state),
+                                             asx_handle_pack_index(t->generation, (uint16_t)i)),
+                             t->cancel_pending ? ASX_LANE_CANCEL : ASX_LANE_READY);
+    }
+}
+#endif
+
 /* -------------------------------------------------------------------
  * Parallel scheduler run
  *
@@ -1233,9 +1270,10 @@ static asx_status parallel_run_impl(asx_region_id region, asx_budget *budget) {
     parallel_mark_workers_running();
     memset(g_lane_dispatch_cursor, 0, sizeof(g_lane_dispatch_cursor));
 
-    /* Auto-classify existing tasks into lanes */
+    /* Auto-classify existing tasks into lanes: the run's one arena walk */
     {
         uint32_t i;
+        sat_inc_u32(&g_arena_scans);
         /* Clear lanes first */
         for (i = 0; i < ASX_MAX_LANES; i++) { g_lanes[i].count = 0; }
         /* Scan task arena and assign to lanes */
@@ -1541,6 +1579,9 @@ static asx_status parallel_run_impl(asx_region_id region, asx_budget *budget) {
                 polls_this_lane++;
                 sat_inc_u32(&g_workers[worker_idx].polls_total);
                 any_polled = 1;
+#ifdef ASX_MUTANT_PARALLEL_RESCAN_ADMISSION
+                parallel_rescan_admit(k, region);
+#endif
 
                 /* Update per-lane dispatch metrics and cancel streak */
                 if (li == (int)ASX_LANE_CANCEL) {

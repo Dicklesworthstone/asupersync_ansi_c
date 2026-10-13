@@ -332,6 +332,11 @@ ASX_API ASX_MUST_USE asx_status asx_inject_ready(asx_task_id tid);
  * progress or the task belongs to another region. */
 void asx_parallel_task_admitted_internal(asx_task_id tid);
 
+/* Runtime-internal: how many times asx_parallel_run has walked the task
+ * arena, summed over runs. A run walks it once, at its start, to classify
+ * the region's tasks; tasks admitted during the run never add to it. */
+uint32_t asx_parallel_arena_scans_internal(void);
+
 /* -------------------------------------------------------------------
  * API: Scheduling metrics
  *

@@ -2265,6 +2265,68 @@ TEST(parallel_run_does_not_return_ok_while_a_spawned_child_is_live) {
 
 typedef struct {
     asx_region_id region;
+    int to_spawn; /* children the parent spawns, one per poll */
+    int spawned;
+    int child_polls;
+} spree_state;
+
+static asx_status poll_spree_child(void *data, asx_task_id self) {
+    spree_state *s = (spree_state *)data;
+    (void)self;
+    s->child_polls++;
+    return ASX_OK;
+}
+
+/* One child per poll, so the spawns are spread over as many rounds. */
+static asx_status poll_spree_parent(void *data, asx_task_id self) {
+    spree_state *s = (spree_state *)data;
+    asx_task_id child;
+    asx_status st;
+    (void)self;
+    if (s->spawned >= s->to_spawn) { return ASX_OK; }
+    st = asx_task_spawn(s->region, poll_spree_child, s, &child);
+    if (st != ASX_OK) { return st; }
+    s->spawned++;
+    return ASX_E_PENDING;
+}
+
+/* Cost of mid-run admission (bd-9kll.4.11): the arena is walked once per
+ * run, to classify the tasks present at its start, however many tasks a poll
+ * spawns later; a spawn joins a lane at the spawn (O(1)) and no round walks
+ * the arena to find it. With the planted rescan every round walks it. */
+TEST(parallel_many_mid_run_spawns_walk_the_arena_once) {
+    asx_region_id rid;
+    asx_task_id parent_t;
+    asx_budget budget;
+    asx_parallel_config cfg = default_config();
+    spree_state s;
+    uint32_t scans_before;
+
+    reset_all();
+    memset(&s, 0, sizeof(s));
+    s.to_spawn = ASX_LANE_TASK_CAPACITY < ASX_MAX_TASKS ? (int)ASX_LANE_TASK_CAPACITY - 2
+                                                        : (int)ASX_MAX_TASKS - 2;
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
+    s.region = rid;
+    ASSERT_EQ(asx_task_spawn(rid, poll_spree_parent, &s, &parent_t), ASX_OK);
+
+    scans_before = asx_parallel_arena_scans_internal();
+    budget = asx_budget_from_polls(10u * (uint32_t)s.to_spawn + 50u);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
+
+    /* Every child ran exactly once, in the run that spawned it ... */
+    ASSERT_EQ(s.spawned, s.to_spawn);
+    ASSERT_EQ(s.child_polls, s.to_spawn);
+    ASSERT_EQ(asx_lane_total_tasks(), 0u);
+    /* ... and the arena was walked once for all of them. */
+    ASSERT_EQ(asx_parallel_arena_scans_internal() - scans_before, 1u);
+
+    asx_parallel_reset();
+}
+
+typedef struct {
+    asx_region_id region;
     order_task a;
     order_task b;
     asx_task_id a_id;
@@ -2586,6 +2648,7 @@ int main(void) {
     RUN_TEST(parallel_blocked_receiver_with_no_sender_would_block_until_a_send);
     RUN_TEST(parallel_spawned_child_that_acknowledges_a_cancel_and_returns_keeps_its_value);
     RUN_TEST(parallel_run_does_not_return_ok_while_a_spawned_child_is_live);
+    RUN_TEST(parallel_many_mid_run_spawns_walk_the_arena_once);
     RUN_TEST(parallel_child_cancelled_after_admission_is_dispatched_from_the_cancel_lane);
     RUN_TEST(parallel_spawn_outside_a_run_is_not_admitted_until_the_next_run);
     RUN_TEST(parallel_spawn_into_a_cancelled_region_is_refused_and_admits_nothing);

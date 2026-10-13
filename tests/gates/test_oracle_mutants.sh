@@ -299,6 +299,11 @@ run_unit_mutant PARALLEL_NO_CANCEL_PROMOTE unit/runtime/test_parallel \
     parallel_child_spawned_then_region_cancelled_is_dispatched_from_the_cancel_lane
 run_unit_mutant SPAWN_INTO_CLOSING_REGION unit/runtime/test_parallel \
     parallel_spawn_into_a_cancelled_region_is_refused_and_admits_nothing
+# Admission by a walk of the whole arena at every round runs the same tasks in
+# the same lanes, so only the cost shows: the arena must be walked once per
+# run, however many tasks a poll spawns (bd-9kll.4.11).
+run_unit_mutant PARALLEL_RESCAN_ADMISSION unit/runtime/test_parallel \
+    parallel_many_mid_run_spawns_walk_the_arena_once
 
 # A reset visits only the used prefix of each arena once they were cleared in
 # full (bd-9kll.14.2): the mutant leaves the last used slot as it was, and a
