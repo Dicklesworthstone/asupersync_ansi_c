@@ -538,6 +538,288 @@ TEST(scheduler_cancel_streak_gives_ready_work_a_turn) {
     ASSERT_EQ(order[18], (uint32_t)asx_handle_slot(c[17]));
 }
 
+/* The sweep's passes over the tasks compare a state with COMPLETED where the
+ * rest of the runtime calls asx_task_is_terminal (a call per task per round
+ * is what that saves): this pins the two to one definition. */
+TEST(scheduler_sweep_terminal_check_is_the_transition_tables) {
+    int s;
+    for (s = 0; s <= (int)ASX_TASK_COMPLETED + 4; s++) {
+        ASSERT_EQ(asx_task_is_terminal((asx_task_state)s) != 0, s == (int)ASX_TASK_COMPLETED);
+    }
+}
+
+/* ---- The timed lane (bd-9kll.4.6) ----
+ *
+ * A task a due wake timer woke runs ahead of the ready lane whatever its
+ * priority: earliest deadline first, then in the order the timers were armed
+ * (Rust's timed entries, priority.rs:61-75); the cancel lane stays ahead of
+ * it. The tasks below arm their timers in round 0 and a pacer task then
+ * moves the virtual clock past all of them, so every timer is due in round 1
+ * and the order of that round is the lane's. */
+
+typedef struct {
+    asx_time at;
+    int yields; /* polls that yield before the sleep is first polled */
+} sleeper;
+
+/* Sleeps until `at`: ASX_OK once it is due, ASX_E_PENDING (armed) before. */
+static asx_status poll_sleep_until(void *data, asx_task_id self) {
+    sleeper *s = (sleeper *)data;
+    if (s->yields > 0) {
+        s->yields--;
+        return ASX_E_PENDING;
+    }
+    return asx_task_wait_until(self, s->at);
+}
+
+static asx_time g_pacer_to;
+static asx_task_id g_pacer_cancel[24];
+static uint32_t g_pacer_cancel_n;
+
+/* Yields *data times (data may be NULL), then moves the virtual clock to
+ * g_pacer_to and cancels g_pacer_cancel. */
+static asx_status poll_pacer(void *data, asx_task_id self) {
+    int *wait = (int *)data;
+    uint32_t i;
+    (void)self;
+    if (wait != NULL && *wait > 0) {
+        (*wait)--;
+        return ASX_E_PENDING;
+    }
+    asx_runtime_virtual_advance(test_runtime(), g_pacer_to);
+    for (i = 0; i < g_pacer_cancel_n; i++) {
+        asx_status st = asx_task_cancel(g_pacer_cancel[i], ASX_CANCEL_USER);
+        if (st != ASX_OK) return st;
+    }
+    return ASX_OK;
+}
+
+TEST(scheduler_polls_due_timers_earliest_deadline_first) {
+    asx_region_id rid;
+    asx_task_id a, b, c, pacer;
+    sleeper sa = {300u, 0};
+    sleeper sb = {100u, 0};
+    sleeper sc = {200u, 0};
+    asx_budget budget;
+    uint32_t order[16];
+
+    asx_runtime_reset(test_runtime());
+    asx_ghost_reset();
+    g_pacer_to = 1000u;
+    g_pacer_cancel_n = 0u;
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_sleep_until, &sa, &a), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_sleep_until, &sb, &b), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_sleep_until, &sc, &c), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_pacer, NULL, &pacer), ASX_OK);
+
+    budget = asx_budget_infinite();
+    ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
+
+    ASSERT_EQ(poll_order(order, 16u), 7u);
+    /* Round 0 arms them in arena order; round 1 wakes them by deadline. */
+    ASSERT_EQ(order[0], (uint32_t)asx_handle_slot(a));
+    ASSERT_EQ(order[1], (uint32_t)asx_handle_slot(b));
+    ASSERT_EQ(order[2], (uint32_t)asx_handle_slot(c));
+    ASSERT_EQ(order[3], (uint32_t)asx_handle_slot(pacer));
+    ASSERT_EQ(order[4], (uint32_t)asx_handle_slot(b)); /* 100 */
+    ASSERT_EQ(order[5], (uint32_t)asx_handle_slot(c)); /* 200 */
+    ASSERT_EQ(order[6], (uint32_t)asx_handle_slot(a)); /* 300 */
+}
+
+TEST(scheduler_polls_a_due_timer_before_higher_priority_ready_work) {
+    asx_region_id rid;
+    asx_task_id s, hi, pacer;
+    sleeper ss = {100u, 0};
+    int hi_yields = 1;
+    asx_budget b_hi = budget_with_priority(200u);
+    asx_budget budget;
+    uint32_t order[16];
+
+    asx_runtime_reset(test_runtime());
+    asx_ghost_reset();
+    g_pacer_to = 500u;
+    g_pacer_cancel_n = 0u;
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_sleep_until, &ss, &s), ASX_OK);
+    ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_yield_n, &hi_yields, &b_hi, &hi), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_pacer, NULL, &pacer), ASX_OK);
+
+    budget = asx_budget_infinite();
+    ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
+
+    ASSERT_EQ(poll_order(order, 16u), 5u);
+    /* Round 0: the ready lane by priority. */
+    ASSERT_EQ(order[0], (uint32_t)asx_handle_slot(hi));
+    ASSERT_EQ(order[1], (uint32_t)asx_handle_slot(s));
+    ASSERT_EQ(order[2], (uint32_t)asx_handle_slot(pacer));
+    /* Round 1: the due timer goes ahead of the priority-200 ready task. */
+    ASSERT_EQ(order[3], (uint32_t)asx_handle_slot(s));
+    ASSERT_EQ(order[4], (uint32_t)asx_handle_slot(hi));
+}
+
+TEST(scheduler_polls_timers_due_at_one_deadline_in_the_order_they_were_armed) {
+    asx_region_id rid;
+    asx_task_id x, y, z, pacer;
+    sleeper sx = {100u, 0};
+    sleeper sy = {100u, 1}; /* yields once: arms a round later than x and z */
+    sleeper sz = {100u, 0};
+    int pacer_waits = 2;
+    asx_budget budget;
+    uint32_t order[16];
+
+    asx_runtime_reset(test_runtime());
+    asx_ghost_reset();
+    g_pacer_to = 500u;
+    g_pacer_cancel_n = 0u;
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_sleep_until, &sx, &x), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_sleep_until, &sy, &y), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_sleep_until, &sz, &z), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_pacer, &pacer_waits, &pacer), ASX_OK);
+
+    budget = asx_budget_infinite();
+    ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
+
+    ASSERT_EQ(poll_order(order, 16u), 10u);
+    /* Round 0: x and z arm, y yields. Round 1: y arms. Round 2: the pacer
+     * moves the clock. */
+    ASSERT_EQ(order[0], (uint32_t)asx_handle_slot(x));
+    ASSERT_EQ(order[1], (uint32_t)asx_handle_slot(y));
+    ASSERT_EQ(order[2], (uint32_t)asx_handle_slot(z));
+    ASSERT_EQ(order[3], (uint32_t)asx_handle_slot(pacer));
+    ASSERT_EQ(order[4], (uint32_t)asx_handle_slot(y));
+    ASSERT_EQ(order[5], (uint32_t)asx_handle_slot(pacer));
+    ASSERT_EQ(order[6], (uint32_t)asx_handle_slot(pacer));
+    /* Round 3, one deadline: the lane keeps the order the timers were armed
+     * in (x, z, y), not the arena's (x, y, z). */
+    ASSERT_EQ(order[7], (uint32_t)asx_handle_slot(x));
+    ASSERT_EQ(order[8], (uint32_t)asx_handle_slot(z));
+    ASSERT_EQ(order[9], (uint32_t)asx_handle_slot(y));
+}
+
+TEST(scheduler_polls_the_cancel_lane_before_the_timed_lane) {
+    asx_region_id rid;
+    asx_task_id s, victim, pacer;
+    sleeper ss = {100u, 0};
+    int victim_yields = 1;
+    asx_budget budget;
+    uint32_t order[16];
+
+    asx_runtime_reset(test_runtime());
+    asx_ghost_reset();
+    g_pacer_to = 500u;
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_sleep_until, &ss, &s), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_yield_n, &victim_yields, &victim), ASX_OK);
+    g_pacer_cancel[0] = victim;
+    g_pacer_cancel_n = 1u;
+    ASSERT_EQ(asx_task_spawn(rid, poll_pacer, NULL, &pacer), ASX_OK);
+
+    budget = asx_budget_infinite();
+    ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
+
+    ASSERT_EQ(poll_order(order, 16u), 5u);
+    ASSERT_EQ(order[0], (uint32_t)asx_handle_slot(s));
+    ASSERT_EQ(order[1], (uint32_t)asx_handle_slot(victim));
+    ASSERT_EQ(order[2], (uint32_t)asx_handle_slot(pacer));
+    /* Round 1: the cancelled task, then the due timer. */
+    ASSERT_EQ(order[3], (uint32_t)asx_handle_slot(victim));
+    ASSERT_EQ(order[4], (uint32_t)asx_handle_slot(s));
+}
+
+TEST(scheduler_cancel_streak_gives_a_due_timer_the_turn_before_ready_work) {
+    /* After 16 cancel dispatches in a row the non-cancel lanes are tried
+     * before the 17th, the timed lane before the ready one. */
+    enum { CANCELLED = 18 };
+    asx_region_id rid;
+    asx_task_id s, r, pacer;
+    asx_task_id c[CANCELLED];
+    sleeper ss = {100u, 0};
+    int r_yields = 1;
+    int c_yields[CANCELLED];
+    asx_budget budget;
+    uint32_t order[48];
+    uint32_t n;
+    uint32_t i;
+
+    asx_runtime_reset(test_runtime());
+    asx_ghost_reset();
+    g_pacer_to = 500u;
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
+    /* r is ahead of s in the arena, so ready-lane order would put it first. */
+    ASSERT_EQ(asx_task_spawn(rid, poll_yield_n, &r_yields, &r), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_sleep_until, &ss, &s), ASX_OK);
+    for (i = 0; i < (uint32_t)CANCELLED; i++) {
+        c_yields[i] = 1;
+        ASSERT_EQ(asx_task_spawn(rid, poll_yield_n, &c_yields[i], &c[i]), ASX_OK);
+        g_pacer_cancel[i] = c[i];
+    }
+    g_pacer_cancel_n = (uint32_t)CANCELLED;
+    ASSERT_EQ(asx_task_spawn(rid, poll_pacer, NULL, &pacer), ASX_OK);
+
+    budget = asx_budget_infinite();
+    ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
+
+    n = poll_order(order, 48u);
+    ASSERT_EQ(n, 2u + (uint32_t)CANCELLED + 1u + (uint32_t)CANCELLED + 2u);
+    /* Round 0 is arena order: r, s, c0..c17, pacer. Round 1: c0..c15, the
+     * timer, c16, c17, then the ready task. */
+    n = 2u + (uint32_t)CANCELLED + 1u;
+    for (i = 0; i < 16u; i++) { ASSERT_EQ(order[n + i], (uint32_t)asx_handle_slot(c[i])); }
+    ASSERT_EQ(order[n + 16u], (uint32_t)asx_handle_slot(s));
+    ASSERT_EQ(order[n + 17u], (uint32_t)asx_handle_slot(c[16]));
+    ASSERT_EQ(order[n + 18u], (uint32_t)asx_handle_slot(c[17]));
+    ASSERT_EQ(order[n + 19u], (uint32_t)asx_handle_slot(r));
+}
+
+static asx_task_id g_late_victim;
+
+/* Sleeps until `at`; once due it cancels g_late_victim and ends. */
+static asx_status poll_sleep_then_cancel(void *data, asx_task_id self) {
+    sleeper *s = (sleeper *)data;
+    asx_status st = asx_task_wait_until(self, s->at);
+    if (st != ASX_OK) return st;
+    return asx_task_cancel(g_late_victim, ASX_CANCEL_USER);
+}
+
+TEST(scheduler_polls_a_task_cancelled_this_round_before_the_rest_of_the_timed_lane) {
+    asx_region_id rid;
+    asx_task_id v, a, c, pacer;
+    sleeper sa = {100u, 0};
+    sleeper sc = {200u, 0};
+    int v_yields = 1;
+    asx_budget budget;
+    uint32_t order[16];
+
+    asx_runtime_reset(test_runtime());
+    asx_ghost_reset();
+    g_pacer_to = 500u;
+    g_pacer_cancel_n = 0u;
+    ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
+    /* v is a ready task: the timed lane is polled before it, so it has not
+     * been polled in round 1 when a's request reaches it. */
+    ASSERT_EQ(asx_task_spawn(rid, poll_yield_n, &v_yields, &v), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_sleep_then_cancel, &sa, &a), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_sleep_until, &sc, &c), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_pacer, NULL, &pacer), ASX_OK);
+    g_late_victim = v;
+
+    budget = asx_budget_infinite();
+    ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
+
+    ASSERT_EQ(poll_order(order, 16u), 7u);
+    ASSERT_EQ(order[0], (uint32_t)asx_handle_slot(v));
+    ASSERT_EQ(order[1], (uint32_t)asx_handle_slot(a));
+    ASSERT_EQ(order[2], (uint32_t)asx_handle_slot(c));
+    ASSERT_EQ(order[3], (uint32_t)asx_handle_slot(pacer));
+    /* Round 1: a (deadline 100) cancels v, which goes to the cancel lane at
+     * once: it is polled before c (deadline 200), the rest of the timed lane. */
+    ASSERT_EQ(order[4], (uint32_t)asx_handle_slot(a));
+    ASSERT_EQ(order[5], (uint32_t)asx_handle_slot(v));
+    ASSERT_EQ(order[6], (uint32_t)asx_handle_slot(c));
+}
+
 typedef struct {
     asx_region_id region;
     asx_task_id child;
@@ -1026,6 +1308,16 @@ int main(void) {
     RUN_TEST(scheduler_orders_the_cancel_lane_by_cleanup_priority);
     RUN_TEST_IF(ASX_MAX_TASKS >= 19u, scheduler_cancel_streak_gives_ready_work_a_turn,
                 "needs 19 tasks: 16 cancel polls in a row, the ready task, two more");
+    RUN_TEST(scheduler_sweep_terminal_check_is_the_transition_tables);
+    /* The timed lane: a due wake timer's task, between cancel and ready */
+    RUN_TEST(scheduler_polls_due_timers_earliest_deadline_first);
+    RUN_TEST(scheduler_polls_a_due_timer_before_higher_priority_ready_work);
+    RUN_TEST(scheduler_polls_timers_due_at_one_deadline_in_the_order_they_were_armed);
+    RUN_TEST(scheduler_polls_the_cancel_lane_before_the_timed_lane);
+    RUN_TEST(scheduler_polls_a_task_cancelled_this_round_before_the_rest_of_the_timed_lane);
+    RUN_TEST_IF(ASX_MAX_TASKS >= 21u,
+                scheduler_cancel_streak_gives_a_due_timer_the_turn_before_ready_work,
+                "needs 21 tasks: a timer, a ready task, 18 cancelled and the pacer");
     RUN_TEST(scheduler_polls_a_task_spawned_in_a_round_in_that_round);
     RUN_TEST(scheduler_polls_a_task_in_a_region_opened_in_the_round_before_its_opener_resumes);
     RUN_TEST(scheduler_does_not_cancel_a_cleanup_task_at_its_budget_deadline_before_it_polls);

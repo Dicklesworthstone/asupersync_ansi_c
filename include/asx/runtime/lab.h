@@ -72,9 +72,10 @@ typedef struct {
     /* ASX_LAB_SCHEDULER_DISPATCH (default) polls one task per step, as
      * Rust's LabRuntime with one worker, drawing from a PRNG seeded with
      * `seed`. ASX_LAB_SCHEDULER_SWEEP polls every runnable task each round
-     * in arena order: what asx_scheduler_run does for a live host, where
-     * the seed only reaches entropy. Any other value is refused by
-     * asx_lab_init. */
+     * by lane (cancel, then due timers by deadline, then ready by budget
+     * priority; arena order within one priority): what asx_scheduler_run
+     * does for a live host, where the seed only reaches entropy. Any
+     * other value is refused by asx_lab_init. */
     uint8_t scheduler;
 } asx_lab_config;
 

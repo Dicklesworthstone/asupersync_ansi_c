@@ -1784,6 +1784,24 @@ bench-journal-overhead:
 	@BENCH_JOURNAL_ARGS="$(BENCH_JOURNAL_ARGS)" tests/bench/journal_overhead.sh
 
 # ---------------------------------------------------------------------------
+# bench-sched-ab — what the sweep's dispatch order costs (bd-9kll.4.6): the
+# walk of before the bead (arena order), the priority and cancel lanes, and
+# the shipped order with the timed lane, three release builds of the one
+# tree (the planted-bug macros ASX_MUTANT_SWEEP_ARENA_ORDER and
+# ASX_MUTANT_SWEEP_NO_TIMED_LANE select the first two), the same bench
+# program against each, interleaved, the median of --runs runs.
+# tests/bench/sched_lanes_ab.sh. Not part of `make test`: timings are noisy
+# on a shared machine.
+#   make bench-sched-ab
+#   make bench-sched-ab SCHED_AB_ARGS="--runs 9 --gate"
+#   rch exec -- make bench-sched-ab
+# ---------------------------------------------------------------------------
+.PHONY: bench-sched-ab
+bench-sched-ab:
+	@chmod +x tests/bench/sched_lanes_ab.sh 2>/dev/null || true
+	@tests/bench/sched_lanes_ab.sh $(SCHED_AB_ARGS)
+
+# ---------------------------------------------------------------------------
 # test-ct-timing: dudect-style Welch t-test of asx_crypto_ct_equal and
 # asx_crypto_ct_is_zero (bd-9kll.16.5). Not part of `make test`: timing
 # statistics are noisy on shared machines. Exits 0 only if no leak is found

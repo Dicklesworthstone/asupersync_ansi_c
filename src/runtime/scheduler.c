@@ -3,11 +3,11 @@
  *
  * The scheduler drives every task in a region subtree. Within a round,
  * runnable tasks are polled cancel lane first (by cleanup priority), then
- * the rest by budget priority, higher first; within one priority in
- * ascending arena index order (deterministic tie-break); see "Dispatch
- * order within a sweep round". A task that returns ASX_E_PENDING stays
- * runnable (yield) unless it parked itself with asx_task_park(); parked
- * tasks are skipped
+ * the timed lane (a due wake timer's task, earliest deadline first), then
+ * the rest by budget priority, higher first, in ascending arena index
+ * within one priority; see "Dispatch order within a sweep round". A task
+ * that returns ASX_E_PENDING stays runnable (yield) unless it parked
+ * itself with asx_task_park(); parked tasks are skipped
  * until woken by a timer, a join target completing, a waker/IO signal, a
  * cancel request, or user code.
  *
@@ -281,7 +281,7 @@ static uint32_t timers_fire(asx_kernel *k, asx_time now) {
              * priority, not the task's latest (bd-1maj). */
             asx_lab_schedule(t, t->timer_waker_prio);
         } else {
-            asx_task_wake_slot_internal(t);
+            asx_sweep_timer_woke_internal(k, t, now);
         }
     }
     return n;
@@ -1367,38 +1367,69 @@ static asx_status sched_lab_run(asx_kernel *k, asx_budget *budget, int advance_c
 /* -------------------------------------------------------------------
  * Dispatch order within a sweep round (bd-9kll.4.6)
  *
- * Rust's three-lane scheduler dispatches the cancel lane before the ready
- * lane, a lane's entries by priority (higher first) and then by wake order
- * (three_lane.rs:1777; priority.rs:546-560), and gives the ready lane a
- * turn after cancel_streak_limit (16) cancel dispatches in a row
- * (three_lane.rs:6930-7110). A sweep round polls every runnable task once;
- * this is the order it does it in. The lanes:
+ * Rust's three-lane scheduler dispatches the cancel lane before the timed
+ * lane and the timed lane before the ready lane, a lane's entries by
+ * priority (higher first) and then by wake order, the timed lane's by
+ * deadline (three_lane.rs:1777; priority.rs:52-75, 547-640), and gives the
+ * non-cancel lanes a turn after cancel_streak_limit (16) cancel dispatches
+ * in a row (three_lane.rs:6930-7110). A sweep round polls every runnable
+ * task once; this is the order it does it in. The lanes:
  *   - cancel: a task with a materialized cancel request, by its cleanup
  *     budget's priority (the cancel table's 200..255);
+ *   - timed: a task a due wake timer woke at the start of this round
+ *     (asx_task_wait_until's registration, Rust's schedule_timed entry whose
+ *     deadline <= now), earliest deadline first, then in the order the
+ *     timers were armed (priority.rs:61-75: deadline, then generation); it
+ *     has no priority, as Rust's timed entries have none (three_lane.rs:
+ *     8262), and goes ahead of every ready task whatever its priority;
  *   - ready: every other task, by its budget's priority.
  * The sweep has no wake order, so ascending arena index stands in for it
- * within one priority; tasks that all share a priority and have no cancel
- * request keep the arena order. The timed lane has no counterpart: due
- * timers wake their tasks at the start of a round (timers_fire).
+ * within one ready priority; tasks that all share a priority and have no
+ * cancel request or due timer keep the arena order. Rust gives the timed
+ * lane a fairness limit only under the governor's MeetDeadlines suggestion
+ * (timed_fairness_limit 6, three_lane.rs:6975); the sweep has no governor,
+ * so a timed task is never held back for a ready one.
  *
- * A round builds its order in O(n) with a bucket per (lane, priority) and
- * one `next` link per task, with no allocation; only the priorities in use
- * are touched. A task spawned during the round is not in the snapshot; it
- * is visited after it, in arena order, as the round has always done.
+ * The lanes are a snapshot of the start of the round. Rust puts a cancel
+ * request in the cancel lane at once, so the next dispatch sees it before
+ * any timed or ready task: a task that a poll cancel-requests and that this
+ * round has not polled is queued (asx_sweep_cancel_woke_internal) and
+ * goes ahead of the rest of the timed lane, after the snapshot's cancel
+ * entries, by its cleanup priority and then in request order. A ready task
+ * keeps its place in the ready lane as it always had.
+ *
+ * Rust feeds its timed lane from no non-test code at the pinned revision
+ * (inject_timed and schedule_local_timed have no caller outside tests):
+ * spawn and wake enter the ready lane. The sweep takes the lane's meaning,
+ * a task that runs at a time, from the wake timers it already has, so the
+ * lane is in the order and is where a future feed (a budget deadline, an
+ * I/O timeout) would join.
+ *
+ * A plain round (one budget priority among the live tasks, no cancel
+ * request) lists nothing: it is the arena order the sweep has always had,
+ * and one pass over the tasks tells; with due timers only the timed lane is
+ * listed. Any other round builds its order in O(n) with a bitmap of the
+ * priorities in use, a bucket per (lane, priority) and one `next` link per
+ * task, and sorts its m due timers (insertion sort up to 16, else
+ * heapsort), with no allocation. A task spawned during the round is not in
+ * the snapshot; it is visited after it, in arena order, as the round has
+ * always done.
  * ------------------------------------------------------------------- */
 
 #define SWEEP_PRIORITIES 256u
+#define SWEEP_WORDS (SWEEP_PRIORITIES / 64u)
 #define SWEEP_NIL UINT32_MAX
 #define SWEEP_UNLISTED (UINT32_MAX - 1u)
 
 static uint32_t g_sweep_next[ASX_MAX_TASKS];
+/* A bucket's first and last task; a head is valid only where g_sweep_used
+ * has its priority's bit, so no bucket is ever reset. */
 static uint32_t g_sweep_head[2][SWEEP_PRIORITIES];
 static uint32_t g_sweep_tail[2][SWEEP_PRIORITIES];
-/* The priority range the last build used, per lane (empty when lo > hi);
- * the next build resets just that range. Initially "everything". */
-static uint32_t g_sweep_lo[2] = {0u, 0u};
-static uint32_t g_sweep_hi[2] = {SWEEP_PRIORITIES - 1u, SWEEP_PRIORITIES - 1u};
-/* Slots 0 .. g_sweep_listed - 1 were considered by the last build. */
+/* The priorities this round's build put a task in, per lane, as a bitmap. */
+static uint64_t g_sweep_used[2][SWEEP_WORDS];
+/* Slots 0 .. g_sweep_listed - 1 were considered by the last build; 0 when
+ * the round was plain (see sweep_round_is_plain) and is walked in arena order. */
 static uint32_t g_sweep_listed;
 /* Consecutive cancel-lane polls, across rounds (Rust's cancel_streak). */
 static uint32_t g_sweep_streak;
@@ -1406,56 +1437,303 @@ static uint32_t g_sweep_streak;
 #define SWEEP_LANE_CANCEL 0u
 #define SWEEP_LANE_READY 1u
 
+/* The timed lane: the tasks a due wake timer woke since the last build, with
+ * the deadline they were armed for and the order they fired in. g_sweep_next
+ * marks a task SWEEP_TIMED_DUE from the wake until the build, and SWEEP_TIMED
+ * while the walk has it in the lane. */
+#define SWEEP_TIMED_DUE (UINT32_MAX - 2u)
+#define SWEEP_TIMED (UINT32_MAX - 3u)
+
+typedef struct {
+    asx_time deadline;
+    uint32_t slot;
+    uint32_t seq;
+} sweep_timed;
+
+static sweep_timed g_sweep_timed[ASX_MAX_TASKS];
+static uint32_t g_sweep_timed_n;
+static uint32_t g_sweep_timed_seq;
+
+/* Cancel requests raised after the round's snapshot, for tasks not yet
+ * polled: a bit per task dispatched this round and per task queued, and the
+ * queue (each task at most once a round, so ASX_MAX_TASKS entries). The
+ * kernel is the one whose round is being walked; a request for another
+ * kernel's task, or one outside a walk, is not recorded. */
+#define SWEEP_TASK_WORDS ((ASX_MAX_TASKS + 63u) / 64u)
+static uint64_t g_sweep_polled[SWEEP_TASK_WORDS];
+static uint64_t g_sweep_queued[SWEEP_TASK_WORDS];
+static uint32_t g_sweep_late[ASX_MAX_TASKS];
+static uint32_t g_sweep_late_n;     /* queued this round */
+static uint32_t g_sweep_late_live;  /* queued and not yet taken */
+static uint32_t g_sweep_late_taken; /* dispatched from the queue this round */
+static const asx_kernel *g_sweep_walking;
+
+/* The first request that cancels a task (cancellation.c, outside lab
+ * dispatch): the task is woken as it always was, and queued for the rest of
+ * this round if the round has not polled it, so it is polled before the
+ * remaining timed tasks. */
+void asx_sweep_cancel_woke_internal(asx_kernel *k, asx_task_slot *t) {
+    uint32_t slot = (uint32_t)(t - k->tasks);
+    asx_task_wake_slot_internal(t);
+#ifndef ASX_MUTANT_SWEEP_NO_LATE_CANCEL
+    {
+        uint64_t bit = (uint64_t)1u << (slot & 63u);
+        if (g_sweep_walking != k || slot >= ASX_MAX_TASKS) return;
+        if (((g_sweep_polled[slot >> 6] | g_sweep_queued[slot >> 6]) & bit) != 0u) return;
+        g_sweep_queued[slot >> 6] |= bit;
+        g_sweep_late[g_sweep_late_n++] = slot;
+        g_sweep_late_live++;
+    }
+#else
+    (void)slot;
+#endif
+}
+
+/* The wake of a task by its due wake timer (timers_fire): the task is woken
+ * as it always was, and a task whose timer fired at its deadline joins the
+ * timed lane of the next round. A timer that fired early (past the wheel's
+ * horizon) is not due and is ready work. */
+void asx_sweep_timer_woke_internal(asx_kernel *k, asx_task_slot *t, asx_time now) {
+    uint32_t slot = (uint32_t)(t - k->tasks);
+    asx_task_wake_slot_internal(t);
+#if !defined(ASX_MUTANT_SWEEP_NO_TIMED_LANE) && !defined(ASX_MUTANT_SWEEP_ARENA_ORDER)
+    if (t->wake_at > now || g_sweep_next[slot] == SWEEP_TIMED_DUE) return;
+    g_sweep_next[slot] = SWEEP_TIMED_DUE;
+    g_sweep_timed[g_sweep_timed_n].deadline = t->wake_at;
+    g_sweep_timed[g_sweep_timed_n].slot = slot;
+    g_sweep_timed[g_sweep_timed_n].seq = g_sweep_timed_seq++;
+    g_sweep_timed_n++;
+#else
+    (void)now;
+    (void)slot;
+#endif
+}
+
+/* A run starts with no lane entries and no marks left by one that stopped
+ * early. */
+static void sweep_timed_reset(void) {
+    uint32_t i;
+    for (i = 0; i < g_sweep_timed_n; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: g_sweep_timed_n <= ASX_MAX_TASKS");
+        g_sweep_next[g_sweep_timed[i].slot] = SWEEP_UNLISTED;
+    }
+    g_sweep_timed_n = 0u;
+    g_sweep_timed_seq = 0u;
+}
+
+/* Earlier deadline first, then the earlier firing (priority.rs:61-75). */
+static int sweep_timed_before(const sweep_timed *a, const sweep_timed *b) {
+    if (a->deadline != b->deadline) return a->deadline < b->deadline;
+    return a->seq < b->seq;
+}
+
+static void sweep_timed_sift(sweep_timed *a, uint32_t root, uint32_t n) {
+    for (;;) {
+        ASX_CHECKPOINT_WAIVER("bounded: a sift is at most log2(ASX_MAX_TASKS) levels");
+        uint32_t child = 2u * root + 1u;
+        sweep_timed tmp;
+        if (child >= n) return;
+        if (child + 1u < n && sweep_timed_before(&a[child], &a[child + 1u])) child++;
+        if (!sweep_timed_before(&a[root], &a[child])) return;
+        tmp = a[root];
+        a[root] = a[child];
+        a[child] = tmp;
+        root = child;
+    }
+}
+
+/* The (deadline, seq) keys are all distinct, so the order is the same
+ * whatever the algorithm; in place, no allocation. A few timers, which
+ * arrive nearly in order, are an insertion sort (O(m) when they are in
+ * order); more are a heapsort, O(m log m). */
+static void sweep_timed_sort(sweep_timed *a, uint32_t n) {
+    uint32_t i;
+    if (n < 2u) return;
+    if (n <= 16u) {
+        for (i = 1u; i < n; i++) {
+            ASX_CHECKPOINT_WAIVER("bounded: n <= 16");
+            sweep_timed key = a[i];
+            uint32_t j = i;
+            while (j > 0u && sweep_timed_before(&key, &a[j - 1u])) {
+                ASX_CHECKPOINT_WAIVER("bounded: j <= n <= 16");
+                a[j] = a[j - 1u];
+                j--;
+            }
+            a[j] = key;
+        }
+        return;
+    }
+    for (i = n / 2u; i > 0u; i--) {
+        ASX_CHECKPOINT_WAIVER("bounded: n <= ASX_MAX_TASKS");
+        sweep_timed_sift(a, i - 1u, n);
+    }
+    for (i = n - 1u; i > 0u; i--) {
+        ASX_CHECKPOINT_WAIVER("bounded: n <= ASX_MAX_TASKS");
+        {
+            sweep_timed tmp = a[0];
+            a[0] = a[i];
+            a[i] = tmp;
+        }
+        sweep_timed_sift(a, 0u, i);
+    }
+}
+
+/* asx_task_is_terminal(t->state) (transition_tables.c:106) without the call:
+ * the passes below run over every task every round. test_scheduler.c pins
+ * the two together. */
+static int sweep_task_done(const asx_task_slot *t) { return t->state == ASX_TASK_COMPLETED; }
+
+/* Whether the ready lane's order is the arena's: no cancel request and
+ * every live task at one budget priority, so the cancel lane is empty and
+ * the ready lane has one bucket. With no due timer either, the round is the
+ * one the sweep has always had and the build has nothing to list; with some,
+ * only the timed lane needs listing. It costs one pass over the tasks. A
+ * task outside the round's scope counts too: that can only make a round not
+ * plain. */
+static int sweep_round_is_plain(const asx_kernel *k) {
+#ifdef ASX_MUTANT_SWEEP_ARENA_ORDER
+    /* Oracle mutant and the bench's "before" (make bench-sched-ab): every
+     * round is walked in arena order, as the sweep did before bd-9kll.4.6.
+     * Never in a product build. */
+    (void)k;
+    return 1;
+#else
+    uint32_t i;
+    uint32_t prio = 0u;
+    int have = 0;
+
+    for (i = 0; i < k->task_count; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: k->task_count <= ASX_MAX_TASKS");
+        const asx_task_slot *t = &k->tasks[i];
+        if (!t->alive || sweep_task_done(t)) continue;
+        if (t->cancel_pending && !t->cancel_unmaterialized) return 0;
+        if (!have) {
+            prio = t->budget.priority;
+            have = 1;
+        } else if (t->budget.priority != prio) {
+            return 0;
+        }
+    }
+    return 1;
+#endif
+}
+
 /* List every live in-scope task in its (lane, priority) bucket, in arena
- * order. Needs sched_compute_scope for this round. */
+ * order, and the due timed ones in the timed lane in deadline order. A round
+ * whose ready lane is the arena lists only the timed lane. Needs
+ * sched_compute_scope for this round. */
 static void sweep_build(asx_kernel *k) {
     uint32_t lane;
-    uint32_t p;
+    uint32_t w;
     uint32_t i;
+    uint32_t kept = 0u;
 
     for (lane = 0u; lane < 2u; lane++) {
-        for (p = g_sweep_lo[lane]; p <= g_sweep_hi[lane]; p++) {
-            ASX_CHECKPOINT_WAIVER("bounded: at most SWEEP_PRIORITIES buckets");
-            g_sweep_head[lane][p] = SWEEP_NIL;
+        ASX_CHECKPOINT_WAIVER("bounded: two lanes");
+        for (w = 0u; w < SWEEP_WORDS; w++) {
+            ASX_CHECKPOINT_WAIVER("bounded: SWEEP_WORDS is a compile-time constant");
+            g_sweep_used[lane][w] = 0u;
         }
-        g_sweep_lo[lane] = SWEEP_PRIORITIES - 1u;
-        g_sweep_hi[lane] = 0u;
+    }
+    sweep_timed_sort(g_sweep_timed, g_sweep_timed_n);
+    if (sweep_round_is_plain(k)) {
+        /* Every entry is ready work: no cancel request in the round. */
+        for (i = 0; i < g_sweep_timed_n; i++) {
+            ASX_CHECKPOINT_WAIVER("bounded: g_sweep_timed_n <= ASX_MAX_TASKS");
+            uint32_t slot = g_sweep_timed[i].slot;
+            const asx_task_slot *t = &k->tasks[slot];
+            if (t->alive && !sweep_task_done(t) && sched_scope_region(k, t) != NULL) {
+                g_sweep_timed[kept++] = g_sweep_timed[i];
+                g_sweep_next[slot] = SWEEP_TIMED;
+            } else {
+                g_sweep_next[slot] = SWEEP_UNLISTED;
+            }
+        }
+        g_sweep_timed_n = kept;
+        g_sweep_listed = 0u;
+        return;
     }
     for (i = 0; i < k->task_count; i++) {
         ASX_CHECKPOINT_WAIVER("bounded: k->task_count <= ASX_MAX_TASKS");
         const asx_task_slot *t = &k->tasks[i];
+        int due = g_sweep_next[i] == SWEEP_TIMED_DUE;
         uint32_t prio;
 
         g_sweep_next[i] = SWEEP_UNLISTED;
-        if (!t->alive || asx_task_is_terminal(t->state)) continue;
+        if (!t->alive || sweep_task_done(t)) continue;
         if (sched_scope_region(k, t) == NULL) continue;
         /* A budget cancel the task raised itself is on its Cx only until a
          * checkpoint acknowledges it (cancel_unmaterialized): no cancel
          * lane entry in Rust, so it stays ready work. */
         lane =
             (t->cancel_pending && !t->cancel_unmaterialized) ? SWEEP_LANE_CANCEL : SWEEP_LANE_READY;
+        if (due && lane == SWEEP_LANE_READY) {
+            /* Its timer's entry is in g_sweep_timed; a cancel request moves
+             * a task to the cancel lane instead (move_to_cancel_lane). */
+            g_sweep_next[i] = SWEEP_TIMED;
+            continue;
+        }
         prio = lane == SWEEP_LANE_CANCEL ? t->cleanup_budget.priority : t->budget.priority;
         g_sweep_next[i] = SWEEP_NIL;
-        if (g_sweep_head[lane][prio] == SWEEP_NIL) {
-            g_sweep_head[lane][prio] = i;
-        } else {
-            g_sweep_next[g_sweep_tail[lane][prio]] = i;
+        {
+            uint64_t *used = &g_sweep_used[lane][prio >> 6];
+            uint64_t bit = (uint64_t)1u << (prio & 63u);
+            if ((*used & bit) == 0u) {
+                *used |= bit;
+                g_sweep_head[lane][prio] = i;
+            } else {
+                g_sweep_next[g_sweep_tail[lane][prio]] = i;
+            }
+            g_sweep_tail[lane][prio] = i;
         }
-        g_sweep_tail[lane][prio] = i;
-        if (prio < g_sweep_lo[lane]) g_sweep_lo[lane] = prio;
-        if (prio > g_sweep_hi[lane]) g_sweep_hi[lane] = prio;
     }
+    /* The timed lane keeps the due timers whose tasks are still ready work. */
+    for (i = 0; i < g_sweep_timed_n; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: g_sweep_timed_n <= ASX_MAX_TASKS");
+        if (g_sweep_next[g_sweep_timed[i].slot] == SWEEP_TIMED)
+            g_sweep_timed[kept++] = g_sweep_timed[i];
+    }
+    g_sweep_timed_n = kept;
     g_sweep_listed = k->task_count;
 }
 
 typedef struct {
-    uint32_t prio; /* the bucket being walked */
-    uint32_t node; /* its next task, SWEEP_NIL when the bucket is spent */
+    uint32_t word; /* the bitmap word being walked; the words below it follow */
+    uint64_t mask; /* its priorities not yet visited */
+    uint32_t node; /* the current bucket's next task, SWEEP_NIL when spent */
 } sweep_cursor;
 
-static void sweep_cursor_init(sweep_cursor *c, uint32_t lane) {
-    c->prio = g_sweep_hi[lane] + 1u;
+static void sweep_cursor_init(sweep_cursor *c) {
+    c->word = SWEEP_WORDS;
+    c->mask = 0u;
     c->node = SWEEP_NIL;
+}
+
+/* The index of the highest set bit of a nonzero word. */
+static uint32_t sweep_highest_bit(uint64_t m) {
+    uint32_t r = 0u;
+    if ((m >> 32) != 0u) {
+        m >>= 32;
+        r += 32u;
+    }
+    if ((m >> 16) != 0u) {
+        m >>= 16;
+        r += 16u;
+    }
+    if ((m >> 8) != 0u) {
+        m >>= 8;
+        r += 8u;
+    }
+    if ((m >> 4) != 0u) {
+        m >>= 4;
+        r += 4u;
+    }
+    if ((m >> 2) != 0u) {
+        m >>= 2;
+        r += 2u;
+    }
+    if ((m >> 1) != 0u) r += 1u;
+    return r;
 }
 
 /* The next task of `lane`: highest priority first, arena order within one;
@@ -1463,9 +1741,15 @@ static void sweep_cursor_init(sweep_cursor *c, uint32_t lane) {
 static uint32_t sweep_lane_next(uint32_t lane, sweep_cursor *c) {
     while (c->node == SWEEP_NIL) {
         ASX_CHECKPOINT_WAIVER("bounded: at most SWEEP_PRIORITIES buckets");
-        if (c->prio <= g_sweep_lo[lane]) return SWEEP_NIL;
-        c->prio--;
-        c->node = g_sweep_head[lane][c->prio];
+        if (c->mask == 0u) {
+            if (c->word == 0u) return SWEEP_NIL;
+            c->word--;
+            c->mask = g_sweep_used[lane][c->word];
+        } else {
+            uint32_t bit = sweep_highest_bit(c->mask);
+            c->mask &= ~((uint64_t)1u << bit);
+            c->node = g_sweep_head[lane][c->word * 64u + bit];
+        }
     }
     {
         uint32_t i = c->node;
@@ -1479,31 +1763,117 @@ typedef struct {
     sweep_cursor ready;
     uint32_t next_cancel; /* lookahead of each lane */
     uint32_t next_ready;
-    uint32_t tail; /* the arena scan for tasks spawned this round */
+    uint32_t timed; /* the next entry of g_sweep_timed */
+    uint32_t tail;  /* the arena scan for tasks spawned this round */
     int in_tail;
 } sweep_walk;
 
-static void sweep_walk_start(sweep_walk *w) {
-    sweep_cursor_init(&w->cancel, SWEEP_LANE_CANCEL);
-    sweep_cursor_init(&w->ready, SWEEP_LANE_READY);
+static void sweep_walk_start(const asx_kernel *k, sweep_walk *w) {
+    uint32_t i;
+    for (i = 0; i < SWEEP_TASK_WORDS; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: SWEEP_TASK_WORDS is a compile-time constant");
+        g_sweep_polled[i] = 0u;
+        g_sweep_queued[i] = 0u;
+    }
+    g_sweep_late_n = 0u;
+    g_sweep_late_live = 0u;
+    g_sweep_late_taken = 0u;
+    g_sweep_walking = k;
+    sweep_cursor_init(&w->cancel);
+    sweep_cursor_init(&w->ready);
     w->next_cancel = sweep_lane_next(SWEEP_LANE_CANCEL, &w->cancel);
     w->next_ready = sweep_lane_next(SWEEP_LANE_READY, &w->ready);
+    w->timed = 0u;
     w->tail = 0u;
     w->in_tail = 0;
+}
+
+static int sweep_polled(uint32_t slot) {
+    return (g_sweep_polled[slot >> 6] & ((uint64_t)1u << (slot & 63u))) != 0u;
+}
+
+/* The queued task to poll next: the highest cleanup priority, then the
+ * earliest request; SWEEP_NIL when none is left. A task the round has
+ * polled since it was queued is dropped. */
+static uint32_t sweep_late_take(const asx_kernel *k) {
+    uint32_t best = SWEEP_NIL;
+    uint32_t best_prio = 0u;
+    uint32_t i;
+    for (i = 0; i < g_sweep_late_n; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: g_sweep_late_n <= ASX_MAX_TASKS");
+        uint32_t slot = g_sweep_late[i];
+        uint32_t prio;
+        if (slot == SWEEP_NIL) continue;
+        if (sweep_polled(slot)) {
+            g_sweep_late[i] = SWEEP_NIL;
+            g_sweep_late_live--;
+            continue;
+        }
+        prio = k->tasks[slot].cleanup_budget.priority;
+        if (best == SWEEP_NIL || prio > best_prio) {
+            best = i;
+            best_prio = prio;
+        }
+    }
+    if (best == SWEEP_NIL) return SWEEP_NIL;
+    {
+        uint32_t slot = g_sweep_late[best];
+        g_sweep_late[best] = SWEEP_NIL;
+        g_sweep_late_live--;
+        g_sweep_late_taken++;
+        return slot;
+    }
 }
 
 /* The next slot to visit this round, or 0 when the round is done.
  * *out_cancel_lane says which lane it came from. After cancel_streak_limit
  * cancel-lane polls in a row (g_sweep_streak, counted where a poll is made)
- * a ready task goes next if there is one. */
+ * a timed task, or failing that a ready one, goes next if there is one. */
 static int sweep_walk_next(const asx_kernel *k, sweep_walk *w, uint32_t *out_slot,
                            int *out_cancel_lane) {
     if (!w->in_tail) {
-        if (w->next_cancel != SWEEP_NIL &&
-            (g_sweep_streak < LAB_CANCEL_STREAK_LIMIT || w->next_ready == SWEEP_NIL)) {
+        int timed_left;
+        if (g_sweep_late_taken != 0u) {
+            /* A task the queue dispatched is not visited again. */
+            while (w->timed < g_sweep_timed_n && sweep_polled(g_sweep_timed[w->timed].slot)) {
+                ASX_CHECKPOINT_WAIVER("bounded: at most g_sweep_timed_n entries");
+                w->timed++;
+            }
+            while (w->next_ready != SWEEP_NIL && sweep_polled(w->next_ready)) {
+                ASX_CHECKPOINT_WAIVER("bounded: each pass leaves one listed task");
+                w->next_ready = sweep_lane_next(SWEEP_LANE_READY, &w->ready);
+            }
+        }
+        timed_left = w->timed < g_sweep_timed_n;
+#ifdef ASX_MUTANT_SWEEP_TIMED_BEFORE_CANCEL
+        /* Oracle mutant: the timed lane preempts the cancel lane. */
+        if (timed_left) {
+            *out_slot = g_sweep_timed[w->timed++].slot;
+            *out_cancel_lane = 0;
+            return 1;
+        }
+#endif
+        if (w->next_cancel != SWEEP_NIL && (g_sweep_streak < LAB_CANCEL_STREAK_LIMIT ||
+                                            (!timed_left && w->next_ready == SWEEP_NIL))) {
             *out_slot = w->next_cancel;
             *out_cancel_lane = 1;
             w->next_cancel = sweep_lane_next(SWEEP_LANE_CANCEL, &w->cancel);
+            return 1;
+        }
+        if (timed_left && w->next_cancel == SWEEP_NIL && g_sweep_late_live != 0u &&
+            g_sweep_streak < LAB_CANCEL_STREAK_LIMIT) {
+            /* A request raised since the snapshot: the cancel lane goes
+             * ahead of the rest of the timed lane. */
+            uint32_t slot = sweep_late_take(k);
+            if (slot != SWEEP_NIL) {
+                *out_slot = slot;
+                *out_cancel_lane = 1;
+                return 1;
+            }
+        }
+        if (timed_left) {
+            *out_slot = g_sweep_timed[w->timed++].slot;
+            *out_cancel_lane = 0;
             return 1;
         }
         if (w->next_ready != SWEEP_NIL) {
@@ -1518,7 +1888,9 @@ static int sweep_walk_next(const asx_kernel *k, sweep_walk *w, uint32_t *out_slo
     while (w->tail < k->task_count) {
         uint32_t i = w->tail++;
         ASX_CHECKPOINT_WAIVER("bounded: k->task_count <= ASX_MAX_TASKS");
+        if (g_sweep_next[i] == SWEEP_TIMED) continue; /* a timed lane entry, visited */
         if (i < g_sweep_listed && g_sweep_next[i] != SWEEP_UNLISTED) continue;
+        if (g_sweep_late_taken != 0u && sweep_polled(i)) continue; /* taken from the queue */
         *out_slot = i;
         *out_cancel_lane = 0;
         return 1;
@@ -1556,6 +1928,7 @@ static asx_status sched_run(asx_region_id region, asx_budget *budget, int advanc
     if (asx_lab_dispatch_active()) return sched_lab_run(k, budget, advance_clock);
 
     g_sweep_streak = 0u;
+    sweep_timed_reset();
     for (round = 0;; round++) {
         uint32_t active = 0;
         uint32_t progress = 0;
@@ -1594,13 +1967,15 @@ static asx_status sched_run(asx_region_id region, asx_budget *budget, int advanc
         }
 
         sweep_build(k);
-        sweep_walk_start(&walk);
+        sweep_walk_start(k, &walk);
         while (sweep_walk_next(k, &walk, &i, &from_cancel_lane)) {
             ASX_CHECKPOINT_WAIVER("kernel-scheduler: inner poll loop bounded by "
                                   "k->task_count <= ASX_MAX_TASKS arena capacity");
             asx_task_slot *t = &k->tasks[i];
             asx_region_slot *rslot;
             asx_task_id tid;
+
+            g_sweep_polled[i >> 6] |= (uint64_t)1u << (i & 63u);
 
             if (!t->alive) continue;
             if (asx_task_is_terminal(t->state)) continue;
@@ -1681,6 +2056,8 @@ static asx_status sched_run(asx_region_id region, asx_budget *budget, int advanc
                 if (done) active--;
             }
         }
+        sweep_timed_reset(); /* the round's timed lane is spent */
+        g_sweep_walking = NULL;
 
         /* No active tasks left: quiescent, unless a finalizer was just spawned */
         if (active == 0 && asx_region_admit_finalizers_internal(k) > 0u) continue;

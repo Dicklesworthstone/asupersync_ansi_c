@@ -444,7 +444,7 @@ TimerHandle { id: u64, generation: u64 }   // wheel.rs:225-228
 
 ## 3. Deterministic Scheduler Semantics
 
-**C status (whole section):** C does not port `three_lane.rs`. Rust parity runs use C's lab dispatch (`src/runtime/lab_dispatch.c`), which ports the Rust `LabRuntime` dispatch with one worker (`lab/runtime.rs` `pop_for_worker`, `:6324-6373`, over `priority.rs` lanes). Outside lab dispatch, `src/runtime/scheduler.c` polls runnable tasks in ascending arena order each round (`scheduler.c:1-22`, loop at `:1424`). The optional parallel profile (`src/runtime/parallel.c`) is a C design of its own, described where relevant below.
+**C status (whole section):** C does not port `three_lane.rs`. Rust parity runs use C's lab dispatch (`src/runtime/lab_dispatch.c`), which ports the Rust `LabRuntime` dispatch with one worker (`lab/runtime.rs` `pop_for_worker`, `:6324-6373`, over `priority.rs` lanes). Outside lab dispatch, `src/runtime/scheduler.c` polls the runnable tasks of each round by lane (cancel, then the timed lane of tasks a due wake timer woke, earliest deadline first, then ready by budget priority; ascending arena index within one priority; `scheduler.c:1-22`, `sweep_build` at `:1581`). The optional parallel profile (`src/runtime/parallel.c`) is a C design of its own, described where relevant below.
 
 ### 3.1 Three-Lane Architecture
 

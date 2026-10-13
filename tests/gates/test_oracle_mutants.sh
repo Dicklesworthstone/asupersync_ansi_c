@@ -263,6 +263,23 @@ run_unit_mutant SPAWN_INTO_CLOSING_REGION unit/runtime/test_parallel \
 run_unit_mutant CLEAR_SKIPS_USED_SLOTS unit/runtime/test_boundary_exhaustion \
     reset_after_heavy_then_light_use_leaves_no_slot_behind
 
+# The sweep scheduler's dispatch order (bd-9kll.4.6): cancel lane, then the
+# timed lane (a due wake timer's task, earliest deadline first, then arming
+# order), then ready by budget priority. The first mutant is the walk of
+# before the bead and is also the "arena" build of `make bench-sched-ab`.
+run_unit_mutant SWEEP_ARENA_ORDER unit/runtime/test_scheduler \
+    scheduler_polls_higher_budget_priority_first \
+    scheduler_polls_the_cancel_lane_before_the_ready_lane \
+    scheduler_polls_due_timers_earliest_deadline_first
+run_unit_mutant SWEEP_NO_TIMED_LANE unit/runtime/test_scheduler \
+    scheduler_polls_due_timers_earliest_deadline_first \
+    scheduler_polls_a_due_timer_before_higher_priority_ready_work \
+    scheduler_polls_timers_due_at_one_deadline_in_the_order_they_were_armed
+run_unit_mutant SWEEP_TIMED_BEFORE_CANCEL unit/runtime/test_scheduler \
+    scheduler_polls_the_cancel_lane_before_the_timed_lane
+run_unit_mutant SWEEP_NO_LATE_CANCEL unit/runtime/test_scheduler \
+    scheduler_polls_a_task_cancelled_this_round_before_the_rest_of_the_timed_lane
+
 # CapabilityBudget (bd-9kll.3.27): an envelope can only tighten down the
 # tree, a spent one is refused when required, a refused child takes nothing,
 # and a refused apply leaves the Cx as it was. The conformance corpus has no

@@ -479,7 +479,7 @@ This is a C design from the port plan (Section 6.8.D), not a Rust structure. The
 
 Correction to the earlier version: Rust never force-completes a task whose cleanup exceeds its budget, and has no `cleanup_budget_exceeded` flag (`git grep` finds no such identifier at `5e60b1c4c`). In the lab, a poll with no poll quota left only strengthens the task's cancel reason to `PollQuota` (`src/lab/runtime.rs:4663-4671`). The multi-worker scheduler does not charge a task in its cancellation cleanup phase at all: its cleanup budget stays advisory (`consume_budget_poll` and its doc comment, `src/runtime/scheduler/three_lane.rs:1266-1301`). v4 §3.2.3 is a proof sketch that assumes sufficient budgets, and v4 §6 PROG-CANCEL lists the premises (rule `prog.cancel.drains`, #9; C status row `prog.cancel.drains`, Partial).
 
-**C status:** the default matches Rust (`cleanup_hard_bound = 0`, `src/runtime/hooks.c:790`; semantics in `include/asx/asx_config.h:1229-1239`). With the opt-in hard bound, the round-robin scheduler force-completes a cancelled, unmasked task whose cleanup polls are spent as Cancelled with `ASX_SCHED_EVENT_CANCEL_FORCED` (`src/runtime/scheduler.c:1631-1648`), a deliberate deviation excluded from parity. It sets no extra flag, and it does not force-abort obligations: completion goes through `sched_complete` (`src/runtime/scheduler.c:761`), whose completion hook (`:776`) leaks still-held obligations under the leak policy (section 4.2).
+**C status:** the default matches Rust (`cleanup_hard_bound = 0`, `src/runtime/hooks.c:790`; semantics in `include/asx/asx_config.h:1229-1239`). With the opt-in hard bound, the round-robin scheduler force-completes a cancelled, unmasked task whose cleanup polls are spent as Cancelled with `ASX_SCHED_EVENT_CANCEL_FORCED` (`src/runtime/scheduler.c:2006-2023`), a deliberate deviation excluded from parity. It sets no extra flag, and it does not force-abort obligations: completion goes through `sched_complete` (`src/runtime/scheduler.c:761`), whose completion hook (`:776`) leaks still-held obligations under the leak policy (section 4.2).
 
 ### 7.5 Exhaustion During Cleanup
 
@@ -595,7 +595,7 @@ Rust `cancel_request_in`: the subtree is collected depth-first with an explicit 
 
 ### 10.5 Task Completion Notification Order
 
-Not stated by v4 and not re-verified for Rust in this pass. Under lab dispatch both engines poll one task per step, so completions follow the dispatch order (`docs/CHANNEL_TIMER_SEMANTICS.md` §3.2). C's round-robin scheduler polls runnable tasks in ascending arena order each round (`docs/CHANNEL_TIMER_SEMANTICS.md` §3).
+Not stated by v4 and not re-verified for Rust in this pass. Under lab dispatch both engines poll one task per step, so completions follow the dispatch order (`docs/CHANNEL_TIMER_SEMANTICS.md` §3.2). C's sweep scheduler polls the runnable tasks of each round by lane, cancel then timed then ready by priority, in ascending arena order within one priority (`docs/CHANNEL_TIMER_SEMANTICS.md` §3; `docs/LIFECYCLE_TRANSITION_TABLES.md` §6.4).
 
 ---
 
@@ -694,7 +694,7 @@ The variant names were checked; the one-line statements are carried over from th
 | QF-012 | Recursive leak detection | Allowed but deduplicated (`in_flight_leak_ids`) with deferred region advances (section 4.5) | Cannot happen (section 4.5) |
 | QF-013 | Quiescence report with pending timers | No timer conjunct (section 9.1) | `ASX_E_TIMERS_PENDING` is never returned (section 9.3) |
 | QF-014 | Quiescence report with undrained channels | No channel conjunct (section 9.2) | `ASX_E_CHANNEL_NOT_DRAINED` is never returned (section 9.3) |
-| QF-015 | Silent cleanup-budget overrun | Not forbidden in Rust: the budget is advisory (section 7.4) | Default advisory; the opt-in hard bound emits `ASX_SCHED_EVENT_CANCEL_FORCED` (`src/runtime/scheduler.c:1631-1648`) |
+| QF-015 | Silent cleanup-budget overrun | Not forbidden in Rust: the budget is advisory (section 7.4) | Default advisory; the opt-in hard bound emits `ASX_SCHED_EVENT_CANCEL_FORCED` (`src/runtime/scheduler.c:2006-2023`) |
 
 ### 13.2 Cross-Reference to bd-296.15 Lifecycle Tables
 

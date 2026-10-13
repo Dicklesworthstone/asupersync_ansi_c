@@ -903,8 +903,12 @@ ASX_API ASX_MUST_USE asx_status asx_obligation_get_state(asx_obligation_id id,
  *
  * Preconditions: region must be a valid handle; budget must not be NULL
  *   and must have remaining polls > 0.
- * Postconditions: tasks are polled cancel lane first, then by budget
- *   priority, in arena-index order within a priority; event log is
+ * Postconditions: tasks are polled cancel lane first (by cleanup
+ *   priority), then the tasks a due wake timer woke at the start of the
+ *   round (earliest deadline first, then in the order the timers were
+ *   armed), then by budget priority, higher first, in arena-index order
+ *   within a priority; after 16 cancel-lane polls in a row one task of
+ *   another lane goes next (Rust's cancel_streak_limit); event log is
  *   populated; budget is decremented once per poll.
  * Returns ASX_OK when all tasks complete (quiescent); the regions stay
  *   open, as after Rust's run_until_idle: asx_region_close or

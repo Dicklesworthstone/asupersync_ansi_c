@@ -1324,6 +1324,17 @@ static inline void asx_trace_emit_ctx_internal(asx_trace_event_kind kind, uint64
 /* asx_runtime_random_secure_u64 as runtime `k` sees it. Defined in hooks.c. */
 asx_status asx_kernel_random_secure_u64(asx_kernel *k, uint64_t *out_value);
 
+/* A task's wake timer fired in the sweep scheduler: the task is woken, and one whose timer was
+ * armed for a deadline that is now due joins the timed lane of the next round. Defined in
+ * scheduler.c (bd-9kll.4.6). */
+void asx_sweep_timer_woke_internal(asx_kernel *k, asx_task_slot *t, asx_time now);
+
+/* The first request that cancels `t`, outside lab dispatch (cancellation.c):
+ * `t` is woken, and the sweep queues it, if its round has not polled it,
+ * ahead of the rest of the round's timed lane (Rust puts a request in the
+ * cancel lane at once). Defined in scheduler.c. */
+void asx_sweep_cancel_woke_internal(asx_kernel *k, asx_task_slot *t);
+
 /* The outcome a completed task's TaskRecord holds, which its monitors, its links and its
  * region's close outcome take; the join's (t->outcome) can differ. Defined in cancellation.c. */
 asx_outcome asx_task_record_outcome_internal(const asx_task_slot *t);

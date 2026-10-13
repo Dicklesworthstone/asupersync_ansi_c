@@ -322,7 +322,7 @@ asx_status asx_task_cancel_reason_internal(asx_task_id id, const asx_cancel_reas
             }
         }
     } else {
-        asx_task_wake_slot_internal(t);
+        asx_sweep_cancel_woke_internal(asx_kernel_of(id), t);
     }
 
     /* Create a cancel witness to track this cancellation's lifecycle */
