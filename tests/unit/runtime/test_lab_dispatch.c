@@ -2584,6 +2584,252 @@ TEST(forced_schedule_refuses_a_run_that_is_not_pristine_or_has_another_seed) {
     ASSERT_EQ(g_order_n, 0u);
 }
 
+/* ---- Stuck tasks and futurelocks (bd-9kll.9.6) ---- */
+
+/* Waits on a channel nothing sends on. */
+typedef struct {
+    asx_region_id region;
+    asx_channel_id rx;
+    asx_cx cx;
+    int cx_ready;
+    uint64_t got;
+} chan_waiter;
+
+static asx_status poll_chan_waiter(void *ud, asx_task_id self) {
+    chan_waiter *w = (chan_waiter *)ud;
+    if (!w->cx_ready) {
+        asx_status st = asx_cx_init(&w->cx, w->region, self, ASX_CAP_NONE);
+        if (st != ASX_OK) return st;
+        w->cx_ready = 1;
+    }
+    return asx_channel_recv(w->rx, &w->cx, &w->got);
+}
+
+/* Parks and is never woken. */
+static asx_status poll_parks_forever(void *ud, asx_task_id self) {
+    (void)ud;
+    return asx_task_park(self) == ASX_OK ? ASX_E_PENDING : ASX_E_INVALID_STATE;
+}
+
+/* Joins `target`. */
+static asx_status poll_joiner(void *ud, asx_task_id self) {
+    asx_outcome out;
+    return asx_task_join_poll(self, *(asx_task_id *)ud, &out);
+}
+
+/* Reserves one obligation at its first poll, then parks for good (`park`)
+ * or yields on every poll. */
+typedef struct {
+    asx_region_id region;
+    asx_obligation_id id;
+    int reserved;
+    int park;
+} holder_state;
+
+static asx_status poll_holder(void *ud, asx_task_id self) {
+    holder_state *h = (holder_state *)ud;
+    if (!h->reserved) {
+        asx_status st = asx_obligation_reserve(h->region, &h->id);
+        if (st != ASX_OK) return st;
+        h->reserved = 1;
+    }
+    if (h->park) return asx_task_park(self) == ASX_OK ? ASX_E_PENDING : ASX_E_INVALID_STATE;
+    return ASX_E_PENDING;
+}
+
+/* Two tasks wait, each on a channel the other would send on: a deadlock.
+ * The run ends ASX_E_WOULD_BLOCK, as Rust's StuckBailout, and both tasks are
+ * named, in arena order, with their region. */
+TEST(a_run_that_would_block_names_both_tasks_of_a_channel_deadlock) {
+    asx_region_id r;
+    asx_task_id ta;
+    asx_task_id tb;
+    asx_channel_id ca;
+    asx_channel_id cb;
+    asx_budget budget;
+    chan_waiter a;
+    chan_waiter b;
+    asx_stuck_task st[4];
+
+    ASSERT_EQ(setup(), ASX_OK);
+    ASSERT_EQ(asx_scheduler_use_lab_dispatch(7u), ASX_OK);
+    memset(&a, 0, sizeof(a));
+    memset(&b, 0, sizeof(b));
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_channel_create(r, 2u, &ca), ASX_OK);
+    ASSERT_EQ(asx_channel_create(r, 2u, &cb), ASX_OK);
+    a.region = r;
+    a.rx = ca;
+    b.region = r;
+    b.rx = cb;
+    ASSERT_EQ(asx_task_spawn(r, poll_chan_waiter, &a, &ta), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(r, poll_chan_waiter, &b, &tb), ASX_OK);
+
+    budget = asx_budget_infinite();
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_E_WOULD_BLOCK);
+
+    ASSERT_EQ(asx_scheduler_stuck_tasks(r, st, 4u), 2u);
+    ASSERT_TRUE(asx_handle_index(st[0].task) == asx_handle_index(ta));
+    ASSERT_TRUE(asx_handle_index(st[1].task) == asx_handle_index(tb));
+    ASSERT_TRUE(asx_handle_index(st[0].region) == asx_handle_index(r));
+    ASSERT_EQ((int)st[0].state, (int)ASX_TASK_RUNNING);
+    ASSERT_EQ((int)st[0].wait, (int)ASX_STUCK_PARKED);
+    ASSERT_EQ((int)st[1].wait, (int)ASX_STUCK_PARKED);
+    ASSERT_EQ(st[0].held, 0u);
+    ASSERT_EQ((int)st[0].cancel_requested, 0);
+    /* The stuck steps went by while they waited. */
+    ASSERT_TRUE(st[0].idle_steps > 100u);
+    /* A short buffer still counts them all. */
+    ASSERT_EQ(asx_scheduler_stuck_tasks(r, st, 1u), 2u);
+    ASSERT_EQ(asx_scheduler_stuck_tasks(r, NULL, 0u), 2u);
+}
+
+/* A task joining another that parks for good: both stuck, the joiner on
+ * the task it awaits. */
+TEST(a_stuck_joiner_names_the_task_it_awaits) {
+    asx_region_id r;
+    asx_task_id target;
+    asx_task_id joiner;
+    asx_budget budget;
+    asx_stuck_task st[4];
+
+    ASSERT_EQ(setup(), ASX_OK);
+    ASSERT_EQ(asx_scheduler_use_lab_dispatch(3u), ASX_OK);
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(r, poll_parks_forever, NULL, &target), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(r, poll_joiner, &target, &joiner), ASX_OK);
+
+    budget = asx_budget_infinite();
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_E_WOULD_BLOCK);
+    ASSERT_EQ(asx_scheduler_stuck_tasks(r, st, 4u), 2u);
+    ASSERT_EQ((int)st[0].wait, (int)ASX_STUCK_PARKED);
+    ASSERT_TRUE(asx_handle_index(st[0].task) == asx_handle_index(target));
+    ASSERT_EQ((int)st[1].wait, (int)ASX_STUCK_JOIN);
+    ASSERT_TRUE(asx_handle_index(st[1].task) == asx_handle_index(joiner));
+    ASSERT_TRUE(asx_handle_index(st[1].wait_task) == asx_handle_index(target));
+}
+
+/* The planted futurelock: a task holds an obligation and parks for good
+ * while another keeps the lab stepping. With the threshold Rust's own test
+ * uses (3) the holder is named, with its obligation and kind; with Rust's
+ * default (10000) the same run reports nothing, because the 1000 stuck steps
+ * that end it never reach it; a threshold of 0 switches the check off. */
+TEST(a_parked_obligation_holder_is_a_futurelock_past_the_threshold) {
+    asx_region_id r;
+    asx_task_id th;
+    asx_task_id tk;
+    asx_budget budget;
+    holder_state h;
+    probe k;
+    asx_futurelock fl[2];
+    asx_stuck_task st[2];
+
+    ASSERT_EQ(setup(), ASX_OK);
+    ASSERT_EQ(asx_scheduler_use_lab_dispatch(7u), ASX_OK);
+    memset(&h, 0, sizeof(h));
+    memset(&k, 0, sizeof(k));
+    order_reset();
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    h.region = r;
+    h.park = 1;
+    k.name = 'k';
+    k.yields = 12u;
+    ASSERT_EQ(asx_task_spawn(r, poll_holder, &h, &th), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(r, poll_probe, &k, &tk), ASX_OK);
+
+    budget = asx_budget_infinite();
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_E_WOULD_BLOCK);
+
+    ASSERT_EQ(asx_lab_futurelocks(3u, fl, 2u), 1u);
+    ASSERT_TRUE(asx_handle_index(fl[0].task) == asx_handle_index(th));
+    ASSERT_TRUE(asx_handle_index(fl[0].region) == asx_handle_index(r));
+    ASSERT_TRUE(fl[0].idle_steps > 3u);
+    ASSERT_EQ(fl[0].held_count, 1u);
+    ASSERT_TRUE(asx_handle_index(fl[0].held[0]) == asx_handle_index(h.id));
+    ASSERT_EQ((int)fl[0].held_kind[0], (int)ASX_OBLIGATION_KIND_GENERIC);
+    ASSERT_EQ(asx_lab_futurelocks(10000u, fl, 2u), 0u);
+    ASSERT_EQ(asx_lab_futurelocks(0u, fl, 2u), 0u);
+
+    /* The same task is the stuck one, holding the obligation. */
+    ASSERT_EQ(asx_scheduler_stuck_tasks(r, st, 2u), 1u);
+    ASSERT_TRUE(asx_handle_index(st[0].task) == asx_handle_index(th));
+    ASSERT_EQ(st[0].held, 1u);
+}
+
+/* Negative: a task that holds an obligation and is polled at every step is
+ * not futurelocked, whatever the threshold; the one that parked is. */
+TEST(a_task_polled_every_step_is_not_a_futurelock) {
+    asx_region_id r;
+    asx_task_id parked;
+    asx_task_id spinner;
+    asx_budget budget;
+    holder_state hp;
+    holder_state hs;
+    asx_futurelock fl[4];
+
+    ASSERT_EQ(setup(), ASX_OK);
+    ASSERT_EQ(asx_scheduler_use_lab_dispatch(11u), ASX_OK);
+    memset(&hp, 0, sizeof(hp));
+    memset(&hs, 0, sizeof(hs));
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    hp.region = r;
+    hp.park = 1;
+    hs.region = r;
+    ASSERT_EQ(asx_task_spawn(r, poll_holder, &hp, &parked), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(r, poll_holder, &hs, &spinner), ASX_OK);
+
+    budget = asx_budget_from_polls(40u);
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_E_POLL_BUDGET_EXHAUSTED);
+
+    ASSERT_EQ(asx_lab_futurelocks(3u, fl, 4u), 1u);
+    ASSERT_TRUE(asx_handle_index(fl[0].task) == asx_handle_index(parked));
+    ASSERT_EQ(asx_lab_futurelocks(1000u, fl, 4u), 0u);
+}
+
+/* Negative: a sleeper a timer wakes is not stuck, and the run that ends
+ * with nothing left reports no stuck task and no futurelock. */
+TEST(a_sleeper_that_wakes_is_neither_stuck_nor_futurelocked) {
+    asx_region_id r;
+    asx_task_id t;
+    asx_budget budget;
+    sleeper s;
+    asx_stuck_task st[2];
+    asx_futurelock fl[2];
+
+    ASSERT_EQ(setup(), ASX_OK);
+    ASSERT_EQ(asx_scheduler_use_lab_dispatch(7u), ASX_OK);
+    memset(&s, 0, sizeof(s));
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(r, poll_sleeper, &s, &t), ASX_OK);
+    budget = asx_budget_from_polls(100);
+    /* Before the timer fires the sleeper waits, but a timer will wake it. */
+    ASSERT_EQ(asx_scheduler_run_until_idle(r, &budget), ASX_E_PENDING);
+    ASSERT_EQ(asx_scheduler_stuck_tasks(r, st, 2u), 0u);
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
+    ASSERT_EQ(asx_scheduler_stuck_tasks(r, st, 2u), 0u);
+    ASSERT_EQ(asx_lab_futurelocks(1u, fl, 2u), 0u);
+}
+
+/* Outside lab dispatch there are no lab steps: the futurelock check reports
+ * nothing, and the stuck query is over the region's parked tasks. */
+TEST(the_futurelock_check_needs_lab_dispatch_and_the_sweep_lists_parked_tasks) {
+    asx_region_id r;
+    asx_task_id t;
+    asx_budget budget;
+    asx_stuck_task st[2];
+    asx_futurelock fl[2];
+
+    ASSERT_EQ(setup(), ASX_OK);
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(r, poll_parks_forever, NULL, &t), ASX_OK);
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_E_WOULD_BLOCK);
+    ASSERT_EQ(asx_lab_futurelocks(1u, fl, 2u), 0u);
+    ASSERT_EQ(asx_scheduler_stuck_tasks(r, st, 2u), 1u);
+    ASSERT_TRUE(asx_handle_index(st[0].task) == asx_handle_index(t));
+    ASSERT_EQ(st[0].idle_steps, (uint64_t)0u);
+}
+
 int main(void) {
     fprintf(stderr, "=== test_lab_dispatch ===\n");
     RUN_TEST(rng_replicates_rust_xorshift64);
@@ -2639,6 +2885,12 @@ int main(void) {
     RUN_TEST(forced_schedule_refuses_a_run_that_is_not_pristine_or_has_another_seed);
     RUN_TEST(a_cancel_storm_yields_to_the_ready_lane_after_sixteen_dispatches);
     RUN_TEST(a_cancel_storm_with_an_empty_ready_lane_runs_on_past_sixteen);
+    RUN_TEST(a_run_that_would_block_names_both_tasks_of_a_channel_deadlock);
+    RUN_TEST(a_stuck_joiner_names_the_task_it_awaits);
+    RUN_TEST(a_parked_obligation_holder_is_a_futurelock_past_the_threshold);
+    RUN_TEST(a_task_polled_every_step_is_not_a_futurelock);
+    RUN_TEST(a_sleeper_that_wakes_is_neither_stuck_nor_futurelocked);
+    RUN_TEST(the_futurelock_check_needs_lab_dispatch_and_the_sweep_lists_parked_tasks);
     RUN_TEST_IF(8u * (uint32_t)ASX_MAX_TASKS >= CAP_TEST_ENTRIES,
                 a_priority_group_is_capped_at_256_entries,
                 "this resource class's lab lanes hold fewer than 300 entries");

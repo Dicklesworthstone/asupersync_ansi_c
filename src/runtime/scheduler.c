@@ -308,8 +308,8 @@ void asx_task_sched_init_internal(asx_task_slot *task) {
     task->timer_partial = 0;
     task->deadline_timer_armed = 0;
     task->deadline_timer_at = 0;
-    task->deadline_timer.slot = 0;
-    task->deadline_timer.generation = 0;
+    task->deadline_timer = (asx_timer_handle){0u, 0u};
+    task->lab_last_polled_step = 0u;
     task->first_waiter = ASX_SLOT_NONE;
     task->next_waiter = ASX_SLOT_NONE;
     task->waiting_on = ASX_SLOT_NONE;

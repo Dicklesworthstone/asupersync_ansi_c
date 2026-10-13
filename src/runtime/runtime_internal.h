@@ -276,6 +276,7 @@ typedef struct {
     uint32_t lab_ent_parent;
     uint16_t lab_ent_parent_gen;
     uint8_t lab_ent_parent_region;
+    uint64_t lab_last_polled_step; /* lab steps at its last poll (Rust last_polled_step) */
 } asx_task_slot;
 
 /* The drop of a permit an obligation tracks (asx_obligation_set_drop_internal). */
@@ -719,12 +720,11 @@ void asx_lab_drain_region_commands(void);
  * entries, then the cancel wakes, a region command's cancel deferred. */
 int asx_lab_deferred_cancels_pending(void);
 void asx_lab_drain_deferred_cancels(void);
-/* Join-handle aborts (Rust JoinHandle::abort_with_reason): queued, applied
- * at the start of the next step after admissions and around the region
- * commands (at most 16 per drain, coalesced per task); a target awaiting
- * admission takes its aborts at admission, onto the cancel lane only.
- * Queueing fails with ASX_E_RESOURCE_EXHAUSTED when full, changing
- * nothing. */
+/* Join-handle aborts (Rust JoinHandle::abort_with_reason): queued, applied at
+ * the start of the next step after admissions and around the region commands
+ * (at most 16 per drain, coalesced per task); a target awaiting admission takes
+ * its aborts at admission, onto the cancel lane only. Queueing fails with
+ * ASX_E_RESOURCE_EXHAUSTED when full, changing nothing. */
 asx_status asx_lab_handle_cancel_command(const asx_task_slot *t, const asx_cancel_reason *reason);
 int asx_lab_handle_cancels_pending(void);
 void asx_lab_drain_handle_cancels(void);

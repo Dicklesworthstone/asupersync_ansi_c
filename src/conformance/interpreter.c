@@ -168,9 +168,6 @@ typedef struct {
     int supervised;
     /* A region finalizer's task (DSL §1, Region finalizers). */
     int finalizer;
-    /* The status of a plain task's `return err`: Rust's body value, which
-     * the runtime completes Ok (body_is_value); ASX_OK when none. */
-    asx_status value_err;
     /* Projection of the task's sleep timers (vocabulary §2: "<task>/tm<k>"). */
     uint32_t timers;         /* timers registered so far (k of the latest) */
     uint32_t timer_name_off; /* name of the latest, in g_text */
@@ -662,24 +659,9 @@ static uint32_t reason_node(const it_reason *r) {
     return o;
 }
 
-/* Whether the program's `return` is the task's value rather than its
- * outcome. A declared task's and a `spawn`ed child's future returns the
- * body, which the runtime publishes to the task's handle and completes the
- * task Ok whatever it was (run_state_task_to_terminal, state.rs:94-129;
- * only a panic or a cancel makes it anything else): an `err` return is a
- * value that join yields, and the task's monitors and links see a normal
- * exit (DownReason::from_task_outcome, monitor.rs:136). A group member, a
- * supervised generation and a race wrapper return an Outcome, so their
- * `err` is a runtime error. */
-static int body_is_value(const it_task *t) {
-    return !t->group_member && !t->supervised && !t->supervisor && !t->server && !t->finalizer &&
-           !t->race_wrapper;
-}
-
 /* Vocabulary §4 outcome of a completed task whose slot is still held. */
 static uint32_t outcome_node(asx_task_id id) {
     asx_outcome outcome;
-    const it_task *plain = task_by_id(id);
     uint32_t o;
     if (asx_task_get_outcome(id, &outcome) != ASX_OK) {
         it_fail("outcome of a completed task is unreadable", NULL);
@@ -687,15 +669,7 @@ static uint32_t outcome_node(asx_task_id id) {
     }
     o = asx_json_new_object(g_out);
     switch (outcome.severity) {
-    case ASX_OUTCOME_OK:
-        if (plain != NULL && body_is_value(plain) && plain->value_err != ASX_OK) {
-            /* The value is Err(status): Rust's join gives Ok(Body::Err). */
-            asx_json_set(g_out, o, "tag", asx_json_new_string(g_out, "err"));
-            asx_json_set(g_out, o, "status", status_node(plain->value_err));
-        } else {
-            asx_json_set(g_out, o, "tag", asx_json_new_string(g_out, "ok"));
-        }
-        break;
+    case ASX_OUTCOME_OK: asx_json_set(g_out, o, "tag", asx_json_new_string(g_out, "ok")); break;
     case ASX_OUTCOME_ERR: {
         asx_status err = ASX_OK;
         if (asx_task_get_error(id, &err) != ASX_OK) it_fail("task error is unreadable", NULL);
@@ -2940,36 +2914,6 @@ static it_monitor *monitor_of(const it_task *t, const char *name, int server) {
     return NULL;
 }
 
-/* Links (DSL §3.11). A task's `link` / `link_trapping` and a server's
- * `server_link` / `server_link_trapping` are held by name until `unlink` /
- * `server_unlink`; the table is bounded by the runtime's own
- * (ASX_LINK_CAPACITY). */
-typedef struct {
-    const char *name;
-    uint32_t owner;   /* index in g_tasks of the task that made it */
-    const char *peer; /* the linked task's name */
-    asx_link_ref ref;
-    int server; /* made by server_link */
-    int trap;   /* made by link_trapping */
-    int dropped;
-} it_link;
-
-static it_link g_links[ASX_LINK_CAPACITY];
-static uint32_t g_n_links = 0;
-
-static it_link *link_of(const it_task *t, const char *name, int server) {
-    uint32_t i;
-    uint32_t owner = (uint32_t)(t - g_tasks);
-    if (name == NULL) return NULL;
-    for (i = 0; i < g_n_links; i++) {
-        const it_link *l = &g_links[i];
-        if (l->owner == owner && l->server == server && !l->dropped && strcmp(l->name, name) == 0) {
-            return &g_links[i];
-        }
-    }
-    return NULL;
-}
-
 /* A DOWN's or an EXIT's reason as the DSL names it (twin_run's
  * down_reason_kind). */
 static const char *down_reason_kind(asx_outcome_severity severity) {
@@ -3003,14 +2947,13 @@ static asx_status server_info(void *state, const asx_actor_info_msg *m, asx_acto
     return ASX_OK;
 }
 
-/* The monitor and link steps. Returns 1 when `op` is one; `may_wait` is 0
- * where a step may not suspend (inside `masked`): the suspending ones are
- * then not handled. `label` is the observation's op. */
-static int exec_monitor_link_op(it_task *t, asx_task_id self, uint32_t step, uint32_t idx,
-                                const char *label, const char *op, int may_wait, step_result *out) {
+/* The monitor steps. Returns 1 when `op` is one; `may_wait` is 0 where a
+ * step may not suspend (inside `masked`): the suspending ones are then not
+ * handled. `label` is the observation's op. */
+static int exec_monitor_op(it_task *t, asx_task_id self, uint32_t step, uint32_t idx,
+                           const char *label, const char *op, int may_wait, step_result *out) {
     asx_status st;
     it_monitor *m;
-    it_link *l;
 
     *out = STEP_NEXT;
     if (strcmp(op, "demonitor") == 0 || strcmp(op, "server_demonitor") == 0) {
@@ -3029,23 +2972,6 @@ static int exec_monitor_link_op(it_task *t, asx_task_id self, uint32_t step, uin
             asx_monitor_release(m->ref);
         }
         m->dropped = 1;
-        observe_status(t, idx, label, ASX_OK);
-        return 1;
-    }
-    if (strcmp(op, "unlink") == 0 || strcmp(op, "server_unlink") == 0) {
-        int server = op[0] == 's';
-        l = link_of(t, it_str(step, "link"), server);
-        if (l == NULL || (server && server_by_name(it_str(step, "server")) == NULL)) {
-            it_fail_task(t, idx, "unlink of a link this task does not hold");
-            *out = STEP_END;
-            return 1;
-        }
-        /* Link::unlink / GenServerHandle::unlink: an Unlink command of the
-         * region-command lane. Link::unlink consumes the handle, which also
-         * frees a stored exit signal. */
-        asx_unlink(l->ref);
-        if (!server) asx_link_release(l->ref);
-        l->dropped = 1;
         observe_status(t, idx, label, ASX_OK);
         return 1;
     }
@@ -3100,65 +3026,6 @@ static int exec_monitor_link_op(it_task *t, asx_task_id self, uint32_t step, uin
             asx_json_set(g_out, value, "reason",
                          asx_json_new_string(g_out, down_reason_kind(down.reason.severity)));
             asx_json_set(g_out, value, "ref", asx_json_new_u64(g_out, down.ref));
-            observe(t, idx, label, status_node(ASX_OK), value);
-        } else {
-            observe_status(t, idx, label, st);
-        }
-        return 1;
-    }
-    if (strcmp(op, "link") == 0 || strcmp(op, "link_trapping") == 0 ||
-        strcmp(op, "server_link") == 0 || strcmp(op, "server_link_trapping") == 0) {
-        int server = op[0] == 's';
-        int trap = strcmp(op, "link_trapping") == 0 || strcmp(op, "server_link_trapping") == 0;
-        asx_exit_policy policy = trap ? ASX_EXIT_TRAP : ASX_EXIT_PROPAGATE;
-        const char *as = it_str(step, "as");
-        it_task *peer = task_by_name(it_str(step, "task"));
-        it_server *srv = server ? server_by_name(it_str(step, "server")) : NULL;
-        asx_link_ref ref = 0;
-        if (as == NULL || peer == NULL || !peer->spawned || link_of(t, as, server) != NULL ||
-            g_n_links >= ASX_LINK_CAPACITY || (server && (srv == NULL || srv->released))) {
-            it_fail_task(t, idx, "link needs a new `as`, a spawned task and room for a link");
-            *out = STEP_END;
-            return 1;
-        }
-        st = server ? asx_link_open_server_poll(self, srv->handle, peer->id, policy, &ref)
-                    : asx_link_open_poll(self, peer->id, policy, &ref);
-        if (st == ASX_E_PENDING) {
-            *out = STEP_PENDING;
-            return 1;
-        }
-        if (st == ASX_OK) {
-            l = &g_links[g_n_links++];
-            l->name = as;
-            l->owner = (uint32_t)(t - g_tasks);
-            l->peer = peer->name;
-            l->ref = ref;
-            l->server = server;
-            l->trap = trap;
-            l->dropped = 0;
-        }
-        /* No value: Rust's LinkRef is a process-wide counter (DSL §3.11). */
-        observe_status(t, idx, label, st);
-        return 1;
-    }
-    if (strcmp(op, "await_exit") == 0) {
-        asx_exit_signal signal;
-        l = link_of(t, it_str(step, "link"), 0);
-        if (l == NULL || !l->trap) {
-            it_fail_task(t, idx, "await_exit of a link this task lacks or that does not trap");
-            *out = STEP_END;
-            return 1;
-        }
-        st = asx_link_exit_poll(self, &t->cx, l->ref, &signal);
-        if (st == ASX_E_PENDING) {
-            *out = STEP_PENDING;
-            return 1;
-        }
-        if (st == ASX_OK) {
-            uint32_t value = asx_json_new_object(g_out);
-            asx_json_set(g_out, value, "from", asx_json_new_string(g_out, l->peer));
-            asx_json_set(g_out, value, "reason",
-                         asx_json_new_string(g_out, down_reason_kind(signal.reason.severity)));
             observe(t, idx, label, status_node(ASX_OK), value);
         } else {
             observe_status(t, idx, label, st);
@@ -3535,10 +3402,10 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
         step_result res;
         if (exec_time_op(t, step, idx, label, op, &res)) return res;
     }
-    /* The monitor and link steps that never suspend (DSL §3.10, §3.11). */
+    /* The monitor steps that never suspend (DSL §3.10). */
     {
         step_result res;
-        if (exec_monitor_link_op(t, self, step, idx, label, op, 0, &res)) return res;
+        if (exec_monitor_op(t, self, step, idx, label, op, 0, &res)) return res;
     }
     /* Non-blocking oneshot, broadcast and watch sends (DSL §3.6). */
     if (strcmp(op, "oneshot_send") == 0 || strcmp(op, "broadcast_send") == 0 ||
@@ -4309,7 +4176,7 @@ static step_result exec_step(it_task *t, asx_task_id self, uint32_t step, uint32
         if (exec_channel_wait(t, step, idx, op, &r)) return r;
         if (exec_group(t, self, step, idx, op, &r)) return r;
         if (exec_server(t, step, idx, op, &r)) return r;
-        if (exec_monitor_link_op(t, self, step, idx, op, op, 1, &r)) return r;
+        if (exec_monitor_op(t, self, step, idx, op, op, 1, &r)) return r;
         if (exec_supervisor(t, self, step, idx, op, &r)) return r;
     }
     if (strcmp(op, "yield") == 0) {
@@ -4366,11 +4233,7 @@ static step_result exec_step(it_task *t, asx_task_id self, uint32_t step, uint32
                              "a supervised child returns Cancelled with tag cancelled, not err");
                 return STEP_END;
             }
-            if (body_is_value(t)) {
-                t->value_err = err; /* completes Ok; outcome_node reports it */
-            } else {
-                t->end = err;
-            }
+            t->end = err;
         } else if (strcmp(tag, "cancelled") == 0) {
             /* The factory future's Outcome::Cancelled(reason): only a
              * supervised generation's body has one (DSL 3.8). The body ends
@@ -5516,7 +5379,6 @@ static asx_status conformance_run(const asx_json_doc *in, uint32_t scenario, asx
     g_n_delay_keys = 0;
     g_n_servers = 0;
     g_n_monitors = 0;
-    g_n_links = 0;
     g_n_sups = 0;
     g_n_regions = 0;
     g_n_events = 0;

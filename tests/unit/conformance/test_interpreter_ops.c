@@ -175,52 +175,6 @@ TEST(a_skip_needs_a_declared_requirement_the_profile_forbids) {
     }
 }
 
-/* The monitor and link steps (DSL 3.10, 3.11), and what an `err` return is:
- * the body's value, so the task exits normally. Its monitor and its
- * trapping link hear `normal`, a propagating link does not cancel the
- * holder, and the task's outcome still reads err. Nine observations: 2 in
- * t.peer, 2 in t.mon, 3 in t.trap and 2 in t.prop. */
-TEST(an_err_return_is_a_normal_exit_for_monitors_and_links) {
-    static const char text[] = SCENARIO_HEAD
-        "\"channels\":[],\"sync\":[],"
-        "\"tasks\":[{\"name\":\"t.peer\",\"region\":\"r.main\",\"budget\":null,\"program\":["
-        "{\"op\":\"sleep\",\"ns\":50},"
-        "{\"op\":\"return\",\"outcome\":{\"tag\":\"err\",\"status\":\"ASX_E_INVALID_STATE\"}}]},"
-        "{\"name\":\"t.mon\",\"region\":\"r.main\",\"budget\":null,\"program\":["
-        "{\"op\":\"monitor\",\"task\":\"t.peer\",\"as\":\"m\"},"
-        "{\"op\":\"await_down\",\"monitor\":\"m\"}]},"
-        "{\"name\":\"t.trap\",\"region\":\"r.main\",\"budget\":null,\"program\":["
-        "{\"op\":\"link_trapping\",\"task\":\"t.peer\",\"as\":\"l\"},"
-        "{\"op\":\"await_exit\",\"link\":\"l\"},"
-        "{\"op\":\"unlink\",\"link\":\"l\"}]},"
-        "{\"name\":\"t.prop\",\"region\":\"r.main\",\"budget\":null,\"program\":["
-        "{\"op\":\"link\",\"task\":\"t.peer\",\"as\":\"l\"},"
-        "{\"op\":\"sleep\",\"ns\":200}]}],"
-        "\"script\":[],\"expect\":{\"kind\":\"ok\"}}";
-    uint32_t root = 0;
-    uint32_t obs;
-    uint32_t i;
-    uint32_t heard = 0;
-    ASSERT_EQ(run_text(text, &root), ASX_OK);
-    obs = asx_json_get(&g_out, root, "observations");
-    ASSERT_EQ(asx_json_count(&g_out, obs), 9u);
-    for (i = 0; i < 9u; i++) {
-        uint32_t o = asx_json_item(&g_out, obs, i);
-        const char *op = asx_json_get_string(&g_out, o, "op");
-        const char *task = asx_json_get_string(&g_out, o, "task");
-        ASSERT_TRUE(op != NULL && task != NULL);
-        if (strcmp(op, "await_down") == 0 || strcmp(op, "await_exit") == 0) {
-            uint32_t value = asx_json_get(&g_out, o, "value");
-            ASSERT_STR_EQ(asx_json_get_string(&g_out, value, "reason"), "normal");
-            heard++;
-        }
-        if (strcmp(task, "t.prop") == 0 && strcmp(op, "sleep") == 0) {
-            ASSERT_STR_EQ(asx_json_get_string(&g_out, o, "status"), "ASX_OK");
-        }
-    }
-    ASSERT_EQ(heard, 2u);
-}
-
 /* A step the interpreter has no handler for still fails closed, so the
  * count above means something. */
 TEST(an_unknown_step_fails_the_run_closed) {
@@ -239,7 +193,6 @@ int main(void) {
     RUN_TEST(the_interval_delay_queue_and_watch_steps_are_dispatched);
     RUN_TEST(an_unbounded_channel_runs_where_the_profile_allows_it);
     RUN_TEST(a_skip_needs_a_declared_requirement_the_profile_forbids);
-    RUN_TEST(an_err_return_is_a_normal_exit_for_monitors_and_links);
     RUN_TEST(an_unknown_step_fails_the_run_closed);
     TEST_REPORT();
     return test_failures;

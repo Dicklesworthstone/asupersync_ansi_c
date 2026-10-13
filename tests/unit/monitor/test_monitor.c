@@ -16,8 +16,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "../../../src/runtime/runtime_internal.h"
-
 static int g_pass, g_fail;
 static asx_status st_sink_;
 #define MUST_OK(expr)                                                                              \
@@ -729,49 +727,6 @@ static void test_a_released_lane_monitor_never_fires(void) {
     ASSERT(asx_monitor_down(w.ref, &d) == ASX_E_NOT_FOUND, "released");
 }
 
-/* Monitor::drop queues a Demonitor command unless the DOWN was delivered
- * (monitor.rs:1133), so a watcher that finishes while it still waits leaves
- * one in the lane: a no-op when applied, but a step of the lab. */
-static void test_a_watcher_finishing_with_a_waiting_monitor_queues_a_demonitor(void) {
-    asx_task_id watcher;
-    asx_task_id target;
-    asx_monitor_ref ref = 0;
-    asx_outcome out = ok_outcome();
-    setup();
-    MUST_OK(asx_scheduler_use_lab_dispatch(7u));
-    watcher = spawn_task();
-    target = spawn_task();
-    MUST_OK(asx_monitor_establish(watcher, target, &ref));
-    ASSERT(asx_lab_region_commands_pending() == 0, "establishing queued nothing");
-    asx_monitor_task_finished(watcher, &out, 1u);
-    ASSERT(asx_monitor_count() == 0u, "the monitor ended with its watcher");
-    ASSERT(asx_lab_region_commands_pending() != 0, "and its dropped handle queued a Demonitor");
-}
-
-static void test_a_delivered_or_server_monitor_queues_no_demonitor(void) {
-    rec_state s;
-    asx_actor_handle h;
-    asx_task_id watcher;
-    asx_task_id server_task = ASX_INVALID_ID;
-    asx_task_id target;
-    asx_monitor_ref r_task = 0;
-    asx_monitor_ref r_server = 0;
-    asx_outcome out = ok_outcome();
-    setup();
-    MUST_OK(asx_scheduler_use_lab_dispatch(7u));
-    h = spawn_server(&s);
-    watcher = spawn_task();
-    target = spawn_task();
-    MUST_OK(asx_monitor_establish(watcher, target, &r_task));
-    MUST_OK(asx_monitor_establish_server(h, target, &r_server));
-    asx_monitor_task_finished(target, &out, 1u);
-    MUST_OK(asx_actor_task_id(h, &server_task));
-    asx_monitor_task_finished(watcher, &out, 2u);
-    asx_monitor_task_finished(server_task, &out, 3u);
-    ASSERT(asx_lab_region_commands_pending() == 0,
-           "a stored notice and a server's monitor have no handle to drop");
-}
-
 int main(void) {
     printf("test_monitor:\n");
 
@@ -804,8 +759,6 @@ int main(void) {
     RUN(test_a_lane_request_for_a_finished_task_is_not_found);
     RUN(test_a_lane_request_for_a_server_reaches_its_handle_info);
     RUN(test_a_released_lane_monitor_never_fires);
-    RUN(test_a_watcher_finishing_with_a_waiting_monitor_queues_a_demonitor);
-    RUN(test_a_delivered_or_server_monitor_queues_no_demonitor);
 
     printf("\n  %d passed, %d failed\n", g_pass, g_fail);
     return g_fail > 0 ? 1 : 0;

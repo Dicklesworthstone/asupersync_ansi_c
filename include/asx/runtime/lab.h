@@ -470,6 +470,90 @@ ASX_API ASX_MUST_USE asx_status asx_lab_forced_schedule_begin(const asx_forced_s
 ASX_API ASX_MUST_USE asx_status asx_lab_forced_schedule_end(asx_forced_report *report,
                                                             asx_forced_error *err);
 
+/* -------------------------------------------------------------------
+ * Stuck tasks and futurelocks (bd-9kll.9.6)
+ *
+ * Rust's lab (asupersync 5e60b1c4c) names no task when it runs out of
+ * work with tasks parked: run_with_auto_advance returns
+ * AutoAdvanceTermination::StuckBailout after 1000 steps without a
+ * dispatch, which is ASX_E_WOULD_BLOCK here, and the stuck tasks are only
+ * in the final state. What it names is a futurelock (lab/runtime.rs:5612):
+ * a task that holds a pending obligation and has not been polled for more
+ * than futurelock_max_idle_steps steps (default 10000), checked at every
+ * step and reported as a FuturelockDetected trace event, by default a
+ * panic. asx_lab_futurelocks is that check; asx_scheduler_stuck_tasks
+ * says what a run that ended ASX_E_WOULD_BLOCK was waiting on.
+ * ------------------------------------------------------------------- */
+
+/* What a stuck task waits on, as far as the runtime records it. */
+typedef enum {
+    ASX_STUCK_PARKED = 0,      /* parked; what wakes it is not recorded: a channel, notify,
+                                * semaphore, mutex, barrier or a park of the task's own */
+    ASX_STUCK_JOIN = 1,        /* joining wait_task, which has not completed */
+    ASX_STUCK_WATCH = 2,       /* wait_task has this task as its completion watcher: a task
+                                * group's owner waiting on a member */
+    ASX_STUCK_REGION_CLOSE = 3 /* waiting for wait_region to close */
+} asx_stuck_wait;
+
+/* One stuck task. */
+typedef struct {
+    asx_task_id task;
+    asx_region_id region; /* the region that owns it */
+    asx_task_state state;
+    asx_stuck_wait wait;
+    asx_task_id wait_task;     /* ASX_STUCK_JOIN, ASX_STUCK_WATCH; else ASX_INVALID_ID */
+    asx_region_id wait_region; /* ASX_STUCK_REGION_CLOSE; else ASX_INVALID_ID */
+    uint32_t held;             /* pending obligations the task holds */
+    uint8_t cancel_requested;  /* a cancel is pending on it */
+    uint64_t idle_steps;       /* lab dispatch: steps since its last poll; 0 under the sweep */
+} asx_stuck_task;
+
+/* The tasks a run is waiting on: live, not completed, and nothing left to
+ * run them (under lab dispatch not scheduled and not awaiting an admission;
+ * under the sweep parked), no timer armed to wake them. Meaningful after a
+ * run returned ASX_E_WOULD_BLOCK, when each of them is what the run could
+ * not make progress without; with a timer pending the sleepers are not
+ * listed. Under lab dispatch every live task of the lab counts, as the run
+ * covers them; under the sweep the tasks of `region`'s subtree.
+ *
+ * Fills out[0 .. min(count, cap)) in task-arena order, which is
+ * deterministic for a given run, and returns the number of stuck tasks
+ * (more than cap when the buffer was short). `out` may be NULL to count.
+ * Thread-safety: not thread-safe; single-threaded mode only. */
+ASX_API uint32_t asx_scheduler_stuck_tasks(asx_region_id region, asx_stuck_task *out, uint32_t cap);
+
+/* Obligations a futurelock names; a task holding more reports the first
+ * ASX_FUTURELOCK_HELD_MAX (in obligation-arena order) and the full count. */
+#define ASX_FUTURELOCK_HELD_MAX 8u
+
+/* One futurelocked task: Rust's InvariantViolation::Futurelock and the
+ * FuturelockDetected trace data. */
+typedef struct {
+    asx_task_id task;
+    asx_region_id region;
+    uint64_t idle_steps; /* lab steps since the task's last poll */
+    uint32_t held_count; /* pending obligations it holds */
+    asx_obligation_id held[ASX_FUTURELOCK_HELD_MAX];
+    asx_obligation_kind held_kind[ASX_FUTURELOCK_HELD_MAX];
+} asx_futurelock;
+
+/* Rust's futurelock_violations (lab/runtime.rs:5612) over the lab's current
+ * state: every task not completed that holds at least one pending
+ * obligation and was last polled more than `max_idle_steps` lab steps ago
+ * (a task never polled counts from step 0). Nothing is reported while the
+ * lab has taken no more than `max_idle_steps` steps, or for a threshold of
+ * 0, which Rust's config uses to switch the check off; Rust's default is
+ * 10000 and its panic_on_futurelock is on.
+ *
+ * Unlike Rust it does not run on its own: no step evaluates it, no trace
+ * event is emitted (FuturelockDetected is a harness failure in a conformance
+ * run, docs/VOCABULARY_EXCLUSIONS.md) and nothing panics; the caller asks
+ * after a run. Fills out[0 .. min(count, cap)) in task-arena order, as
+ * Rust's BTreeMap by TaskId orders them, and returns the count. Returns 0
+ * when lab dispatch is off. `out` may be NULL to count.
+ * Thread-safety: not thread-safe; single-threaded mode only. */
+ASX_API uint32_t asx_lab_futurelocks(uint64_t max_idle_steps, asx_futurelock *out, uint32_t cap);
+
 /* A stable lowercase name for an error kind ("task_unavailable", ...). */
 ASX_API const char *asx_forced_error_kind_name(asx_forced_error_kind kind);
 

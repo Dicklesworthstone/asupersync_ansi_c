@@ -277,17 +277,9 @@ void asx_monitor_task_finished(asx_task_id task, const asx_outcome *outcome, asx
 
     /* The task's own monitors end with it, silently (:1425), and so do the
      * notices they stored: the Monitor handles that would read them are
-     * dropped with the task, and nothing else can release them. A handle
-     * dropped before its DOWN was delivered queues a Demonitor command
-     * (Monitor::drop, :1133): a no-op when it is applied, but a command of
-     * the lane, and a step that drains it is one of the lab's steps. A
-     * server's monitors have no handle to drop. */
+     * dropped with the task, and nothing else can release them. */
     for (i = 0; i < ASX_MONITOR_CAPACITY; i++) {
         if (g_mon[i].state != MON_FREE && same_task(g_mon[i].watcher, task)) {
-            if (g_mon[i].state == MON_ACTIVE && !g_mon[i].to_server && !g_mon[i].released &&
-                asx_lab_dispatch_active()) {
-                (void)asx_lab_watch_demonitor_command(g_mon[i].ref);
-            }
             memset(&g_mon[i], 0, sizeof(g_mon[i]));
         }
     }

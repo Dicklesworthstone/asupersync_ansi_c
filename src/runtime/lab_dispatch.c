@@ -426,7 +426,6 @@ uint64_t asx_lab_step_begin_internal(void) { return ++g_lab_steps; }
 void asx_lab_record_dispatch_internal(uint32_t slot, uint16_t task_gen, int cancel_lane,
                                       uint64_t step, asx_time at) {
     uint8_t lane = (uint8_t)(cancel_lane ? ASX_DISPATCH_LANE_CANCEL : ASX_DISPATCH_LANE_READY);
-
     /* certificate.record(task, lane, steps) at the pick (LR:4632). */
     g_lab_cert = asx_forced_schedule_certificate_step(g_lab_cert, g_lab_pick_task, lane, step);
     g_lab_decisions++;
@@ -450,8 +449,9 @@ void asx_lab_record_dispatch_internal(uint32_t slot, uint16_t task_gen, int canc
         d->lane = (uint8_t)(cancel_lane ? ASX_DISPATCH_LANE_CANCEL : ASX_DISPATCH_LANE_READY);
     }
     if (g_lab_rec_n < UINT32_MAX) g_lab_rec_n++;
+    /* TaskRecord::mark_polled(steps) after the poll (LR:4809): the futurelock idle count. */
+    if (g_tasks[slot].generation == task_gen) g_tasks[slot].lab_last_polled_step = step;
 }
-
 void asx_scheduler_record_dispatches(asx_dispatch_record *buf, uint32_t capacity) {
     g_lab_rec = buf;
     g_lab_rec_cap = buf != NULL ? capacity : 0u;
@@ -1684,4 +1684,161 @@ uint64_t asx_lab_task_order_key_internal(asx_task_id task) {
     asx_task_slot *t;
     if (g_lab_active && asx_task_slot_lookup(task, &t) == ASX_OK) return lab_compact_task(t);
     return (uint64_t)asx_handle_index(task);
+}
+
+/* -------------------------------------------------------------------
+ * Stuck tasks and futurelocks (bd-9kll.9.6)
+ *
+ * Rust's lab names no task when it runs out of work with tasks parked:
+ * run_with_auto_advance ends with AutoAdvanceTermination::StuckBailout
+ * after 1000 steps without a dispatch (LR:3228-3305), which this lab's
+ * ASX_E_WOULD_BLOCK mirrors, and the stuck tasks are only in its final
+ * state. What it does name is a futurelock (LR:5612): a task that holds a
+ * pending obligation and has not been polled for more than
+ * futurelock_max_idle_steps steps (default 10000, only once the run has
+ * taken more steps than that), checked at every step (check_futurelocks,
+ * LR:4508), traced as FuturelockDetected and, by default, a panic.
+ * asx_lab_futurelocks evaluates that predicate. asx_scheduler_stuck_tasks
+ * lists what a run that ended ASX_E_WOULD_BLOCK was waiting on, with the
+ * facts the runtime keeps about each wait.
+ * ------------------------------------------------------------------- */
+
+/* Pending obligations `t` holds, counted along its held list. */
+static uint32_t lab_held_pending(const asx_task_slot *t) {
+    uint32_t n = 0;
+    uint32_t bound = 0;
+    uint32_t idx = t->first_held;
+    while (idx != ASX_SLOT_NONE && idx < g_obligation_count && bound++ < g_obligation_count) {
+        ASX_CHECKPOINT_WAIVER("bounded: at most g_obligation_count links");
+        if (g_obligations[idx].alive && g_obligations[idx].state == ASX_OBLIGATION_RESERVED) n++;
+        idx = g_obligations[idx].next_held;
+    }
+    return n;
+}
+
+/* A live task that waits with nothing to run it: under lab dispatch not
+ * scheduled and not awaiting an admission or an applied region open, under
+ * the sweep parked; in both, no timer is armed to wake it. */
+static int lab_task_waiting(const asx_task_slot *t) {
+    if (!t->alive || asx_task_is_terminal(t->state)) return 0;
+    if (t->timer_armed || t->deadline_timer_armed) return 0;
+    if (t->region_wait == ASX_REGION_WAIT_OPEN) return 0;
+    if (g_lab_active) return !t->lab_scheduled && !t->lab_admission_pending;
+    return t->parked != 0u;
+}
+
+/* What task slot `idx` waits on, where the runtime records it: a join, a
+ * completion watch (a task group's owner on its members), a region close. */
+static void lab_wait_of(const asx_task_slot *t, uint32_t idx, asx_stuck_task *e) {
+    uint32_t i;
+    e->wait = ASX_STUCK_PARKED;
+    e->wait_task = ASX_INVALID_ID;
+    e->wait_region = ASX_INVALID_ID;
+    if (t->waiting_on != ASX_SLOT_NONE && t->waiting_on < g_task_count &&
+        g_tasks[t->waiting_on].alive) {
+        e->wait = ASX_STUCK_JOIN;
+        e->wait_task = asx_task_handle_for_slot(t->waiting_on);
+        return;
+    }
+    if (t->region_wait == ASX_REGION_WAIT_CLOSE) {
+        e->wait = ASX_STUCK_REGION_CLOSE;
+        e->wait_region = t->region_wait_region;
+        return;
+    }
+    for (i = 0; i < g_task_count; i++) {
+        const asx_task_slot *m = &g_tasks[i];
+        ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= ASX_MAX_TASKS");
+        if (m->alive && !asx_task_is_terminal(m->state) && m->watcher == idx &&
+            m->watcher_gen == t->generation) {
+            e->wait = ASX_STUCK_WATCH;
+            e->wait_task = asx_task_handle_for_slot(i);
+            return;
+        }
+    }
+}
+
+static uint64_t lab_idle_steps(const asx_task_slot *t) {
+    return g_lab_steps > t->lab_last_polled_step ? g_lab_steps - t->lab_last_polled_step : 0u;
+}
+
+uint32_t asx_scheduler_stuck_tasks(asx_region_id region, asx_stuck_task *out, uint32_t cap) {
+    uint32_t subtree[ASX_MAX_REGIONS];
+    uint32_t n_sub = 0;
+    uint32_t total = 0;
+    uint32_t i;
+
+    if (!g_lab_active) n_sub = asx_region_subtree_internal(region, subtree, ASX_MAX_REGIONS);
+    for (i = 0; i < g_task_count; i++) {
+        const asx_task_slot *t = &g_tasks[i];
+        ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= ASX_MAX_TASKS");
+        if (!lab_task_waiting(t)) continue;
+        if (!g_lab_active) {
+            uint32_t r;
+            uint32_t slot = (uint32_t)asx_handle_slot(t->region);
+            int inside = 0;
+            for (r = 0; r < n_sub && !inside; r++) {
+                ASX_CHECKPOINT_WAIVER("bounded: n_sub <= ASX_MAX_REGIONS");
+                inside = subtree[r] == slot;
+            }
+            if (!inside) continue;
+        }
+        if (out != NULL && total < cap) {
+            asx_stuck_task *e = &out[total];
+            e->task = asx_task_handle_for_slot(i);
+            e->region = t->region;
+            e->state = t->state;
+            e->held = lab_held_pending(t);
+            e->cancel_requested = t->cancel_pending ? 1u : 0u;
+            e->idle_steps = g_lab_active ? lab_idle_steps(t) : 0u;
+            lab_wait_of(t, i, e);
+        }
+        total++;
+    }
+    return total;
+}
+
+uint32_t asx_lab_futurelocks(uint64_t max_idle_steps, asx_futurelock *out, uint32_t cap) {
+    uint32_t total = 0;
+    uint32_t i;
+
+    /* futurelock_violations (LR:5612-5655): a zero threshold disables the
+     * check, and no task can pass the threshold before the run has. */
+    if (!g_lab_active || max_idle_steps == 0u || g_lab_steps <= max_idle_steps) return 0u;
+    for (i = 0; i < g_task_count; i++) {
+        const asx_task_slot *t = &g_tasks[i];
+        uint32_t held = 0;
+        uint32_t o;
+        asx_futurelock f;
+        ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= ASX_MAX_TASKS");
+        if (!t->alive || asx_task_is_terminal(t->state)) continue;
+        if (lab_idle_steps(t) <= max_idle_steps) continue;
+        memset(&f, 0, sizeof(f));
+        /* The held list in obligation-arena order, as obligations_iter. */
+        for (o = 0; o < g_obligation_count; o++) {
+            const asx_obligation_slot *ob = &g_obligations[o];
+            ASX_CHECKPOINT_WAIVER("bounded: g_obligation_count <= ASX_MAX_OBLIGATIONS");
+            if (!ob->alive || ob->state != ASX_OBLIGATION_RESERVED) continue;
+            if (ob->holder == ASX_INVALID_ID || asx_handle_slot(ob->holder) != (uint16_t)i ||
+                asx_handle_generation(ob->holder) != t->generation) {
+                continue;
+            }
+            if (held < ASX_FUTURELOCK_HELD_MAX) {
+                f.held[held] = asx_handle_mint(ASX_TYPE_OBLIGATION,
+                                               (uint16_t)(1u << (unsigned)ASX_OBLIGATION_RESERVED),
+                                               asx_handle_pack_index(ob->generation, (uint16_t)o));
+                f.held_kind[held] = ob->kind;
+            }
+            held++;
+        }
+        if (held == 0u) continue;
+        if (out != NULL && total < cap) {
+            f.task = asx_task_handle_for_slot(i);
+            f.region = t->region;
+            f.idle_steps = lab_idle_steps(t);
+            f.held_count = held;
+            out[total] = f;
+        }
+        total++;
+    }
+    return total;
 }
