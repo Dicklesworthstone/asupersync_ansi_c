@@ -10,13 +10,19 @@
  * test harness does. It prints one fixed line, which must be the same under
  * qemu-user on every target.
  *
+ * It writes with write(2), not stdio: printf alone links musl's whole
+ * formatter, its soft-float helpers and the error-string table, about 20 KiB
+ * of a router build that an application which does not format numbers does
+ * not pay (bd-dkfs).
+ *
  * Not part of the library.
  *
  * SPDX-License-Identifier: MIT
  */
 
 #include <asx/asx.h>
-#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
 
 static asx_runtime g_rt;
 
@@ -36,8 +42,15 @@ static asx_status poll_sender(void *ud, asx_task_id self) {
     return s->result;
 }
 
+static void say(const char *s) {
+    size_t n = strlen(s);
+    if (write(1, s, n) < 0) return;
+}
+
 static int fail(const char *what) {
-    printf("kernel-min: FAIL %s\n", what);
+    say("kernel-min: FAIL ");
+    say(what);
+    say("\n");
     return 1;
 }
 
@@ -72,6 +85,6 @@ int main(void) {
     budget = asx_budget_from_polls(16);
     if (asx_region_drain(region, &budget) != ASX_OK) return fail("drain");
     if (asx_quiescence_check(region) != ASX_OK) return fail("quiescent");
-    printf("kernel-min: region ok, task ok, channel ok (42), quiescent\n");
+    say("kernel-min: region ok, task ok, channel ok (42), quiescent\n");
     return 0;
 }

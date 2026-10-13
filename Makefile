@@ -3490,6 +3490,13 @@ test-baremetal-qemu: $(CONFORMANCE_RUNNER)
 # device half stays open).
 # ---------------------------------------------------------------------------
 MUSL_ZIG ?= zig
+# -Os: the router build is measured in bytes (bd-dkfs: mips R1 kernel-only app
+# 151,524 B of flash at -O2, 122,792 B at -Os, behavior unchanged: the replay
+# digests are the same). MUSL_LTO=-flto links the whole program at once: the
+# same app is 50 KB, because the reset and lab tables nothing reaches fall
+# away; it is opt-in until it has its own CI run.
+MUSL_OPT ?= -Os
+MUSL_LTO ?=
 MUSL_DIR := $(BUILD_DIR)/musl
 MUSL_CLASSES ?= 1 2
 MUSL_CONTROL_CLASS ?= 2
@@ -3502,7 +3509,7 @@ MUSL_TARGETS := mips:mips-linux-musleabi:-mcpu=mips32r2:qemu-mips \
 ifneq ($(MUSL_VARIANT),)
 MUSL_VDIR := $(MUSL_DIR)/$(MUSL_VARIANT)
 MUSL_CC := $(MUSL_ZIG) cc -target $(MUSL_TRIPLE) $(MUSL_ARCHFLAGS)
-MUSL_CFLAGS := $(STD_FLAGS) $(WARN_FLAGS) -O2 -DNDEBUG -ffunction-sections -fdata-sections \
+MUSL_CFLAGS := $(STD_FLAGS) $(WARN_FLAGS) $(MUSL_OPT) $(MUSL_LTO) -DNDEBUG -ffunction-sections -fdata-sections \
                $(INC_FLAGS) -I$(CURDIR)/src $(CODEC_DEF) $(DET_DEF) \
                -DASX_PROFILE_EMBEDDED_ROUTER -DASX_RESOURCE_CLASS=$(MUSL_CLASS_NUM)
 MUSL_FULL_OBJ := $(patsubst src/%.c,$(MUSL_VDIR)/full/%.o,$(LIB_SRC))
