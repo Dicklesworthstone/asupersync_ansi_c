@@ -10,6 +10,8 @@
  *           expires before inner completes
  * Interval: fires repeatedly at fixed intervals; increments a counter
  *           each period; completes after max_ticks (0 = unlimited)
+ * DelayQueue: values that each come due at their own deadline, earliest
+ *           first, addressed by keys (Rust time::DelayQueue)
  *
  * All primitives integrate with the timer wheel for efficient scheduling
  * and support deterministic replay via virtual time.
@@ -172,6 +174,157 @@ ASX_API asx_status asx_interval_poll(void *user_data, asx_task_id self);
 /* Get the current tick count of an interval.
  * Returns 0 if state is NULL. */
 ASX_API uint32_t asx_interval_ticks(const asx_interval_state *state);
+
+/* One tick of the interval's state machine at time `now`, without waiting
+ * (Rust Interval::tick / poll_tick, time/interval.rs:261-303). *out_time is
+ * the tick's deadline as it was before this call. If a tick is due at `now`
+ * (the interval is not exhausted and now >= that deadline), *out_due is 1
+ * and the deadline moves on as the missed-tick behavior says: one tick per
+ * call, so a Burst interval polled late is called again for each missed
+ * tick. Otherwise *out_due is 0 and nothing changes (Rust's tick returns the
+ * deadline without advancing). The first call fixes the first deadline as
+ * the poll function does: the init_at start time, else `now`. max_ticks is
+ * not consulted (Rust's Interval has no limit); ticks is incremented.
+ * Returns ASX_OK, or ASX_E_INVALID_ARGUMENT for a NULL argument. */
+ASX_API ASX_MUST_USE asx_status asx_interval_tick_at(asx_interval_state *state, asx_time now,
+                                                     asx_time *out_time, int *out_due);
+
+/* -------------------------------------------------------------------
+ * DelayQueue
+ *
+ * A queue of values that each come due at their own deadline, as Rust's
+ * DelayQueue (time/delay_queue.rs): entries come out earliest deadline
+ * first, ties in insertion order (a reset counts as a new insertion), and
+ * each is addressed by the key its insertion returned, which stops being
+ * valid when the entry expires or is removed. Storage is fixed:
+ * ASX_DELAY_QUEUE_CAPACITY live entries (insert fails with
+ * ASX_E_RESOURCE_EXHAUSTED beyond it). Values are uint64_t tokens.
+ *
+ * The queue is caller-owned and holds no clock: the pure functions take
+ * `now`, as Rust's take wall_now(). asx_delay_queue_poll is the task-level
+ * form: it reads the runtime clock and, while nothing is due, waits on the
+ * calling task's traced sleep timer for the earliest deadline. Like
+ * asx_sleep_poll it shares that one timer slot, so a task should not
+ * interleave another sleep with a pending poll; Rust's queue owns a
+ * separate Sleep.
+ * ------------------------------------------------------------------- */
+
+#define ASX_DELAY_QUEUE_CAPACITY 16u
+/* Stale heap items (resets and removals) are rebuilt away before they
+ * outnumber twice the live entries plus 64, as Rust's queue does. */
+#define ASX_DELAY_QUEUE_HEAP_CAPACITY (2u * ASX_DELAY_QUEUE_CAPACITY + 65u)
+
+/* Names one entry. Valid while it matches a live entry's generation. */
+typedef struct {
+    uint32_t index;
+    uint64_t generation;
+} asx_delay_key;
+
+typedef struct {
+    uint64_t value;
+    asx_time deadline;
+    uint64_t generation; /* fixed at insertion: a key is valid while it matches */
+    uint64_t schedule;   /* changes on every reset: names the one live heap item */
+    int live;
+} asx_delay_entry;
+
+typedef struct {
+    asx_time deadline;
+    uint64_t schedule;
+    uint32_t index;
+} asx_delay_heap_item;
+
+typedef struct {
+    asx_delay_entry entries[ASX_DELAY_QUEUE_CAPACITY];
+    uint32_t len; /* live entries */
+    asx_delay_heap_item heap[ASX_DELAY_QUEUE_HEAP_CAPACITY];
+    uint32_t heap_len;
+    uint64_t next_generation;
+} asx_delay_queue;
+
+/* What a poll found (Rust's Poll<Option<Expired<T>>>). */
+typedef enum {
+    ASX_DELAY_EMPTY = 0,   /* Ready(None): the queue has no entry */
+    ASX_DELAY_EXPIRED = 1, /* Ready(Some): an entry's deadline has passed */
+    ASX_DELAY_WAITING = 2  /* Pending: the earliest deadline is still ahead */
+} asx_delay_poll_state;
+
+/* An entry that expired or was removed. */
+typedef struct {
+    uint64_t value;
+    asx_time deadline; /* the deadline the entry had */
+    asx_delay_key key; /* no longer valid */
+} asx_delay_expired;
+
+/* Make `queue` empty. Returns ASX_E_INVALID_ARGUMENT for NULL. */
+ASX_API ASX_MUST_USE asx_status asx_delay_queue_init(asx_delay_queue *queue);
+
+/* Insert `value` due at `deadline` (Rust insert_at). The new entry's key is
+ * stored in *out_key.
+ * Returns ASX_E_RESOURCE_EXHAUSTED when the queue holds
+ *   ASX_DELAY_QUEUE_CAPACITY entries, with nothing changed. */
+ASX_API ASX_MUST_USE asx_status asx_delay_queue_insert_at(asx_delay_queue *queue, uint64_t value,
+                                                          asx_time deadline,
+                                                          asx_delay_key *out_key);
+
+/* Insert `value` due `timeout_ns` after `now`, saturating at the last
+ * representable time (Rust insert). Same returns as insert_at. */
+ASX_API ASX_MUST_USE asx_status asx_delay_queue_insert(asx_delay_queue *queue, asx_time now,
+                                                       uint64_t value, uint64_t timeout_ns,
+                                                       asx_delay_key *out_key);
+
+/* Remove the entry `key` names and return it (Rust try_remove).
+ * Returns ASX_E_NOT_FOUND if the key is not valid (its entry expired or
+ *   was removed). */
+ASX_API ASX_MUST_USE asx_status asx_delay_queue_remove(asx_delay_queue *queue,
+                                                       const asx_delay_key *key,
+                                                       asx_delay_expired *out);
+
+/* Move the entry `key` names to be due at `deadline` (Rust reset_at). The
+ * key stays valid; the entry now orders after those already due at the same
+ * time. Returns ASX_E_NOT_FOUND if the key is not valid (Rust panics). */
+ASX_API ASX_MUST_USE asx_status asx_delay_queue_reset_at(asx_delay_queue *queue,
+                                                         const asx_delay_key *key,
+                                                         asx_time deadline);
+
+/* Move the entry to be due `timeout_ns` after `now`, saturating (Rust
+ * reset). Same returns as reset_at. */
+ASX_API ASX_MUST_USE asx_status asx_delay_queue_reset(asx_delay_queue *queue,
+                                                      const asx_delay_key *key, asx_time now,
+                                                      uint64_t timeout_ns);
+
+/* The deadline of the entry `key` names (Rust deadline).
+ * Returns ASX_E_NOT_FOUND if the key is not valid (Rust panics). */
+ASX_API ASX_MUST_USE asx_status asx_delay_queue_deadline(const asx_delay_queue *queue,
+                                                         const asx_delay_key *key,
+                                                         asx_time *out_deadline);
+
+/* Whether `key` still names an entry of `queue` (Rust contains). */
+ASX_API int asx_delay_queue_contains(const asx_delay_queue *queue, const asx_delay_key *key);
+
+/* The number of entries (Rust len); 0 for NULL. */
+ASX_API uint32_t asx_delay_queue_len(const asx_delay_queue *queue);
+
+/* Remove every entry (Rust clear); keys already handed out stay invalid. */
+ASX_API ASX_MUST_USE asx_status asx_delay_queue_clear(asx_delay_queue *queue);
+
+/* Poll for the next entry due at `now`, earliest first (Rust poll_expired
+ * without a timer). *out_state is ASX_DELAY_EXPIRED with *out filled (the
+ * entry is removed), ASX_DELAY_EMPTY, or ASX_DELAY_WAITING with
+ * out->deadline set to the earliest deadline (nothing is removed).
+ * Returns ASX_E_INVALID_ARGUMENT for a NULL argument. */
+ASX_API ASX_MUST_USE asx_status asx_delay_queue_poll_at(asx_delay_queue *queue, asx_time now,
+                                                        asx_delay_poll_state *out_state,
+                                                        asx_delay_expired *out);
+
+/* Task-level poll: asx_delay_queue_poll_at at the runtime clock. While
+ * nothing is due it waits on the task's traced sleep timer for the earliest
+ * deadline, re-arming when an earlier entry arrived (the old timer is
+ * cancelled and the new one registered, as Rust's Sleep::reset does).
+ * Returns ASX_OK with *out_state ASX_DELAY_EXPIRED or ASX_DELAY_EMPTY, or
+ *   ASX_E_PENDING (*out_state ASX_DELAY_WAITING). */
+ASX_API asx_status asx_delay_queue_poll(asx_delay_queue *queue, asx_task_id self,
+                                        asx_delay_poll_state *out_state, asx_delay_expired *out);
 
 #ifdef __cplusplus
 }

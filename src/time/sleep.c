@@ -285,3 +285,250 @@ uint32_t asx_interval_ticks(const asx_interval_state *state) {
     if (state == NULL) return 0;
     return state->ticks;
 }
+
+asx_status asx_interval_tick_at(asx_interval_state *state, asx_time now, asx_time *out_time,
+                                int *out_due) {
+    if (state == NULL || out_time == NULL || out_due == NULL) return ASX_E_INVALID_ARGUMENT;
+
+    if (!state->initialized) {
+        asx_status st =
+            asx_deadline_init(&state->deadline, state->has_start ? state->start_ns : now);
+        if (st != ASX_OK) return st;
+        state->initialized = 1;
+    }
+
+    /* Rust's tick returns the deadline either way and advances only when
+     * it is due; one tick per call, so a Burst interval takes a call per
+     * missed tick. */
+    *out_time = asx_deadline_target(&state->deadline);
+    *out_due = 0;
+    if (state->exhausted || now < *out_time) return ASX_OK;
+
+    (void)interval_take_due(state, now, 1u);
+    if (state->ticks < UINT32_MAX) state->ticks++;
+    *out_due = 1;
+    return ASX_OK;
+}
+
+/* ===================================================================
+ * DelayQueue (Rust time/delay_queue.rs)
+ * =================================================================== */
+
+/* Earliest deadline first, then the schedule counter (insertion order);
+ * the index is a tie-break nothing reaches, as schedules are unique. */
+static int dq_before(const asx_delay_heap_item *a, const asx_delay_heap_item *b) {
+    if (a->deadline != b->deadline) return a->deadline < b->deadline;
+    if (a->schedule != b->schedule) return a->schedule < b->schedule;
+    return a->index < b->index;
+}
+
+static void dq_heap_push(asx_delay_queue *q, asx_time deadline, uint64_t schedule, uint32_t index) {
+    asx_delay_heap_item item;
+    uint32_t i = q->heap_len++;
+
+    item.deadline = deadline;
+    item.schedule = schedule;
+    item.index = index;
+    while (i > 0u) {
+        uint32_t parent = (i - 1u) / 2u;
+        ASX_CHECKPOINT_WAIVER("bounded: a sift up is at most log2 of the heap length");
+        if (!dq_before(&item, &q->heap[parent])) break;
+        q->heap[i] = q->heap[parent];
+        i = parent;
+    }
+    q->heap[i] = item;
+}
+
+static void dq_heap_pop(asx_delay_queue *q) {
+    asx_delay_heap_item last;
+    uint32_t i = 0u;
+
+    if (q->heap_len == 0u) return;
+    last = q->heap[--q->heap_len];
+    for (;;) {
+        uint32_t child = 2u * i + 1u;
+        ASX_CHECKPOINT_WAIVER("bounded: a sift down is at most log2 of the heap length");
+        if (child >= q->heap_len) break;
+        if (child + 1u < q->heap_len && dq_before(&q->heap[child + 1u], &q->heap[child])) child++;
+        if (!dq_before(&q->heap[child], &last)) break;
+        q->heap[i] = q->heap[child];
+        i = child;
+    }
+    if (q->heap_len > 0u) q->heap[i] = last;
+}
+
+/* Rust's schedule(): push the heap item, then rebuild from the live
+ * entries before stale items (resets, removals) dominate the heap. */
+static void dq_schedule(asx_delay_queue *q, asx_time deadline, uint64_t schedule, uint32_t index) {
+    dq_heap_push(q, deadline, schedule, index);
+    if (q->heap_len > 2u * q->len + 64u) {
+        uint32_t i;
+        q->heap_len = 0u;
+        for (i = 0; i < ASX_DELAY_QUEUE_CAPACITY; i++) {
+            ASX_CHECKPOINT_WAIVER("bounded: ASX_DELAY_QUEUE_CAPACITY constant");
+            if (q->entries[i].live) {
+                dq_heap_push(q, q->entries[i].deadline, q->entries[i].schedule, i);
+            }
+        }
+    }
+}
+
+/* The live entry `key` names, or NULL. */
+static asx_delay_entry *dq_entry(const asx_delay_queue *q, const asx_delay_key *key) {
+    asx_delay_entry *e;
+    if (q == NULL || key == NULL || key->index >= ASX_DELAY_QUEUE_CAPACITY) return NULL;
+    e = (asx_delay_entry *)&q->entries[key->index];
+    return e->live && e->generation == key->generation ? e : NULL;
+}
+
+asx_status asx_delay_queue_init(asx_delay_queue *queue) {
+    if (queue == NULL) return ASX_E_INVALID_ARGUMENT;
+    memset(queue, 0, sizeof(*queue));
+    return ASX_OK;
+}
+
+asx_status asx_delay_queue_insert_at(asx_delay_queue *queue, uint64_t value, asx_time deadline,
+                                     asx_delay_key *out_key) {
+    uint32_t slot;
+    uint64_t generation;
+
+    if (queue == NULL || out_key == NULL) return ASX_E_INVALID_ARGUMENT;
+    for (slot = 0; slot < ASX_DELAY_QUEUE_CAPACITY; slot++) {
+        ASX_CHECKPOINT_WAIVER("bounded: ASX_DELAY_QUEUE_CAPACITY constant");
+        if (!queue->entries[slot].live) break;
+    }
+    if (slot == ASX_DELAY_QUEUE_CAPACITY) return ASX_E_RESOURCE_EXHAUSTED;
+
+    generation = queue->next_generation++;
+    queue->entries[slot].value = value;
+    queue->entries[slot].deadline = deadline;
+    queue->entries[slot].generation = generation;
+    queue->entries[slot].schedule = generation;
+    queue->entries[slot].live = 1;
+    queue->len++;
+    dq_schedule(queue, deadline, generation, slot);
+
+    out_key->index = slot;
+    out_key->generation = generation;
+    return ASX_OK;
+}
+
+asx_status asx_delay_queue_insert(asx_delay_queue *queue, asx_time now, uint64_t value,
+                                  uint64_t timeout_ns, asx_delay_key *out_key) {
+    return asx_delay_queue_insert_at(queue, value,
+                                     timeout_ns > UINT64_MAX - now ? UINT64_MAX : now + timeout_ns,
+                                     out_key);
+}
+
+asx_status asx_delay_queue_remove(asx_delay_queue *queue, const asx_delay_key *key,
+                                  asx_delay_expired *out) {
+    asx_delay_entry *e;
+
+    if (queue == NULL || key == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
+    e = dq_entry(queue, key);
+    if (e == NULL) return ASX_E_NOT_FOUND;
+
+    /* Its heap item is stale now and is skipped when it surfaces. */
+    out->value = e->value;
+    out->deadline = e->deadline;
+    out->key = *key;
+    e->live = 0;
+    queue->len--;
+    return ASX_OK;
+}
+
+asx_status asx_delay_queue_reset_at(asx_delay_queue *queue, const asx_delay_key *key,
+                                    asx_time deadline) {
+    asx_delay_entry *e;
+    uint64_t schedule;
+
+    if (queue == NULL || key == NULL) return ASX_E_INVALID_ARGUMENT;
+    e = dq_entry(queue, key);
+    if (e == NULL) return ASX_E_NOT_FOUND;
+
+    schedule = queue->next_generation++;
+    e->deadline = deadline;
+    e->schedule = schedule;
+    dq_schedule(queue, deadline, schedule, key->index);
+    return ASX_OK;
+}
+
+asx_status asx_delay_queue_reset(asx_delay_queue *queue, const asx_delay_key *key, asx_time now,
+                                 uint64_t timeout_ns) {
+    return asx_delay_queue_reset_at(queue, key,
+                                    timeout_ns > UINT64_MAX - now ? UINT64_MAX : now + timeout_ns);
+}
+
+asx_status asx_delay_queue_deadline(const asx_delay_queue *queue, const asx_delay_key *key,
+                                    asx_time *out_deadline) {
+    const asx_delay_entry *e;
+
+    if (queue == NULL || key == NULL || out_deadline == NULL) return ASX_E_INVALID_ARGUMENT;
+    e = dq_entry(queue, key);
+    if (e == NULL) return ASX_E_NOT_FOUND;
+    *out_deadline = e->deadline;
+    return ASX_OK;
+}
+
+int asx_delay_queue_contains(const asx_delay_queue *queue, const asx_delay_key *key) {
+    return dq_entry(queue, key) != NULL;
+}
+
+uint32_t asx_delay_queue_len(const asx_delay_queue *queue) {
+    return queue == NULL ? 0u : queue->len;
+}
+
+asx_status asx_delay_queue_clear(asx_delay_queue *queue) {
+    uint32_t i;
+
+    if (queue == NULL) return ASX_E_INVALID_ARGUMENT;
+    for (i = 0; i < ASX_DELAY_QUEUE_CAPACITY; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: ASX_DELAY_QUEUE_CAPACITY constant");
+        queue->entries[i].live = 0;
+    }
+    queue->len = 0u;
+    queue->heap_len = 0u;
+    return ASX_OK;
+}
+
+asx_status asx_delay_queue_poll_at(asx_delay_queue *queue, asx_time now,
+                                   asx_delay_poll_state *out_state, asx_delay_expired *out) {
+    if (queue == NULL || out_state == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
+
+    while (queue->heap_len > 0u) {
+        const asx_delay_heap_item top = queue->heap[0];
+        asx_delay_entry *e = &queue->entries[top.index];
+        ASX_CHECKPOINT_WAIVER("bounded: each pass pops a heap item or returns");
+        if (!e->live || e->schedule != top.schedule) {
+            dq_heap_pop(queue); /* a reset or removed entry's old item */
+            continue;
+        }
+        if (top.deadline <= now) {
+            dq_heap_pop(queue);
+            out->value = e->value;
+            out->deadline = top.deadline;
+            out->key.index = top.index;
+            out->key.generation = e->generation;
+            e->live = 0;
+            queue->len--;
+            *out_state = ASX_DELAY_EXPIRED;
+            return ASX_OK;
+        }
+        out->deadline = top.deadline;
+        *out_state = ASX_DELAY_WAITING;
+        return ASX_OK;
+    }
+    *out_state = ASX_DELAY_EMPTY;
+    return ASX_OK;
+}
+
+asx_status asx_delay_queue_poll(asx_delay_queue *queue, asx_task_id self,
+                                asx_delay_poll_state *out_state, asx_delay_expired *out) {
+    asx_time now;
+    asx_status st = asx_runtime_now_ns(&now);
+
+    if (st != ASX_OK) return st;
+    st = asx_delay_queue_poll_at(queue, now, out_state, out);
+    if (st != ASX_OK || *out_state != ASX_DELAY_WAITING) return st;
+    return park_until(self, out->deadline);
+}
