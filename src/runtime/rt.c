@@ -354,11 +354,72 @@ static asx_status runtime_admit_second(const asx_runtime_config *config,
     return ASX_OK;
 }
 
+/* The registry slot the new runtime takes, or the reason it cannot have one:
+ * the registry is full, or (beyond the first) no storage block of its own, as
+ * a plain init while one is live always was: refused as a state, not an
+ * argument. With one slot there is no "beyond the first". */
+static asx_status runtime_take_tag(const asx_runtime_config *config, uint16_t *out_tag) {
+    uint16_t tag = runtime_free_tag();
+
+    if (tag >= ASX_MAX_RUNTIMES) {
+        runtime_set_reason("the runtime registry is full: ", "raise ASX_MAX_RUNTIMES", "");
+        return ASX_E_INVALID_STATE;
+    }
+#if ASX_MAX_RUNTIMES > 1
+    if (tag != 0u && config->storage == NULL) {
+        runtime_set_reason("a runtime beyond the first needs its own storage block: ",
+                           "asx_runtime_config.storage, asx_runtime_storage_size() bytes", "");
+        return ASX_E_INVALID_STATE;
+    }
+#else
+    (void)config;
+#endif
+    *out_tag = tag;
+    return ASX_OK;
+}
+
+/* Bind the runtime's state storage as the kernel of `tag`: the caller's
+ * block, zeroed, or for tag 0 without one the library's. */
+static void runtime_bind(uint16_t tag, void *storage) {
+    if (tag == 0u) {
+        asx_kernel_bind_internal(storage);
+    } else {
+        asx_kernel_bind_slot_internal(tag, storage);
+    }
+}
+
+/* The io driver and the blocking pool, the live runtimes' one pair: the
+ * first runtime starts them (a second has nothing live in them, and its
+ * shutdown leaves them to the last). Browser profile builds fail closed for
+ * native-only surfaces, which is expected and should not prevent the runtime
+ * object itself from starting. A failure leaves the driver stopped. A build
+ * with neither has nothing to start. */
+#if ASX_HAS_NATIVE_IO_DRIVER || ASX_HAS_BLOCKING_SURFACE
+static asx_status runtime_services_start(void) {
+#if ASX_HAS_NATIVE_IO_DRIVER
+    {
+        asx_status st = asx_io_driver_init();
+        if (st != ASX_OK && st != ASX_E_PERMISSION_DENIED) return st;
+    }
+#endif
+#if ASX_HAS_BLOCKING_SURFACE
+    {
+        asx_status st = asx_blocking_pool_init();
+        if (st != ASX_OK && st != ASX_E_PERMISSION_DENIED) {
+            asx_io_driver_shutdown();
+            return st;
+        }
+    }
+#endif
+    return ASX_OK;
+}
+#endif
+
 asx_status asx_runtime_init_checked(asx_runtime *rt, const asx_runtime_config *config,
                                     const asx_runtime_hooks *hooks,
                                     uint64_t application_fingerprint) {
     asx_status st;
-    uint16_t tag;
+    uint16_t tag = 0u;
     asx_kernel *k;
     int shared; /* another runtime is live: process-wide state is its */
 
@@ -376,18 +437,8 @@ asx_status asx_runtime_init_checked(asx_runtime *rt, const asx_runtime_config *c
     if (st != ASX_OK) return st;
     /* Initialization accepts an uninitialized destination: do not inspect
      * its bytes to authorize replacing a live process-wide runtime. */
-    tag = runtime_free_tag();
-    if (tag >= ASX_MAX_RUNTIMES) {
-        runtime_set_reason("the runtime registry is full: ", "raise ASX_MAX_RUNTIMES", "");
-        return ASX_E_INVALID_STATE;
-    }
-    /* A second runtime without a block of its own is what a plain init
-     * while one is live always was: refused as a state, not an argument. */
-    if (tag != 0u && config->storage == NULL) {
-        runtime_set_reason("a runtime beyond the first needs its own storage block: ",
-                           "asx_runtime_config.storage, asx_runtime_storage_size() bytes", "");
-        return ASX_E_INVALID_STATE;
-    }
+    st = runtime_take_tag(config, &tag);
+    if (st != ASX_OK) return st;
     shared = asx_kernel_any_held();
     if (shared) {
         st = runtime_admit_second(config, hooks);
@@ -396,51 +447,26 @@ asx_status asx_runtime_init_checked(asx_runtime *rt, const asx_runtime_config *c
     /* Step 3: bind the runtime's state storage (the caller's block, zeroed,
      * or the library's) and reset its internal state (deterministic clean
      * slate). Nothing above wrote any state, so a refusal left it intact. */
-    if (tag == 0u) {
-        asx_kernel_bind_internal(config->storage);
-    } else {
-        asx_kernel_bind_slot_internal(tag, config->storage);
-    }
+    runtime_bind(tag, config->storage);
     k = g_kernels[tag];
     asx_runtime_clear_internal(k);
 
-    /* Step 4: install hooks (the live runtime's table is the same one) */
+    /* Step 4: install hooks (the live runtime's table is the same one) and
+     * start the shipped runtime subsystems (once: the first runtime's). */
     if (!shared) {
         st = asx_runtime_set_hooks(hooks);
+        if (st == ASX_OK) {
+            g_active_io_backend = config->io_backend;
+#if ASX_HAS_NATIVE_IO_DRIVER || ASX_HAS_BLOCKING_SURFACE
+            st = runtime_services_start();
+            if (st != ASX_OK) g_active_io_backend = ASX_IO_BACKEND_GHOST;
+#endif
+        }
         if (st != ASX_OK) {
             asx_kernel_release_internal(tag); /* a failed init leaves no binding */
             return st;
         }
-        g_active_io_backend = config->io_backend;
     }
-
-    /* Step 4a: initialize shipped runtime subsystems (once: the live
-     * runtime's driver and pool serve a second one, which has nothing live
-     * in them, and its shutdown leaves them to the last).
-     * Browser profile builds fail closed for native-only surfaces, which is
-     * expected and should not prevent the runtime object itself from starting. */
-#if ASX_HAS_NATIVE_IO_DRIVER
-    if (!shared) {
-        st = asx_io_driver_init();
-        if (st != ASX_OK && st != ASX_E_PERMISSION_DENIED) {
-            g_active_io_backend = ASX_IO_BACKEND_GHOST;
-            asx_kernel_release_internal(tag);
-            return st;
-        }
-    }
-#endif
-
-#if ASX_HAS_BLOCKING_SURFACE
-    if (!shared) {
-        st = asx_blocking_pool_init();
-        if (st != ASX_OK && st != ASX_E_PERMISSION_DENIED) {
-            asx_io_driver_shutdown();
-            g_active_io_backend = ASX_IO_BACKEND_GHOST;
-            asx_kernel_release_internal(tag);
-            return st;
-        }
-    }
-#endif
 
 #if ASX_HAS_NATIVE_RUNTIME_SURFACES && !ASX_DETERMINISTIC
     /* A live readiness reactor means real I/O: sockets, files, child
