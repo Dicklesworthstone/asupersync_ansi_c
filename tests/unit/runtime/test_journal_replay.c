@@ -798,6 +798,89 @@ TEST(a_cut_stream_replays_its_committed_prefix_and_ends_at_the_cut_with_its_seq)
     ASSERT_EQ(rep.seq, (uint64_t)8u);
 }
 
+/* The log medium of the watchdog store: g_out, append-only. */
+static asx_status log_write(void *ctx, uint64_t offset, const uint8_t *bytes, uint32_t len) {
+    (void)ctx;
+    if (offset != (uint64_t)g_out_len || g_out_len + len > OUT_CAP) return ASX_E_INVALID_STATE;
+    memcpy(g_out + g_out_len, bytes, len);
+    g_out_len += len;
+    return ASX_OK;
+}
+
+/* AUTOMOTIVE's persistence (bd-9kll.11.4): the stream goes to a RAM ring and
+ * a watchdog checkpoint writes a bounded part of the committed prefix. A
+ * process that dies after one checkpoint leaves the log cut inside a record,
+ * and recovery replays the committed prefix the log holds, and only it. */
+TEST(a_log_the_watchdog_store_wrote_is_cut_between_checkpoints_and_replays_its_prefix) {
+    uint64_t rec_t[10];
+    uint64_t got_t[10];
+    asx_journal j;
+    asx_journal_config cfg;
+    asx_journal_wdog w;
+    static uint8_t ring[4096];
+    asx_runtime_hooks hooks;
+    asx_replay rp;
+    asx_replay_report rep;
+    asx_replay_prefix pfx;
+    size_t first_window = (size_t)ASX_JOURNAL_HEADER_BYTES + 3u * CLOCK_REC_LEN + CHAIN_REC_LEN;
+    uint32_t i;
+
+    g_fake_clock = 0u;
+    fake_table(&hooks);
+    asx_trace_reset();
+    asx_journal_uninstall();
+    g_out_len = 0u;
+    ASSERT_EQ(asx_journal_wdog_init(&w, ring, (uint32_t)sizeof(ring), log_write, NULL,
+                                    (uint32_t)first_window + 11u, 0u),
+              ASX_OK);
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.sink_fn = asx_journal_wdog_sink;
+    cfg.sink_ctx = &w;
+    cfg.buffer = g_stage;
+    cfg.buffer_cap = (uint32_t)sizeof(g_stage);
+    cfg.chain_every = 3u;
+    cfg.persist = ASX_JOURNAL_PERSIST_CHAIN;
+    cfg.commit_every_chains = 1u;
+    cfg.commit_fn = asx_journal_wdog_commit;
+    cfg.config_fingerprint = UINT64_C(0x1122334455667788);
+    cfg.rust_rev_hash = REV_HASH;
+    cfg.build_hash = BUILD_HASH;
+    ASSERT_EQ(asx_journal_init(&j, &cfg), ASX_OK);
+    ASSERT_EQ(asx_journal_wrap_hooks(&j, &hooks), ASX_OK);
+    for (i = 0; i < 10u; i++) {
+        rec_t[i] = (uint64_t)hooks.clock.now_ns_fn(hooks.clock.ctx);
+        asx_trace_emit(ASX_TRACE_SCHED_POLL, (uint64_t)i, 0u);
+    }
+    asx_journal_uninstall(); /* the process dies here: no finish */
+
+    /* Three windows are committed and in the ring; the log has nothing yet. */
+    ASSERT_EQ(g_out_len, (size_t)0u);
+    ASSERT_EQ(w.committed,
+              (uint64_t)ASX_JOURNAL_HEADER_BYTES + 9u * CLOCK_REC_LEN + 3u * CHAIN_REC_LEN);
+
+    /* One checkpoint writes the first window and 11 bytes of the second. */
+    ASSERT_EQ(asx_journal_wdog_tick(&w, 1000u), ASX_OK);
+    ASSERT_EQ(g_out_len, first_window + 11u);
+    ASSERT_EQ(w.largest_write, (uint32_t)first_window + 11u);
+
+    ASSERT_EQ((int)open_prefix_hooks(&rp, g_out_len, &rep, &pfx, &hooks), (int)ASX_REPLAY_OK);
+    ASSERT_EQ(pfx.complete, 0);
+    ASSERT_EQ(pfx.committed_bytes, (uint64_t)first_window);
+    ASSERT_EQ(pfx.committed_records, (uint64_t)3u);
+    ASSERT_EQ(pfx.cut_seq, (uint64_t)4u); /* 3 data records and 1 chain */
+    ASSERT_EQ((int)pfx.cut_reason, (int)ASX_REPLAY_E_INCOMPLETE);
+
+    replay_clocks(&hooks, 4u, got_t, 0u);
+    for (i = 0; i < 3u; i++) { ASSERT_EQ(got_t[i], rec_t[i]); }
+    ASSERT_EQ(got_t[3], (uint64_t)0u); /* the cut answers nothing */
+    ASSERT_TRUE(asx_replay_failure(&rp) != NULL);
+    ASSERT_EQ((int)asx_replay_failure(&rp)->error, (int)ASX_REPLAY_E_CUT);
+    ASSERT_EQ(asx_replay_failure(&rp)->seq, (uint64_t)4u);
+    asx_replay_prefix_progress(&rp, &pfx);
+    ASSERT_EQ(pfx.served, (uint64_t)3u);
+    ASSERT_EQ(pfx.checkpoints, (uint64_t)1u);
+}
+
 TEST(a_program_that_ends_inside_the_prefix_is_a_cut_not_a_pass) {
     uint64_t rec_t[10];
     uint64_t got_t[10];
@@ -2227,6 +2310,7 @@ int main(void) {
     RUN_TEST(a_resolution_of_another_host_diverges);
     RUN_TEST(a_replay_is_not_activated_while_a_journal_records);
     RUN_TEST(a_cut_stream_replays_its_committed_prefix_and_ends_at_the_cut_with_its_seq);
+    RUN_TEST(a_log_the_watchdog_store_wrote_is_cut_between_checkpoints_and_replays_its_prefix);
     RUN_TEST(a_program_that_ends_inside_the_prefix_is_a_cut_not_a_pass);
     RUN_TEST(a_trace_checkpoint_that_differs_diverges_at_the_window_s_last_record);
     RUN_TEST(a_complete_stream_opens_as_a_prefix_and_passes);

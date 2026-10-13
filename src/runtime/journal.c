@@ -15,6 +15,7 @@
  */
 
 #define ASX_INTERNAL_TRACE_FAMILY_ACCESS 1
+#include <asx/runtime/automotive_instrument.h>
 #include <asx/runtime/journal.h>
 #include <asx/runtime/trace.h>
 #undef ASX_INTERNAL_TRACE_FAMILY_ACCESS
@@ -438,9 +439,22 @@ asx_journal_store_kind asx_journal_profile_store(void) {
     return ASX_JOURNAL_STORE_FILE;
 #elif defined(ASX_PROFILE_EMBEDDED_ROUTER)
     return ASX_JOURNAL_STORE_FLASH;
+#elif defined(ASX_PROFILE_AUTOMOTIVE)
+    return ASX_JOURNAL_STORE_WATCHDOG;
 #else
     return ASX_JOURNAL_STORE_CALLER;
 #endif
+}
+
+/* Append `len` bytes at the tail of a byte ring of `cap` bytes that holds
+ * `used` bytes from `head`. The caller has checked there is room. */
+static void store_ring_append(uint8_t *ring, uint32_t cap, uint32_t head, uint32_t used,
+                              const uint8_t *bytes, uint32_t len) {
+    uint32_t tail = (head + used) % cap;
+    uint32_t first = cap - tail;
+    if (first > len) first = len;
+    memcpy(ring + tail, bytes, (size_t)first);
+    if (len > first) memcpy(ring, bytes + first, (size_t)(len - first));
 }
 
 asx_status asx_journal_flash_init(asx_journal_flash *f, uint8_t *ring, uint32_t ring_cap,
@@ -462,8 +476,6 @@ asx_status asx_journal_flash_init(asx_journal_flash *f, uint8_t *ring, uint32_t 
 
 asx_status asx_journal_flash_sink(void *ctx, const uint8_t *bytes, uint32_t len) {
     asx_journal_flash *f = (asx_journal_flash *)ctx;
-    uint32_t tail;
-    uint32_t first;
     if (f == NULL || f->ring == NULL || (bytes == NULL && len > 0u)) {
         return ASX_E_INVALID_ARGUMENT;
     }
@@ -474,11 +486,7 @@ asx_status asx_journal_flash_sink(void *ctx, const uint8_t *bytes, uint32_t len)
         f->status = ASX_E_RESOURCE_EXHAUSTED;
         return f->status;
     }
-    tail = (f->head + f->len) % f->ring_cap;
-    first = f->ring_cap - tail;
-    if (first > len) first = len;
-    memcpy(f->ring + tail, bytes, (size_t)first);
-    if (len > first) memcpy(f->ring, bytes + first, (size_t)(len - first));
+    store_ring_append(f->ring, f->ring_cap, f->head, f->len, bytes, len);
     f->len += len;
     f->offered += (uint64_t)len;
     return ASX_OK;
@@ -525,6 +533,114 @@ asx_status asx_journal_flash_commit(void *ctx, const asx_journal_commit *commit)
     st = flash_write_head(f, first);
     if (st == ASX_OK && n > first) st = flash_write_head(f, n - first);
     return st;
+}
+
+/* The watchdog-aligned store (AUTOMOTIVE). */
+
+asx_status asx_journal_wdog_init(asx_journal_wdog *f, uint8_t *ring, uint32_t ring_cap,
+                                 asx_journal_flash_write_fn write_fn, void *write_ctx,
+                                 uint32_t max_tick_bytes, uint64_t period_ns) {
+    if (f == NULL || ring == NULL || ring_cap == 0u || write_fn == NULL || max_tick_bytes == 0u) {
+        return ASX_E_INVALID_ARGUMENT;
+    }
+    memset(f, 0, sizeof(*f));
+    f->write_fn = write_fn;
+    f->write_ctx = write_ctx;
+    f->ring = ring;
+    f->ring_cap = ring_cap;
+    f->max_tick_bytes = max_tick_bytes;
+    f->period_ns = period_ns;
+    return ASX_OK;
+}
+
+asx_status asx_journal_wdog_sink(void *ctx, const uint8_t *bytes, uint32_t len) {
+    asx_journal_wdog *f = (asx_journal_wdog *)ctx;
+    if (f == NULL || f->ring == NULL || (bytes == NULL && len > 0u)) {
+        return ASX_E_INVALID_ARGUMENT;
+    }
+    if (f->status != ASX_OK) return f->status;
+    if (len == 0u) return ASX_OK;
+    if (len > f->ring_cap - f->len) {
+        /* The log keeps what it has; the stream cannot go on. */
+        f->status = ASX_E_RESOURCE_EXHAUSTED;
+        return f->status;
+    }
+    store_ring_append(f->ring, f->ring_cap, f->head, f->len, bytes, len);
+    f->len += len;
+    f->offered += (uint64_t)len;
+    return ASX_OK;
+}
+
+/* Write `n` bytes from the ring's head in one log write and release them.
+ * n <= the bytes before the ring's end. */
+static asx_status wdog_write_head(asx_journal_wdog *f, uint32_t n) {
+    asx_status st = f->write_fn(f->write_ctx, f->flushed, f->ring + f->head, n);
+    f->log_writes++;
+    if (st != ASX_OK) {
+        if (f->status == ASX_OK) f->status = st;
+        return st;
+    }
+    if (n > f->largest_write) f->largest_write = n;
+    f->head = (f->head + n) % f->ring_cap;
+    f->len -= n;
+    f->flushed += (uint64_t)n;
+    return ASX_OK;
+}
+
+/* Write up to `budget` bytes of the committed backlog: one log write, two
+ * when the span wraps the ring. */
+static asx_status wdog_flush_some(asx_journal_wdog *f, uint32_t budget) {
+    uint64_t pending = f->committed - f->flushed;
+    uint32_t n = pending < (uint64_t)budget ? (uint32_t)pending : budget;
+    uint32_t first;
+    asx_status st;
+    if (n == 0u) return ASX_OK;
+    first = f->ring_cap - f->head;
+    if (first > n) first = n;
+    st = wdog_write_head(f, first);
+    if (st == ASX_OK && n > first) st = wdog_write_head(f, n - first);
+    return st;
+}
+
+asx_status asx_journal_wdog_commit(void *ctx, const asx_journal_commit *commit) {
+    asx_journal_wdog *f = (asx_journal_wdog *)ctx;
+    asx_status st;
+    if (f == NULL || commit == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (commit->stream_bytes < f->flushed || commit->stream_bytes > f->offered) {
+        return ASX_E_INVALID_STATE;
+    }
+    f->committed = commit->stream_bytes;
+    if (!commit->final) return ASX_OK;
+    /* The stream is finished and the supervised loop is over: drain the
+     * backlog, still in writes of at most max_tick_bytes. */
+    while (f->committed > f->flushed) {
+        ASX_CHECKPOINT_WAIVER("bounded: every pass writes at least one byte of the backlog");
+        st = wdog_flush_some(f, f->max_tick_bytes);
+        if (st != ASX_OK) return st;
+    }
+    return ASX_OK;
+}
+
+asx_status asx_journal_wdog_tick(asx_journal_wdog *f, uint64_t now_ns) {
+    asx_status st;
+    if (f == NULL || f->ring == NULL) return ASX_E_INVALID_ARGUMENT;
+    f->ticks++;
+    if (f->committed == f->flushed) return ASX_OK;
+    if (f->flushes != 0u && f->period_ns != 0u) {
+        /* A clock that stepped back counts as no time passed. */
+        uint64_t since = now_ns >= f->last_flush_ns ? now_ns - f->last_flush_ns : 0u;
+        if (since < f->period_ns) return ASX_OK;
+    }
+    st = wdog_flush_some(f, f->max_tick_bytes);
+    f->flushes++;
+    f->last_flush_ns = now_ns;
+    return st;
+}
+
+asx_status asx_journal_wdog_checkpoint(asx_journal_wdog *f, uint64_t now_ns, uint64_t entity_id) {
+    if (f == NULL) return ASX_E_INVALID_ARGUMENT;
+    asx_auto_record_checkpoint(now_ns, entity_id);
+    return asx_journal_wdog_tick(f, now_ns);
 }
 
 /* ------------------------------------------------------------------ */

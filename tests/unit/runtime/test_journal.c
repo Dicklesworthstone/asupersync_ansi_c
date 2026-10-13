@@ -1302,11 +1302,277 @@ TEST(the_flash_store_rejects_bad_arguments) {
     ASSERT_EQ(asx_journal_flash_commit(&f, NULL), ASX_E_INVALID_ARGUMENT);
 }
 
+/* --- the watchdog-aligned store (AUTOMOTIVE, bd-9kll.11.4): a RAM ring
+ * written to a log only at watchdog checkpoints, at most once per period and
+ * max_tick_bytes at a time, and only the committed prefix --- */
+
+static asx_status open_wdog_journal(asx_journal *j, asx_journal_wdog *f, uint8_t *ring,
+                                    uint32_t ring_cap, uint32_t max_tick_bytes, uint64_t period_ns,
+                                    uint32_t chain_every) {
+    asx_journal_config cfg;
+    asx_status st;
+    sink_reset();
+    g_flash_next = 0u;
+    g_flash_writes = 0u;
+    g_flash_fail = ASX_OK;
+    st = asx_journal_wdog_init(f, ring, ring_cap, flash_write, NULL, max_tick_bytes, period_ns);
+    if (st != ASX_OK) return st;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.sink_fn = asx_journal_wdog_sink;
+    cfg.sink_ctx = f;
+    cfg.buffer = g_stage;
+    cfg.buffer_cap = 4096u;
+    cfg.chain_every = chain_every;
+    cfg.persist = ASX_JOURNAL_PERSIST_CHAIN;
+    cfg.commit_every_chains = 1u;
+    cfg.commit_fn = asx_journal_wdog_commit;
+    return asx_journal_init(j, &cfg);
+}
+
+TEST(the_watchdog_store_writes_only_committed_bytes_at_checkpoints_in_bounded_writes) {
+    asx_journal j;
+    asx_journal_wdog f;
+    static uint8_t ring[2048];
+    size_t pos;
+    uint64_t records;
+    uint64_t chains;
+    uint32_t i;
+    uint64_t want = (uint64_t)ASX_JOURNAL_HEADER_BYTES + 28u * NOTE_REC_LEN + 7u * CHAIN_REC_LEN;
+
+    ASSERT_EQ(open_wdog_journal(&j, &f, ring, (uint32_t)sizeof(ring), 100u, 0u, 4u), ASX_OK);
+    ASSERT_EQ(asx_journal_install(&j), ASX_OK);
+    note_many(30u); /* the process dies here: seven chains committed, 2 records staged */
+    asx_journal_uninstall();
+
+    /* Between checkpoints the log is not touched: the committed prefix sits
+     * in the ring (the staged records never reached it). */
+    ASSERT_EQ(g_flash_writes, 0u);
+    ASSERT_EQ(g_flash_next, (uint64_t)0u);
+    ASSERT_EQ(f.committed, want);
+    ASSERT_EQ(f.offered, want);
+    ASSERT_EQ(f.len, (uint32_t)want);
+
+    /* Each checkpoint writes at most max_tick_bytes of it. */
+    for (i = 0u; i < 17u; i++) {
+        ASSERT_EQ(asx_journal_wdog_tick(&f, (uint64_t)i * 1000u), ASX_OK);
+        ASSERT_TRUE(f.largest_write <= 100u);
+        ASSERT_TRUE(f.flushed <= f.committed);
+    }
+    ASSERT_EQ(f.flushed, want);
+    ASSERT_EQ(f.flushes, (uint64_t)17u);
+    ASSERT_EQ(f.log_writes, (uint64_t)17u);
+    ASSERT_EQ(f.largest_write, 100u);
+    ASSERT_EQ(f.len, 0u);
+
+    /* With nothing pending a checkpoint writes nothing. */
+    ASSERT_EQ(asx_journal_wdog_tick(&f, 99000u), ASX_OK);
+    ASSERT_EQ(f.flushes, (uint64_t)17u);
+    ASSERT_EQ(f.ticks, (uint64_t)18u);
+
+    ASSERT_EQ(g_flash_next, want);
+    flash_prefix(&pos, &records, &chains);
+    ASSERT_EQ(pos, (size_t)want);
+    ASSERT_EQ(records, (uint64_t)28u);
+    ASSERT_EQ(chains, (uint64_t)7u);
+}
+
+TEST(a_watchdog_flush_is_at_most_once_per_period_and_a_stepped_back_clock_adds_no_time) {
+    asx_journal j;
+    asx_journal_wdog f;
+    static uint8_t ring[2048];
+
+    ASSERT_EQ(open_wdog_journal(&j, &f, ring, (uint32_t)sizeof(ring), 50u, 1000u, 4u), ASX_OK);
+    ASSERT_EQ(asx_journal_install(&j), ASX_OK);
+    note_many(12u);
+    asx_journal_uninstall();
+
+    ASSERT_EQ(asx_journal_wdog_tick(&f, 0u), ASX_OK); /* the first one writes */
+    ASSERT_EQ(f.flushes, (uint64_t)1u);
+    ASSERT_EQ(f.flushed, (uint64_t)50u);
+    ASSERT_EQ(asx_journal_wdog_tick(&f, 500u), ASX_OK);
+    ASSERT_EQ(asx_journal_wdog_tick(&f, 999u), ASX_OK);
+    ASSERT_EQ(f.flushes, (uint64_t)1u);
+    ASSERT_EQ(asx_journal_wdog_tick(&f, 1000u), ASX_OK);
+    ASSERT_EQ(f.flushes, (uint64_t)2u);
+    ASSERT_EQ(f.flushed, (uint64_t)100u);
+    ASSERT_EQ(asx_journal_wdog_tick(&f, 900u), ASX_OK); /* the clock stepped back */
+    ASSERT_EQ(f.flushes, (uint64_t)2u);
+    ASSERT_EQ(asx_journal_wdog_tick(&f, 2000u), ASX_OK);
+    ASSERT_EQ(f.flushes, (uint64_t)3u);
+    ASSERT_EQ(f.flushed, (uint64_t)150u);
+    ASSERT_EQ(f.ticks, (uint64_t)6u);
+    ASSERT_EQ(f.largest_write, 50u);
+}
+
+TEST(the_final_commit_drains_the_watchdog_backlog_in_bounded_writes_to_a_complete_stream) {
+    asx_journal j;
+    asx_journal_wdog f;
+    asx_journal_reader r;
+    asx_journal_record rec;
+    asx_journal_read_result rr;
+    static uint8_t ring[4096];
+
+    ASSERT_EQ(open_wdog_journal(&j, &f, ring, (uint32_t)sizeof(ring), 100u, 0u, 4u), ASX_OK);
+    ASSERT_EQ(asx_journal_install(&j), ASX_OK);
+    note_many(12u); /* three windows committed, no checkpoint yet */
+    asx_journal_uninstall();
+    ASSERT_EQ(f.flushed, (uint64_t)0u);
+
+    ASSERT_EQ(asx_journal_finish(&j), ASX_OK); /* END is the final commit */
+    ASSERT_EQ(asx_journal_status(&j), ASX_OK);
+    ASSERT_TRUE(g_flash_next > 720u);
+    ASSERT_EQ(f.flushed, g_flash_next);
+    ASSERT_EQ(f.len, 0u);
+    ASSERT_TRUE(f.largest_write <= 100u);
+    ASSERT_EQ(f.log_writes, (g_flash_next + 99u) / 100u);
+    ASSERT_EQ((int)asx_journal_reader_init(&r, g_flash, (size_t)g_flash_next),
+              (int)ASX_JOURNAL_READ_RECORD);
+    for (;;) {
+        rr = asx_journal_reader_next(&r, &rec);
+        if (rr != ASX_JOURNAL_READ_RECORD) break;
+    }
+    ASSERT_EQ((int)rr, (int)ASX_JOURNAL_READ_END);
+}
+
+TEST(a_wrapped_watchdog_ring_flushes_in_order) {
+    asx_journal j;
+    asx_journal_wdog f;
+    static uint8_t ring[300]; /* a window is 224 bytes: the second one wraps */
+    size_t pos;
+    uint64_t records;
+    uint64_t chains;
+    uint32_t w;
+    uint32_t k;
+
+    ASSERT_EQ(open_wdog_journal(&j, &f, ring, (uint32_t)sizeof(ring), 64u, 0u, 4u), ASX_OK);
+    ASSERT_EQ(asx_journal_install(&j), ASX_OK);
+    for (w = 0u; w < 4u; w++) {
+        note_many(4u);
+        for (k = 0u; k < 5u; k++) {
+            ASSERT_EQ(asx_journal_wdog_tick(&f, (uint64_t)(w * 5u + k)), ASX_OK);
+        }
+    }
+    asx_journal_uninstall();
+    ASSERT_EQ(asx_journal_finish(&j), ASX_OK);
+    ASSERT_EQ(asx_journal_status(&j), ASX_OK);
+    ASSERT_EQ(f.flushed, g_flash_next);
+    ASSERT_TRUE(f.largest_write <= 64u);
+    ASSERT_TRUE(f.log_writes > (g_flash_next + 63u) / 64u); /* a wrap makes a flush two writes */
+    flash_prefix(&pos, &records, &chains);
+    ASSERT_EQ(records, (uint64_t)16u);
+    ASSERT_EQ(chains, (uint64_t)4u);
+}
+
+TEST(a_producer_that_outruns_the_bound_fails_the_stream_and_the_log_keeps_its_prefix) {
+    asx_journal j;
+    asx_journal_wdog f;
+    static uint8_t ring[600];
+    size_t pos;
+    uint64_t records;
+    uint64_t chains;
+    uint32_t i;
+
+    /* Windows: 272, then 224 each. The ring takes two (496) and has 104
+     * left for the third. */
+    ASSERT_EQ(open_wdog_journal(&j, &f, ring, (uint32_t)sizeof(ring), 64u, 0u, 4u), ASX_OK);
+    ASSERT_EQ(asx_journal_install(&j), ASX_OK);
+    note_many(12u);
+    ASSERT_EQ(asx_journal_status(&j), ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(f.status, ASX_E_RESOURCE_EXHAUSTED);
+    asx_journal_uninstall();
+
+    /* The checkpoints still write what was committed. */
+    for (i = 0u; i < 8u; i++) ASSERT_EQ(asx_journal_wdog_tick(&f, (uint64_t)i), ASX_OK);
+    ASSERT_EQ(f.flushed, (uint64_t)496u);
+    flash_prefix(&pos, &records, &chains);
+    ASSERT_EQ(pos, (size_t)496u);
+    ASSERT_EQ(records, (uint64_t)8u);
+    ASSERT_EQ(chains, (uint64_t)2u);
+}
+
+TEST(a_failed_log_write_is_tried_again_at_the_next_checkpoint) {
+    asx_journal j;
+    asx_journal_wdog f;
+    static uint8_t ring[1024];
+
+    ASSERT_EQ(open_wdog_journal(&j, &f, ring, (uint32_t)sizeof(ring), 50u, 0u, 4u), ASX_OK);
+    ASSERT_EQ(asx_journal_install(&j), ASX_OK);
+    note_many(8u);
+    asx_journal_uninstall();
+
+    g_flash_fail = ASX_E_RESOURCE_EXHAUSTED;
+    ASSERT_EQ(asx_journal_wdog_tick(&f, 0u), ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(f.status, ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(f.flushed, (uint64_t)0u);
+    ASSERT_EQ(f.log_writes, (uint64_t)1u);
+    g_flash_fail = ASX_OK;
+    ASSERT_EQ(asx_journal_wdog_tick(&f, 1u), ASX_OK);
+    ASSERT_EQ(f.flushed, (uint64_t)50u);
+    ASSERT_EQ(f.status, ASX_E_RESOURCE_EXHAUSTED); /* the first failure is kept */
+}
+
+TEST(a_watchdog_checkpoint_services_the_automotive_watchdog_then_flushes) {
+    asx_journal j;
+    asx_journal_wdog f;
+    static uint8_t ring[2048];
+    const asx_auto_watchdog *wd;
+
+    asx_auto_instrument_reset();
+    wd = asx_auto_watchdog_global();
+    ASSERT_EQ(open_wdog_journal(&j, &f, ring, (uint32_t)sizeof(ring), 1000u, 0u, 4u), ASX_OK);
+    ASSERT_EQ(asx_journal_install(&j), ASX_OK);
+    note_many(8u);
+    asx_journal_uninstall();
+
+    ASSERT_EQ(asx_journal_wdog_checkpoint(&f, 1000000u, 7u), ASX_OK);
+    ASSERT_EQ(wd->total_checkpoints, 1u);
+    ASSERT_EQ(wd->violations, 0u);
+    ASSERT_EQ(f.flushes, (uint64_t)1u);
+    ASSERT_EQ(f.flushed, f.committed);
+
+    /* The next one comes 29 ms later: the watchdog's own violation, and the
+     * store has nothing left to write. */
+    ASSERT_EQ(asx_journal_wdog_checkpoint(&f, 30000000u, 7u), ASX_OK);
+    ASSERT_EQ(wd->total_checkpoints, 2u);
+    ASSERT_EQ(wd->violations, 1u);
+    ASSERT_EQ(f.ticks, (uint64_t)2u);
+    ASSERT_EQ(f.flushes, (uint64_t)1u);
+    asx_auto_instrument_reset();
+}
+
+TEST(the_watchdog_store_rejects_bad_arguments) {
+    asx_journal_wdog f;
+    static uint8_t ring[64];
+    asx_journal_commit c;
+    ASSERT_EQ(asx_journal_wdog_init(NULL, ring, 64u, flash_write, NULL, 10u, 0u),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_journal_wdog_init(&f, NULL, 64u, flash_write, NULL, 10u, 0u),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_journal_wdog_init(&f, ring, 0u, flash_write, NULL, 10u, 0u),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_journal_wdog_init(&f, ring, 64u, NULL, NULL, 10u, 0u), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_journal_wdog_init(&f, ring, 64u, flash_write, NULL, 0u, 0u),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_journal_wdog_init(&f, ring, 64u, flash_write, NULL, 10u, 0u), ASX_OK);
+    ASSERT_EQ(asx_journal_wdog_sink(NULL, ring, 4u), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_journal_wdog_sink(&f, NULL, 4u), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_journal_wdog_sink(&f, NULL, 0u), ASX_OK);
+    memset(&c, 0, sizeof(c));
+    c.stream_bytes = 10u; /* more than was offered */
+    ASSERT_EQ(asx_journal_wdog_commit(&f, &c), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_journal_wdog_commit(NULL, &c), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_journal_wdog_commit(&f, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_journal_wdog_tick(NULL, 0u), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_journal_wdog_checkpoint(NULL, 0u, 0u), ASX_E_INVALID_ARGUMENT);
+}
+
 TEST(each_profile_names_its_persistence_store) {
 #if defined(ASX_PROFILE_POSIX)
     ASSERT_EQ((int)asx_journal_profile_store(), (int)ASX_JOURNAL_STORE_FILE);
 #elif defined(ASX_PROFILE_EMBEDDED_ROUTER)
     ASSERT_EQ((int)asx_journal_profile_store(), (int)ASX_JOURNAL_STORE_FLASH);
+#elif defined(ASX_PROFILE_AUTOMOTIVE)
+    ASSERT_EQ((int)asx_journal_profile_store(), (int)ASX_JOURNAL_STORE_WATCHDOG);
 #else
     ASSERT_EQ((int)asx_journal_profile_store(), (int)ASX_JOURNAL_STORE_CALLER);
 #endif
@@ -1667,6 +1933,14 @@ int main(void) {
     RUN_TEST(min_flush_coalesces_commits_and_the_final_commit_flushes_the_rest);
     RUN_TEST(a_failed_flash_write_sticks_and_flash_keeps_the_earlier_prefix);
     RUN_TEST(the_flash_store_rejects_bad_arguments);
+    RUN_TEST(the_watchdog_store_writes_only_committed_bytes_at_checkpoints_in_bounded_writes);
+    RUN_TEST(a_watchdog_flush_is_at_most_once_per_period_and_a_stepped_back_clock_adds_no_time);
+    RUN_TEST(the_final_commit_drains_the_watchdog_backlog_in_bounded_writes_to_a_complete_stream);
+    RUN_TEST(a_wrapped_watchdog_ring_flushes_in_order);
+    RUN_TEST(a_producer_that_outruns_the_bound_fails_the_stream_and_the_log_keeps_its_prefix);
+    RUN_TEST(a_failed_log_write_is_tried_again_at_the_next_checkpoint);
+    RUN_TEST(a_watchdog_checkpoint_services_the_automotive_watchdog_then_flushes);
+    RUN_TEST(the_watchdog_store_rejects_bad_arguments);
     RUN_TEST(each_profile_names_its_persistence_store);
 #if defined(ASX_PROFILE_POSIX)
     RUN_TEST(the_posix_file_store_writes_every_byte_and_maps_errors);

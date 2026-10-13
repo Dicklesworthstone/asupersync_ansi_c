@@ -120,11 +120,14 @@
  *   POSIX             a file; commit_fn is fsync(2)  (asx_posix_journal_file)
  *   EMBEDDED_ROUTER   a RAM ring flushed to flash at commit points under a
  *                     write budget, so flash wear is bounded (asx_journal_flash)
+ *   AUTOMOTIVE        a RAM ring flushed to a log at watchdog checkpoints,
+ *                     at most max_tick_bytes once per watchdog period, so
+ *                     the supervised loop never spends more than that bound
+ *                     on persistence (asx_journal_wdog)
  *   FREESTANDING and  the caller's sink and commit_fn: the caller makes the
- *   the rest          prefix durable however its target needs (a watchdog-
- *                     aligned flush on AUTOMOTIVE, a hand-off to a flusher
- *                     on HFT). asx_journal_profile_store() names the
- *                     compiled profile's choice.
+ *   the rest          prefix durable however its target needs (a hand-off
+ *                     to a flusher on HFT). asx_journal_profile_store()
+ *                     names the compiled profile's choice.
  * A killed process (SIGKILL) loses only what was not yet given to the sink;
  * the fsync or flash flush is what a kernel crash or power loss needs.
  *
@@ -360,14 +363,15 @@ ASX_API uint32_t asx_journal_ring_read(const asx_journal_ring *r, uint8_t *dst, 
 
 /* Which store a profile uses for ASX_JOURNAL_PERSIST_CHAIN. */
 typedef enum {
-    ASX_JOURNAL_STORE_CALLER = 0, /* the caller's sink and commit_fn */
-    ASX_JOURNAL_STORE_FILE = 1,   /* asx_posix_journal_file: write(2), fsync(2) per commit */
-    ASX_JOURNAL_STORE_FLASH = 2   /* asx_journal_flash: RAM ring, budgeted flash flush */
+    ASX_JOURNAL_STORE_CALLER = 0,  /* the caller's sink and commit_fn */
+    ASX_JOURNAL_STORE_FILE = 1,    /* asx_posix_journal_file: write(2), fsync(2) per commit */
+    ASX_JOURNAL_STORE_FLASH = 2,   /* asx_journal_flash: RAM ring, budgeted flash flush */
+    ASX_JOURNAL_STORE_WATCHDOG = 3 /* asx_journal_wdog: RAM ring, flush at watchdog checkpoints */
 } asx_journal_store_kind;
 
 /* The store the compiled profile uses: FILE on POSIX, FLASH on
- * EMBEDDED_ROUTER, CALLER on every other profile (CORE, FREESTANDING, HFT,
- * AUTOMOTIVE, WIN32). */
+ * EMBEDDED_ROUTER, WATCHDOG on AUTOMOTIVE, CALLER on every other profile
+ * (CORE, FREESTANDING, HFT, WIN32). */
 ASX_API asx_journal_store_kind asx_journal_profile_store(void);
 
 /* Writes `len` bytes at `offset` of the flash log area: append-only, the
@@ -417,6 +421,75 @@ ASX_API ASX_MUST_USE asx_status asx_journal_flash_init(asx_journal_flash *f, uin
  * asx_journal_flash. */
 ASX_API asx_status asx_journal_flash_sink(void *ctx, const uint8_t *bytes, uint32_t len);
 ASX_API asx_status asx_journal_flash_commit(void *ctx, const asx_journal_commit *commit);
+
+/* A RAM ring in front of a persistent log whose writes are aligned to the
+ * watchdog, for the AUTOMOTIVE profile (bd-9kll.11.4). A write is time spent
+ * in the loop a hardware watchdog supervises, so this store does not make
+ * it at commit points, where its cost lands wherever the stream happened to
+ * reach a chain, and does not make it unbounded. As the journal's sink it
+ * stages the stream in the ring; as its commit_fn it only records how much
+ * of the stream is committed. The writes happen at a watchdog checkpoint
+ * (asx_journal_wdog_tick, or asx_journal_wdog_checkpoint, which services the
+ * watchdog first): at most once per `period_ns` of checkpoint time, and
+ * never more than `max_tick_bytes` of the committed prefix, so persistence
+ * costs the supervised loop at most one such write (two when the ring
+ * wraps) per period and its bandwidth is max_tick_bytes / period_ns. Only
+ * committed bytes are ever written: the log holds a prefix of the stream
+ * that may end inside a record, and recovery (asx_replay_open_prefix) uses
+ * its last verified chain. The final commit (asx_journal_finish, at
+ * shutdown, outside the supervised loop) drains the backlog in writes of at
+ * most `max_tick_bytes` each. What a crash loses is the uncommitted tail
+ * and the committed bytes no checkpoint has written yet; both are bounded
+ * by the ring. When production outruns the bound the ring fills and the sink
+ * fails (ASX_E_RESOURCE_EXHAUSTED): the journal marks the stream incomplete
+ * and the log keeps the prefix it had. Size the ring for the longest
+ * stretch between flushes at the production rate. */
+typedef struct {
+    asx_journal_flash_write_fn write_fn; /* required: the log's append-only write */
+    void *write_ctx;
+    uint8_t *ring; /* caller-owned RAM, `ring_cap` bytes */
+    uint32_t ring_cap;
+    uint32_t max_tick_bytes; /* most bytes one write takes; required, > 0 */
+    uint64_t period_ns;      /* at most one flush per this much checkpoint time; 0 = every tick */
+    uint32_t head;           /* ring: offset of the oldest byte not in the log */
+    uint32_t len;            /* ring: bytes held */
+    uint64_t offered;        /* stream bytes offered to the sink */
+    uint64_t committed;      /* stream bytes of the last commit's prefix */
+    uint64_t flushed;        /* stream bytes written to the log */
+    uint64_t log_writes;     /* write_fn calls */
+    uint64_t ticks;          /* checkpoints seen */
+    uint64_t flushes;        /* checkpoints that wrote */
+    uint64_t last_flush_ns;  /* checkpoint time of the last flush */
+    uint32_t largest_write;  /* most bytes any one write_fn call took (<= max_tick_bytes) */
+    asx_status status;       /* first failure, sticky: the sink refuses after it, while the
+                              * log still takes the committed backlog and a failed write
+                              * is tried again at the next checkpoint */
+} asx_journal_wdog;
+
+/* Start a store. Returns ASX_OK, or ASX_E_INVALID_ARGUMENT for NULLs, a zero
+ * ring or a zero max_tick_bytes. */
+ASX_API ASX_MUST_USE asx_status asx_journal_wdog_init(asx_journal_wdog *f, uint8_t *ring,
+                                                      uint32_t ring_cap,
+                                                      asx_journal_flash_write_fn write_fn,
+                                                      void *write_ctx, uint32_t max_tick_bytes,
+                                                      uint64_t period_ns);
+
+/* An asx_journal_sink_fn and an asx_journal_commit_fn; `ctx` is the
+ * asx_journal_wdog. The commit writes only when it is the final one. */
+ASX_API asx_status asx_journal_wdog_sink(void *ctx, const uint8_t *bytes, uint32_t len);
+ASX_API asx_status asx_journal_wdog_commit(void *ctx, const asx_journal_commit *commit);
+
+/* A watchdog checkpoint at `now_ns`: write up to max_tick_bytes of the
+ * committed backlog when a period has passed since the last flush (or none
+ * yet). Returns ASX_OK, the store's sticky failure, or
+ * ASX_E_INVALID_ARGUMENT for NULL. */
+ASX_API asx_status asx_journal_wdog_tick(asx_journal_wdog *f, uint64_t now_ns);
+
+/* The automotive watchdog's checkpoint (asx_auto_record_checkpoint(now_ns,
+ * entity_id): the kick and its violation audit) and then the store's tick,
+ * so the flush is charged to the period the checkpoint opens. */
+ASX_API asx_status asx_journal_wdog_checkpoint(asx_journal_wdog *f, uint64_t now_ns,
+                                               uint64_t entity_id);
 
 /* -------------------------------------------------------------------
  * Reader: validates a complete stream and walks its records.
