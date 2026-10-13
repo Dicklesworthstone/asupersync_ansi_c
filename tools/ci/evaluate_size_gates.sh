@@ -32,6 +32,7 @@ PROFILE=""
 RUN_ID="${ASX_CI_RUN_TAG:-size-$(date -u +%Y%m%dT%H%M%SZ)}"
 STRICT=0
 OUTPUT=""
+INCLUDE_CONFORMANCE=0
 
 usage() {
     cat <<'USAGE'
@@ -47,6 +48,8 @@ Options:
   --run-id <id>             Run identifier (default: ASX_CI_RUN_TAG or timestamp)
   --strict                  Exit 1 on any violation (default: always exit 0)
   --output <file>           Write gate report JSON to file (default: stdout)
+  --include-conformance     Measure the host-only conformance interpreter too
+                            (default: left out, DEC-015)
   --help                    Show this help
 USAGE
     exit 2
@@ -87,6 +90,10 @@ while [ $# -gt 0 ]; do
             [ $# -ge 2 ] || usage
             OUTPUT="$2"
             shift 2
+            ;;
+        --include-conformance)
+            INCLUDE_CONFORMANCE=1
+            shift
             ;;
         --help|-h)
             usage
@@ -157,10 +164,48 @@ fi
 
 # --- Measure binary size ---
 
-archive_bytes="$(wc -c < "$LIB_PATH" | tr -d ' ')"
+# The whole archive first, for the record (full_archive in the report).
+full_archive_bytes="$(wc -c < "$LIB_PATH" | tr -d ' ')"
+full_size_output="$(size "$LIB_PATH" 2>/dev/null || true)"
+if [ -n "$full_size_output" ]; then
+    full_text_bytes="$(echo "$full_size_output" | awk 'NR>1{s+=$1} END{print s+0}')"
+    full_data_bytes="$(echo "$full_size_output" | awk 'NR>1{s+=$2} END{print s+0}')"
+    full_bss_bytes="$(echo "$full_size_output" | awk 'NR>1{s+=$3} END{print s+0}')"
+else
+    full_text_bytes=0
+    full_data_bytes=0
+    full_bss_bytes=0
+fi
+
+# DEC-015: the budgets bound the shipped library surface. The conformance
+# interpreter (src/conformance: json, canon, interpreter) is host-only test
+# machinery whose static tables are most of the archive's bss; its members
+# are left out of the measurement, which is taken on a copy of the archive
+# with them removed (the archive itself is not touched). --include-conformance
+# measures everything, as the gate did before DEC-015.
+EXCLUDED_MEMBERS=()
+if [ "$INCLUDE_CONFORMANCE" != "1" ]; then
+    for src in "$REPO_ROOT"/src/conformance/*.c; do
+        [ -f "$src" ] || continue
+        member="$(basename "$src" .c).o"
+        if ar t "$LIB_PATH" 2>/dev/null | grep -qx -- "$member"; then
+            EXCLUDED_MEMBERS+=("$member")
+        fi
+    done
+fi
+
+MEASURE_PATH="$LIB_PATH"
+if [ "${#EXCLUDED_MEMBERS[@]}" -gt 0 ]; then
+    MEASURE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/asx-size-gate-XXXXXX")"
+    MEASURE_PATH="$MEASURE_DIR/shipped.a"
+    cp "$LIB_PATH" "$MEASURE_PATH"
+    ar d "$MEASURE_PATH" "${EXCLUDED_MEMBERS[@]}"
+fi
+
+archive_bytes="$(wc -c < "$MEASURE_PATH" | tr -d ' ')"
 
 # Extract text/data/bss totals from size command
-size_output="$(size "$LIB_PATH" 2>/dev/null || true)"
+size_output="$(size "$MEASURE_PATH" 2>/dev/null || true)"
 if [ -n "$size_output" ]; then
     text_bytes="$(echo "$size_output" | awk 'NR>1{s+=$1} END{print s+0}')"
     data_bytes="$(echo "$size_output" | awk 'NR>1{s+=$2} END{print s+0}')"
@@ -181,9 +226,16 @@ fi
 # --- Extract cold-start metrics from bench JSON ---
 
 cold_start_json="null"
+cold_samples_json="{}"
 if [ -n "$BENCH_JSON" ] && [ -f "$BENCH_JSON" ]; then
     cold_start_json="$(jq '.cold_start_report // null' "$BENCH_JSON")"
+    # DEC-016: a bench-results.json that is the median of N runs carries the
+    # N values of each metric in `repeats`.
+    cold_samples_json="$(jq '(.repeats.samples // {})
+        | with_entries(select(.key | startswith("cold_start_report/")))
+        | with_entries(.key |= sub("^cold_start_report/"; ""))' "$BENCH_JSON")"
 fi
+excluded_json="$(printf '%s\n' "${EXCLUDED_MEMBERS[@]+"${EXCLUDED_MEMBERS[@]}"}" | jq -R . | jq -sc 'map(select(. != ""))')"
 
 # --- Evaluate gates ---
 
@@ -200,6 +252,12 @@ report=$(jq -n \
     --argjson data_bytes "$data_bytes" \
     --argjson bss_bytes "$bss_bytes" \
     --argjson cold_start "$cold_start_json" \
+    --argjson cold_samples "$cold_samples_json" \
+    --argjson excluded "$excluded_json" \
+    --argjson full_archive_bytes "$full_archive_bytes" \
+    --argjson full_text_bytes "$full_text_bytes" \
+    --argjson full_data_bytes "$full_data_bytes" \
+    --argjson full_bss_bytes "$full_bss_bytes" \
     --argjson suspects "$suspects_json" \
 '
 def check_upper(category; metric_name; actual; budget_obj):
@@ -236,6 +294,11 @@ def check_upper(category; metric_name; actual; budget_obj):
             ($cold_start[$entry.key] // null) as $actual |
             if $actual != null then
                 check_upper("cold_start"; $entry.key; $actual; $entry.value)
+                + (($cold_samples[$entry.key] // null) as $s |
+                   if $s == null then {}
+                   else {runs: ($s | length), samples_all: $s,
+                         runs_over_budget: ($s | map(select(. > $entry.value.budget)) | length)}
+                   end)
             else
                 empty
             end
@@ -257,6 +320,16 @@ def check_upper(category; metric_name; actual; budget_obj):
         lib: $lib_path,
         baselines: $baselines_file,
         bench_json: $bench_json
+    },
+    measured_surface: {
+        kind: (if ($excluded | length) > 0 then "shipped" else "full_archive" end),
+        excluded_members: $excluded,
+        full_archive: {
+            archive_bytes: $full_archive_bytes,
+            text_bytes: $full_text_bytes,
+            data_bytes: $full_data_bytes,
+            bss_bytes: $full_bss_bytes
+        }
     },
     measured: {
         archive_bytes: $archive_bytes,
@@ -299,6 +372,9 @@ failed="$(echo "$report" | jq -r '.summary.failed')"
 
 echo "[asx] size-gate: status=$status total=$total passed=$passed failed=$failed profile=$PROFILE" >&2
 echo "[asx] size-gate: archive=${archive_bytes}B text=${text_bytes}B data=${data_bytes}B bss=${bss_bytes}B" >&2
+if [ "${#EXCLUDED_MEMBERS[@]}" -gt 0 ]; then
+    echo "[asx] size-gate: shipped surface, left out ${EXCLUDED_MEMBERS[*]} (full archive: ${full_archive_bytes}B text=${full_text_bytes}B bss=${full_bss_bytes}B)" >&2
+fi
 
 if [ "$failed" -gt 0 ]; then
     echo "[asx] size-gate: violations:" >&2

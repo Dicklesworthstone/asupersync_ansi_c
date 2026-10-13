@@ -42,7 +42,9 @@ jobs:
       - name: Test performance evidence controls
         id: test_perf_evidence
         if: always() && steps.dependencies.outcome == 'success'
-        run: bash tests/gates/test_perf_evidence.sh
+        run: |
+          bash tests/gates/test_perf_evidence.sh
+          bash tests/gates/test_perf_median.sh
 
       - name: Build (release)
         id: build_release
@@ -57,7 +59,11 @@ jobs:
       - name: Run benchmarks (JSON output)
         id: run_bench_json
         if: always() && steps.build_release.outcome == 'success'
-        run: make bench-json PROFILE=CORE BUILD_DIR="${CORE_BUILD_DIR}" > bench-results.json
+        # DEC-016: the statistic every gate judges is the median of five
+        # runs; each run's JSON is kept beside the result.
+        run: |
+          tools/ci/run_bench_median.sh --runs 5 --output bench-results.json -- \
+            make bench-json PROFILE=CORE BUILD_DIR="${CORE_BUILD_DIR}"
 
       - name: Validate benchmark artifacts
         id: validate_manifest
@@ -87,7 +93,9 @@ jobs:
       - name: Run benchmarks (HFT JSON)
         id: run_bench_hft
         if: always() && steps.build_hft.outcome == 'success'
-        run: make bench-json PROFILE=HFT BUILD_DIR="${HFT_BUILD_DIR}" > bench-results-hft.json
+        run: |
+          tools/ci/run_bench_median.sh --runs 5 --output bench-results-hft.json -- \
+            make bench-json PROFILE=HFT BUILD_DIR="${HFT_BUILD_DIR}"
 
       - name: Evaluate HFT SLO gates
         id: slo_gate_hft
@@ -150,7 +158,7 @@ jobs:
             rerun="make bench PROFILE=CORE BUILD_DIR=build/perf-core"
           elif [ "${{ steps.run_bench_json.outcome }}" = "failure" ]; then
             first_failure="bench-json"
-            rerun="make bench-json PROFILE=CORE BUILD_DIR=build/perf-core > bench-results.json"
+            rerun="tools/ci/run_bench_median.sh --runs 5 --output bench-results.json -- make bench-json PROFILE=CORE BUILD_DIR=build/perf-core"
           elif [ "${{ steps.validate_manifest.outcome }}" = "failure" ]; then
             first_failure="validate-bench-artifacts"
             rerun="ls -l bench-results.json"
@@ -162,7 +170,7 @@ jobs:
             rerun="make release PROFILE=HFT BUILD_DIR=build/perf-hft"
           elif [ "${{ steps.run_bench_hft.outcome }}" = "failure" ]; then
             first_failure="hft-bench-json"
-            rerun="make bench-json PROFILE=HFT BUILD_DIR=build/perf-hft"
+            rerun="tools/ci/run_bench_median.sh --runs 5 --output bench-results-hft.json -- make bench-json PROFILE=HFT BUILD_DIR=build/perf-hft"
           elif [ "${{ steps.slo_gate_hft.outcome }}" = "failure" ]; then
             first_failure="slo-gate-hft"
             rerun="tools/ci/evaluate_slo_gates.sh --bench-json bench-results-hft.json --profile HFT --strict"
@@ -232,11 +240,11 @@ jobs:
                 {id: "perf-evidence-controls", outcome: $control_outcome, rerun: "bash tests/gates/test_perf_evidence.sh"},
                 {id: "release-build", outcome: $build_outcome, rerun: "make release PROFILE=CORE BUILD_DIR=build/perf-core"},
                 {id: "bench", outcome: $bench_outcome, rerun: "make bench PROFILE=CORE BUILD_DIR=build/perf-core"},
-                {id: "bench-json", outcome: $bench_json_outcome, rerun: "make bench-json PROFILE=CORE BUILD_DIR=build/perf-core > bench-results.json"},
+                {id: "bench-json", outcome: $bench_json_outcome, rerun: "tools/ci/run_bench_median.sh --runs 5 --output bench-results.json -- make bench-json PROFILE=CORE BUILD_DIR=build/perf-core"},
                 {id: "validate-bench-artifacts", outcome: $validate_outcome, rerun: "ls -l bench-results.json"},
                 {id: "slo-gate-core", outcome: $slo_outcome, rerun: "tools/ci/evaluate_slo_gates.sh --bench-json bench-results.json --strict"},
                 {id: "hft-build", outcome: $hft_build_outcome, rerun: "make release PROFILE=HFT BUILD_DIR=build/perf-hft"},
-                {id: "hft-bench-json", outcome: $hft_bench_outcome, rerun: "make bench-json PROFILE=HFT BUILD_DIR=build/perf-hft"},
+                {id: "hft-bench-json", outcome: $hft_bench_outcome, rerun: "tools/ci/run_bench_median.sh --runs 5 --output bench-results-hft.json -- make bench-json PROFILE=HFT BUILD_DIR=build/perf-hft"},
                 {id: "slo-gate-hft", outcome: $slo_hft_outcome, rerun: "tools/ci/evaluate_slo_gates.sh --bench-json bench-results-hft.json --profile HFT --strict"},
                 {id: "size-gate", outcome: $size_outcome, rerun: "tools/ci/evaluate_size_gates.sh --lib build/perf-core/lib/libasx.a --bench-json bench-results.json --strict"},
                 {id: "parallel-bench-gate", outcome: $parallel_outcome, rerun: "make parallel-bench-gate"}
@@ -268,7 +276,9 @@ jobs:
           name: perf-tail-deadline-${{ env.ASX_CI_RUN_TAG }}
           path: |
             bench-results.json
+            bench-results-run-*.json
             bench-results-hft.json
+            bench-results-hft-run-*.json
             build/perf-core/bench/
             build/perf-core/lib/libasx.a
             build/perf-core/.build-config

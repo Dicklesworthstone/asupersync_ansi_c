@@ -1808,7 +1808,7 @@ parallel-bench-gate:
 slo-gate: bench-build
 	@echo "[asx] slo-gate: capturing benchmark and evaluating SLO baselines..."
 	@mkdir -p build/perf
-	@$(BENCH_BIN) --json > build/perf/bench-results.json
+	@tools/ci/run_bench_median.sh --runs 5 --output build/perf/bench-results.json -- $(BENCH_BIN) --json
 	@tools/ci/evaluate_slo_gates.sh \
 		--bench-json build/perf/bench-results.json \
 		--command "make bench-json" \
@@ -1819,7 +1819,7 @@ slo-gate: bench-build
 size-gate: release bench-build
 	@echo "[asx] size-gate: measuring binary size and cold-start metrics..."
 	@mkdir -p build/perf
-	@$(BENCH_BIN) --json > build/perf/bench-results.json
+	@tools/ci/run_bench_median.sh --runs 5 --output build/perf/bench-results.json -- $(BENCH_BIN) --json
 	@tools/ci/evaluate_size_gates.sh \
 		--lib $(LIB_DIR)/libasx.a \
 		--bench-json build/perf/bench-results.json \
@@ -1830,7 +1830,7 @@ size-gate: release bench-build
 evidence-dashboard: bench-build
 	@echo "[asx] evidence-dashboard: collecting metrics and computing trends..."
 	@mkdir -p build/perf
-	@$(BENCH_BIN) --json > build/perf/bench-results.json
+	@tools/ci/run_bench_median.sh --runs 5 --output build/perf/bench-results.json -- $(BENCH_BIN) --json
 	@tools/ci/run_evidence_dashboard.sh \
 		--bench-json build/perf/bench-results.json
 	@echo "[asx] evidence-dashboard: complete"

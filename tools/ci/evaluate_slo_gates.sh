@@ -190,6 +190,19 @@ def tail_info(metric_name; n):
         {samples: n, tail_rank: (n - $idx)}
     end;
 
+# DEC-016: bench-results.json is the median of N runs when it carries a
+# `repeats` object (tools/ci/aggregate_bench_runs.sh), and `actual` is that
+# median. The N values stay in the report, with how many of them were over
+# the budget: a median over the threshold fails, one outlier run does not.
+def repeat_info(rep; key; budget):
+    ((rep.samples // {})[key] // null) as $s |
+    if $s == null then
+        {runs: 1, samples_all: null, runs_over_budget: null}
+    else
+        {runs: ($s | length), samples_all: $s,
+         runs_over_budget: ($s | map(select(. > budget)) | length)}
+    end;
+
 def latency_delta(bench_name; metric_name; actual; budget_obj):
     (budget_obj.baseline // null) as $baseline |
     {
@@ -277,6 +290,8 @@ def latency_delta(bench_name; metric_name; actual; budget_obj):
         if $actual != null then
             check_upper($bench_entry.key; $metric_entry.key; $actual; $metric_entry.value)
             + tail_info($metric_entry.key; $samples)
+            + repeat_info($b.repeats; "benchmarks/" + $bench_entry.key + "/" + $metric_entry.key;
+                          $metric_entry.value.budget)
         else
             empty
         end
@@ -414,7 +429,7 @@ echo "[asx] slo-gate: status=$status total=$total passed=$passed failed=$failed 
 
 if [ "$failed" -gt 0 ]; then
     echo "[asx] slo-gate: violations:" >&2
-    echo "$report" | jq -r '.violations[] | "  - \(.benchmark)/\(.metric): actual=\(.actual) budget=\(.budget) delta=\(.delta_vs_budget)" + (if (.tail_rank // null) != null then " (statistic is sample #\(.tail_rank) from the top of \(.samples))" else "" end)' >&2
+    echo "$report" | jq -r '.violations[] | "  - \(.benchmark)/\(.metric): actual=\(.actual) budget=\(.budget) delta=\(.delta_vs_budget)" + (if (.tail_rank // null) != null then " (statistic is sample #\(.tail_rank) from the top of \(.samples))" else "" end) + (if (.samples_all // null) != null then " (median of \(.runs) runs: \(.samples_all | tojson); \(.runs_over_budget) over budget)" else "" end)' >&2
     echo "$report" | jq -r '.validation_failures[] | "  - validation/\(.check): \(. | @json)"' >&2
 fi
 
