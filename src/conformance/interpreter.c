@@ -5598,6 +5598,60 @@ static void check_expectation(uint32_t scenario, uint32_t observations) {
     it_fail("must_fail: no observation for the named step", task);
 }
 
+/* The kernel-state oracles a run asks for (docs/LAB_ORACLE_CATALOG.md): the
+ * scenario's lab.oracles (DSL section 1) and asx_conformance_set_oracles's
+ * list, by Rust's registry names or "all". Each runs once over the arenas
+ * when the run has ended, before it is projected, and a violation fails the
+ * run with the oracle's own message. */
+static const char *g_default_oracles;
+
+void asx_conformance_set_oracles(const char *csv) { g_default_oracles = csv; }
+
+static void run_oracle(const char *name) {
+    asx_oracle_result r;
+    char buf[192];
+    if (strcmp(name, "all") == 0) {
+        uint32_t i;
+        for (i = 0; i < asx_oracle_kernel_count() && !g_failed; i++) {
+            run_oracle(asx_oracle_kernel_name(i));
+        }
+        return;
+    }
+    r = asx_oracle_check_named(name);
+    if (r.verdict == ASX_ORACLE_PASS) return;
+    (void)snprintf(buf, sizeof(buf), "%s, %u violation(s): %s", name, (unsigned)r.detail_count,
+                   r.message != NULL ? r.message : "");
+    it_fail("oracle failed", buf);
+}
+
+static void check_oracles(uint32_t scenario) {
+    uint32_t list = asx_json_get(g_in, asx_json_get(g_in, scenario, "lab"), "oracles");
+    const char *p = g_default_oracles;
+    uint32_t i;
+    for (i = 0; list != ASX_JSON_NONE && i < asx_json_count(g_in, list) && !g_failed; i++) {
+        const char *name = asx_json_string(g_in, asx_json_item(g_in, list, i));
+        if (name == NULL) {
+            it_fail("lab.oracles must be an array of oracle names", NULL);
+            return;
+        }
+        run_oracle(name);
+    }
+    while (p != NULL && *p != '\0' && !g_failed) {
+        char name[48];
+        size_t n = 0;
+        while (p[n] != '\0' && p[n] != ',') n++;
+        if (n > 0u && n < sizeof(name)) {
+            memcpy(name, p, n);
+            name[n] = '\0';
+            run_oracle(name);
+        } else if (n >= sizeof(name)) {
+            it_fail("oracle name too long", NULL);
+        }
+        p += n;
+        if (*p == ',') p++;
+    }
+}
+
 static void set_digest(uint32_t obj, const char *key, uint32_t node) {
     char digest[ASX_CANON_DIGEST_LEN];
     if (asx_canon_digest(g_out, node, digest) != ASX_OK) {
@@ -5859,6 +5913,7 @@ static asx_status conformance_run(const asx_json_doc *in, uint32_t scenario, asx
         g_forced_on = 0;
         if (asx_lab_forced_schedule_end(&frep, &ferr) != ASX_OK) forced_report(&ferr);
     }
+    if (!g_failed) check_oracles(scenario);
     asx_trace_set_observer(NULL, NULL);
     if (g_failed) return ASX_E_INVALID_STATE;
 

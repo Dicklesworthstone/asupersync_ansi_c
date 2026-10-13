@@ -18,6 +18,7 @@
 
 #define ASX_INTERNAL_TRACE_FAMILY_ACCESS 1
 #include <asx/runtime/lab.h>
+#include <asx/runtime/replay.h>
 #undef ASX_INTERNAL_TRACE_FAMILY_ACCESS
 
 /* Run the scenario object `scenario` of `in` and build the projection in
@@ -63,6 +64,13 @@ ASX_MUST_USE asx_status asx_conformance_run_sweep(const asx_json_doc *in, uint32
  * id resolves through the lab's Rust arena shadow. Both must outlive the
  * runs. NULL clears the replay. */
 void asx_conformance_force_schedule(const asx_forced_schedule *schedule, const char *const *names);
+
+/* Run these kernel-state oracles (docs/LAB_ORACLE_CATALOG.md) at the end of
+ * every run that follows, as if each scenario had listed them in its
+ * lab.oracles: a comma-separated list of Rust registry names ("task_leak",
+ * "region_tree", ...) or "all". A violation fails the run with the oracle's
+ * message. NULL clears. `csv` must outlive the runs. */
+void asx_conformance_set_oracles(const char *csv);
 
 /* The vocabulary name ("<holder>/o<k>") the last run's projection gave the
  * obligation with this handle (a ghost violation's or a trace event's

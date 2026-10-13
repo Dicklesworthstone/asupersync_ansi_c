@@ -73,6 +73,14 @@ Companion files:
     (threshold 10000, panic on), a futurelock is a harness failure, and the
     C lab runs no check (`VOCABULARY_EXCLUSIONS.md`). §5 says what the
     scenario then expects.
+  - `oracles` (optional) names C-side kernel-state oracles to run once when
+    the run has ended, by Rust's registry names (`task_leak`,
+    `obligation_leak`, `quiescence`, `finalizer`, `region_tree`,
+    `deadline_monotone`, `cancellation_protocol`) or `"all"`
+    (`docs/LAB_ORACLE_CATALOG.md`). A violation fails the run with the
+    oracle's message. Rust ignores the field (its `LabRuntime` runs the oracles
+    it feeds regardless). `ASX_ORACLES=all` in the runner's environment does
+    the same for every scenario of a run without editing them.
 - **`requires`** (optional) lists capabilities the scenario needs that a
   C profile may forbid; the only one is `"unbounded_queue"`, for a scenario
   that declares an unbounded mpsc channel (§3.6, DEC-008). Rust ignores it.

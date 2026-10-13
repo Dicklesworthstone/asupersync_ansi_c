@@ -48,8 +48,8 @@
 #include <asx/runtime/lab.h>
 #include <asx/runtime/runtime.h>
 #include <asx/time/timer_wheel.h>
-
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define FILE_CAP (4u * 1024u * 1024u)
@@ -1613,6 +1613,10 @@ int main(int argc, char **argv) {
     unsigned fail = 0;
     unsigned error = 0;
     if (argc < 3) return usage();
+    /* ASX_ORACLES=all, or a comma-separated list of Rust oracle names
+     * (docs/LAB_ORACLE_CATALOG.md), runs the kernel-state oracles at the end of
+     * every scenario this process runs. */
+    asx_conformance_set_oracles(getenv("ASX_ORACLES"));
     if (strcmp(argv[1], "run") == 0 && argc == 3) return cmd_run(argv[2]);
     if (strcmp(argv[1], "canon") == 0 && argc == 3) return cmd_canon(argv[2]);
     if (strcmp(argv[1], "constants") == 0 && argc == 3) return cmd_constants(argv[2]);

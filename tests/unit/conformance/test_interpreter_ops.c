@@ -379,6 +379,45 @@ TEST(a_futurelock_expectation_is_checked_both_ways) {
     ASSERT_TRUE(strstr(g_error, "expects ok") != NULL);
 }
 
+/* Kernel-state oracles (DSL 1 lab.oracles, bd-9kll.9.2): the scenario's list
+ * and the process-wide list both run once when the run has ended. A healthy
+ * scenario passes them all, and a name that is not an oracle fails the run
+ * (the schema's enum refuses it; the interpreter does not rely on that). */
+#define ORACLE_SCENARIO(oracles)                                                                   \
+    "{\"schema\":\"asx.scenario.v2\",\"id\":\"unit-oracles-001\",\"description\":\"d\","           \
+    "\"unit\":\"quiescence\",\"rules\":[\"inv.determinism.replayable\"],\"seed\":42,"              \
+    "\"lab\":{\"max_steps\":200" oracles "},"                                                      \
+    "\"regions\":[{\"name\":\"r.main\",\"parent\":\"root\",\"budget\":null}],"                     \
+    "\"channels\":[],\"sync\":[],"                                                                 \
+    "\"tasks\":[{\"name\":\"t.a\",\"region\":\"r.main\",\"budget\":null,\"program\":["             \
+    "{\"op\":\"yield\"},{\"op\":\"yield\"}]}],"                                                    \
+    "\"script\":[],\"expect\":{\"kind\":\"ok\"}}"
+
+TEST(declared_kernel_oracles_run_at_the_end_and_pass_on_a_healthy_scenario) {
+    static const char all[] = ORACLE_SCENARIO(",\"oracles\":[\"all\"]");
+    static const char some[] =
+        ORACLE_SCENARIO(",\"oracles\":[\"region_tree\",\"quiescence\",\"deadline_monotone\"]");
+    static const char bogus[] = ORACLE_SCENARIO(",\"oracles\":[\"no_such_oracle\"]");
+    uint32_t root = 0;
+    ASSERT_EQ(run_text(all, &root), ASX_OK);
+    ASSERT_EQ(run_text(some, &root), ASX_OK);
+    ASSERT_TRUE(run_text(bogus, &root) != ASX_OK);
+    ASSERT_TRUE(strstr(g_error, "no_such_oracle") != NULL);
+    ASSERT_TRUE(strstr(g_error, "unknown oracle") != NULL);
+}
+
+TEST(the_process_wide_oracle_list_runs_for_a_scenario_that_declares_none) {
+    static const char plain[] = ORACLE_SCENARIO("");
+    uint32_t root = 0;
+    asx_conformance_set_oracles("all");
+    ASSERT_EQ(run_text(plain, &root), ASX_OK);
+    asx_conformance_set_oracles("task_leak,no_such_oracle");
+    ASSERT_TRUE(run_text(plain, &root) != ASX_OK);
+    ASSERT_TRUE(strstr(g_error, "no_such_oracle") != NULL);
+    asx_conformance_set_oracles(NULL);
+    ASSERT_EQ(run_text(plain, &root), ASX_OK);
+}
+
 /* A step the interpreter has no handler for still fails closed, so the
  * count above means something. */
 TEST(an_unknown_step_fails_the_run_closed) {
@@ -402,6 +441,8 @@ int main(void) {
     RUN_TEST(a_holder_idle_past_the_threshold_is_reported_at_every_step);
     RUN_TEST(a_polled_holder_and_an_idle_task_without_an_obligation_are_not_reported);
     RUN_TEST(a_futurelock_expectation_is_checked_both_ways);
+    RUN_TEST(declared_kernel_oracles_run_at_the_end_and_pass_on_a_healthy_scenario);
+    RUN_TEST(the_process_wide_oracle_list_runs_for_a_scenario_that_declares_none);
     TEST_REPORT();
     return test_failures;
 }
