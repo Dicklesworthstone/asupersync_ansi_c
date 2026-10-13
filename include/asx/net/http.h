@@ -370,7 +370,8 @@ ASX_API asx_status asx_http_parse_multipart(const asx_http_request *req,
 
 /* Maximum number of header + trailer fields one parser instance can index. */
 /* Default parser limits (see asx_http_limits_init). */
-/* Leading empty lines tolerated before a start line (RFC 9112 section 2.2). */
+/* Leading empty lines tolerated before a request-line (RFC 9112 section 2.2);
+ * a response starts at its first byte, as asupersync's client codec reads it. */
 /* Configurable fail-closed parser limits. */
 typedef struct {
     uint32_t max_start_line;   /* request-line / status-line bytes, excluding CRLF */

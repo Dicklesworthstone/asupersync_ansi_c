@@ -1261,7 +1261,7 @@ static asx_status http_perr_status(asx_http_parse_error err) {
 
 /* Parser states (asx_http_parser.state). */
 enum {
-    HTTP_PS_START = 0,        /* expecting a start line (leading CRLFs skipped) */
+    HTTP_PS_START = 0,        /* expecting a start line (a request skips leading CRLFs) */
     HTTP_PS_START_LINE,       /* accumulating the start line */
     HTTP_PS_HEADER_LINE,      /* accumulating a header field line */
     HTTP_PS_BODY_LENGTH,      /* Content-Length body */
@@ -1490,7 +1490,12 @@ static asx_status http_parse_status_line(asx_http_parser *p) {
     }
     p->status = (asx_http_status)(((uint32_t)(line[9] - '0') * 100u) +
                                   ((uint32_t)(line[10] - '0') * 10u) + (uint32_t)(line[11] - '0'));
-    if (p->status < 100u || p->status > 599u) return http_parser_fail(p, ASX_HTTP_PERR_BAD_STATUS);
+    /* Three digits, 100 to 999, as asupersync's client codec takes them
+     * (parse_status_line, src/http/h1/client.rs at 5e60b1c4c). RFC 9110
+     * section 15 calls 600 to 999 invalid and has a client treat them as 5xx;
+     * the parser reports the status as sent (bd-9kll.16.2.12: align to Rust,
+     * the delta budget is 0). */
+    if (p->status < 100u) return http_parser_fail(p, ASX_HTTP_PERR_BAD_STATUS);
     if (n > 12u) {
         if (line[12] != ' ') return http_parser_fail(p, ASX_HTTP_PERR_BAD_STATUS);
         for (i = 13u; i < n; i++) {
@@ -1622,6 +1627,17 @@ static void http_parser_enter_chunk_size(asx_http_parser *p) {
     p->ext_state = HTTP_EXT_NEED_SEMI;
 }
 
+/* A response whose body framing its status or the request method fixes: 1xx,
+ * 204, 304, a response to HEAD, a 2xx to CONNECT (RFC 9112 section 6.3 items 1
+ * and 2). Such a response ends at the first empty line whatever its
+ * Content-Length and Transfer-Encoding say, and a client ignores both in a
+ * successful CONNECT response (RFC 9110 section 9.3.6). */
+static int http_response_framing_fixed(const asx_http_parser *p) {
+    return p->status < 200u || p->response_to == ASX_HTTP_HEAD ||
+           p->status == ASX_HTTP_204_NO_CONTENT || p->status == ASX_HTTP_304_NOT_MODIFIED ||
+           (p->response_to == ASX_HTTP_CONNECT && p->status < 300u);
+}
+
 /* Decide message framing and persistence once the header section is complete. */
 static asx_status http_finish_head(asx_http_parser *p) {
     uint32_t i;
@@ -1634,18 +1650,25 @@ static asx_status http_finish_head(asx_http_parser *p) {
     int chunked_final = 0;
     int other_codings = 0;
     asx_http_parse_error err;
+    asx_http_parse_error repeated = ASX_HTTP_PERR_NONE; /* the first repeated framing field */
 
     for (i = 0u; i < p->header_count; i++) {
         const char *name = http_field_name(p, i);
         const char *value = http_field_value(p, i);
 
         if (http_cstr_ieq(name, "content-length")) {
-            if (cl_value != NULL)
-                return http_parser_fail(p, ASX_HTTP_PERR_DUPLICATE_CONTENT_LENGTH);
-            cl_value = value;
+            if (cl_value != NULL) {
+                if (repeated == ASX_HTTP_PERR_NONE)
+                    repeated = ASX_HTTP_PERR_DUPLICATE_CONTENT_LENGTH;
+            } else {
+                cl_value = value;
+            }
         } else if (http_cstr_ieq(name, "transfer-encoding")) {
-            if (te_value != NULL) return http_parser_fail(p, ASX_HTTP_PERR_BAD_TRANSFER_ENCODING);
-            te_value = value;
+            if (te_value != NULL) {
+                if (repeated == ASX_HTTP_PERR_NONE) repeated = ASX_HTTP_PERR_BAD_TRANSFER_ENCODING;
+            } else {
+                te_value = value;
+            }
         } else if (http_cstr_ieq(name, "host")) {
             host_count++;
         } else if (http_cstr_ieq(name, "connection")) {
@@ -1656,6 +1679,20 @@ static asx_status http_finish_head(asx_http_parser *p) {
         }
     }
 
+    /* The framing fields of a response that they do not frame are stored
+     * with the other fields and not looked at: asupersync's client codec
+     * returns for such a response before it reads either (decode_inner,
+     * src/http/h1/client.rs at 5e60b1c4c), so a bad or repeated Content-Length
+     * or a bad Transfer-Encoding there is not an error (bd-9kll.16.2.13). */
+    if (p->kind == ASX_HTTP_PARSE_RESPONSE && http_response_framing_fixed(p)) {
+        /* A valid Content-Length is still reported (a HEAD response's is the
+         * size the body would have); an invalid one leaves it 0. */
+        if (cl_value != NULL) (void)http_parse_content_length(cl_value, &p->content_length);
+        cl_value = NULL;
+        te_value = NULL;
+        repeated = ASX_HTTP_PERR_NONE;
+    }
+    if (repeated != ASX_HTTP_PERR_NONE) return http_parser_fail(p, repeated);
     if (cl_value != NULL && !http_parse_content_length(cl_value, &p->content_length)) {
         return http_parser_fail(p, ASX_HTTP_PERR_BAD_CONTENT_LENGTH);
     }
@@ -1703,8 +1740,16 @@ static asx_status http_finish_head(asx_http_parser *p) {
             p->framing = ASX_HTTP_BODY_FRAMING_NONE;
             p->upgrade = 1u;
         } else if (te_value != NULL) {
-            p->framing =
-                chunked_final ? ASX_HTTP_BODY_FRAMING_CHUNKED : ASX_HTTP_BODY_FRAMING_CLOSE;
+            /* asupersync's client codec takes a response Transfer-Encoding of
+             * exactly `chunked` and refuses any other value, a coding list or
+             * a non-final chunked alike (require_transfer_encoding_chunked,
+             * src/http/h1/codec.rs at 5e60b1c4c); RFC 9112 section 6.3 item 4
+             * would read a non-final chunked as close-delimited
+             * (bd-9kll.16.2.10: align to Rust, the delta budget is 0). */
+            if (!chunked_final || other_codings) {
+                return http_parser_fail(p, ASX_HTTP_PERR_BAD_TRANSFER_ENCODING);
+            }
+            p->framing = ASX_HTTP_BODY_FRAMING_CHUNKED;
         } else if (cl_value != NULL) {
             if (p->content_length > p->limits.max_body) {
                 return http_parser_fail(p, ASX_HTTP_PERR_BODY_TOO_LARGE);
@@ -1909,6 +1954,15 @@ asx_status asx_http_parser_feed(asx_http_parser *p, const void *data, uint32_t l
                     return http_parser_fail(p, ASX_HTTP_PERR_BAD_START_LINE);
                 }
                 break;
+            }
+            if ((b == '\r' || b == '\n') && p->kind == ASX_HTTP_PARSE_RESPONSE) {
+                /* RFC 9112 section 2.2 lets a server skip empty lines before
+                 * a request-line and says nothing of a status-line. asupersync's
+                 * client codec reads the empty line as the status-line and
+                 * refuses it (parse_status_line, src/http/h1/client.rs at
+                 * 5e60b1c4c), so a response starts at its first byte
+                 * (bd-9kll.16.2.9: align to Rust, the delta budget is 0). */
+                return http_parser_fail(p, ASX_HTTP_PERR_BAD_START_LINE);
             }
             if (b == '\r') {
                 pos++;

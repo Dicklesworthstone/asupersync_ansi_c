@@ -130,15 +130,21 @@ ASX_API ASX_MUST_USE asx_status asx_ws_header_encode(const asx_ws_frame_header *
  * bytes are needed, or ASX_E_INVALID_ARGUMENT for wire-format violations
  * (non-minimal length encoding, 64-bit length with the MSB set). Opcode,
  * RSV, control-frame, and masking rules are checked separately by
- * asx_ws_header_check(). */
+ * asx_ws_header_check(). On ASX_E_PENDING with at least two bytes, h holds
+ * what those two bytes say (fin, rsv, opcode, masked, and payload_len = the
+ * 7-bit length, a lower bound when it is 126 or 127; header_len is 0), so
+ * asx_ws_header_check() can reject the frame before the rest of the header
+ * arrives. */
 ASX_API ASX_MUST_USE asx_status asx_ws_header_decode(const uint8_t *in, uint32_t len,
                                                      asx_ws_frame_header *h);
 
 /* Validate a decoded header as received by an endpoint of receiver_role
  * with no extensions negotiated. Returns 0 when valid, otherwise the close
- * code to fail with (ASX_WS_CLOSE_PROTOCOL_ERROR for RSV bits, reserved
- * opcodes, fragmented or oversized control frames, unmasked client frames at
- * a server, or masked server frames at a client). */
+ * code to fail with, checked in this order: ASX_WS_CLOSE_PROTOCOL_ERROR for
+ * RSV bits and reserved opcodes, for an unmasked client frame at a server
+ * or a masked server frame at a client, and for a fragmented control frame;
+ * then ASX_WS_CLOSE_MESSAGE_TOO_BIG for a control frame over 125 bytes (the
+ * order and the code of asupersync's FrameCodec). */
 ASX_API uint16_t asx_ws_header_check(const asx_ws_frame_header *h, asx_ws_role receiver_role);
 
 /* Encode a complete frame (header + payload). mask_key == NULL produces an

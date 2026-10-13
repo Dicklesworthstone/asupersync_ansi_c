@@ -703,13 +703,29 @@ TEST(parse_response_close_delimited_and_eof) {
         ASSERT_EQ(asx_http_parser_feed(&g_parser, "x", 1u, &used, &ev), ASX_E_INVALID_STATE);
     }
 
-    /* A non-chunked final transfer coding is close-delimited too. */
+    /* A response Transfer-Encoding other than exactly `chunked` is refused,
+     * a coding list and a non-final chunked alike: asupersync's client codec
+     * takes only `chunked` (require_transfer_encoding_chunked,
+     * src/http/h1/codec.rs at 5e60b1c4c, reached from decode_inner in
+     * src/http/h1/client.rs). RFC 9112 section 6.3 item 4 would read a
+     * non-final chunked as close-delimited; the port follows Rust
+     * (bd-9kll.16.2.10). */
     ASSERT_EQ(parse_with(ASX_HTTP_PARSE_RESPONSE, NULL,
                          LIT("HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip\r\n\r\nzz"), 0u),
-              ASX_OK);
-    ASSERT_EQ(asx_http_parser_body_framing(&g_parser), ASX_HTTP_BODY_FRAMING_CLOSE);
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_http_parser_error(&g_parser), ASX_HTTP_PERR_BAD_TRANSFER_ENCODING);
     ASSERT_EQ(parse_with(ASX_HTTP_PARSE_RESPONSE, NULL,
                          LIT("HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip, chunked\r\n\r\n"
+                             "2\r\nzz\r\n0\r\n\r\n"),
+                         0u),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_http_parser_error(&g_parser), ASX_HTTP_PERR_BAD_TRANSFER_ENCODING);
+    ASSERT_EQ(parse_with(ASX_HTTP_PARSE_RESPONSE, NULL,
+                         LIT("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked, gzip\r\n\r\nzz"), 0u),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_http_parser_error(&g_parser), ASX_HTTP_PERR_BAD_TRANSFER_ENCODING);
+    ASSERT_EQ(parse_with(ASX_HTTP_PARSE_RESPONSE, NULL,
+                         LIT("HTTP/1.1 200 OK\r\nTransfer-Encoding: Chunked\r\n\r\n"
                              "2\r\nzz\r\n0\r\n\r\n"),
                          0u),
               ASX_OK);
@@ -754,7 +770,22 @@ TEST(parse_response_versions_and_status_lines) {
     ASSERT_EQ(parse_with(ASX_HTTP_PARSE_RESPONSE, NULL, LIT("HTTP/1.1 20 OK\r\n\r\n"), 0u),
               ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_http_parser_error(&g_parser), ASX_HTTP_PERR_BAD_STATUS);
-    ASSERT_EQ(parse_with(ASX_HTTP_PARSE_RESPONSE, NULL, LIT("HTTP/1.1 600 X\r\n\r\n"), 0u),
+    /* 100 to 999, as asupersync's client codec takes a status
+     * (parse_status_line, src/http/h1/client.rs at 5e60b1c4c): RFC 9110
+     * section 15 calls 600 to 999 invalid, and the parser reports them as
+     * sent (bd-9kll.16.2.12). Two digits, four digits and 099 are refused. */
+    ASSERT_EQ(parse_with(ASX_HTTP_PARSE_RESPONSE, NULL,
+                         LIT("HTTP/1.1 600 X\r\nContent-Length: 0\r\n\r\n"), 0u),
+              ASX_OK);
+    ASSERT_EQ(asx_http_parser_status(&g_parser), 600u);
+    ASSERT_EQ(parse_with(ASX_HTTP_PARSE_RESPONSE, NULL,
+                         LIT("HTTP/1.1 999 X\r\nContent-Length: 0\r\n\r\n"), 0u),
+              ASX_OK);
+    ASSERT_EQ(asx_http_parser_status(&g_parser), 999u);
+    ASSERT_EQ(parse_with(ASX_HTTP_PARSE_RESPONSE, NULL, LIT("HTTP/1.1 099 X\r\n\r\n"), 0u),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_http_parser_error(&g_parser), ASX_HTTP_PERR_BAD_STATUS);
+    ASSERT_EQ(parse_with(ASX_HTTP_PARSE_RESPONSE, NULL, LIT("HTTP/1.1 1000 X\r\n\r\n"), 0u),
               ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_http_parser_error(&g_parser), ASX_HTTP_PERR_BAD_STATUS);
     ASSERT_EQ(parse_with(ASX_HTTP_PARSE_RESPONSE, NULL, LIT("HTTP/1.1 200OK\r\n\r\n"), 0u),
@@ -773,6 +804,118 @@ TEST(parse_response_versions_and_status_lines) {
                          0u),
               ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_http_parser_error(&g_parser), ASX_HTTP_PERR_CONTENT_LENGTH_AND_CHUNKED);
+}
+
+/* Parse `data` as the answer to a request of `method` (what frames its body). */
+static asx_status parse_response_to(asx_http_method method, const void *data, uint32_t len) {
+    memset(&g_cap, 0, sizeof(g_cap));
+    if (asx_http_parser_init(&g_parser, ASX_HTTP_PARSE_RESPONSE, NULL, g_head,
+                             (uint32_t)sizeof(g_head)) != ASX_OK) {
+        return ASX_E_INVALID_STATE;
+    }
+    asx_http_parser_set_request_method(&g_parser, method);
+    return feed_steps(&g_parser, data, len, 0u, &g_cap);
+}
+
+/* bd-9kll.16.2.13. A response whose framing its status or the request method
+ * fixes (1xx, 204, 304, to HEAD, a 2xx to CONNECT) ends at the first empty
+ * line, and its Content-Length and Transfer-Encoding are not read: asupersync's
+ * client codec returns for it before it reads either (decode_inner,
+ * src/http/h1/client.rs at 5e60b1c4c), and RFC 9110 section 9.3.6 has a
+ * client ignore both in a successful CONNECT response. Where the fields do
+ * frame the body, a bad one is still refused. */
+TEST(parse_response_with_fixed_framing_does_not_read_its_framing_fields) {
+    static const char *const bad_fields[] = {
+        "Content-Length: abc\r\n",
+        "Content-Length:\r\n",
+        "Content-Length: 5\r\nContent-Length: 6\r\n",
+        "Transfer-Encoding:\r\n",
+        "Transfer-Encoding: a a\r\n",
+        "Transfer-Encoding: gzip\r\n",
+        "Transfer-Encoding:\r\nContent-Length: 5\r\n",
+        "Content-Length: 5\r\nTransfer-Encoding: chunked\r\n",
+    };
+    char msg[160];
+    size_t i;
+
+    for (i = 0u; i < sizeof(bad_fields) / sizeof(bad_fields[0]); i++) {
+        int n = snprintf(msg, sizeof(msg), "HTTP/1.1 200 OK\r\n%s\r\n", bad_fields[i]);
+        ASSERT_TRUE(n > 0 && (size_t)n < sizeof(msg));
+        /* to a HEAD: no body, the fields are only fields */
+        ASSERT_EQ(parse_response_to(ASX_HTTP_HEAD, msg, (uint32_t)n), ASX_OK);
+        ASSERT_EQ(g_cap.completes, 1u);
+        ASSERT_EQ(asx_http_parser_body_framing(&g_parser), ASX_HTTP_BODY_FRAMING_NONE);
+        /* a 2xx to CONNECT: a tunnel, the fields are ignored */
+        ASSERT_EQ(parse_response_to(ASX_HTTP_CONNECT, msg, (uint32_t)n), ASX_OK);
+        ASSERT_TRUE(asx_http_parser_is_upgraded(&g_parser));
+        /* where they frame the body, a bad one is refused (Rust: the same
+         * codec reads them for a GET) */
+        ASSERT_EQ(parse_response_to(ASX_HTTP_GET, msg, (uint32_t)n), ASX_E_INVALID_ARGUMENT);
+        /* a non-2xx to CONNECT is an ordinary response */
+        n = snprintf(msg, sizeof(msg), "HTTP/1.1 404 Not Found\r\n%s\r\n", bad_fields[i]);
+        ASSERT_TRUE(n > 0 && (size_t)n < sizeof(msg));
+        ASSERT_EQ(parse_response_to(ASX_HTTP_CONNECT, msg, (uint32_t)n), ASX_E_INVALID_ARGUMENT);
+        /* 1xx, 204 and 304 carry no body to anyone */
+        n = snprintf(msg, sizeof(msg), "HTTP/1.1 204 No Content\r\n%s\r\n", bad_fields[i]);
+        ASSERT_TRUE(n > 0 && (size_t)n < sizeof(msg));
+        ASSERT_EQ(parse_response_to(ASX_HTTP_GET, msg, (uint32_t)n), ASX_OK);
+        ASSERT_EQ(g_cap.completes, 1u);
+        n = snprintf(msg, sizeof(msg), "HTTP/1.1 304 Not Modified\r\n%s\r\n", bad_fields[i]);
+        ASSERT_TRUE(n > 0 && (size_t)n < sizeof(msg));
+        ASSERT_EQ(parse_response_to(ASX_HTTP_GET, msg, (uint32_t)n), ASX_OK);
+        ASSERT_EQ(g_cap.completes, 1u);
+        n = snprintf(msg, sizeof(msg), "HTTP/1.1 100 Continue\r\n%s\r\n", bad_fields[i]);
+        ASSERT_TRUE(n > 0 && (size_t)n < sizeof(msg));
+        ASSERT_EQ(parse_response_to(ASX_HTTP_GET, msg, (uint32_t)n), ASX_OK);
+    }
+
+    /* the reason for each refusal where the fields do frame the body */
+    ASSERT_EQ(parse_response_to(ASX_HTTP_GET,
+                                LIT("HTTP/1.1 200 OK\r\nContent-Length: abc\r\n\r\n")),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_http_parser_error(&g_parser), ASX_HTTP_PERR_BAD_CONTENT_LENGTH);
+    ASSERT_EQ(parse_response_to(ASX_HTTP_GET,
+                                LIT("HTTP/1.1 200 OK\r\nContent-Length: 5\r\nContent-Length: 6\r\n"
+                                    "\r\n")),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_http_parser_error(&g_parser), ASX_HTTP_PERR_DUPLICATE_CONTENT_LENGTH);
+    ASSERT_EQ(parse_response_to(ASX_HTTP_GET, LIT("HTTP/1.1 200 OK\r\nTransfer-Encoding:\r\n\r\n")),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_http_parser_error(&g_parser), ASX_HTTP_PERR_BAD_TRANSFER_ENCODING);
+    /* a valid Content-Length of such a response is still reported (a HEAD
+     * response's is the size the body would have), an invalid one is 0 */
+    ASSERT_EQ(parse_response_to(ASX_HTTP_HEAD, LIT("HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\n")),
+              ASX_OK);
+    ASSERT_EQ(asx_http_parser_content_length(&g_parser), 5u);
+    ASSERT_EQ(parse_response_to(ASX_HTTP_HEAD,
+                                LIT("HTTP/1.1 200 OK\r\nContent-Length: abc\r\n\r\n")),
+              ASX_OK);
+    ASSERT_EQ(asx_http_parser_content_length(&g_parser), 0u);
+}
+
+/* bd-9kll.16.2.9. A response starts at its first byte: asupersync's client
+ * codec reads an empty first line as the status-line and refuses it
+ * (parse_status_line, src/http/h1/client.rs at 5e60b1c4c). RFC 9112 section
+ * 2.2's allowance to skip empty lines is for a request-line, and a request
+ * still skips them (parse_leading_empty_lines_bounded). */
+TEST(parse_response_starts_at_its_first_byte) {
+    ASSERT_EQ(parse_with(ASX_HTTP_PARSE_RESPONSE, NULL,
+                         LIT("\r\nHTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"), 0u),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_http_parser_error(&g_parser), ASX_HTTP_PERR_BAD_START_LINE);
+    ASSERT_EQ(parse_with(ASX_HTTP_PARSE_RESPONSE, NULL,
+                         LIT("\nHTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"), 0u),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(parse_with(ASX_HTTP_PARSE_RESPONSE, NULL, LIT("\r\n"), 1u), ASX_E_INVALID_ARGUMENT);
+    /* an empty line between two keep-alive responses ends the stream at the
+     * second */
+    ASSERT_EQ(parse_with(ASX_HTTP_PARSE_RESPONSE, NULL,
+                         LIT("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"
+                             "\r\nHTTP/1.1 204 No Content\r\n\r\n"),
+                         0u),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(g_cap.completes, 1u);
+    ASSERT_EQ(asx_http_parser_error(&g_parser), ASX_HTTP_PERR_BAD_START_LINE);
 }
 
 TEST(parse_response_informational_and_upgrade) {
@@ -2149,6 +2292,8 @@ int main(void) {
     RUN_TEST(parse_response_to_head_has_no_body);
     RUN_TEST(parse_response_close_delimited_and_eof);
     RUN_TEST(parse_response_versions_and_status_lines);
+    RUN_TEST(parse_response_with_fixed_framing_does_not_read_its_framing_fields);
+    RUN_TEST(parse_response_starts_at_its_first_byte);
     RUN_TEST(parse_response_informational_and_upgrade);
 
     /* Collection path */

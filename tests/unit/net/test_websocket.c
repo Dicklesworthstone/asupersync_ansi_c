@@ -331,10 +331,48 @@ TEST(header_check_rules) {
     h.fin = 0u; /* fragmented control frame */
     ASSERT_EQ(asx_ws_header_check(&h, ASX_WS_ROLE_CLIENT), ASX_WS_CLOSE_PROTOCOL_ERROR);
     h.fin = 1u;
-    h.payload_len = 126u; /* oversized control frame */
+    /* An oversized control frame fails with 1009, not 1002, and after the
+     * masking rule: asupersync's FrameCodec checks reserved bits, opcode,
+     * masking by role, then the control rules, and maps ControlFrameTooLarge
+     * to MessageTooBig (decode_inner and WsError::as_close_code,
+     * src/net/websocket/frame.rs at 5e60b1c4c; bd-9kll.16.2.14). */
+    h.payload_len = 126u;
+    ASSERT_EQ(asx_ws_header_check(&h, ASX_WS_ROLE_CLIENT), ASX_WS_CLOSE_MESSAGE_TOO_BIG);
+    h.payload_len = 127u; /* the lower bound a pending 64-bit length reports */
+    ASSERT_EQ(asx_ws_header_check(&h, ASX_WS_ROLE_CLIENT), ASX_WS_CLOSE_MESSAGE_TOO_BIG);
+    ASSERT_EQ(asx_ws_header_check(&h, ASX_WS_ROLE_SERVER), ASX_WS_CLOSE_PROTOCOL_ERROR);
+    h.masked = 1u; /* masked at a client, and oversized: masking is first */
     ASSERT_EQ(asx_ws_header_check(&h, ASX_WS_ROLE_CLIENT), ASX_WS_CLOSE_PROTOCOL_ERROR);
+    ASSERT_EQ(asx_ws_header_check(&h, ASX_WS_ROLE_SERVER), ASX_WS_CLOSE_MESSAGE_TOO_BIG);
+    h.fin = 0u; /* fragmented and oversized: fragmentation is first */
+    ASSERT_EQ(asx_ws_header_check(&h, ASX_WS_ROLE_SERVER), ASX_WS_CLOSE_PROTOCOL_ERROR);
+    h.fin = 1u;
+    h.rsv = 2u; /* a reserved bit and oversized: the reserved bit is first */
+    ASSERT_EQ(asx_ws_header_check(&h, ASX_WS_ROLE_SERVER), ASX_WS_CLOSE_PROTOCOL_ERROR);
+    h.rsv = 0u;
+    h.masked = 0u;
     h.payload_len = 125u;
     ASSERT_EQ(asx_ws_header_check(&h, ASX_WS_ROLE_CLIENT), 0u);
+}
+
+/* A pending header still reports its first two bytes, so a frame can be
+ * rejected before the rest of the header arrives (the 7-bit length is a lower
+ * bound while it is 126 or 127). */
+TEST(header_decode_pending_reports_the_first_two_bytes) {
+    static const uint8_t ping64[] = {0x89, 0xFF, 0, 0, 0, 0, 0, 0, 0x01, 0x00};
+    asx_ws_frame_header h;
+
+    memset(&h, 0xAA, sizeof(h));
+    ASSERT_EQ(asx_ws_header_decode(ping64, 1u, &h), ASX_E_PENDING);
+    ASSERT_EQ(asx_ws_header_decode(ping64, 2u, &h), ASX_E_PENDING);
+    ASSERT_EQ(h.fin, 1u);
+    ASSERT_EQ(h.rsv, 0u);
+    ASSERT_EQ(h.opcode, ASX_WS_OPCODE_PING);
+    ASSERT_EQ(h.masked, 1u);
+    ASSERT_EQ(h.payload_len, 127u);
+    ASSERT_EQ(h.header_len, 0u);
+    ASSERT_EQ(asx_ws_header_check(&h, ASX_WS_ROLE_SERVER), ASX_WS_CLOSE_MESSAGE_TOO_BIG);
+    ASSERT_EQ(asx_ws_header_check(&h, ASX_WS_ROLE_CLIENT), ASX_WS_CLOSE_PROTOCOL_ERROR);
 }
 
 TEST(frame_encode_rejects_bad_control_frames) {
@@ -892,13 +930,6 @@ TEST(engine_protocol_errors_map_to_1002) {
     wire[0] &= 0x7Fu;
     ASSERT_EQ(fail_code_for(ASX_WS_ROLE_SERVER, 0u, wire, n), ASX_WS_CLOSE_PROTOCOL_ERROR);
 
-    /* ping with a 126-byte payload (16-bit length form) */
-    {
-        static const uint8_t big_ping[] = {0x89, 0xFE, 0x00, 0x7E, 0, 0, 0, 0};
-        ASSERT_EQ(fail_code_for(ASX_WS_ROLE_SERVER, 0u, big_ping, sizeof(big_ping)),
-                  ASX_WS_CLOSE_PROTOCOL_ERROR);
-    }
-
     /* non-minimal length encoding */
     {
         static const uint8_t nonmin[] = {0x82, 0xFE, 0x00, 0x05, 0, 0, 0, 0};
@@ -915,6 +946,50 @@ TEST(engine_protocol_errors_map_to_1002) {
         n = masked_frame(ASX_WS_OPCODE_CLOSE, 1, bad_code, 2u, wire, sizeof(wire));
         ASSERT_EQ(fail_code_for(ASX_WS_ROLE_SERVER, 0u, wire, n), ASX_WS_CLOSE_PROTOCOL_ERROR);
     }
+
+    /* close reason that is not UTF-8: 1002 as asupersync fails it
+     * (validate_close_payload -> InvalidClosePayload -> ProtocolError,
+     * src/net/websocket/frame.rs at 5e60b1c4c; RFC 6455 section 7.4.1 would
+     * allow 1007 and Autobahn 7.5.1 accepts either; bd-9kll.16.2.15) */
+    {
+        uint8_t body[4] = {0x03, 0xE8, 0xFF, 0xFE};
+        n = masked_frame(ASX_WS_OPCODE_CLOSE, 1, body, 4u, wire, sizeof(wire));
+        ASSERT_EQ(fail_code_for(ASX_WS_ROLE_SERVER, 0u, wire, n), ASX_WS_CLOSE_PROTOCOL_ERROR);
+    }
+}
+
+/* A control frame over 125 bytes fails with 1009 as asupersync fails it
+ * (FrameCodec::decode_inner and WsError::as_close_code, src/net/websocket/
+ * frame.rs at 5e60b1c4c; RFC 6455 section 5.5 makes it a protocol violation
+ * and Autobahn 2.5 expects 1002; bd-9kll.16.2.14), and as soon as the first
+ * two bytes show it, whatever the extended length that follows is. */
+TEST(engine_control_frame_over_125_maps_to_1009) {
+    /* ping with a 126-byte payload (16-bit length form), masked */
+    static const uint8_t big_ping[] = {0x89, 0xFE, 0x00, 0x7E, 0, 0, 0, 0};
+    /* the 16-bit length field is itself non-minimal: still 1009, the 7-bit
+     * length decides */
+    static const uint8_t nonmin_ping[] = {0x89, 0xFE, 0x00, 0x00, 0, 0, 0, 0};
+    /* two bytes are enough: a 64-bit form, nothing after it yet */
+    static const uint8_t two_bytes[] = {0x88, 0xFF};
+    /* a reserved bit, or no mask at a server, is judged first */
+    static const uint8_t rsv_first[] = {0xC9, 0xFE};
+    static const uint8_t unmasked_first[] = {0x89, 0x7E};
+    uint8_t wire[16];
+
+    ASSERT_EQ(fail_code_for(ASX_WS_ROLE_SERVER, 0u, big_ping, sizeof(big_ping)),
+              ASX_WS_CLOSE_MESSAGE_TOO_BIG);
+    ASSERT_EQ(fail_code_for(ASX_WS_ROLE_SERVER, 0u, nonmin_ping, sizeof(nonmin_ping)),
+              ASX_WS_CLOSE_MESSAGE_TOO_BIG);
+    ASSERT_EQ(fail_code_for(ASX_WS_ROLE_SERVER, 0u, two_bytes, sizeof(two_bytes)),
+              ASX_WS_CLOSE_MESSAGE_TOO_BIG);
+    ASSERT_EQ(fail_code_for(ASX_WS_ROLE_SERVER, 0u, rsv_first, sizeof(rsv_first)),
+              ASX_WS_CLOSE_PROTOCOL_ERROR);
+    ASSERT_EQ(fail_code_for(ASX_WS_ROLE_SERVER, 0u, unmasked_first, sizeof(unmasked_first)),
+              ASX_WS_CLOSE_PROTOCOL_ERROR);
+    /* a client receives it unmasked */
+    wire[0] = 0x89u;
+    wire[1] = 0x7Eu;
+    ASSERT_EQ(fail_code_for(ASX_WS_ROLE_CLIENT, 0u, wire, 2u), ASX_WS_CLOSE_MESSAGE_TOO_BIG);
 }
 
 TEST(engine_invalid_utf8_maps_to_1007) {
@@ -934,12 +1009,8 @@ TEST(engine_invalid_utf8_maps_to_1007) {
     n = masked_frame(ASX_WS_OPCODE_TEXT, 1, euro_head, 2u, wire, sizeof(wire));
     ASSERT_EQ(fail_code_for(ASX_WS_ROLE_SERVER, 0u, wire, n), ASX_WS_CLOSE_INVALID_PAYLOAD);
 
-    /* close reason with invalid UTF-8 */
-    {
-        uint8_t body[4] = {0x03, 0xE8, 0xFF, 0xFE};
-        n = masked_frame(ASX_WS_OPCODE_CLOSE, 1, body, 4u, wire, sizeof(wire));
-        ASSERT_EQ(fail_code_for(ASX_WS_ROLE_SERVER, 0u, wire, n), ASX_WS_CLOSE_INVALID_PAYLOAD);
-    }
+    /* (a close reason that is not UTF-8 is 1002, see
+     * engine_protocol_errors_map_to_1002) */
 
     /* but a code point split across fragments is fine */
     ASSERT_EQ(init_open(&g_srv, ASX_WS_ROLE_SERVER, 0u, NULL), ASX_OK);
@@ -1304,6 +1375,7 @@ int main(void) {
     RUN_TEST(header_decode_reports_pending_for_partial_headers);
     RUN_TEST(header_decode_rejects_non_minimal_and_msb_lengths);
     RUN_TEST(header_check_rules);
+    RUN_TEST(header_decode_pending_reports_the_first_two_bytes);
     RUN_TEST(frame_encode_rejects_bad_control_frames);
     RUN_TEST(mask_is_chunk_offset_consistent);
     RUN_TEST(utf8_validation_strict);
@@ -1331,6 +1403,7 @@ int main(void) {
     RUN_TEST(server_engine_reassembles_masked_fragments_with_interleaved_ping);
     RUN_TEST(engine_backpressure_one_message_at_a_time);
     RUN_TEST(engine_protocol_errors_map_to_1002);
+    RUN_TEST(engine_control_frame_over_125_maps_to_1009);
     RUN_TEST(engine_invalid_utf8_maps_to_1007);
     RUN_TEST(engine_oversized_message_maps_to_1009);
 

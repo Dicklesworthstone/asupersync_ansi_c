@@ -927,6 +927,19 @@ static void diff_ws_frame(asx_ws_role role, const uint8_t *data, size_t size) {
         diff_ws_error("input too large", 0u);
         return;
     }
+    /* The engine is fed a header a byte at a time and judges its first two
+     * bytes as they arrive, before the rest of the header can make it
+     * malformed or incomplete, as asupersync's codec does. */
+    if (size >= 2u) {
+        st = asx_ws_header_decode(data, 2u, &h);
+        if (st == ASX_OK || st == ASX_E_PENDING) {
+            code = asx_ws_header_check(&h, role);
+            if (code != 0u) {
+                diff_ws_error("header-check", code);
+                return;
+            }
+        }
+    }
     st = asx_ws_header_decode(data, (uint32_t)size, &h);
     if (st == ASX_E_PENDING) {
         diff_ws_error("incomplete", 0u);
@@ -966,7 +979,7 @@ static void diff_ws_frame(asx_ws_role role, const uint8_t *data, size_t size) {
             return;
         }
         if (!asx_ws_utf8_valid(g_ws_payload + 2, plen - 2u)) {
-            diff_ws_error("close-reason-utf8", ASX_WS_CLOSE_INVALID_PAYLOAD);
+            diff_ws_error("close-reason-utf8", ASX_WS_CLOSE_PROTOCOL_ERROR);
             return;
         }
     }

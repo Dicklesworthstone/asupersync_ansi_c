@@ -108,13 +108,20 @@ asx_status asx_ws_header_decode(const uint8_t *in, uint32_t len, asx_ws_frame_he
 #else
     need = 2u + (len7 == 126u ? 2u : (len7 == 127u ? 8u : 0u)) + ((in[1] & 0x80u) ? 4u : 0u);
 #endif
-    if (len < need) return ASX_E_PENDING;
-
+    /* The first two bytes carry the fields most rejections turn on, so a
+     * pending header still reports them (with the 7-bit length, which is a
+     * lower bound while the extended length is not in and has header_len 0):
+     * asx_ws_header_check() can then reject a frame as soon as asupersync's
+     * FrameCodec does (decode_inner, Header state, src/net/websocket/frame.rs
+     * at 5e60b1c4c), before the rest of the header arrives. */
     memset(h, 0, sizeof(*h));
     h->fin = (uint8_t)((in[0] >> 7) & 1u);
     h->rsv = (uint8_t)((in[0] >> 4) & 7u);
     h->opcode = (uint8_t)(in[0] & 0x0Fu);
     h->masked = (uint8_t)((in[1] >> 7) & 1u);
+    h->payload_len = len7;
+    if (len < need) return ASX_E_PENDING;
+
     pos = 2u;
     if (len7 <= 125u) {
         h->payload_len = len7;
@@ -142,12 +149,20 @@ uint16_t asx_ws_header_check(const asx_ws_frame_header *h, asx_ws_role receiver_
     if (h == NULL) return ASX_WS_CLOSE_PROTOCOL_ERROR;
     if (h->rsv != 0u) return ASX_WS_CLOSE_PROTOCOL_ERROR;
     if (!ws_opcode_known(h->opcode)) return ASX_WS_CLOSE_PROTOCOL_ERROR;
-    if (asx_ws_opcode_is_control(h->opcode)) {
-        if (!h->fin) return ASX_WS_CLOSE_PROTOCOL_ERROR;
-        if (h->payload_len > ASX_WS_CONTROL_MAX) return ASX_WS_CLOSE_PROTOCOL_ERROR;
-    }
     if (receiver_role == ASX_WS_ROLE_SERVER && !h->masked) return ASX_WS_CLOSE_PROTOCOL_ERROR;
     if (receiver_role == ASX_WS_ROLE_CLIENT && h->masked) return ASX_WS_CLOSE_PROTOCOL_ERROR;
+    /* The order is asupersync's (FrameCodec::decode_inner, Header state,
+     * src/net/websocket/frame.rs at 5e60b1c4c): reserved bits, opcode,
+     * masking by role, then the control rules. A control frame over 125 bytes
+     * fails with 1009, not 1002: WsError::as_close_code maps
+     * ControlFrameTooLarge with PayloadTooLarge to MessageTooBig (same file;
+     * bd-9kll.16.2.14: align to Rust, the delta budget is 0). RFC 6455
+     * section 5.5 makes it a protocol violation (1002); Autobahn 2.5 expects
+     * that. */
+    if (asx_ws_opcode_is_control(h->opcode)) {
+        if (!h->fin) return ASX_WS_CLOSE_PROTOCOL_ERROR;
+        if (h->payload_len > ASX_WS_CONTROL_MAX) return ASX_WS_CLOSE_MESSAGE_TOO_BIG;
+    }
     return 0u;
 }
 
@@ -1034,7 +1049,14 @@ static asx_status ws_on_close_frame(asx_ws_engine *ws) {
         code = asx_load_be_u16(ws->ctrl_buf);
         if (!asx_ws_close_code_receivable(code)) return ws_fail(ws, ASX_WS_CLOSE_PROTOCOL_ERROR);
         if (!asx_ws_utf8_valid(ws->ctrl_buf + 2, n - 2u)) {
-            return ws_fail(ws, ASX_WS_CLOSE_INVALID_PAYLOAD);
+            /* 1002, as asupersync fails every invalid close payload, a
+             * reason that is not UTF-8 included (validate_close_payload ->
+             * InvalidClosePayload -> ProtocolError, src/net/websocket/
+             * frame.rs at 5e60b1c4c). RFC 6455 section 7.4.1 would allow
+             * 1007 and Autobahn 7.5.1 accepts either (bd-9kll.16.2.15:
+             * align to Rust, the delta budget is 0). A text message that is
+             * not UTF-8 stays 1007. */
+            return ws_fail(ws, ASX_WS_CLOSE_PROTOCOL_ERROR);
         }
         memcpy(ws->close_reason, ws->ctrl_buf + 2, n - 2u);
         ws->close_reason[n - 2u] = '\0';
@@ -1104,7 +1126,21 @@ static asx_status ws_feed_frames(asx_ws_engine *ws, const uint8_t *p, uint32_t l
             }
             ws->hdr_buf[ws->hdr_len++] = p[pos++];
             hst = asx_ws_header_decode(ws->hdr_buf, ws->hdr_len, &h);
-            if (hst == ASX_E_PENDING) continue;
+            if (hst == ASX_E_PENDING) {
+                /* The first two bytes decide the reserved bits, the opcode,
+                 * the masking and the control rules, and asupersync's codec
+                 * rejects on them before it reads the rest of the header:
+                 * a control frame whose 7-bit length is 126 or 127 is
+                 * refused with its own code whatever follows. */
+                if (ws->hdr_len == 2u) {
+                    uint16_t early = asx_ws_header_check(&h, ws->role);
+                    if (early != 0u) {
+                        st = ws_fail(ws, early);
+                        break;
+                    }
+                }
+                continue;
+            }
             if (hst != ASX_OK) {
                 st = ws_fail(ws, ASX_WS_CLOSE_PROTOCOL_ERROR);
                 break;
