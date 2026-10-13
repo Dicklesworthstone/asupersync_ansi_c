@@ -105,7 +105,11 @@ BUILD_TYPE ?= release
 endif
 BUILD_TYPE ?= debug
 ifeq ($(BUILD_TYPE),release)
-  OPT_FLAGS := -O2 -DNDEBUG
+  # Each function and datum in a section of its own, so a link told to drop
+  # what nothing references (GC_LDFLAGS below) can: an archive member is
+  # otherwise all or nothing, and the kernel-only quickstart linked 316 KB
+  # of .text it never calls (bd-dkfs).
+  OPT_FLAGS := -O2 -DNDEBUG -ffunction-sections -fdata-sections
 else
   OPT_FLAGS := -O0 -g -DASX_DEBUG=1
 endif
@@ -163,7 +167,17 @@ INC_FLAGS := -I$(CURDIR)/include
 ALL_CFLAGS := $(STD_FLAGS) $(WARN_FLAGS) $(OPT_FLAGS) $(BITS_FLAGS) \
               $(INC_FLAGS) $(PROFILE_DEF) $(CODEC_DEF) $(DET_DEF) $(CLASS_DEF) $(CFLAGS)
 
-ALL_LDFLAGS := $(BITS_FLAGS) $(LDFLAGS)
+# The link half of the release sections: drop what nothing references. GNU
+# ld, lld and gold (and the cross and MinGW toolchains) take --gc-sections;
+# Apple's ld64, which a native Darwin build uses, spells it -dead_strip.
+ifeq ($(BUILD_TYPE),release)
+  ifeq ($(shell uname -s 2>/dev/null)$(TARGET),Darwin)
+    GC_LDFLAGS := -Wl,-dead_strip
+  else
+    GC_LDFLAGS := -Wl,--gc-sections
+  endif
+endif
+ALL_LDFLAGS := $(BITS_FLAGS) $(LDFLAGS) $(GC_LDFLAGS)
 
 # ---------------------------------------------------------------------------
 # Source files
