@@ -35,7 +35,7 @@ static uint64_t g_hash_chain;
  * byte past the end of this table and drops the value. No result, trace or
  * digest changes, so a parity compare passes; AddressSanitizer reports a
  * global-buffer-overflow. The volatile index keeps the compiler from seeing
- * it. */
+ * it, and the read goes through a pointer (see asx_event_emit). */
 #ifdef ASX_MUTANT_SANITIZER_OOB_READ
 static uint8_t g_mutant_oob_table[4] = {1u, 2u, 3u, 4u};
 static volatile uint32_t g_mutant_oob_index = 4u;
@@ -85,8 +85,15 @@ uint32_t asx_event_emit(asx_event_kind kind, uint64_t entity_id, uint64_t parent
     uint32_t seq = g_event_count;
 
 #ifdef ASX_MUTANT_SANITIZER_OOB_READ
-    /* ASX_ANALYZER_WAIVER("planted mutant: built only by test_conformance_monitors.sh") */
-    g_mutant_oob_sink = g_mutant_oob_table[g_mutant_oob_index];
+    {
+        /* Read through a pointer: -fsanitize=bounds checks subscripts of
+         * declared arrays and would halt first with its own report, so the
+         * gate's AddressSanitizer expectation would never see the
+         * global-buffer-overflow. */
+        const volatile uint8_t *table = g_mutant_oob_table;
+        /* ASX_ANALYZER_WAIVER("planted mutant: built only by test_conformance_monitors.sh") */
+        g_mutant_oob_sink = table[g_mutant_oob_index];
+    }
 #endif
 #ifdef ASX_MUTANT_GHOST_ILLEGAL_TRANSITION
     /* Planted ghost-monitor bug (bd-9kll.2.21): logging a spawn also tells
