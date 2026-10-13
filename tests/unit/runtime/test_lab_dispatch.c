@@ -442,7 +442,7 @@ static void storm_setup(asx_region_id *r, asx_task_id *parkers, storm_task *task
     ASSERT_EQ(asx_scheduler_use_lab_dispatch(42u), ASX_OK);
     memset(g_storm_log, 0, sizeof(g_storm_log));
     g_storm_n = 0;
-    asx_wait_queue_init(&g_storm_q, NULL);
+    asx_wait_queue_init(&g_storm_q, NULL, 0u);
     ASSERT_EQ(asx_region_open(&g_rt, r), ASX_OK);
     for (k = 0; k < STORM_PARKERS; k++) {
         tasks[k].name = (char)('a' + k);

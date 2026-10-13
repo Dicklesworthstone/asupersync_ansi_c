@@ -128,6 +128,8 @@ TEST(two_runtimes_have_independent_regions_tasks_and_quiescence) {
     asx_timer_wheel *wheel_b;
     asx_timer_handle th;
     asx_deadline dl;
+    asx_wait_queue wq;
+    uint32_t wid;
 
     memset(&a, 0, sizeof(a));
     memset(&b, 0, sizeof(b));
@@ -200,6 +202,21 @@ TEST(two_runtimes_have_independent_regions_tasks_and_quiescence) {
     ASSERT_EQ(asx_timer_active_count(wheel_b), 1u);
     ASSERT_TRUE(asx_timer_cancel(wheel_b, &th));
     ASSERT_EQ(asx_timer_active_count(wheel_b), 0u);
+
+    /* Wait nodes are each runtime's own: a queue bound to b takes its nodes
+     * from b's pool, and the id it hands out carries b's tag above the
+     * index. */
+    asx_wait_queue_init(&wq, NULL, 1u);
+    wid = asx_wait_record_add(&wq);
+    ASSERT_TRUE(wid != ASX_WAIT_NIL);
+    ASSERT_EQ(wid >> 24, 1u);
+    ASSERT_TRUE(asx_wait_node_at(wid) == &g_kernels[1]->waits.nodes[wid & 0xFFFFFFu]);
+    ASSERT_EQ(g_kernels[1]->waits.in_use, 1u);
+    ASSERT_EQ(g_kernels[0]->waits.in_use, 0u);
+    ASSERT_TRUE(asx_wait_record_get(&wq, wid, asx_wait_node_at(wid)->generation) != NULL);
+    asx_wait_record_release(&wq, wid);
+    ASSERT_EQ(g_kernels[1]->waits.in_use, 0u);
+    ASSERT_EQ(asx_wait_queue_len(&wq), 0u);
 
     /* A handle of the other runtime is no member of this one's world. */
     ASSERT_EQ(asx_task_watch(ta, tb), ASX_E_NOT_FOUND);
