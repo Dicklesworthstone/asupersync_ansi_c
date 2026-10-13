@@ -702,7 +702,11 @@ generations-subregions-001` (a task of a sub-region the generation opened,
 under `{"poll_quota": 5, "priority": 250}`, has 5 polls at 250 against
 ParentCancelled's 200 at 220). The ceiling also bounds the region's
 finalizer tasks in Rust (`state.rs:8615`, `:7871`); C does not apply it
-there yet (the header's "Not in the C model").
+there yet (the header's "Not in the C model"). Generated scenarios give a
+fifth of the supervised children a ceiling of a poll quota (1 to 40). A
+ceiling with a priority is not drawn: the fuzzer found three scenarios in
+4500 where C serves the drained generation's cancel lane in another order
+than Rust (bd-zwre).
 
 A child's `depends_on` names siblings of the same `supervise` (an unknown
 name, or a cycle, is refused at compile time in both engines). The

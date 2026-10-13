@@ -2372,6 +2372,15 @@ fn ext_declarations(
                             }
                         }
                     }
+                    // A child's shutdown ceiling (DSL §3.8): the budget its
+                    // drained generations are cancelled with. A poll quota
+                    // only: with a priority C orders the drained cancel lane
+                    // differently from Rust (bd-zwre).
+                    for child in children.iter_mut() {
+                        if ext.chance(20) {
+                            child["shutdown_budget"] = json!({"poll_quota": 1 + ext.below(40)});
+                        }
+                    }
                     // A task group in a supervised child's program: its
                     // members run in each generation of the child, whose
                     // names scope them (the interpreter's scope_collect).

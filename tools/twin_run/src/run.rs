@@ -6230,6 +6230,430 @@ mod projection_tests {
             json!({"t.a/o1": {"abort_reason": null, "holder": "t.a", "kind": "Lease",
                               "region": "r.main", "state": "Committed"}})
         );
+        // The rest of the snapshot, as the committed fixture spells it.
+        let snapshot = &fixture["snapshot"];
+        assert_eq!(snapshot["now_ns"], json!(0));
+        assert_eq!(snapshot["quiescent"], json!(true));
+        assert_eq!(snapshot["timers_pending"], json!([]));
+        assert_eq!(
+            snapshot["regions"],
+            json!({
+                "r.main": {"cancel_reason": null, "parent": "root", "state": "Open"},
+                "root": {"cancel_reason": null, "parent": null, "state": "Open"},
+            })
+        );
+        assert_eq!(
+            snapshot["tasks"],
+            json!({"t.a": {"cancel_reason": null, "cleanup_budget": null,
+                           "outcome": {"tag": "ok"}, "state": "Completed"}})
+        );
+    }
+
+    /// `cancel.requested` and `region.cancelled` project the reason whole:
+    /// the chain is counted, not copied, a truncated chain says so, and a
+    /// refused spawn's text keeps only its fixed prefix (vocabulary §4).
+    #[test]
+    fn a_cancel_reason_projects_every_field() {
+        let shared = world();
+        let chain = reason(CancelKind::ParentCancelled, 9)
+            .with_cause(reason(CancelKind::Deadline, 4).with_cause(reason(CancelKind::Timeout, 3)));
+        let mut cut = reason(CancelKind::Shutdown, 5);
+        cut.truncated = true;
+        let refused = "[ASUP-E006] region admission limit reached: limit 4, live 4";
+        let trace = [
+            TraceEvent::cancel_request(1, at(9), task(1), region(2), chain),
+            TraceEvent::cancel_request(2, at(5), task(1), region(2), cut),
+            TraceEvent::cancel_request(
+                3,
+                at(6),
+                task(1),
+                region(2),
+                reason(CancelKind::User, 6).with_message(refused),
+            ),
+            TraceEvent::cancel_request(
+                4,
+                at(6),
+                task(1),
+                region(2),
+                reason(CancelKind::Shutdown, 6).with_message(refused),
+            ),
+        ];
+        let events = project(&trace, &shared).events;
+        let reasons: Vec<&Value> = events.iter().map(|e| &e["reason"]).collect();
+        assert_eq!(
+            reasons,
+            [
+                &json!({"kind": "ParentCancelled", "origin_region": "root", "origin_task": null,
+                        "timestamp_ns": 9, "message": null, "cause_chain_len": 2,
+                        "truncated": false}),
+                &json!({"kind": "Shutdown", "origin_region": "root", "origin_task": null,
+                        "timestamp_ns": 5, "message": null, "cause_chain_len": 0,
+                        "truncated": true}),
+                &json!({"kind": "User", "origin_region": "root", "origin_task": null,
+                        "timestamp_ns": 6, "message": "[ASUP-E006] region admission limit reached",
+                        "cause_chain_len": 0, "truncated": false}),
+                &json!({"kind": "Shutdown", "origin_region": "root", "origin_task": null,
+                        "timestamp_ns": 6, "message": refused, "cause_chain_len": 0,
+                        "truncated": false}),
+            ]
+        );
+    }
+
+    /// The serde envelope of an id: the pinned private form the handoff
+    /// message carries (trace/event.rs:24-76).
+    fn envelope<T: serde::Serialize>(id: &T) -> Value {
+        serde_json::to_value(id).expect("an id serializes")
+    }
+
+    fn handoff_message(source_ticket: u64, destination_ticket: u64, to: TaskId) -> String {
+        format!(
+            "obligation_handoff_v1 {}",
+            json!({
+                "id": envelope(&obligation(1)),
+                "source_holder": envelope(&task(1)),
+                "destination_holder": envelope(&to),
+                "source_region": envelope(&region(1)),
+                "destination_region": envelope(&region(2)),
+                "source_ticket": source_ticket,
+                "destination_ticket": destination_ticket,
+            })
+        )
+    }
+
+    fn reserved_by_t1() -> TraceEvent {
+        TraceEvent::obligation_reserve(
+            1,
+            at(0),
+            obligation(1),
+            task(1),
+            region(1),
+            ObligationKind::SendPermit,
+        )
+    }
+
+    /// An accepted transfer moves the obligation to the destination holder
+    /// and region in the final records, and is a vocabulary event only
+    /// because the runtime linked its tickets (vocabulary §3).
+    #[test]
+    fn an_obligation_handoff_moves_the_holder_and_region() {
+        let shared = world();
+        lock(&shared)
+            .handoff_tickets
+            .insert((1, 2), (task(1), task(2), region(1), region(2)));
+        let message = handoff_message(1, 2, task(2));
+        let trace = [reserved_by_t1(), TraceEvent::user_trace(2, at(0), &message)];
+        let projected = project(&trace, &shared);
+        assert_eq!(
+            Value::Array(projected.events),
+            json!([
+                {"k": "obligation.reserved", "obligation": "t1/o1", "task": "t1",
+                 "region": "root", "kind": "SendPermit"},
+                {"k": "obligation.handoff", "obligation": "t1/o1", "from_task": "t1",
+                 "to_task": "t2", "from_region": "root", "to_region": "child"},
+            ])
+        );
+        assert_eq!(
+            projected.obligations[0].1,
+            json!({"state": "Reserved", "kind": "SendPermit", "holder": "t2",
+                   "region": "child", "abort_reason": null})
+        );
+    }
+
+    #[test]
+    fn a_handoff_without_its_runtime_link_or_with_bad_tickets_fails_the_run() {
+        // No accepted ticket link in the shared state.
+        let shared = world();
+        let message = handoff_message(1, 2, task(2));
+        let trace = [reserved_by_t1(), TraceEvent::user_trace(2, at(0), &message)];
+        let error = project_events(&trace, &shared).err();
+        assert!(error.is_some_and(|e| e.contains("lacks an accepted runtime ticket link")));
+
+        // A link nobody traced.
+        let shared = world();
+        lock(&shared)
+            .handoff_tickets
+            .insert((1, 2), (task(1), task(2), region(1), region(2)));
+        let error = project_events(&[reserved_by_t1()], &shared).err();
+        assert!(error.is_some_and(|e| e.contains("missing its runtime ownership trace")));
+
+        // The destination ticket must follow the source's, and the holders differ.
+        for (message, wanted) in [
+            (
+                handoff_message(2, 2, task(2)),
+                "destination ticket must follow source",
+            ),
+            (
+                handoff_message(1, 2, task(1)),
+                "distinct holder generations",
+            ),
+        ] {
+            let trace = [reserved_by_t1(), TraceEvent::user_trace(2, at(0), &message)];
+            let error = project_events(&trace, &world()).err();
+            assert!(error.is_some_and(|e| e.contains(wanted)), "{wanted}");
+        }
+    }
+
+    /// A supervisor's controller trace is a vocabulary event with its raw ids
+    /// replaced by the names of the region and task it mentions (§3).
+    #[test]
+    fn a_supervisor_trace_names_its_region_and_task() {
+        let shared = world();
+        let message = format!(
+            "managed_supervisor_v1 action=start supervisor=\"sup\" child=\"kid\" \
+             generation=2 region={:?} task={:?} outcome=ok",
+            region(2),
+            task(2)
+        );
+        let trace = [
+            TraceEvent::region_created(1, at(0), region(2), Some(region(1))),
+            TraceEvent::spawn(2, at(0), task(2), region(2)),
+            TraceEvent::user_trace(3, at(0), &message),
+        ];
+        let events = project(&trace, &shared).events;
+        assert_eq!(
+            events[2],
+            json!({"k": "user.trace", "message":
+                   "managed_supervisor_v1 action=start supervisor=\"sup\" child=\"kid\" \
+                    generation=2 region=child task=t2 outcome=ok"})
+        );
+
+        // A region or task the trace never created is an error, not a raw id.
+        let error = project_events(&[TraceEvent::user_trace(1, at(0), &message)], &shared).err();
+        assert!(error.is_some_and(|e| e.contains("supervisor trace names")));
+        let malformed = [TraceEvent::user_trace(
+            1,
+            at(0),
+            "managed_supervisor_v1 action",
+        )];
+        assert!(project_events(&malformed, &shared).is_err());
+    }
+
+    /// A declared futurelock is a vocabulary event listing what the task
+    /// holds in Rust's order; without the declaration it fails the run
+    /// (DSL §1).
+    #[test]
+    fn a_declared_futurelock_projects_its_held_obligations_in_order() {
+        let futurelock = |held: Vec<(asupersync::ObligationId, ObligationKind)>| {
+            TraceEvent::new(
+                3,
+                at(9),
+                TraceEventKind::FuturelockDetected,
+                TraceData::Futurelock {
+                    task: task(1),
+                    region: region(1),
+                    idle_steps: 4,
+                    held,
+                },
+            )
+        };
+        let reserves = || {
+            [
+                reserved_by_t1(),
+                TraceEvent::obligation_reserve(
+                    2,
+                    at(0),
+                    obligation(2),
+                    task(1),
+                    region(1),
+                    ObligationKind::Lease,
+                ),
+            ]
+        };
+        let held = vec![
+            (obligation(2), ObligationKind::Lease),
+            (obligation(1), ObligationKind::SendPermit),
+        ];
+
+        let shared = world();
+        lock(&shared).futurelock_declared = true;
+        let mut trace = reserves().to_vec();
+        trace.push(futurelock(held.clone()));
+        assert_eq!(
+            project(&trace, &shared).events[2],
+            json!({"k": "futurelock.detected", "task": "t1", "region": "root", "idle_steps": 4,
+                   "held": [{"obligation": "t1/o2", "kind": "Lease"},
+                            {"obligation": "t1/o1", "kind": "SendPermit"}]})
+        );
+
+        // An obligation the trace never reserved cannot be named.
+        let stray = [futurelock(vec![(obligation(7), ObligationKind::Ack)])];
+        let error = project_events(&stray, &shared).err();
+        assert!(error.is_some_and(|e| e.contains("never reserved")));
+
+        // Not declared: a harness failure, never a report.
+        let mut trace = reserves().to_vec();
+        trace.push(futurelock(held));
+        let error = project_events(&trace, &world()).err();
+        assert!(error.is_some_and(|e| e.contains("harness failure")));
+    }
+
+    /// Timer ids are reused: an event with no name of its own takes the name
+    /// of the id's latest schedule, and one for an id never scheduled fails.
+    #[test]
+    fn a_timer_event_without_a_name_takes_its_ids_latest_schedule() {
+        let shared = world();
+        {
+            let mut s = lock(&shared);
+            s.timer_names.insert(20, "sleep.x".to_string());
+            s.timer_names.insert(22, "sleep.y".to_string());
+        }
+        let trace = [
+            TraceEvent::timer_scheduled(20, at(0), 5, at(50)),
+            TraceEvent::timer_fired(21, at(50), 5),
+            TraceEvent::timer_scheduled(22, at(50), 5, at(80)),
+            TraceEvent::timer_cancelled(23, at(60), 5),
+        ];
+        let projected = project(&trace, &shared);
+        assert_eq!(
+            Value::Array(projected.events),
+            json!([
+                {"k": "timer.scheduled", "timer": "sleep.x", "deadline_ns": 50},
+                {"k": "timer.fired", "timer": "sleep.x"},
+                {"k": "timer.scheduled", "timer": "sleep.y", "deadline_ns": 80},
+                {"k": "timer.cancelled", "timer": "sleep.y"},
+            ])
+        );
+        assert!(projected.timers_pending.is_empty());
+
+        let error = project_events(&[TraceEvent::timer_fired(1, at(0), 9)], &shared).err();
+        assert!(error.is_some_and(|e| e.contains("unnamed timer 9")));
+    }
+
+    /// The snapshot lists the timers still pending by deadline, then name.
+    #[test]
+    fn pending_timers_are_ordered_by_deadline_then_name() {
+        let shared = world();
+        {
+            let mut s = lock(&shared);
+            s.timer_names.insert(1, "sleep.b".to_string());
+            s.timer_names.insert(2, "sleep.a".to_string());
+            s.timer_names.insert(3, "sleep.c".to_string());
+        }
+        let trace = [
+            TraceEvent::timer_scheduled(1, at(0), 1, at(100)),
+            TraceEvent::timer_scheduled(2, at(0), 2, at(100)),
+            TraceEvent::timer_scheduled(3, at(0), 3, at(50)),
+        ];
+        assert_eq!(
+            Value::Array(project(&trace, &shared).timers_pending),
+            json!([
+                {"timer": "sleep.c", "deadline_ns": 50},
+                {"timer": "sleep.a", "deadline_ns": 100},
+                {"timer": "sleep.b", "deadline_ns": 100},
+            ])
+        );
+    }
+
+    /// The snapshot's task states: the name Rust's state maps to, and the
+    /// reason and cleanup budget only the three cancelling states carry.
+    #[test]
+    fn task_states_map_to_their_snapshot_names() {
+        let budget = Budget::new().with_poll_quota(7).with_priority(200);
+        let cancelling = |name: &str, state: TaskState| {
+            let (got, reason, cleanup) = task_state(&state);
+            assert_eq!(got, name);
+            assert_eq!(reason.map(|r| r.kind), Some(CancelKind::User), "{name}");
+            assert_eq!(
+                cleanup.map(|b| (b.poll_quota, b.priority)),
+                Some((7, 200)),
+                "{name}"
+            );
+        };
+        let user = || reason(CancelKind::User, 1);
+        cancelling(
+            "CancelRequested",
+            TaskState::CancelRequested {
+                reason: user(),
+                cleanup_budget: budget,
+            },
+        );
+        cancelling(
+            "Cancelling",
+            TaskState::Cancelling {
+                reason: user(),
+                cleanup_budget: budget,
+            },
+        );
+        cancelling(
+            "Finalizing",
+            TaskState::Finalizing {
+                reason: user(),
+                cleanup_budget: budget,
+            },
+        );
+        for (name, state) in [
+            ("Created", TaskState::Created),
+            ("Running", TaskState::Running),
+            (
+                "Completed",
+                TaskState::Completed(asupersync::Outcome::Ok(())),
+            ),
+        ] {
+            let (got, reason, cleanup) = task_state(&state);
+            assert_eq!(got, name);
+            assert!(reason.is_none() && cleanup.is_none(), "{name}");
+        }
+    }
+
+    /// A committed scenario that ends mid-cancel, through the lab: the task
+    /// is still `CancelRequested` with its own (stronger) reason and cleanup
+    /// budget, the region is `Closing` with the reason it was cancelled for,
+    /// and the trace carries the region cancel, its child's and the request.
+    #[test]
+    fn a_run_that_ends_mid_cancel_snapshots_reasons_budgets_and_states() {
+        let scenario: Value = serde_json::from_str(include_str!(
+            "../../../tests/conformance/scenarios_v2/cancel-request-event-reason-001.json"
+        ))
+        .expect("the committed scenario parses");
+        let fixture = run_scenario(&scenario).expect("the scenario runs");
+        let user = json!({"cause_chain_len": 0, "kind": "User", "message": null,
+                          "origin_region": "r.main", "origin_task": null,
+                          "timestamp_ns": 50, "truncated": false});
+        assert_eq!(
+            fixture["snapshot"],
+            json!({
+                "channels": {},
+                "now_ns": 50,
+                "obligations": {},
+                "quiescent": false,
+                "regions": {
+                    "r.main": {"cancel_reason": user, "parent": "root", "state": "Closing"},
+                    "root": {"cancel_reason": null, "parent": null, "state": "Open"},
+                    "t.0.r1": {"cancel_reason": null, "parent": "r.main", "state": "Closed"},
+                },
+                "tasks": {"t.0": {
+                    "cancel_reason": {"cause_chain_len": 0, "kind": "PollQuota", "message": null,
+                                      "origin_region": "root", "origin_task": null,
+                                      "timestamp_ns": 1_000_000_000, "truncated": false},
+                    "cleanup_budget": {"poll_quota": 300, "priority": 215},
+                    "outcome": null,
+                    "state": "CancelRequested",
+                }},
+                "timers_pending": [],
+            })
+        );
+        // The last three layers of the Foata trace.
+        let trace = fixture["trace"].as_array().expect("a trace");
+        assert_eq!(
+            Value::Array(trace[3..].to_vec()),
+            json!([
+                [
+                    {"k": "region.cancelled", "reason": user, "region": "r.main"},
+                    {"k": "region.cancelled", "region": "t.0.r1", "reason": {
+                        "cause_chain_len": 1, "kind": "ParentCancelled", "message": null,
+                        "origin_region": "r.main", "origin_task": null, "timestamp_ns": 50,
+                        "truncated": false}},
+                ],
+                [
+                    {"k": "region.close_begin", "region": "r.main"},
+                    {"k": "region.close_begin", "region": "t.0.r1"},
+                ],
+                [
+                    {"k": "cancel.requested", "reason": user, "region": "r.main", "task": "t.0"},
+                    {"k": "region.closed", "region": "t.0.r1"},
+                ],
+            ])
+        );
     }
 }
 
