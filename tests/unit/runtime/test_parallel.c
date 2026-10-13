@@ -127,7 +127,7 @@ static void reset_all(void) {
     asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     asx_parallel_reset();
-    asx_waker_reset();
+    asx_waker_reset(test_runtime());
     asx_timer_wheel_reset(asx_timer_wheel_global());
 #if ASX_HAS_NATIVE_IO_DRIVER
     asx_io_driver_reset();

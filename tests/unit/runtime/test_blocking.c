@@ -36,7 +36,7 @@ static void reset_hook_state(void);
 static int setup(void) {
     asx_status st;
     asx_runtime_reset(test_runtime());
-    asx_waker_reset();
+    asx_waker_reset(test_runtime());
     asx_blocking_pool_reset();
     st = asx_blocking_pool_init();
     if (!asx_surface_available_active(ASX_SURFACE_BLOCKING)) {

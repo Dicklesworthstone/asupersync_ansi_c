@@ -5,6 +5,7 @@
  */
 
 #include "../../test_harness.h"
+#include "../../test_runtime.h"
 #include <asx/asx_config.h>
 #include <asx/runtime/browser_boundary.h>
 #include <asx/runtime/io_driver.h>
@@ -38,7 +39,7 @@ static int setup(void) {
     asx_status st;
     asx_runtime_hooks hooks;
 
-    asx_waker_reset();
+    asx_waker_reset(test_runtime());
     asx_io_driver_reset();
     g_ready_count = 0u;
     MUST_OK(asx_runtime_hooks_init(&hooks));
@@ -71,7 +72,7 @@ static void teardown(void) { asx_io_driver_shutdown(); }
 TEST(register_null_token_fails) {
     asx_waker w;
     if (!setup()) return;
-    asx_waker_reset();
+    asx_waker_reset(test_runtime());
     MUST_OK(asx_waker_register(1, &w));
     ASSERT_EQ(asx_io_register(42, ASX_IO_READABLE, &w, NULL), ASX_E_INVALID_ARGUMENT);
     teardown();
@@ -89,7 +90,7 @@ TEST(register_before_init_fails) {
     asx_io_token tok;
     asx_io_driver_reset();
     asx_io_driver_shutdown();
-    asx_waker_reset();
+    asx_waker_reset(test_runtime());
     MUST_OK(asx_waker_register(1, &w));
     /* Surface gating may return PERMISSION_DENIED before init check */
     {

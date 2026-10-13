@@ -10,6 +10,7 @@
 
 #include <asx/asx_ids.h>
 #include <asx/asx_status.h>
+#include <asx/runtime/waker.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -18,7 +19,7 @@ void asx_oneshot_reset(void) {}
 void asx_watch_reset(void) {}
 void asx_broadcast_reset(void) {}
 void asx_session_reset(void) {}
-void asx_waker_reset(void) {}
+void asx_waker_reset(const asx_runtime *rt) { (void)rt; }
 void asx_io_driver_reset(void) {}
 void asx_blocking_pool_reset(void) {}
 void asx_notify_reset(void) {}

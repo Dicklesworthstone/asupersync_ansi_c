@@ -5,6 +5,7 @@
  */
 
 #include "../../test_harness.h"
+#include "../../test_runtime.h"
 #include <asx/runtime/waker.h>
 
 static asx_status st_sink_;
@@ -14,7 +15,7 @@ static asx_status st_sink_;
         (void)st_sink_;                                                                            \
     } while (0)
 
-static void setup(void) { asx_waker_reset(); }
+static void setup(void) { asx_waker_reset(test_runtime()); }
 
 /* ------------------------------------------------------------------ */
 /* Registration tests                                                  */
@@ -28,14 +29,14 @@ TEST(register_invalid_task_fails) {
     asx_waker w;
     setup();
     ASSERT_EQ(asx_waker_register(ASX_INVALID_ID, &w), ASX_E_INVALID_ARGUMENT);
-    ASSERT_EQ(asx_waker_active_count(), 0u);
+    ASSERT_EQ(asx_waker_active_count(test_runtime()), 0u);
 }
 
 TEST(register_success) {
     asx_waker w;
     setup();
     ASSERT_EQ(asx_waker_register(42, &w), ASX_OK);
-    ASSERT_EQ(asx_waker_active_count(), 1u);
+    ASSERT_EQ(asx_waker_active_count(test_runtime()), 1u);
     ASSERT_EQ(asx_waker_task(&w), (asx_task_id)42);
 }
 
@@ -43,9 +44,9 @@ TEST(deregister_decrements_count) {
     asx_waker w;
     setup();
     MUST_OK(asx_waker_register(1, &w));
-    ASSERT_EQ(asx_waker_active_count(), 1u);
+    ASSERT_EQ(asx_waker_active_count(test_runtime()), 1u);
     asx_waker_deregister(&w);
-    ASSERT_EQ(asx_waker_active_count(), 0u);
+    ASSERT_EQ(asx_waker_active_count(test_runtime()), 0u);
 }
 
 TEST(deregister_null_safe) { asx_waker_deregister(NULL); /* should not crash */ }
@@ -115,7 +116,7 @@ TEST(clone_null_fails) {
 TEST(drain_empty_returns_zero) {
     asx_task_id tasks[4];
     setup();
-    ASSERT_EQ(asx_waker_drain_signaled(tasks, 4), 0u);
+    ASSERT_EQ(asx_waker_drain_signaled(test_runtime(), tasks, 4), 0u);
 }
 
 TEST(drain_collects_signaled) {
@@ -128,7 +129,7 @@ TEST(drain_collects_signaled) {
     MUST_OK(asx_waker_register(30, &w3));
     MUST_OK(asx_waker_wake(&w1));
     MUST_OK(asx_waker_wake(&w3));
-    count = asx_waker_drain_signaled(tasks, 4);
+    count = asx_waker_drain_signaled(test_runtime(), tasks, 4);
     ASSERT_EQ(count, 2u);
     /* After drain, signals are cleared */
     ASSERT_FALSE(asx_waker_is_signaled(&w1));
@@ -148,7 +149,7 @@ TEST(drain_uses_signal_order) {
     MUST_OK(asx_waker_wake(&w1));
     MUST_OK(asx_waker_wake(&w3));
 
-    count = asx_waker_drain_signaled(tasks, 4);
+    count = asx_waker_drain_signaled(test_runtime(), tasks, 4);
     ASSERT_EQ(count, 3u);
     ASSERT_EQ(tasks[0], (asx_task_id)20);
     ASSERT_EQ(tasks[1], (asx_task_id)10);
@@ -167,13 +168,16 @@ TEST(duplicate_wake_keeps_first_signal_order) {
     MUST_OK(asx_waker_wake(&w2));
     MUST_OK(asx_waker_wake(&w1));
 
-    count = asx_waker_drain_signaled(tasks, 4);
+    count = asx_waker_drain_signaled(test_runtime(), tasks, 4);
     ASSERT_EQ(count, 2u);
     ASSERT_EQ(tasks[0], (asx_task_id)10);
     ASSERT_EQ(tasks[1], (asx_task_id)20);
 }
 
-TEST(drain_null_returns_zero) { ASSERT_EQ(asx_waker_drain_signaled(NULL, 4), 0u); }
+TEST(drain_null_returns_zero) {
+    ASSERT_EQ(asx_waker_drain_signaled(test_runtime(), NULL, 4), 0u);
+    ASSERT_EQ(asx_waker_drain_signaled(NULL, NULL, 4), 0u);
+}
 
 /* ------------------------------------------------------------------ */
 /* Query null safety                                                   */
@@ -182,6 +186,36 @@ TEST(drain_null_returns_zero) { ASSERT_EQ(asx_waker_drain_signaled(NULL, 4), 0u)
 TEST(signaled_null_false) { ASSERT_FALSE(asx_waker_is_signaled(NULL)); }
 
 TEST(task_null_invalid) { ASSERT_EQ(asx_waker_task(NULL), ASX_INVALID_ID); }
+
+/* ------------------------------------------------------------------ */
+/* Runtime tags                                                        */
+/* ------------------------------------------------------------------ */
+
+/* A tag no runtime holds (no build has 15 runtimes live here): a task of
+ * such a runtime has no arena to register in, and a waker naming one
+ * reaches nothing. */
+TEST(a_tag_no_runtime_holds_has_no_arena) {
+    asx_task_id ghost = asx_handle_with_runtime_tag(10u, 9u);
+    asx_waker w;
+    asx_waker named;
+    asx_task_id tasks[2];
+
+    setup();
+    ASSERT_EQ(asx_waker_register(ghost, &w), ASX_E_NOT_FOUND);
+    ASSERT_EQ(asx_waker_active_count(test_runtime()), 0u);
+
+    MUST_OK(asx_waker_register(1, &w));
+    named.slot = w.slot | (9u << 16);
+    named.generation = w.generation;
+    ASSERT_EQ(asx_waker_wake(&named), ASX_E_NOT_FOUND);
+    ASSERT_EQ(asx_waker_clone(&named, &w), ASX_E_NOT_FOUND);
+    ASSERT_FALSE(asx_waker_is_signaled(&named));
+    ASSERT_EQ(asx_waker_task(&named), ASX_INVALID_ID);
+    asx_waker_clear(&named);
+    asx_waker_deregister(&named);
+    ASSERT_EQ(asx_waker_active_count(test_runtime()), 1u);
+    ASSERT_EQ(asx_waker_drain_signaled(test_runtime(), tasks, 2), 0u);
+}
 
 /* ------------------------------------------------------------------ */
 /* Exhaustion                                                          */
@@ -230,6 +264,8 @@ int main(void) {
 
     RUN_TEST(signaled_null_false);
     RUN_TEST(task_null_invalid);
+
+    RUN_TEST(a_tag_no_runtime_holds_has_no_arena);
 
     RUN_TEST(arena_exhaustion);
 

@@ -344,7 +344,7 @@ static int scenario_reactor_and_blocking(void) {
     printf("--- scenario: reactor and blocking ---\n");
 
     asx_runtime_reset(test_runtime());
-    asx_waker_reset();
+    asx_waker_reset(test_runtime());
     g_reactor_waits = 0;
 
     st = install_custom_hooks();

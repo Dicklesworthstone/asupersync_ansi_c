@@ -121,6 +121,9 @@ TEST(two_runtimes_have_independent_regions_tasks_and_quiescence) {
     asx_obligation_id ob;
     asx_task_state state;
     asx_budget run;
+    asx_waker wa;
+    asx_waker wb;
+    asx_task_id drained[4];
 
     memset(&a, 0, sizeof(a));
     memset(&b, 0, sizeof(b));
@@ -158,6 +161,23 @@ TEST(two_runtimes_have_independent_regions_tasks_and_quiescence) {
     ASSERT_EQ(asx_runtime_region_count(&b), 1u);
     ASSERT_EQ(asx_runtime_task_count(&a), 1u);
     ASSERT_EQ(asx_runtime_task_count(&b), 1u);
+
+    /* Wakers are each runtime's own: the arena index is the same, the tag
+     * tells them apart, and a signal and its drain stay in one arena. */
+    ASSERT_EQ(asx_waker_register(ta, &wa), ASX_OK);
+    ASSERT_EQ(asx_waker_register(tb, &wb), ASX_OK);
+    ASSERT_EQ(wa.slot, 0u);
+    ASSERT_EQ(wb.slot, 1u << 16);
+    ASSERT_EQ(asx_waker_active_count(&a), 1u);
+    ASSERT_EQ(asx_waker_active_count(&b), 1u);
+    ASSERT_EQ(asx_waker_wake(&wb), ASX_OK);
+    ASSERT_EQ(asx_waker_drain_signaled(&a, drained, 4u), 0u);
+    ASSERT_EQ(asx_waker_drain_signaled(&b, drained, 4u), 1u);
+    ASSERT_EQ(drained[0], tb);
+    asx_waker_deregister(&wa);
+    asx_waker_deregister(&wb);
+    ASSERT_EQ(asx_waker_active_count(&a), 0u);
+    ASSERT_EQ(asx_waker_active_count(&b), 0u);
 
     /* A handle of the other runtime is no member of this one's world. */
     ASSERT_EQ(asx_task_watch(ta, tb), ASX_E_NOT_FOUND);
