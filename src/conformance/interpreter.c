@@ -5008,7 +5008,7 @@ static void apply_driver_op(uint32_t op, uint32_t step) {
     }
     if (strcmp(name, "region_close_outcome") == 0) {
         /* The aggregated close outcome of a region (Rust
-         * RuntimeState::region_close_outcome, state.rs:3743), observed
+         * RuntimeState::region_close_outcome, state.rs:3972), observed
          * under the task name `driver` at the script entry's 1-based
          * index: none yet is ASX_E_NOT_FOUND (DSL §4). */
         it_region *r = region_by_name(it_str(op, "region"));

@@ -206,7 +206,13 @@ The driver runs a scenario in four phases.
    - Tasks become runnable in array order.
 2. **Script.** For each `script` entry in order:
    - run until idle (no runnable task): Rust `lab.run_until_idle()`
-     (`lab/runtime.rs:3428`), C `asx_scheduler_run` until no task is ready;
+     (`lab/runtime.rs:3428`), C `asx_scheduler_run` until no task is ready.
+     Only a lab *step* fires due timers (`step_inner`, `:4509`), and an
+     idle run takes none with an empty scheduler: while every task is
+     parked, neither an entry's clock advance nor the next entry's idle run
+     fires a timer that has come due. It fires once some task is runnable
+     (a driver `cancel_task`, `cancel_region` or `close_region` schedules
+     one) or in the finish phase's auto-advance;
    - if `at_ns` is later than now, advance virtual time to it: Rust
      `advance_time_to` (`:3097`), C `asx_lab_advance_time`;
    - apply the entry's driver operation (§4).
@@ -779,7 +785,7 @@ idle and virtual time is advanced to `t` (§2).
 | `finish_region` | `region`, `body` (`ok`, `err`, `cancelled`, `panicked`); Cancelled requires `kind`, optional `message` | Scope's body-return branch (`scope.rs:877-920`): Ok only `begin_close(None)`; Cancelled `cancel_request` with the supplied reason; Err/Panicked `CancelReason::fail_fast().with_region(region)`; then `advance_region_state` once | `asx_region_close_with_outcome`, then the runtime's ordinary close advancement; subsequent lab steps finish existing work without a new cancellation |
 | `advance` | `ns` | `lab.advance_time(ns)` (`lab/runtime.rs:3076`; a forward jump, the only clock fault Rust offers) | `asx_lab_advance_time(ns)` |
 | `region_limits` | `region`, optional `max_tasks`, `max_children`, `max_obligations` | `lab.state.set_region_limits(region, RegionLimits{…})` (`state.rs:4103`; `record/region.rs:208`); a region already gone has nothing to limit: no effect | `asx_region_set_limits(region, &limits)`; an omitted or null field is `ASX_REGION_UNLIMITED`; a region already gone: no effect |
-| `region_close_outcome` | `region` | `lab.state.region_close_outcome(region)` (`state.rs:3743`): the outcomes of the tasks that completed in the region, joined, read live or after its close | `asx_region_get_close_outcome(region, &outcome)` |
+| `region_close_outcome` | `region` | `lab.state.region_close_outcome(region)` (`state.rs:3972`; folded as each task completes, `state.rs:8794`): the outcomes of the tasks that completed in the region, joined, read live or after its close | `asx_region_get_close_outcome(region, &outcome)` |
 
 `finish_region` is a primitive body-branch witness executed against the real
 Rust runtime. It does not run `Scope::region_with_child_admission`'s typed
@@ -798,7 +804,7 @@ task of the region has completed and the region is not Closed. The outcome
 is the join of the tasks' outcomes, folded as each completes (so readable
 before the close), with the severity order Ok < Err < Cancelled < Panicked
 deciding; with nothing folded, a closed region reports Cancelled with its own
-cancel reason if it was cancelled and Ok otherwise (`record/region.rs:1810`).
+cancel reason if it was cancelled and Ok otherwise (`record/region.rs:1820-1835`).
 An `err` outcome has no status on the C side, so the interpreter refuses a
 scenario that reads one. The name `driver` is reserved.
 

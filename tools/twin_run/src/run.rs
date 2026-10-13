@@ -4187,7 +4187,7 @@ fn apply_driver_op(
     };
     match str_field(op, "op")? {
         // The aggregated close outcome of a live or recently closed region
-        // (RuntimeState::region_close_outcome, state.rs:3743), observed
+        // (RuntimeState::region_close_outcome, state.rs:3972), observed
         // under the task name `driver`: none yet is ASX_E_NOT_FOUND.
         "region_close_outcome" => {
             let region = region_id("region")?;
