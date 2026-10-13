@@ -2,9 +2,9 @@
  * db.c — in-memory database client model (MODEL-ONLY, DEC-010)
  *
  * Not a database client: no driver, no wire protocol, no storage. A
- * connection is a slot in the pool, a statement runs nothing, and execute
- * hands back an empty result set that the caller may fill with
- * asx_db_result_add_row for a lab scenario. Only "mem://" DSNs are accepted.
+ * connection is a slot in the pool, and execute refuses every statement:
+ * the model implements none, so a lab scenario builds the result sets it
+ * needs with asx_db_result_add_row. Only "mem://" DSNs are accepted.
  *
  * SPDX-License-Identifier: MIT
  */
@@ -144,11 +144,15 @@ asx_status asx_db_execute(asx_db_conn *conn, const char *query, asx_db_result *r
     if (conn == NULL || !conn->alive || query == NULL || result == NULL)
         return ASX_E_INVALID_ARGUMENT;
     if (conn->state == ASX_DB_CONN_CLOSED) return ASX_E_INVALID_STATE;
+    if (query[0] == '\0') return ASX_E_INVALID_ARGUMENT;
 
+    /* The model implements no statement: it has no tables, no parser and no
+     * storage, so nothing can give a statement a meaning here. It is refused
+     * by name. OK with an empty result set would read as "ran and found
+     * nothing", and an INSERT would look like it inserted. The result is
+     * left empty and nothing counts as executed. */
     asx_db_result_init(result);
-    conn->queries_executed++;
-    /* Deterministic: return empty result set for any query */
-    return ASX_OK;
+    return ASX_E_PERMISSION_DENIED;
 }
 
 asx_status asx_db_begin(asx_db_conn *conn) {

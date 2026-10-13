@@ -3,8 +3,9 @@
  *
  * MODEL-ONLY (DEC-010). This is a deterministic in-memory model. It is not a
  * database client: no driver, no wire protocol and no storage. A connection
- * is a slot in a pool; a statement runs nothing; a success status means the
- * in-process model accepted the call, not that a database did anything. The
+ * is a slot in a pool; a statement is refused (the model implements none); a
+ * success status means the in-process model accepted the call, not that a
+ * database did anything. The
  * SQLite, Postgres and MySQL backend flags are 0 and selecting those
  * backends is refused.
  *
@@ -92,7 +93,7 @@ typedef struct {
     uint32_t generation;
     asx_db_conn_state state;
     char dsn[ASX_DB_DSN_MAX];
-    uint32_t queries_executed;
+    uint32_t queries_executed; /* statements run: always 0, the model runs none */
     uint8_t alive;
 } asx_db_conn;
 
@@ -131,10 +132,14 @@ ASX_API asx_status asx_db_connect(asx_db_pool *pool, const char *dsn, asx_db_con
 /* Close a connection. */
 ASX_API asx_status asx_db_close(asx_db_conn *conn);
 
-/* Count a statement and return an EMPTY result set: the model runs nothing and
- * stores nothing, whatever the statement says (an INSERT inserts no row, a
- * SELECT finds none). A lab scenario fills the result with
- * asx_db_result_add_row if it needs rows. */
+/* Refuse the statement. The model implements none: it has no tables, no parser
+ * and no storage, so no statement has a meaning here, and answering OK with an
+ * empty result would read as "ran, found nothing" (an INSERT would look like
+ * it inserted). Returns ASX_E_PERMISSION_DENIED for any non-empty statement,
+ * as selecting a backend the model lacks does, with *result left empty and
+ * nothing counted in queries_executed. ASX_E_INVALID_ARGUMENT for NULL
+ * arguments, a closed connection or an empty statement. A lab scenario builds
+ * the result sets it needs with asx_db_result_add_row. */
 ASX_API asx_status asx_db_execute(asx_db_conn *conn, const char *query, asx_db_result *result);
 
 /* Begin a transaction. */

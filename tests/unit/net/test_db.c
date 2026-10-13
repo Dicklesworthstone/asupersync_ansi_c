@@ -123,21 +123,77 @@ TEST(db_connect_exhaustion) {
     for (i = 0; i < ASX_DB_MAX_CONNECTIONS; i++) { asx_db_close(conns[i]); }
 }
 
-TEST(db_execute_query) {
+TEST(db_execute_refuses_every_statement_with_a_typed_error) {
+    static const char *const statements[] = {
+        "SELECT 1",
+        "SELECT * FROM users WHERE id = 7",
+        "INSERT INTO users VALUES (1, 'a')",
+        "UPDATE users SET name = 'b'",
+        "DELETE FROM users",
+        "CREATE TABLE t (a INT)",
+        "BEGIN",
+        "COMMIT",
+        "SELECT 1; DROP TABLE users",
+    };
     asx_db_pool pool;
-    asx_db_conn *conn;
+    asx_db_conn *conn = NULL;
     asx_db_result result;
+    size_t i;
 
     asx_db_pool_init(&pool);
     if (!db_surface_available()) {
         ASSERT_EQ(asx_db_connect(&pool, "mem://test", &conn), ASX_E_PERMISSION_DENIED);
         return;
     }
-    asx_db_connect(&pool, "mem://test", &conn);
-    ASSERT_EQ(asx_db_execute(conn, "SELECT 1", &result), ASX_OK);
-    ASSERT_EQ(conn->queries_executed, 1u);
-    ASSERT_EQ(result.row_count, 0u); /* deterministic: empty result */
-    asx_db_close(conn);
+    ASSERT_EQ(asx_db_connect(&pool, "mem://test", &conn), ASX_OK);
+
+    for (i = 0; i < sizeof(statements) / sizeof(statements[0]); i++) {
+        /* A result that held a column is emptied by the refusal. */
+        asx_db_result_init(&result);
+        ASSERT_EQ(asx_db_result_add_column(&result, "a"), ASX_OK);
+        ASSERT_EQ(asx_db_execute(conn, statements[i], &result), ASX_E_PERMISSION_DENIED);
+        ASSERT_EQ(result.column_count, 0u);
+        ASSERT_EQ(result.row_count, 0u);
+    }
+    /* Nothing ran, so nothing is counted as executed. */
+    ASSERT_EQ(conn->queries_executed, 0u);
+
+    ASSERT_EQ(asx_db_close(conn), ASX_OK);
+}
+
+TEST(db_execute_refusal_leaves_the_transaction_alone) {
+    asx_db_pool pool;
+    asx_db_conn *conn = NULL;
+    asx_db_result result;
+
+    asx_db_pool_init(&pool);
+    if (!db_surface_available()) return;
+    ASSERT_EQ(asx_db_connect(&pool, "mem://test", &conn), ASX_OK);
+    ASSERT_EQ(asx_db_begin(conn), ASX_OK);
+    ASSERT_EQ(conn->state, ASX_DB_CONN_IN_TX);
+
+    ASSERT_EQ(asx_db_execute(conn, "INSERT INTO t VALUES (1)", &result), ASX_E_PERMISSION_DENIED);
+    ASSERT_EQ(conn->state, ASX_DB_CONN_IN_TX);
+    ASSERT_EQ(asx_db_rollback(conn), ASX_OK);
+    ASSERT_EQ(conn->state, ASX_DB_CONN_ACTIVE);
+    ASSERT_EQ(asx_db_close(conn), ASX_OK);
+}
+
+TEST(db_execute_rejects_an_empty_statement_and_a_closed_connection) {
+    asx_db_pool pool;
+    asx_db_conn *conn = NULL;
+    asx_db_result result;
+
+    asx_db_pool_init(&pool);
+    if (!db_surface_available()) return;
+    ASSERT_EQ(asx_db_connect(&pool, "mem://test", &conn), ASX_OK);
+
+    ASSERT_EQ(asx_db_execute(conn, "", &result), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_db_execute(conn, NULL, &result), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_db_execute(conn, "SELECT 1", NULL), ASX_E_INVALID_ARGUMENT);
+
+    ASSERT_EQ(asx_db_close(conn), ASX_OK);
+    ASSERT_EQ(asx_db_execute(conn, "SELECT 1", &result), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(db_transaction_lifecycle) {
@@ -318,7 +374,9 @@ int main(void) {
     RUN_TEST(db_connect_rejects_oversized_dsn);
     RUN_TEST(db_connect_refuses_a_dsn_that_names_a_real_database);
     RUN_TEST(db_connect_exhaustion);
-    RUN_TEST(db_execute_query);
+    RUN_TEST(db_execute_refuses_every_statement_with_a_typed_error);
+    RUN_TEST(db_execute_refusal_leaves_the_transaction_alone);
+    RUN_TEST(db_execute_rejects_an_empty_statement_and_a_closed_connection);
     RUN_TEST(db_transaction_lifecycle);
     RUN_TEST(db_result_navigation);
     RUN_TEST(db_result_rejects_row_beyond_schema);
