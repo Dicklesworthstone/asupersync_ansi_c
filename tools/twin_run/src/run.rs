@@ -69,6 +69,9 @@ struct Shared {
     /// Every task a `handoff` step names as its destination
     /// (`handoff_destinations`).
     handoff_destinations: HashSet<String>,
+    /// The mpsc channels declared `"unbounded": true` (DSL §3.6): Rust's
+    /// `UnboundedSender` has no `send_evict_oldest` and no `closed`.
+    unbounded_channels: HashSet<String>,
     /// Weak references only: the destination future owns incoming tokens,
     /// including before its first poll, and drops them with its body.
     obligation_tokens: HashMap<String, Weak<Mutex<HashMap<String, ObligationToken>>>>,
@@ -1695,7 +1698,13 @@ fn exec_sync(
         }
         "send_evict_oldest" => {
             // Never parks; the value is the evicted message, if any.
-            let (tx, _) = local.lend(str_field(step, "channel")?)?;
+            let channel = str_field(step, "channel")?;
+            if lock(&ctx.shared).unbounded_channels.contains(channel) {
+                return Err(format!(
+                    "send_evict_oldest on the unbounded channel {channel:?} (UnboundedSender has none)"
+                ));
+            }
+            let (tx, _) = local.lend(channel)?;
             match tx.send_evict_oldest(u64_field(step, "value")?) {
                 Ok(evicted) => observe(&ctx.shared, me, idx, label, "ASX_OK", json!(evicted)),
                 Err(e) => observe(
@@ -2248,7 +2257,13 @@ async fn exec_step(
         }
         "closed" => {
             // No Cx: closure, not cancellation, ends the wait (mpsc_closed.rs:39).
-            let (tx, _) = local.lend(str_field(step, "channel")?)?;
+            let channel = str_field(step, "channel")?;
+            if lock(&ctx.shared).unbounded_channels.contains(channel) {
+                return Err(format!(
+                    "closed on the unbounded channel {channel:?} (UnboundedSender has none)"
+                ));
+            }
+            let (tx, _) = local.lend(channel)?;
             tx.closed().await;
             observe(&ctx.shared, me, idx, op, "ASX_OK", Value::Null);
         }
@@ -3618,9 +3633,29 @@ pub fn run_scenario_with(scenario: &Value, raw: Option<&mut Vec<String>>) -> Run
         {
             return Err("only an mpsc or a broadcast channel takes senders".to_string());
         }
+        if decl.get("unbounded").is_some() && str_field(decl, "type")? != "mpsc" {
+            return Err("only an mpsc channel can be unbounded".to_string());
+        }
         match str_field(decl, "type")? {
             "mpsc" => {
-                let (tx, rx) = mpsc::channel::<u64>(capacity()?);
+                // `"unbounded": true` is mpsc::unbounded_channel() (mpsc.rs:599),
+                // which is channel(usize::MAX): the same Sender and Receiver, so
+                // every mpsc step applies and a send never waits.
+                let unbounded = match decl.get("unbounded") {
+                    None => false,
+                    Some(Value::Bool(true)) => true,
+                    Some(_) => return Err("unbounded is not the constant true".to_string()),
+                };
+                let slots = if unbounded {
+                    if decl.get("capacity").is_some() {
+                        return Err("an unbounded mpsc channel has no capacity".to_string());
+                    }
+                    lock(&shared).unbounded_channels.insert(name.clone());
+                    usize::MAX
+                } else {
+                    capacity()?
+                };
+                let (tx, rx) = mpsc::channel::<u64>(slots);
                 for extra in extra_senders()? {
                     give(&extra, Endpoint::MpscTx(tx.clone()));
                 }
