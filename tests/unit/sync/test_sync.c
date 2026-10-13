@@ -812,7 +812,7 @@ static void check_sync_foreign_settlement(sync_access_operation operation) {
     ASSERT_EQ(before.kind, ASX_OBLIGATION_KIND_SEMAPHORE_PERMIT);
     ASSERT_EQ(asx_handle_index(before.holder), asx_handle_index(owner));
     ASSERT_EQ(sync_obligation_resolution_count(c.permit.obligation), 0u);
-    leaks = asx_obligation_leak_count();
+    leaks = asx_obligation_leak_count(test_runtime());
     if (operation == SYNC_ACCESS_POISON_FOREIGN_CREDIT) {
         ASSERT_EQ(c.holder_forged_attempted, ASX_E_PERMISSION_DENIED);
         ASSERT_TRUE(asx_mutex_is_locked(c.mutex));
@@ -837,7 +837,7 @@ static void check_sync_foreign_settlement(sync_access_operation operation) {
         ASSERT_EQ(after.state, before.state);
         ASSERT_EQ(after.abort_reason, before.abort_reason);
     }
-    ASSERT_EQ(asx_obligation_leak_count(), leaks);
+    ASSERT_EQ(asx_obligation_leak_count(test_runtime()), leaks);
     ASSERT_EQ(sync_obligation_resolution_count(c.permit.obligation), moved ? 1u : 0u);
     if (operation == SYNC_ACCESS_POISON_FOREIGN_CREDIT) {
         ASSERT_TRUE(asx_mutex_is_locked(c.mutex));
@@ -860,7 +860,7 @@ static void check_sync_foreign_settlement(sync_access_operation operation) {
     }
     ASSERT_EQ(asx_semaphore_available(c.sem), final_available);
     ASSERT_EQ(sync_obligation_resolution_count(c.permit.obligation), 1u);
-    ASSERT_EQ(asx_obligation_leak_count(), leaks);
+    ASSERT_EQ(asx_obligation_leak_count(test_runtime()), leaks);
     ASSERT_EQ(asx_semaphore_release(c.permit), ASX_E_INVALID_STATE);
     ASSERT_EQ(asx_semaphore_forget(c.permit), ASX_E_INVALID_STATE);
     ASSERT_EQ(asx_semaphore_available(c.sem), final_available);
@@ -942,7 +942,7 @@ TEST(equal_count_permits_reject_another_reservations_credit) {
     ASSERT_EQ(info.state, ASX_OBLIGATION_COMMITTED);
     ASSERT_EQ(asx_obligation_get_info(second.obligation, &info), ASX_OK);
     ASSERT_EQ(info.state, ASX_OBLIGATION_COMMITTED);
-    ASSERT_EQ(asx_obligation_leak_count(), 0u);
+    ASSERT_EQ(asx_obligation_leak_count(test_runtime()), 0u);
     ASSERT_EQ(asx_semaphore_close(sem), ASX_OK);
 }
 

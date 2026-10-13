@@ -419,7 +419,7 @@ TEST(ghost_integration_lifecycle_obligation_leak_on_drain) {
      * holder completes, before any close. The ghost linearity monitor has
      * not looked yet: it runs at the close. */
     ASSERT_EQ(test_run_in_task(rid, reserve_and_complete_body, &rid), ASX_OK);
-    ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)1u);
+    ASSERT_EQ(asx_obligation_leak_count(test_runtime()), (uint64_t)1u);
     ASSERT_EQ(asx_ghost_violation_count(), (uint32_t)0);
 
     /* Drain: the ghost linearity monitor, run at the close before its

@@ -5,6 +5,7 @@
  */
 
 #include "../../test_harness.h"
+#include "../../test_runtime.h"
 #include <asx/cx/scope.h>
 #include <asx/runtime/rt.h>
 #include <asx/runtime/trace.h>
@@ -615,7 +616,8 @@ TEST(scope_finish_cancelled_body_preserves_requested_reason) {
     asx_task_handle child;
     finish_child_ctx ctx;
     asx_outcome body = asx_outcome_make(ASX_OUTCOME_CANCELLED);
-    asx_cancel_reason reason = asx_cancel_reason_default(ASX_CANCEL_SHUTDOWN, "body cancelled");
+    asx_cancel_reason reason =
+        asx_cancel_reason_default(test_runtime(), ASX_CANCEL_SHUTDOWN, "body cancelled");
     asx_cancel_reason seen;
     setup();
     memset(&ctx, 0, sizeof(ctx));
@@ -635,7 +637,7 @@ TEST(scope_finish_invalid_body_and_reason_are_failure_atomic) {
     asx_outcome ok = asx_outcome_make(ASX_OUTCOME_OK);
     asx_outcome cancelled = asx_outcome_make(ASX_OUTCOME_CANCELLED);
     asx_outcome invalid = asx_outcome_make((asx_outcome_severity)99);
-    asx_cancel_reason reason = asx_cancel_reason_default(ASX_CANCEL_USER, NULL);
+    asx_cancel_reason reason = asx_cancel_reason_default(test_runtime(), ASX_CANCEL_USER, NULL);
     asx_region_state state;
     uint32_t events;
     setup();
@@ -662,7 +664,8 @@ TEST(scope_finish_cancelled_retry_without_reason_does_not_cancel_again) {
     asx_task_handle child;
     finish_child_ctx ctx;
     asx_outcome body = asx_outcome_make(ASX_OUTCOME_CANCELLED);
-    asx_cancel_reason requested = asx_cancel_reason_default(ASX_CANCEL_USER, "original body");
+    asx_cancel_reason requested =
+        asx_cancel_reason_default(test_runtime(), ASX_CANCEL_USER, "original body");
     asx_cancel_reason seen;
     uint32_t cancellations;
     setup();
@@ -798,14 +801,15 @@ TEST(scope_finish_finalizer_reentry_keeps_first_body_and_cancel_reason) {
         for (order = 0u; order < 2u; order++) {
             asx_scope scope;
             finish_reentry_ctx ctx;
-            asx_cancel_reason first = asx_cancel_reason_default(ASX_CANCEL_USER, "first body");
+            asx_cancel_reason first =
+                asx_cancel_reason_default(test_runtime(), ASX_CANCEL_USER, "first body");
             asx_cancel_reason observed;
             asx_region_state state;
             setup();
             memset(&ctx, 0, sizeof(ctx));
             ctx.scope = &scope;
             ctx.body = asx_outcome_make(severities[severity]);
-            ctx.stronger = asx_cancel_reason_default(ASX_CANCEL_SHUTDOWN, "reentrant retry");
+            ctx.stronger = asx_cancel_reason_default(&g_rt, ASX_CANCEL_SHUTDOWN, "reentrant retry");
             ctx.different_first = (int)order;
             ASSERT_EQ(asx_scope_init(&scope, g_rid, &g_cx, asx_budget_from_polls(8u)), ASX_OK);
             ASSERT_EQ(asx_region_defer_sync(g_rid, finalizer_reenter_scope_finish, &ctx), ASX_OK);

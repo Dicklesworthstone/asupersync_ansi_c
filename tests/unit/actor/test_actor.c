@@ -395,7 +395,8 @@ static void test_refused_server_reply_does_not_repoll_following_sleep(void) {
     ASSERT(asx_task_get_outcome(task, &outcome) == ASX_OK && outcome.severity == ASX_OUTCOME_OK,
            "body close did not cancel the caller");
     budget = asx_budget_from_polls(100u);
-    ASSERT(asx_region_wait_closed(region, &budget) == ASX_OK && asx_obligation_leak_count() == 0u,
+    ASSERT(asx_region_wait_closed(region, &budget) == ASX_OK &&
+               asx_obligation_leak_count(&g_refused_lab.rt) == 0u,
            "real reply settlement permits a leak-free close");
     asx_lab_shutdown(&g_refused_lab);
 }
@@ -712,7 +713,7 @@ static void test_join_waits_for_the_server(void) {
 /* ------------------------------------------------------------------ */
 
 static void cancel(asx_region_id region) {
-    asx_cancel_reason r = asx_cancel_reason_default(ASX_CANCEL_USER, NULL);
+    asx_cancel_reason r = asx_cancel_reason_default(test_runtime(), ASX_CANCEL_USER, NULL);
     MUST_OK(asx_region_cancel(region, &r, NULL));
 }
 

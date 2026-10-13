@@ -441,7 +441,7 @@ static void test_the_outcome_is_carried(void) {
     asx_task_id t_cancel;
     asx_task_id t_panic;
     asx_monitor_ref r_err = 0, r_cancel = 0, r_panic = 0;
-    asx_cancel_reason reason = asx_cancel_reason_default(ASX_CANCEL_TIMEOUT, NULL);
+    asx_cancel_reason reason = asx_cancel_reason_default(test_runtime(), ASX_CANCEL_TIMEOUT, NULL);
     asx_outcome o_err = asx_outcome_make(ASX_OUTCOME_ERR);
     asx_outcome o_cancel = asx_outcome_cancelled(&reason);
     asx_outcome o_panic = asx_outcome_panicked("boom");

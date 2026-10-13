@@ -623,7 +623,7 @@ TEST(crowd_on_a_small_channel_with_a_third_cancelled_keeps_fifo) {
     ASSERT_TRUE(setup());
     reset_fixtures();
     memset(cancelled, 0, sizeof(cancelled));
-    leaks_before = asx_obligation_leak_count();
+    leaks_before = asx_obligation_leak_count(&g_rt);
     ASSERT_EQ(asx_channel_create(g_region, 8, &ch), ASX_OK);
     for (i = 0; i < CROWD; i++) {
         g_tx[i].ch = ch;
@@ -665,7 +665,7 @@ TEST(crowd_on_a_small_channel_with_a_third_cancelled_keeps_fifo) {
     ASSERT_EQ(k, g_rx[0].got);
     ASSERT_EQ(asx_channel_queue_len(ch, &k), ASX_OK);
     ASSERT_EQ(k, 0u);
-    ASSERT_EQ(asx_obligation_leak_count(), leaks_before);
+    ASSERT_EQ(asx_obligation_leak_count(&g_rt), leaks_before);
 }
 
 TEST(cancel_pending_front_producer_keeps_its_place) {
@@ -1579,7 +1579,7 @@ TEST(send_permits_held_at_completion_are_dropped_with_their_task) {
     ASSERT_TRUE(setup());
     reset_fixtures();
     memset(h, 0, sizeof(h));
-    leaks_before = asx_obligation_leak_count();
+    leaks_before = asx_obligation_leak_count(&g_rt);
     ASSERT_EQ(asx_channel_create(g_region, 2, &ch), ASX_OK);
     h[0].ch = ch;
     h[1].ch = ch;
@@ -1606,7 +1606,7 @@ TEST(send_permits_held_at_completion_are_dropped_with_their_task) {
     ASSERT_TRUE(send_permit_dropped(h[0].permit.obligation, th[0]));
     ASSERT_TRUE(send_permit_dropped(h[1].permit.obligation, th[1]));
     ASSERT_TRUE(task_cancelled(th[1]));
-    ASSERT_EQ(asx_obligation_leak_count(), leaks_before);
+    ASSERT_EQ(asx_obligation_leak_count(&g_rt), leaks_before);
     ASSERT_NE(asx_send_permit_send(&h[0].permit, 9u), ASX_OK);
     asx_send_permit_abort(&h[1].permit);
     ASSERT_EQ(asx_channel_queue_len(ch, &len), ASX_OK);
@@ -1628,7 +1628,7 @@ TEST(oneshot_permit_held_at_completion_is_dropped_with_its_task) {
 
     ASSERT_TRUE(setup());
     memset(&h, 0, sizeof(h));
-    leaks_before = asx_obligation_leak_count();
+    leaks_before = asx_obligation_leak_count(&g_rt);
     ASSERT_EQ(asx_oneshot_create(&h.tx, &rx), ASX_OK);
     h.oneshot = 1;
     ASSERT_EQ(asx_task_spawn(g_region, poll_permit_holder, &h, &t), ASX_OK);
@@ -1636,7 +1636,7 @@ TEST(oneshot_permit_held_at_completion_is_dropped_with_its_task) {
     ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_OK);
 
     ASSERT_TRUE(send_permit_dropped(h.oneshot_permit.obligation, t));
-    ASSERT_EQ(asx_obligation_leak_count(), leaks_before);
+    ASSERT_EQ(asx_obligation_leak_count(&g_rt), leaks_before);
     ASSERT_NE(asx_oneshot_permit_send(&h.oneshot_permit, 7u), ASX_OK);
     ASSERT_EQ(asx_oneshot_try_recv(&rx, &v), ASX_E_DISCONNECTED);
     ASSERT_EQ(v, 0u);
@@ -1654,7 +1654,7 @@ TEST(broadcast_permit_held_at_completion_is_dropped_with_its_task) {
 
     ASSERT_TRUE(setup());
     memset(&h, 0, sizeof(h));
-    leaks_before = asx_obligation_leak_count();
+    leaks_before = asx_obligation_leak_count(&g_rt);
     ASSERT_EQ(asx_broadcast_create(2u, &h.btx, &rx), ASX_OK);
     h.broadcast = 1;
     ASSERT_EQ(asx_task_spawn(g_region, poll_permit_holder, &h, &t), ASX_OK);
@@ -1662,7 +1662,7 @@ TEST(broadcast_permit_held_at_completion_is_dropped_with_its_task) {
     ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_OK);
 
     ASSERT_TRUE(send_permit_dropped(h.broadcast_permit.obligation, t));
-    ASSERT_EQ(asx_obligation_leak_count(), leaks_before);
+    ASSERT_EQ(asx_obligation_leak_count(&g_rt), leaks_before);
     ASSERT_EQ(asx_broadcast_try_recv(&rx, &v), ASX_E_WOULD_BLOCK);
     ASSERT_EQ(asx_broadcast_total_sent(&h.btx), 0u);
 }

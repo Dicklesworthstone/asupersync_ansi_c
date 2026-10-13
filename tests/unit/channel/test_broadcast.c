@@ -413,7 +413,7 @@ TEST(tracked_permit_authenticates_each_reservation_and_moves) {
     ASSERT_EQ(asx_broadcast_try_recv(&rx, &value), ASX_OK);
     ASSERT_EQ(value, 7u);
     ASSERT_EQ(asx_broadcast_try_recv(&rx, &value), ASX_E_WOULD_BLOCK);
-    ASSERT_EQ(asx_obligation_leak_count(), 0u);
+    ASSERT_EQ(asx_obligation_leak_count(test_runtime()), 0u);
 }
 
 typedef struct {
@@ -455,7 +455,7 @@ TEST(tracked_permit_drops_with_its_holder_without_publication) {
     ASSERT_EQ(probe.permit.consumed, 0);
     ASSERT_EQ(asx_broadcast_total_sent(&probe.sender), 0u);
     ASSERT_EQ(asx_broadcast_try_recv(&rx, &value), ASX_E_WOULD_BLOCK);
-    ASSERT_EQ(asx_obligation_leak_count(), 0u);
+    ASSERT_EQ(asx_obligation_leak_count(test_runtime()), 0u);
 }
 
 /* ------------------------------------------------------------------ */
@@ -621,7 +621,7 @@ TEST(registration_observer_cannot_reuse_the_credit_being_registered) {
     ASSERT_EQ(asx_broadcast_try_recv(&receiver, &value), ASX_OK);
     ASSERT_EQ(value, 8u);
     ASSERT_EQ(asx_broadcast_try_recv(&receiver, &value), ASX_E_WOULD_BLOCK);
-    ASSERT_EQ(asx_obligation_leak_count(), 0u);
+    ASSERT_EQ(asx_obligation_leak_count(test_runtime()), 0u);
 }
 
 /* ------------------------------------------------------------------ */

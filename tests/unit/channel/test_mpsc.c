@@ -1509,7 +1509,7 @@ TEST(create_accepts_a_closing_region) {
     setup();
     ASSERT_EQ(asx_region_open(test_runtime(), &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_idle, NULL, &t), ASX_OK);
-    reason = asx_cancel_reason_default(ASX_CANCEL_USER, NULL);
+    reason = asx_cancel_reason_default(test_runtime(), ASX_CANCEL_USER, NULL);
     ASSERT_EQ(asx_region_cancel(r, &reason, NULL), ASX_OK);
     ASSERT_EQ(asx_region_get_state(r, &rs), ASX_OK);
     ASSERT_TRUE(rs != ASX_REGION_OPEN && rs != ASX_REGION_CLOSED);

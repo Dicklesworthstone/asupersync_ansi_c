@@ -424,7 +424,7 @@ TEST(sem_permit_polled_with_cx_is_an_obligation_until_release) {
 
     ASSERT_TRUE(setup());
     reset_sem_fixtures();
-    leaks_before = asx_obligation_leak_count();
+    leaks_before = asx_obligation_leak_count(&g_rt);
     ASSERT_EQ(asx_semaphore_create(1, &h), ASX_OK);
     for (i = 0; i < 2u; i++) {
         g_sem[i].id = i;
@@ -441,7 +441,7 @@ TEST(sem_permit_polled_with_cx_is_an_obligation_until_release) {
     ASSERT_TRUE(g_sem[0].obligation != g_sem[1].obligation);
     ASSERT_TRUE(sem_obligation_is(g_sem[0].obligation, t[0], ASX_OBLIGATION_COMMITTED));
     ASSERT_TRUE(sem_obligation_is(g_sem[1].obligation, t[1], ASX_OBLIGATION_COMMITTED));
-    ASSERT_EQ(asx_obligation_leak_count(), leaks_before);
+    ASSERT_EQ(asx_obligation_leak_count(&g_rt), leaks_before);
     ASSERT_EQ(asx_semaphore_available(h), 1u);
 }
 
@@ -453,7 +453,7 @@ TEST(sem_permit_held_past_task_completion_is_dropped_with_it) {
 
     ASSERT_TRUE(setup());
     reset_sem_fixtures();
-    leaks_before = asx_obligation_leak_count();
+    leaks_before = asx_obligation_leak_count(&g_rt);
     ASSERT_EQ(asx_semaphore_create(1, &h), ASX_OK);
     g_sem[0].sem = h;
     g_sem[0].use_cx = 1;
@@ -467,7 +467,7 @@ TEST(sem_permit_held_past_task_completion_is_dropped_with_it) {
      * commits the obligation (sync/semaphore.rs:1081); nothing leaks. The
      * spent permit value cannot be released again. */
     ASSERT_TRUE(sem_obligation_is(g_sem[0].obligation, t, ASX_OBLIGATION_COMMITTED));
-    ASSERT_EQ(asx_obligation_leak_count(), leaks_before);
+    ASSERT_EQ(asx_obligation_leak_count(&g_rt), leaks_before);
     ASSERT_EQ(asx_semaphore_available(h), 1u);
     ASSERT_EQ(asx_semaphore_release(g_sem[0].permit), ASX_E_INVALID_STATE);
     ASSERT_EQ(asx_semaphore_available(h), 1u);
@@ -494,7 +494,7 @@ TEST(sem_holders_ending_with_permits_and_tokens_under_each_leak_policy) {
     for (p = 0; p < 3u; p++) {
         ASSERT_TRUE(setup_with_leak_response(policies[p]));
         reset_sem_fixtures();
-        leaks_before = asx_obligation_leak_count();
+        leaks_before = asx_obligation_leak_count(&g_rt);
         ASSERT_EQ(asx_semaphore_create(8, &h), ASX_OK);
         for (i = 0; i < 8u; i++) {
             g_sem[i].sem = h;
@@ -505,7 +505,7 @@ TEST(sem_holders_ending_with_permits_and_tokens_under_each_leak_policy) {
         }
         budget = asx_budget_from_polls(100);
         ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_OK);
-        ASSERT_EQ(asx_obligation_leak_count(), leaks_before + 8u);
+        ASSERT_EQ(asx_obligation_leak_count(&g_rt), leaks_before + 8u);
         ASSERT_EQ(asx_semaphore_available(h), 8u);
         for (i = 0; i < 8u; i++) {
             ASSERT_TRUE(sem_obligation_is(g_sem[i].obligation, t[i], ASX_OBLIGATION_COMMITTED));

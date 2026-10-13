@@ -99,7 +99,7 @@ TEST(obligation_host_can_neither_reserve_nor_settle) {
     ASSERT_EQ(asx_scheduler_run(rid, &run), ASX_OK);
     ASSERT_EQ(asx_obligation_get_state(h.ob, &state), ASX_OK);
     ASSERT_EQ(state, ASX_OBLIGATION_ABORTED);
-    ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)0u);
+    ASSERT_EQ(asx_obligation_leak_count(test_runtime()), (uint64_t)0u);
 }
 
 static void commit_body(void *ctx) {

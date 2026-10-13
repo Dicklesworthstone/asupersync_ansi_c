@@ -279,7 +279,8 @@ static asx_status poll_panic(void *ud, asx_task_id self) {
 TEST(task_outcome_carries_the_reason_it_was_cancelled_with) {
     asx_region_id rid;
     asx_task_id tid;
-    asx_cancel_reason reason = asx_cancel_reason_default(ASX_CANCEL_TIMEOUT, "too slow");
+    asx_cancel_reason reason =
+        asx_cancel_reason_default(test_runtime(), ASX_CANCEL_TIMEOUT, "too slow");
     asx_cancel_reason recorded;
     asx_outcome out;
     asx_budget run;
@@ -327,7 +328,7 @@ TEST(region_close_outcome_joins_member_payloads) {
     asx_region_id rid;
     asx_task_id cancelled;
     asx_task_id panicking;
-    asx_cancel_reason reason = asx_cancel_reason_default(ASX_CANCEL_USER, "stop");
+    asx_cancel_reason reason = asx_cancel_reason_default(test_runtime(), ASX_CANCEL_USER, "stop");
     asx_outcome out;
     asx_budget run;
 
@@ -355,7 +356,8 @@ TEST(region_close_outcome_joins_member_payloads) {
 
 TEST(cancelled_region_without_tasks_reports_its_own_reason) {
     asx_region_id rid;
-    asx_cancel_reason reason = asx_cancel_reason_default(ASX_CANCEL_SHUTDOWN, "going down");
+    asx_cancel_reason reason =
+        asx_cancel_reason_default(test_runtime(), ASX_CANCEL_SHUTDOWN, "going down");
     asx_outcome out;
     uint32_t reached = 99u;
 

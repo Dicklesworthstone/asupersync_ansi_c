@@ -42,20 +42,22 @@ TEST(resource_capacity_unknown) {
 
 TEST(resource_used_after_reset) {
     asx_runtime_reset(test_runtime());
-    ASSERT_EQ(asx_resource_used(ASX_RESOURCE_REGION), (uint32_t)0);
-    ASSERT_EQ(asx_resource_used(ASX_RESOURCE_TASK), (uint32_t)0);
-    ASSERT_EQ(asx_resource_used(ASX_RESOURCE_OBLIGATION), (uint32_t)0);
+    ASSERT_EQ(asx_resource_used(test_runtime(), ASX_RESOURCE_REGION), (uint32_t)0);
+    ASSERT_EQ(asx_resource_used(test_runtime(), ASX_RESOURCE_TASK), (uint32_t)0);
+    ASSERT_EQ(asx_resource_used(test_runtime(), ASX_RESOURCE_OBLIGATION), (uint32_t)0);
 }
 
 TEST(resource_remaining_matches_capacity_minus_used) {
     asx_region_id rid;
     asx_runtime_reset(test_runtime());
 
-    ASSERT_EQ(asx_resource_remaining(ASX_RESOURCE_REGION), (uint32_t)ASX_MAX_REGIONS);
+    ASSERT_EQ(asx_resource_remaining(test_runtime(), ASX_RESOURCE_REGION),
+              (uint32_t)ASX_MAX_REGIONS);
 
     ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
-    ASSERT_EQ(asx_resource_used(ASX_RESOURCE_REGION), (uint32_t)1);
-    ASSERT_EQ(asx_resource_remaining(ASX_RESOURCE_REGION), (uint32_t)(ASX_MAX_REGIONS - 1));
+    ASSERT_EQ(asx_resource_used(test_runtime(), ASX_RESOURCE_REGION), (uint32_t)1);
+    ASSERT_EQ(asx_resource_remaining(test_runtime(), ASX_RESOURCE_REGION),
+              (uint32_t)(ASX_MAX_REGIONS - 1));
 }
 
 /* ---- Snapshot consistency ---- */
@@ -67,7 +69,7 @@ TEST(resource_snapshot_matches_queries) {
 
     ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
-    ASSERT_EQ(asx_resource_snapshot_get(ASX_RESOURCE_REGION, &snap), ASX_OK);
+    ASSERT_EQ(asx_resource_snapshot_get(test_runtime(), ASX_RESOURCE_REGION, &snap), ASX_OK);
     ASSERT_EQ(snap.kind, ASX_RESOURCE_REGION);
     ASSERT_EQ(snap.capacity, (uint32_t)ASX_MAX_REGIONS);
     ASSERT_EQ(snap.used, (uint32_t)1);
@@ -75,25 +77,27 @@ TEST(resource_snapshot_matches_queries) {
 }
 
 TEST(resource_snapshot_null_output) {
-    ASSERT_EQ(asx_resource_snapshot_get(ASX_RESOURCE_REGION, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_resource_snapshot_get(test_runtime(), ASX_RESOURCE_REGION, NULL),
+              ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(resource_snapshot_invalid_kind) {
     asx_resource_snapshot snap;
-    ASSERT_EQ(asx_resource_snapshot_get(ASX_RESOURCE_KIND_COUNT, &snap), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_resource_snapshot_get(test_runtime(), ASX_RESOURCE_KIND_COUNT, &snap),
+              ASX_E_INVALID_ARGUMENT);
 }
 
 /* ---- Admission gate ---- */
 
 TEST(resource_admit_succeeds_when_available) {
     asx_runtime_reset(test_runtime());
-    ASSERT_EQ(asx_resource_admit(ASX_RESOURCE_REGION, 1), ASX_OK);
-    ASSERT_EQ(asx_resource_admit(ASX_RESOURCE_REGION, ASX_MAX_REGIONS), ASX_OK);
+    ASSERT_EQ(asx_resource_admit(test_runtime(), ASX_RESOURCE_REGION, 1), ASX_OK);
+    ASSERT_EQ(asx_resource_admit(test_runtime(), ASX_RESOURCE_REGION, ASX_MAX_REGIONS), ASX_OK);
 }
 
 TEST(resource_admit_fails_when_exhausted) {
     asx_runtime_reset(test_runtime());
-    ASSERT_EQ(asx_resource_admit(ASX_RESOURCE_REGION, ASX_MAX_REGIONS + 1u),
+    ASSERT_EQ(asx_resource_admit(test_runtime(), ASX_RESOURCE_REGION, ASX_MAX_REGIONS + 1u),
               ASX_E_RESOURCE_EXHAUSTED);
 }
 
@@ -103,16 +107,19 @@ TEST(resource_admit_tracks_allocation) {
 
     ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     /* One region used, so can only admit MAX-1 more */
-    ASSERT_EQ(asx_resource_admit(ASX_RESOURCE_REGION, ASX_MAX_REGIONS), ASX_E_RESOURCE_EXHAUSTED);
-    ASSERT_EQ(asx_resource_admit(ASX_RESOURCE_REGION, ASX_MAX_REGIONS - 1u), ASX_OK);
+    ASSERT_EQ(asx_resource_admit(test_runtime(), ASX_RESOURCE_REGION, ASX_MAX_REGIONS),
+              ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(asx_resource_admit(test_runtime(), ASX_RESOURCE_REGION, ASX_MAX_REGIONS - 1u),
+              ASX_OK);
 }
 
 TEST(resource_admit_zero_count) {
-    ASSERT_EQ(asx_resource_admit(ASX_RESOURCE_REGION, 0), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_resource_admit(test_runtime(), ASX_RESOURCE_REGION, 0), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(resource_admit_invalid_kind) {
-    ASSERT_EQ(asx_resource_admit(ASX_RESOURCE_KIND_COUNT, 1), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_resource_admit(test_runtime(), ASX_RESOURCE_KIND_COUNT, 1),
+              ASX_E_INVALID_ARGUMENT);
 }
 
 /* ---- Region arena exhaustion ---- */
@@ -127,13 +134,13 @@ TEST(resource_region_arena_exhaustion) {
     for (i = 0; i < ASX_MAX_REGIONS; i++) {
         ASSERT_EQ(asx_region_open(test_runtime(), &ids[i]), ASX_OK);
     }
-    ASSERT_EQ(asx_resource_remaining(ASX_RESOURCE_REGION), (uint32_t)0);
+    ASSERT_EQ(asx_resource_remaining(test_runtime(), ASX_RESOURCE_REGION), (uint32_t)0);
 
     /* Next allocation should fail */
     ASSERT_EQ(asx_region_open(test_runtime(), &overflow), ASX_E_RESOURCE_EXHAUSTED);
 
     /* State should be consistent: still exactly MAX_REGIONS in use */
-    ASSERT_EQ(asx_resource_used(ASX_RESOURCE_REGION), (uint32_t)ASX_MAX_REGIONS);
+    ASSERT_EQ(asx_resource_used(test_runtime(), ASX_RESOURCE_REGION), (uint32_t)ASX_MAX_REGIONS);
 }
 
 TEST(resource_region_reclaim_after_drain) {
@@ -174,13 +181,13 @@ TEST(resource_task_arena_exhaustion) {
     for (i = 0; i < ASX_MAX_TASKS; i++) {
         ASSERT_EQ(asx_task_spawn(rid, noop_poll, NULL, &tids[i]), ASX_OK);
     }
-    ASSERT_EQ(asx_resource_remaining(ASX_RESOURCE_TASK), (uint32_t)0);
+    ASSERT_EQ(asx_resource_remaining(test_runtime(), ASX_RESOURCE_TASK), (uint32_t)0);
 
     /* Next spawn should fail */
     ASSERT_EQ(asx_task_spawn(rid, noop_poll, NULL, &overflow), ASX_E_RESOURCE_EXHAUSTED);
 
     /* Counter should not have advanced */
-    ASSERT_EQ(asx_resource_used(ASX_RESOURCE_TASK), (uint32_t)ASX_MAX_TASKS);
+    ASSERT_EQ(asx_resource_used(test_runtime(), ASX_RESOURCE_TASK), (uint32_t)ASX_MAX_TASKS);
 }
 
 /* ---- Obligation arena exhaustion ---- */
@@ -197,13 +204,14 @@ static void obligation_arena_exhaustion_body(void *ctx) {
     for (i = 0; i < ASX_MAX_OBLIGATIONS; i++) {
         ASSERT_EQ(asx_obligation_reserve(rid, &oids[i]), ASX_OK);
     }
-    ASSERT_EQ(asx_resource_remaining(ASX_RESOURCE_OBLIGATION), (uint32_t)0);
+    ASSERT_EQ(asx_resource_remaining(test_runtime(), ASX_RESOURCE_OBLIGATION), (uint32_t)0);
 
     /* Next reservation should fail */
     ASSERT_EQ(asx_obligation_reserve(rid, &overflow), ASX_E_RESOURCE_EXHAUSTED);
 
     /* Counter should not have advanced */
-    ASSERT_EQ(asx_resource_used(ASX_RESOURCE_OBLIGATION), (uint32_t)ASX_MAX_OBLIGATIONS);
+    ASSERT_EQ(asx_resource_used(test_runtime(), ASX_RESOURCE_OBLIGATION),
+              (uint32_t)ASX_MAX_OBLIGATIONS);
 
     /* Resolved before the task completes: one still reserved then leaks. */
     for (i = 0; i < ASX_MAX_OBLIGATIONS; i++) { ASSERT_EQ(asx_obligation_commit(oids[i]), ASX_OK); }
@@ -361,7 +369,7 @@ TEST(resource_exhaustion_deterministic) {
             ASSERT_EQ(asx_region_open(test_runtime(), &ids[j]), ASX_OK);
         }
         ASSERT_EQ(asx_region_open(test_runtime(), &overflow), ASX_E_RESOURCE_EXHAUSTED);
-        ASSERT_EQ(asx_resource_remaining(ASX_RESOURCE_REGION), (uint32_t)0);
+        ASSERT_EQ(asx_resource_remaining(test_runtime(), ASX_RESOURCE_REGION), (uint32_t)0);
     }
 }
 
@@ -376,7 +384,7 @@ TEST(resource_admit_then_allocate) {
     ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     /* Admit check should predict success */
-    ASSERT_EQ(asx_resource_admit(ASX_RESOURCE_TASK, 1), ASX_OK);
+    ASSERT_EQ(asx_resource_admit(test_runtime(), ASX_RESOURCE_TASK, 1), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, noop_poll, NULL, &tid), ASX_OK);
 
     /* Fill the rest */
@@ -385,7 +393,7 @@ TEST(resource_admit_then_allocate) {
     }
 
     /* Admit check should predict failure */
-    ASSERT_EQ(asx_resource_admit(ASX_RESOURCE_TASK, 1), ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(asx_resource_admit(test_runtime(), ASX_RESOURCE_TASK, 1), ASX_E_RESOURCE_EXHAUSTED);
     ASSERT_EQ(asx_task_spawn(rid, noop_poll, NULL, &tid), ASX_E_RESOURCE_EXHAUSTED);
 }
 

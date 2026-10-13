@@ -203,7 +203,7 @@ static void test_a_cancelled_exit_is_the_cause_of_the_cancel(void) {
     asx_task_id a;
     asx_task_id b;
     asx_link_ref ref = 0;
-    asx_cancel_reason why = asx_cancel_reason_default(ASX_CANCEL_TIMEOUT, NULL);
+    asx_cancel_reason why = asx_cancel_reason_default(test_runtime(), ASX_CANCEL_TIMEOUT, NULL);
     asx_outcome out = asx_outcome_cancelled(&why);
     asx_cancel_reason r;
     setup();

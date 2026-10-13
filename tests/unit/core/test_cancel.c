@@ -5,6 +5,7 @@
  */
 
 #include "test_harness.h"
+#include "test_runtime.h"
 #include <asx/core/cancel.h>
 #include <string.h>
 
@@ -138,7 +139,7 @@ TEST(cancel_strengthen_equal_severity_same_timestamp) {
 TEST(cancel_reason_default_has_rust_default_attribution) {
     /* Rust's Cx-free constructors (types/cancel.rs:596-631): the region at
      * arena index 0, no task, stamped 1 s, the given message. */
-    asx_cancel_reason r = asx_cancel_reason_default(ASX_CANCEL_TIMEOUT, "late");
+    asx_cancel_reason r = asx_cancel_reason_default(test_runtime(), ASX_CANCEL_TIMEOUT, "late");
     ASSERT_EQ(r.kind, ASX_CANCEL_TIMEOUT);
     ASSERT_EQ(asx_handle_index(r.origin_region), 0u);
     ASSERT_TRUE(r.origin_region != ASX_INVALID_ID);
@@ -147,7 +148,7 @@ TEST(cancel_reason_default_has_rust_default_attribution) {
     ASSERT_TRUE(r.message != NULL && strcmp(r.message, "late") == 0);
     ASSERT_TRUE(r.cause == NULL);
     ASSERT_EQ(r.truncated, 0);
-    r = asx_cancel_reason_default(ASX_CANCEL_RACE_LOST, NULL);
+    r = asx_cancel_reason_default(test_runtime(), ASX_CANCEL_RACE_LOST, NULL);
     ASSERT_EQ(r.kind, ASX_CANCEL_RACE_LOST);
     ASSERT_TRUE(r.message == NULL);
 }
