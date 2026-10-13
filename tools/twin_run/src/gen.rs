@@ -1581,6 +1581,21 @@ pub fn scenario(seed: u64, index: u64) -> Value {
         script.push(json!({"at_ns": at, "op": op}));
     }
 
+    // The op families the main stream never draws, from a stream of their
+    // own (a crowd is a lock queue: nothing is added to it).
+    if !crowd {
+        let mut ext = Rng::new(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ index ^ EXT_SALT);
+        ext.quantum = rng.quantum;
+        extend(
+            &mut ext,
+            &tasks,
+            &world,
+            &regions,
+            &mut task_values,
+            &mut script,
+        );
+    }
+
     json!({
         "schema": "asx.scenario.v2",
         "id": format!("gen-{seed}-{index}-001"),
@@ -1598,9 +1613,693 @@ pub fn scenario(seed: u64, index: u64) -> Value {
     })
 }
 
+/// Salt of the extension stream (bd-9kll.2.10). It decides, per scenario,
+/// which of the op families the main stream never draws are added and
+/// where. The main stream is not consumed, so a scenario's own steps, names,
+/// regions and budgets are what they were: steps are only inserted.
+const EXT_SALT: u64 = 0xE475_4E51_0000_0002;
+
+/// An insertion position in `program`, from `floor` (the steps before it
+/// are a monitor or link group that opens the program, which nothing may
+/// delay) up to the first top-level `return` (a step after it never runs),
+/// but not between a `reserve_send` and the step that disposes of its
+/// permit.
+fn ext_position(ext: &mut Rng, program: &[Value], floor: usize) -> usize {
+    let limit = program
+        .iter()
+        .position(|s| s["op"] == "return")
+        .unwrap_or(program.len())
+        .max(floor);
+    loop {
+        let pos = floor + usize::try_from(ext.below((limit - floor) as u64 + 1)).unwrap_or(0);
+        if pos == 0 || program[pos - 1]["op"] != "reserve_send" {
+            return pos;
+        }
+    }
+}
+
+/// `steps` into `program` at `pos`.
+fn ext_insert(program: &mut Vec<Value>, pos: usize, steps: Vec<Value>) {
+    program.splice(pos..pos, steps);
+}
+
+/// A time in the extension stream: a few quanta, or 0 (already due) where
+/// the scenario can cancel a task and a wait for it cannot be relied on.
+fn ext_time(ext: &mut Rng, timed: bool, quanta: u64) -> u64 {
+    if timed {
+        ext.quantum * (1 + ext.below(quanta))
+    } else {
+        0
+    }
+}
+
+/// An interval (DSL §3.9): created with a period of a few quanta, sometimes
+/// a start in the future and a missed-tick behavior, ticked between sleeps.
+fn ext_interval(ext: &mut Rng, me: &str, n: u64) -> Vec<Value> {
+    let q = ext.quantum;
+    let name = format!("{me}.iv{n}");
+    let mut new = json!({"op": "interval_new", "as": name, "period_ns": q * (1 + ext.below(4))});
+    if ext.chance(30) {
+        new["start_ns"] = json!(q * ext.below(4));
+    }
+    if ext.chance(60) {
+        new["behavior"] = json!(*ext.pick(&["burst", "delay", "skip"]));
+    }
+    let mut steps = vec![new];
+    for _ in 0..2 + ext.below(4) {
+        steps.push(match ext.below(4) {
+            0 => json!({"op": "sleep", "ns": q * (1 + ext.below(6))}),
+            1 => json!({"op": "yield"}),
+            _ => json!({"op": "interval_tick", "interval": name}),
+        });
+    }
+    steps
+}
+
+/// A delay queue (DSL §3.9) used within its capacity and without ever
+/// naming a dead key where Rust panics: a key is live from its insert until
+/// it is removed or cleared, and every key is treated as dead from a poll on
+/// (the poll takes whichever entry is due first). A poll is preceded by the
+/// sleeps that make everything inserted due, as the DSL requires; where the
+/// scenario can cancel a task (`timed` false) every entry is due at once
+/// instead, since a cancelled sleep would leave the poll with nothing due,
+/// which is a harness error.
+fn ext_delay_queue(ext: &mut Rng, me: &str, n: u64, timed: bool) -> Vec<Value> {
+    let q = ext.quantum;
+    let queue = format!("{me}.dq{n}");
+    let mut steps = vec![json!({"op": "delay_queue_new", "as": queue})];
+    // (key name, live)
+    let mut keys: Vec<(String, bool)> = Vec::new();
+    let (mut max_rel, mut max_abs) = (0u64, 0u64);
+    for _ in 0..3 + ext.below(8) {
+        let live: Vec<usize> = keys
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, live))| *live)
+            .map(|(i, _)| i)
+            .collect();
+        match ext.below(11) {
+            0..=2 if keys.len() < 4 => {
+                let key = format!("{queue}.k{}", keys.len() + 1);
+                let value = ext.below(100);
+                if ext.chance(60) {
+                    let timeout = ext_time(ext, timed, 5);
+                    max_rel = max_rel.max(timeout);
+                    steps.push(
+                        json!({"op": "delay_queue_insert", "queue": queue, "as": key,
+                                      "value": value, "timeout_ns": timeout}),
+                    );
+                } else {
+                    let deadline = ext_time(ext, timed, 8);
+                    max_abs = max_abs.max(deadline);
+                    steps.push(
+                        json!({"op": "delay_queue_insert_at", "queue": queue, "as": key,
+                                      "value": value, "deadline_ns": deadline}),
+                    );
+                }
+                keys.push((key, true));
+            }
+            3 | 4 if !live.is_empty() => {
+                let which = usize::try_from(ext.below(live.len() as u64)).unwrap_or(0);
+                let key = keys[live[which]].0.clone();
+                if ext.chance(50) {
+                    let timeout = ext_time(ext, timed, 5);
+                    max_rel = max_rel.max(timeout);
+                    steps.push(
+                        json!({"op": "delay_queue_reset", "queue": queue, "key": key,
+                                      "timeout_ns": timeout}),
+                    );
+                } else {
+                    let deadline = ext_time(ext, timed, 8);
+                    max_abs = max_abs.max(deadline);
+                    steps.push(
+                        json!({"op": "delay_queue_reset_at", "queue": queue, "key": key,
+                                      "deadline_ns": deadline}),
+                    );
+                }
+            }
+            5 if !live.is_empty() => {
+                let which = usize::try_from(ext.below(live.len() as u64)).unwrap_or(0);
+                let key = keys[live[which]].0.clone();
+                steps.push(json!({"op": "delay_queue_deadline", "queue": queue, "key": key}));
+            }
+            6 if !keys.is_empty() => {
+                // Safe on any key ever inserted: a dead one is not found.
+                let i = usize::try_from(ext.below(keys.len() as u64)).unwrap_or(0);
+                let key = keys[i].0.clone();
+                if ext.chance(50) {
+                    steps.push(json!({"op": "delay_queue_contains", "queue": queue, "key": key}));
+                } else {
+                    keys[i].1 = false;
+                    steps.push(json!({"op": "delay_queue_remove", "queue": queue, "key": key}));
+                }
+            }
+            7 => steps.push(json!({"op": "delay_queue_len", "queue": queue})),
+            8 if ext.chance(40) => {
+                for key in &mut keys {
+                    key.1 = false;
+                }
+                steps.push(json!({"op": "delay_queue_clear", "queue": queue}));
+            }
+            9 if timed => steps.push(json!({"op": "sleep", "ns": q * (1 + ext.below(6))})),
+            10 => {
+                // Everything inserted is due once the program has slept the
+                // longest relative timeout from now and until the latest
+                // absolute deadline; an empty queue answers CHANNEL_EMPTY.
+                if max_rel > 0 {
+                    steps.push(json!({"op": "sleep", "ns": max_rel}));
+                }
+                if max_abs > 0 {
+                    steps.push(json!({"op": "sleep_until", "at_ns": max_abs}));
+                }
+                for key in &mut keys {
+                    key.1 = false;
+                }
+                steps.push(json!({"op": "delay_queue_poll", "queue": queue}));
+            }
+            _ => {}
+        }
+    }
+    steps
+}
+
+/// The watch receiver and sender operations the main stream never draws
+/// (DSL §3.6): a subscriber borrows, marks seen, clones the receiver and
+/// uses the clone, asks whether it changed or its sender closed, and waits
+/// for a value; the sender modifies in place, counts receivers and asks
+/// whether they all dropped.
+fn ext_watch(ext: &mut Rng, me: &str, n: u64, ch: &str, sender: bool) -> Vec<Value> {
+    let mut steps = Vec::new();
+    if sender {
+        for _ in 0..1 + ext.below(3) {
+            steps.push(match ext.below(3) {
+                0 => json!({"op": "watch_send_modify", "channel": ch, "add": ext.below(3)}),
+                1 => json!({"op": "watch_receiver_count", "channel": ch}),
+                _ => json!({"op": "watch_is_closed", "channel": ch, "end": "sender"}),
+            });
+        }
+        return steps;
+    }
+    let mut receiver: Option<String> = None;
+    for _ in 0..2 + ext.below(4) {
+        let mut s = match ext.below(7) {
+            0 => json!({"op": "watch_borrow", "channel": ch}),
+            1 => json!({"op": "watch_borrow_and_update", "channel": ch}),
+            2 => json!({"op": "watch_has_changed", "channel": ch}),
+            3 => json!({"op": "watch_mark_seen", "channel": ch}),
+            4 => json!({"op": "watch_is_closed", "channel": ch, "end": "receiver"}),
+            5 if receiver.is_none() => {
+                let name = format!("{me}.w{n}");
+                receiver = Some(name.clone());
+                steps.push(json!({"op": "watch_clone", "channel": ch, "as": name}));
+                continue;
+            }
+            _ => {
+                // Mostly satisfied by the initial value; otherwise it waits
+                // for a send the sender may never make, which both engines
+                // must agree on too.
+                let (cmp, value) = if ext.chance(70) {
+                    ("ge", 0)
+                } else {
+                    (
+                        *ext.pick(&["eq", "ne", "lt", "le", "gt", "ge"]),
+                        ext.below(4),
+                    )
+                };
+                json!({"op": "watch_wait_for", "channel": ch, "cmp": cmp, "value": value})
+            }
+        };
+        if let Some(name) = &receiver
+            && ext.chance(60)
+        {
+            s["receiver"] = json!(name);
+        }
+        steps.push(s);
+    }
+    steps
+}
+
+/// A monitor or a link on `peer` (DSL §3.10, §3.11), then what the holder
+/// does with it: waits for the DOWN or the exit (a trapping link only), or
+/// drops it. It opens the holder's program and the peer's program opens
+/// with a sleep, so the peer is live when the request is applied (a request
+/// for a task that is gone observes NOT_FOUND and binds no name, which the
+/// steps that follow would then name). Where a task can be cancelled
+/// (`safe` false) the request can observe CANCELLED as well, so nothing
+/// follows the open.
+fn ext_watcher(ext: &mut Rng, me: &str, peer: &str, safe: bool) -> Vec<Value> {
+    let q = ext.quantum;
+    let mut steps = Vec::new();
+    if ext.chance(50) {
+        let name = format!("{me}.mon");
+        steps.push(json!({"op": "monitor", "task": peer, "as": name}));
+        if !safe {
+            return steps;
+        }
+        match ext.below(3) {
+            0 => steps.push(json!({"op": "await_down", "monitor": name})),
+            1 => {
+                steps.push(json!({"op": "sleep", "ns": q * (1 + ext.below(4))}));
+                steps.push(json!({"op": "demonitor", "monitor": name}));
+            }
+            _ => {
+                steps.push(json!({"op": "await_down", "monitor": name}));
+                steps.push(json!({"op": "demonitor", "monitor": name}));
+            }
+        }
+    } else {
+        let name = format!("{me}.lnk");
+        let trapping = ext.chance(60);
+        let op = if trapping { "link_trapping" } else { "link" };
+        steps.push(json!({"op": op, "task": peer, "as": name}));
+        if !safe {
+            return steps;
+        }
+        match ext.below(3) {
+            0 if trapping => steps.push(json!({"op": "await_exit", "link": name})),
+            1 => {
+                steps.push(json!({"op": "sleep", "ns": q * (1 + ext.below(4))}));
+                steps.push(json!({"op": "unlink", "link": name}));
+            }
+            _ => steps.push(json!({"op": "yield"})),
+        }
+    }
+    steps
+}
+
+/// A capability envelope (DSL, "Capability budgets") of one to three
+/// dimensions, each a small number (0 is an envelope, a spent one).
+fn ext_envelope(ext: &mut Rng) -> Value {
+    const DIMENSIONS: [(&str, u64); 5] = [
+        ("memory_bytes", 4096),
+        ("cpu_units", 1000),
+        ("io_bytes", 10_000),
+        ("cleanup_poll_quota", 100),
+        ("artifact_bytes", 4096),
+    ];
+    let mut envelope = serde_json::Map::new();
+    for _ in 0..1 + ext.below(3) {
+        let (name, high) = *ext.pick(&DIMENSIONS);
+        envelope.insert(name.to_string(), json!(ext.below(high + 1)));
+    }
+    Value::Object(envelope)
+}
+
+/// The capability steps (DSL §3.1, "Capability budgets"): the Cx's envelope
+/// read, narrowed once or twice by `apply_capability_budget` (sometimes with
+/// requirements: a dimension required and missing or spent is a refusal, an
+/// observation like the success) and read again, and the envelope of a child
+/// region this task holds, which is NOT_FOUND where the step comes before the
+/// open.
+fn ext_capability(ext: &mut Rng, held: &[String]) -> Vec<Value> {
+    const NAMES: [&str; 5] = [
+        "memory_bytes",
+        "cpu_units",
+        "io_bytes",
+        "cleanup",
+        "artifact_bytes",
+    ];
+    let mut steps = vec![json!({"op": "capability_budget"})];
+    for _ in 0..1 + ext.below(2) {
+        let mut step = json!({"op": "apply_capability_budget",
+                              "capability_budget": ext_envelope(ext)});
+        if ext.chance(40) {
+            let mut required: Vec<&str> =
+                NAMES.iter().copied().filter(|_| ext.chance(40)).collect();
+            if required.is_empty() {
+                required.push(*ext.pick(&NAMES));
+            }
+            step["requirements"] = json!(required);
+        }
+        steps.push(step);
+        steps.push(json!({"op": "capability_budget"}));
+    }
+    if !held.is_empty() {
+        steps.push(json!({"op": "capability_budget", "region": *ext.pick(held)}));
+    }
+    steps
+}
+
+/// Non-waiting casts and the eviction count of a server the task holds, to
+/// follow right after its spawn.
+fn ext_server_casts(ext: &mut Rng, server: &str) -> Vec<Value> {
+    let mut steps = Vec::new();
+    for _ in 0..1 + ext.below(3) {
+        steps.push(json!({"op": "try_cast", "server": server, "value": ext.below(100)}));
+    }
+    steps.push(json!({"op": "server_evicted", "server": server}));
+    steps
+}
+
+/// A server of the task's own that holds a monitor or a link on `peer`
+/// (DSL §3.8, §3.10, §3.11): its spawn, a cast, the monitor or link and
+/// optionally its release (where `safe`: see [`ext_watcher`]); the stop is
+/// the tail, last in the program.
+fn ext_server_watch(ext: &mut Rng, me: &str, peer: &str, safe: bool) -> (Vec<Value>, Vec<Value>) {
+    let server = format!("{me}.xs");
+    let behavior = if ext.chance(50) { "counter" } else { "echo" };
+    let mut head = vec![
+        json!({"op": "server_spawn", "as": server, "behavior": behavior,
+                               "mailbox": 1 + ext.below(4)}),
+    ];
+    head.extend(ext_server_casts(ext, &server));
+    if ext.chance(50) {
+        let name = format!("{me}.xm");
+        head.push(json!({"op": "server_monitor", "server": server, "task": peer, "as": name}));
+        if safe && ext.chance(50) {
+            head.push(json!({"op": "server_demonitor", "server": server, "monitor": name}));
+        }
+    } else {
+        let name = format!("{me}.xl");
+        let op = if ext.chance(50) {
+            "server_link"
+        } else {
+            "server_link_trapping"
+        };
+        head.push(json!({"op": op, "server": server, "task": peer, "as": name}));
+        if safe && ext.chance(50) {
+            head.push(json!({"op": "server_unlink", "server": server, "link": name}));
+        }
+    }
+    let tail = if ext.chance(50) {
+        vec![json!({"op": "server_stop", "server": server})]
+    } else {
+        Vec::new()
+    };
+    (head, tail)
+}
+
+/// Add the families of ops the main stream never draws, from the extension
+/// stream `ext` (see [`EXT_SALT`]): driver operations on regions in the
+/// script, monitors, links and a server holding either on a peer that starts
+/// with a sleep, and per task, with probability one half, one or two groups
+/// inserted where they cannot split a reserved permit from its disposal.
+/// `tasks` is parallel to `task_values`; `regions` are the scenario's region
+/// declarations.
+fn extend(
+    ext: &mut Rng,
+    tasks: &[String],
+    world: &World,
+    regions: &[Value],
+    task_values: &mut [Value],
+    script: &mut Vec<Value>,
+) {
+    let q = ext.quantum;
+    let region_names: Vec<&str> = regions.iter().filter_map(|r| r["name"].as_str()).collect();
+    // Regions no declared task lives in, nor in any region below them: the
+    // only ones a driver `close_region` can drain, which runs idle rounds
+    // without moving the clock (a task asleep or queued at the close is
+    // cancelled, and a sleep is not a cancellation point: the region stays
+    // open for ever, "did not close within 1000 idle rounds").
+    let mut occupied: Vec<&str> = Vec::new();
+    for task in task_values.iter() {
+        let mut region = task["region"].as_str();
+        while let Some(name) = region {
+            if occupied.contains(&name) {
+                break;
+            }
+            occupied.push(name);
+            region = regions
+                .iter()
+                .find(|r| r["name"] == json!(name))
+                .and_then(|r| r["parent"].as_str());
+        }
+    }
+    // Whether a task can still be cancelled: by the script, by a budget (a
+    // deadline, a poll or cost quota) or by a driver operation drawn here.
+    let mut cancelling = task_values.iter().any(|t| !t["budget"].is_null())
+        || script.iter().any(|e| {
+            !matches!(
+                e["op"]["op"].as_str(),
+                Some("advance" | "region_limits" | "region_close_outcome")
+            )
+        });
+
+    // Driver operations: the outcome of a region's close (not where a task
+    // returns an `err`, which C has no status for, DSL §4), a region
+    // finished by its body or closed by a cancel and a drain, once each.
+    if ext.chance(35) {
+        let has_err = task_values
+            .iter()
+            .any(|t| t.to_string().contains("\"tag\":\"err\""));
+        let mut free: Vec<&str> = region_names.clone();
+        let mut at = q * ext.below(6);
+        for _ in 0..1 + ext.below(2) {
+            let kind = ext.below(6);
+            let op = match kind {
+                0 | 1 if has_err => continue,
+                0 | 1 => json!({"op": "region_close_outcome", "region": *ext.pick(&region_names)}),
+                5 => {
+                    let empty: Vec<&str> = free
+                        .iter()
+                        .copied()
+                        .filter(|r| !occupied.contains(r))
+                        .collect();
+                    if empty.is_empty() {
+                        continue;
+                    }
+                    let region = *ext.pick(&empty);
+                    free.retain(|r| *r != region);
+                    cancelling = true;
+                    json!({"op": "close_region", "region": region,
+                           "kind": *ext.pick(&CANCEL_KINDS)})
+                }
+                _ if free.is_empty() => continue,
+                _ => {
+                    let which = usize::try_from(ext.below(free.len() as u64)).unwrap_or(0);
+                    let region = free.remove(which);
+                    match kind {
+                        2 => json!({"op": "finish_region", "region": region, "body": "ok"}),
+                        3 => {
+                            cancelling = true;
+                            json!({"op": "finish_region", "region": region,
+                                   "body": *ext.pick(&["err", "panicked"])})
+                        }
+                        _ => {
+                            cancelling = true;
+                            json!({"op": "finish_region", "region": region, "body": "cancelled",
+                                   "kind": *ext.pick(&CANCEL_KINDS)})
+                        }
+                    }
+                }
+            };
+            script.push(json!({"at_ns": at, "op": op}));
+            at += q * ext.below(4);
+        }
+        script.sort_by_key(|entry| entry["at_ns"].as_u64());
+    }
+    // Where nothing can cancel a task a request for a monitor or a link
+    // binds its name; where the script jumps the clock (`advance`) the delay
+    // queue's own clock and the tasks' disagree (gen-3-245: a poll with
+    // nothing due after sleeps that outlast every timeout), so its entries
+    // are all due at once.
+    let safe = !cancelling;
+    let timed = safe && !script.iter().any(|e| e["op"]["op"] == "advance");
+    // The interpreter's own tables (IT_MAX_DELAY_QUEUES, IT_MAX_INTERVALS):
+    // a scenario past them is a C gap, not a divergence.
+    let (mut queues_left, mut intervals_left) = (4u32, 8u32);
+
+    // Monitors, links and a server's: at most one group per holder, and no
+    // task is both a holder and a peer (a peer's program opens with a sleep,
+    // which is what keeps it live at the time of the holder's first poll).
+    let count = tasks.len();
+    let mut holder = vec![false; count];
+    let mut peer = vec![false; count];
+    // Where later insertions may start in each program: after the group that
+    // opens a holder's, and after a peer's sleep.
+    let mut floor = vec![0usize; count];
+    if count >= 2 && ext.chance(40) {
+        for _ in 0..1 + ext.below(2) {
+            let holders: Vec<usize> = (0..count).filter(|&i| !holder[i] && !peer[i]).collect();
+            if holders.is_empty() {
+                break;
+            }
+            let i = holders[usize::try_from(ext.below(holders.len() as u64)).unwrap_or(0)];
+            let peers: Vec<usize> = (0..count).filter(|&j| j != i && !holder[j]).collect();
+            if peers.is_empty() {
+                break;
+            }
+            let j = peers[usize::try_from(ext.below(peers.len() as u64)).unwrap_or(0)];
+            holder[i] = true;
+            let (Some(mut mine), Some(mut theirs)) = (
+                task_values[i]["program"].as_array().cloned(),
+                task_values[j]["program"].as_array().cloned(),
+            ) else {
+                continue;
+            };
+            if !peer[j] {
+                peer[j] = true;
+                floor[j] = 1;
+                let nap = json!({"op": "sleep", "ns": q * (1 + ext.below(3))});
+                ext_insert(&mut theirs, 0, vec![nap]);
+                task_values[j]["program"] = Value::Array(theirs);
+            }
+            let (head, tail) = if ext.chance(35) {
+                ext_server_watch(ext, &tasks[i], &tasks[j], safe)
+            } else {
+                (ext_watcher(ext, &tasks[i], &tasks[j], safe), Vec::new())
+            };
+            floor[i] = head.len();
+            ext_insert(&mut mine, 0, head);
+            let end = mine
+                .iter()
+                .position(|s| s["op"] == "return")
+                .unwrap_or(mine.len());
+            ext_insert(&mut mine, end, tail);
+            task_values[i]["program"] = Value::Array(mine);
+        }
+    }
+
+    // Obligations handed over, once each.
+    let mut handed: Vec<String> = Vec::new();
+    for (i, me) in tasks.iter().enumerate() {
+        if !ext.chance(50) {
+            continue;
+        }
+        for n in 1..=1 + ext.below(2) {
+            let Some(mut program) = task_values[i]["program"].as_array().cloned() else {
+                continue;
+            };
+            match ext.below(9) {
+                0 if intervals_left > 0 => {
+                    intervals_left -= 1;
+                    let steps = ext_interval(ext, me, n);
+                    let pos = ext_position(ext, &program, floor[i]);
+                    ext_insert(&mut program, pos, steps);
+                }
+                1 | 2 if queues_left > 0 => {
+                    queues_left -= 1;
+                    let steps = ext_delay_queue(ext, me, n, timed);
+                    let pos = ext_position(ext, &program, floor[i]);
+                    ext_insert(&mut program, pos, steps);
+                }
+                3 => {
+                    if let Some((ch, sender, subscribers)) = &world.watch {
+                        let is_sender = me == sender;
+                        if is_sender || subscribers.iter().any(|s| s == me) {
+                            let steps = ext_watch(ext, me, n, ch, is_sender);
+                            let pos = ext_position(ext, &program, floor[i]);
+                            ext_insert(&mut program, pos, steps);
+                        }
+                    }
+                }
+                4 => {
+                    // A `timeout` around one blocking sync wait, last in the
+                    // program: a guard it takes is dropped by the body's end.
+                    let mut inner = Vec::new();
+                    if world.mutex {
+                        inner.push(json!({"op": "mutex_lock", "mutex": "m"}));
+                    }
+                    if world.rwlock {
+                        inner.push(json!({"op": "rwlock_write", "rwlock": "rw"}));
+                        inner.push(json!({"op": "rwlock_read", "rwlock": "rw"}));
+                    }
+                    if world.semaphore {
+                        inner.push(json!({"op": "sem_acquire", "semaphore": "s", "count": 1}));
+                    }
+                    if world.notify {
+                        inner.push(json!({"op": "notify_wait", "notify": "n"}));
+                    }
+                    if !inner.is_empty() {
+                        let which = usize::try_from(ext.below(inner.len() as u64)).unwrap_or(0);
+                        let step = json!({"op": "timeout",
+                                          "ns": q * (1 + ext.below(8)),
+                                          "inner": inner[which]});
+                        let end = program
+                            .iter()
+                            .position(|s| s["op"] == "return")
+                            .unwrap_or(program.len());
+                        ext_insert(&mut program, end, vec![step]);
+                    }
+                }
+                5 if count >= 2 => {
+                    // An obligation handed to another task, which then
+                    // disposes of it under its own name.
+                    let reserved: Vec<String> = program
+                        .iter()
+                        .filter(|s| s["op"] == "reserve")
+                        .filter_map(|s| s["as"].as_str().map(str::to_string))
+                        .filter(|name| !handed.contains(name))
+                        .collect();
+                    if !reserved.is_empty() {
+                        let which = usize::try_from(ext.below(reserved.len() as u64)).unwrap_or(0);
+                        let name = reserved[which].clone();
+                        let others: Vec<usize> = (0..count).filter(|&j| j != i).collect();
+                        let j =
+                            others[usize::try_from(ext.below(others.len() as u64)).unwrap_or(0)];
+                        let local = format!("{name}.h");
+                        let at = program
+                            .iter()
+                            .position(|s| s["op"] == "reserve" && s["as"] == json!(name))
+                            .map_or(0, |p| p + 1);
+                        ext_insert(
+                            &mut program,
+                            at,
+                            vec![json!({"op": "handoff", "obligation": name,
+                                        "task": tasks[j], "as": local})],
+                        );
+                        if let Some(mut other) = task_values[j]["program"].as_array().cloned() {
+                            let dispose = match ext.below(3) {
+                                0 => json!({"op": "commit", "obligation": local}),
+                                1 => json!({"op": "abort", "obligation": local,
+                                            "reason": *ext.pick(&ABORT_REASONS)}),
+                                _ => json!({"op": "leak", "obligation": local}),
+                            };
+                            let pos = ext_position(ext, &other, floor[j]);
+                            ext_insert(&mut other, pos, vec![dispose]);
+                            task_values[j]["program"] = Value::Array(other);
+                        }
+                        handed.push(name);
+                    }
+                }
+                6 => {
+                    // Casts that never wait and the eviction count of the
+                    // first server this task spawned, right after its spawn
+                    // (before any stop; not inside the group that opens a
+                    // holder's program).
+                    let spawned = program
+                        .iter()
+                        .enumerate()
+                        .skip(floor[i])
+                        .find(|(_, s)| s["op"] == "server_spawn")
+                        .and_then(|(p, s)| s["as"].as_str().map(|n| (p, n.to_string())));
+                    if let Some((p, server)) = spawned {
+                        let steps = ext_server_casts(ext, &server);
+                        ext_insert(&mut program, p + 1, steps);
+                    }
+                }
+                7 => {
+                    let held: Vec<String> = program
+                        .iter()
+                        .filter(|s| s["op"] == "open_region")
+                        .filter_map(|s| s["as"].as_str().map(str::to_string))
+                        .collect();
+                    let steps = ext_capability(ext, &held);
+                    let pos = ext_position(ext, &program, floor[i]);
+                    ext_insert(&mut program, pos, steps);
+                }
+                8 => {
+                    // A child region opened with an envelope of its own,
+                    // never with requirements: a refused open mints nothing,
+                    // and the steps that name the region would be harness
+                    // errors.
+                    for step in &mut program {
+                        if step["op"] == "open_region" && ext.chance(60) {
+                            step["capability_budget"] = ext_envelope(ext);
+                        }
+                    }
+                }
+                _ => {}
+            }
+            task_values[i]["program"] = Value::Array(program);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
 
     /// (`return cancelled` steps anywhere in `v`, those that are the last step
     /// of a supervised child's own program).
@@ -1680,11 +2379,237 @@ mod tests {
     #[test]
     fn a_scenario_without_a_supervisor_has_no_cancelled_return() {
         for index in 0..100 {
-            let text = scenario(7, index).to_string();
-            if !text.contains("\"supervise\"") {
-                assert!(!text.contains("\"cancelled\""), "scenario {index}");
+            // (A region finished with a `cancelled` body is no `return`.)
+            let value = scenario(7, index);
+            if !value.to_string().contains("\"supervise\"") {
+                assert_eq!(cancelled_returns(&value).0, 0, "scenario {index}");
             }
         }
+    }
+
+    /// The op names the schema allows: (steps, driver operations).
+    fn schema_ops() -> (BTreeSet<String>, BTreeSet<String>) {
+        fn walk(node: &Value, into: &mut BTreeSet<String>) {
+            match node {
+                Value::Object(fields) => {
+                    let op = fields.get("properties").and_then(|p| p.get("op"));
+                    let consts = op.and_then(|o| o.get("const")).and_then(Value::as_str);
+                    into.extend(consts.map(str::to_string));
+                    let names = op.and_then(|o| o.get("enum")).and_then(Value::as_array);
+                    into.extend(
+                        names
+                            .into_iter()
+                            .flatten()
+                            .filter_map(Value::as_str)
+                            .map(str::to_string),
+                    );
+                    for field in fields.values() {
+                        walk(field, into);
+                    }
+                }
+                Value::Array(items) => {
+                    for item in items {
+                        walk(item, into);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let schema: Value =
+            serde_json::from_str(include_str!("../../../schemas/scenario_dsl_v2.json"))
+                .expect("the DSL schema parses");
+        let (mut steps, mut drivers) = (BTreeSet::new(), BTreeSet::new());
+        for (name, def) in schema["$defs"].as_object().expect("$defs") {
+            walk(
+                def,
+                if name == "driver_op" {
+                    &mut drivers
+                } else {
+                    &mut steps
+                },
+            );
+        }
+        (steps, drivers)
+    }
+
+    /// The op names `v` contains, at every nesting depth: (steps, driver
+    /// operations: those under `script`).
+    fn drawn_ops(
+        v: &Value,
+        in_script: bool,
+        steps: &mut BTreeSet<String>,
+        drivers: &mut BTreeSet<String>,
+    ) {
+        match v {
+            Value::Object(fields) => {
+                if let Some(op) = fields.get("op").and_then(Value::as_str) {
+                    let into = if in_script {
+                        &mut *drivers
+                    } else {
+                        &mut *steps
+                    };
+                    into.insert(op.to_string());
+                }
+                for (key, field) in fields {
+                    drawn_ops(field, in_script || key == "script", steps, drivers);
+                }
+            }
+            Value::Array(items) => {
+                for item in items {
+                    drawn_ops(item, in_script, steps, drivers);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// bd-9kll.2.10 (grammar coverage): every op of DSL v2 appears in the
+    /// scenarios of the default shape within 1200 of them, or is on a list
+    /// of ops that cannot, each with its reason. A schema op the generator
+    /// never draws is an op the differential fuzzer never compares.
+    #[test]
+    fn the_generator_draws_every_op_of_the_dsl() {
+        // (op, why a generated scenario cannot contain it)
+        const EXEMPT: &[(&str, &str)] = &[];
+        let (steps, drivers) = schema_ops();
+        assert!(
+            steps.len() > 90 && drivers.len() >= 7,
+            "the schema walk found too little"
+        );
+        let (mut seen_steps, mut seen_drivers) = (BTreeSet::new(), BTreeSet::new());
+        for seed in 1..=3 {
+            for index in 0..400 {
+                drawn_ops(
+                    &scenario(seed, index),
+                    false,
+                    &mut seen_steps,
+                    &mut seen_drivers,
+                );
+            }
+        }
+        let exempt = |op: &String| EXEMPT.iter().any(|(name, _)| name == op);
+        let never = |all: &BTreeSet<String>, seen: &BTreeSet<String>| -> Vec<String> {
+            all.iter()
+                .filter(|op| !seen.contains(*op) && !exempt(op))
+                .cloned()
+                .collect()
+        };
+        assert_eq!(
+            never(&steps, &seen_steps),
+            Vec::<String>::new(),
+            "step ops never drawn"
+        );
+        assert_eq!(
+            never(&drivers, &seen_drivers),
+            Vec::<String>::new(),
+            "driver ops never drawn"
+        );
+        for (op, why) in EXEMPT {
+            assert!(
+                !seen_steps.contains(*op) && !seen_drivers.contains(*op),
+                "{op} is drawn now: drop it from EXEMPT ({why})"
+            );
+        }
+        let unknown: Vec<_> = seen_steps
+            .iter()
+            .filter(|op| !steps.contains(*op))
+            .chain(seen_drivers.iter().filter(|op| !drivers.contains(*op)))
+            .collect();
+        assert!(
+            unknown.is_empty(),
+            "ops the schema does not know: {unknown:?}"
+        );
+    }
+
+    /// The rules the extension pass keeps, which the interpreters turn into
+    /// harness errors when broken: a name is bound once per task, a trapping
+    /// link only is awaited, and the peer of a monitor or link a task opens
+    /// first is a task that opens with a sleep (so it is live when the
+    /// request is applied).
+    #[test]
+    fn extension_steps_keep_the_dsl_naming_and_liveness_rules() {
+        let mut watchers = 0;
+        for index in 0..400 {
+            let value = scenario(5, index);
+            let tasks = value["tasks"].as_array().expect("tasks");
+            let mut handed = BTreeSet::new();
+            for task in tasks {
+                let program = task["program"].as_array().expect("program");
+                let mut bound = BTreeSet::new();
+                let mut trapping = BTreeSet::new();
+                for step in program {
+                    let op = step["op"].as_str().unwrap_or_default();
+                    if matches!(
+                        op,
+                        "interval_new"
+                            | "delay_queue_new"
+                            | "monitor"
+                            | "link"
+                            | "link_trapping"
+                            | "watch_clone"
+                            | "server_monitor"
+                            | "server_link"
+                            | "server_link_trapping"
+                            | "handoff"
+                    ) {
+                        let name = step["as"].as_str().expect("as");
+                        assert!(
+                            bound.insert(name.to_string()),
+                            "{name} is bound twice in scenario {index}"
+                        );
+                        if op == "handoff" {
+                            assert!(
+                                handed.insert(name.to_string()),
+                                "{name} handed over twice in {index}"
+                            );
+                        }
+                    }
+                    if op == "link_trapping" {
+                        trapping.insert(step["as"].as_str().expect("as").to_string());
+                    }
+                    if op == "await_exit" {
+                        let link = step["link"].as_str().expect("link");
+                        assert!(
+                            trapping.contains(link),
+                            "await_exit of {link} in scenario {index}"
+                        );
+                    }
+                }
+                let first = program
+                    .first()
+                    .map_or("", |s| s["op"].as_str().unwrap_or_default());
+                let peer = match first {
+                    "monitor" | "link" | "link_trapping" => step_peer(&program[0]),
+                    "server_spawn" => program
+                        .iter()
+                        .find(|s| {
+                            s["op"].as_str().is_some_and(|o| {
+                                o.starts_with("server_m") || o.starts_with("server_l")
+                            })
+                        })
+                        .and_then(step_peer),
+                    _ => None,
+                };
+                if let Some(peer) = peer {
+                    watchers += 1;
+                    let target = tasks
+                        .iter()
+                        .find(|t| t["name"] == json!(peer))
+                        .expect("peer is declared");
+                    let opens = target["program"][0]["op"].as_str();
+                    assert_eq!(
+                        opens,
+                        Some("sleep"),
+                        "peer {peer} of scenario {index} does not open with a sleep"
+                    );
+                }
+            }
+        }
+        assert!(watchers > 0, "no monitor or link in 400 scenarios");
+    }
+
+    fn step_peer(step: &Value) -> Option<String> {
+        step["task"].as_str().map(str::to_string)
     }
 
     /// The indices below `count` of batch `seed` that are cancel storms.

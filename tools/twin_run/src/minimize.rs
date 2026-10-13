@@ -125,11 +125,24 @@ fn comparison_kind(code: Option<i32>, stdout: &str, id: &str) -> Result<Option<S
         .lines()
         .filter(|line| line.starts_with("asx-conformance: "))
         .collect();
-    if results.len() != 1 || summaries.len() != 1 {
-        return Err("runner must report exactly one result and one comparison summary".into());
+    if results.is_empty() || summaries.len() != 1 {
+        return Err("runner must report a result and exactly one comparison summary".into());
+    }
+    // A scenario that fails reports one FAIL line per check that failed
+    // (trace and snapshot, then the schedule certificate and the replay of
+    // Rust's schedule): the first is the divergence the minimizer keeps. A
+    // PASS or an ERROR is the only line.
+    if results.len() > 1 && !results.iter().all(|line| line.starts_with("FAIL ")) {
+        return Err("runner must report exactly one result unless every one is a FAIL".into());
     }
     let result = results[0];
     let counts = summary_counts(summaries[0]);
+    if results.len() > 1 {
+        let prefix = format!("FAIL {id}: ");
+        if results.iter().any(|line| !line.starts_with(&prefix)) {
+            return Err("runner result and scenario id disagree".into());
+        }
+    }
     if code == Some(0)
         && result.starts_with(&format!("PASS {id} sha256:"))
         && counts == Some([1, 1, 0, 0])
@@ -341,12 +354,28 @@ mod tests {
             "FAIL x: \nasx-conformance: compared=1 pass=0 fail=1 error=0\n",
             "FAIL x: snapshot\nasx-conformance: compared=2 pass=0 fail=2 error=0\n",
             "FAIL x: snapshot\nasx-conformance: compared=1 pass=0 fail=0 error=1\n",
-            "FAIL x: trace\nFAIL x: snapshot\nasx-conformance: compared=1 pass=0 fail=1 error=0\n",
+            "FAIL x: trace\nFAIL y: snapshot\nasx-conformance: compared=1 pass=0 fail=1 error=0\n",
+            "FAIL x: trace\nPASS x sha256:abc\nasx-conformance: compared=1 pass=0 fail=1 error=0\n",
+            "FAIL x: trace\nERROR x: C run failed\nasx-conformance: compared=1 pass=0 fail=1 error=0\n",
             "FAIL x: trace\nasx-conformance: compared=1 pass=0 fail=1 error=0\nasx-conformance: compared=1 pass=0 fail=1 error=0\n",
         ] {
             assert!(comparison_kind(Some(1), output, "x").is_err());
         }
         assert!(comparison_kind(Some(1), fail, "other-scenario").is_err());
+    }
+
+    /// The runner reports one FAIL line per failed check of a scenario: the
+    /// trace, then the schedule certificate and the replay of Rust's
+    /// schedule in C. The minimizer keeps the first.
+    #[test]
+    fn comparator_takes_the_first_of_several_fail_lines_of_one_scenario() {
+        let fails = "FAIL x: trace\n  trace[1] differs\nFAIL x: schedule certificate\n    rust: a\n    c: b\nFAIL x: replaying Rust's schedule in C: forced schedule diverged\nasx-conformance: compared=1 pass=0 fail=1 error=0 forced_replayed=0 forced_unavailable=1 skipped_forbidden=0\n";
+        assert_eq!(
+            comparison_kind(Some(1), fails, "x"),
+            Ok(Some("trace".into()))
+        );
+        assert!(comparison_kind(Some(0), fails, "x").is_err());
+        assert!(comparison_kind(Some(1), fails, "y").is_err());
     }
 
     fn paths(doc: &Value) -> Vec<String> {

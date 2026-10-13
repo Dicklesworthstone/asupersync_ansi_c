@@ -862,6 +862,13 @@ idle and virtual time is advanced to `t` (§2).
 | `region_limits` | `region`, optional `max_tasks`, `max_children`, `max_obligations` | `lab.state.set_region_limits(region, RegionLimits{…})` (`state.rs:4103`; `record/region.rs:208`); a region already gone has nothing to limit: no effect | `asx_region_set_limits(region, &limits)`; an omitted or null field is `ASX_REGION_UNLIMITED`; a region already gone: no effect |
 | `region_close_outcome` | `region` | `lab.state.region_close_outcome(region)` (`state.rs:3972`; folded as each task completes, `state.rs:8794`): the outcomes of the tasks that completed in the region, joined, read live or after its close | `asx_region_get_close_outcome(region, &outcome)` |
 
+`close_region` runs idle rounds without moving the clock, so a region closes
+only when every task in it (and below it) ends from the cancel alone: a sleep
+is not a cancellation point and a task asleep, or queued behind one, keeps the
+region open (`close_region: region did not close within 1000 idle rounds`, a
+harness error on both sides). Use it on a region whose tasks wait on
+cancellable steps, whose sleeps are already due, or that holds none.
+
 `finish_region` is a primitive body-branch witness executed against the real
 Rust runtime. It does not run `Scope::region_with_child_admission`'s typed
 factory or return its body payload. Its body tag is separate from the region

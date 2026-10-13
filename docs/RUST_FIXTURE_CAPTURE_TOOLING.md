@@ -27,6 +27,28 @@ Subcommands (`tools/twin_run/src/main.rs:23-29`, dispatch at `main.rs:155-249`):
 | `twin_run minimize <scenario.json> --runner <asx-conformance> --out <dir>` | Delta-debugging reducer for a scenario whose Rust capture the C runtime FAILs: deletes tasks, script entries, program steps and declarations while Rust still runs the scenario and C still FAILs in the same part of the comparison. Writes the reduced scenario (`<id>-min`) and its Rust fixture. | `minimize.rs:1-17`, `minimize.rs:192-201`; `main.rs:221-247` |
 | `twin_run trace <scenario.json>` | Prints the raw lab trace of one scenario, for diagnosing a divergence. | `main.rs:174-201` |
 
+Generated scenarios (`gen.rs`). The main stream draws the program steps and
+the world (sync objects, channels, regions, budgets, a script of cancels and
+clock jumps); other shapes (cancel storms, `--shape timers`) and derived
+streams (rich supervised children, `return cancelled`) add to it without
+consuming it. The **extension stream** (`EXT_SALT`, `gen::extend`, bd-9kll.2.10)
+inserts the op families the main stream never draws, into scenarios that are
+otherwise what they were: intervals and delay queues, the watch receiver and
+sender steps, monitors and links (the peer opens with a sleep, so it is live
+when the request is applied), a server holding a monitor or a link, a handed
+obligation, a `timeout` around a sync wait, `try_cast` and `server_evicted`,
+the capability envelope steps, and the driver ops `region_close_outcome`,
+`finish_region` and `close_region`. It keeps to what both engines can run: a
+delay queue's entries are all due at once where a task can be cancelled or the
+script jumps the clock (a poll with nothing due is a harness error), nothing
+follows a monitor or link open where the holder can be cancelled (a refused
+open binds no name), `close_region` only names a region no task lives in (its
+drain does not move the clock), and the interpreter's tables (4 delay queues, 8
+intervals) are not exceeded. `the_generator_draws_every_op_of_the_dsl` reads
+the op names of `schemas/scenario_dsl_v2.json` and requires 1200 default-shape
+scenarios to contain each, so an op added to the schema without a draw fails
+the unit tests.
+
 Fixture contents (`tools/twin_run/src/run.rs:2072-2089`): `schema`
 (`asx.fixture.v2`), `scenario_id`, the embedded `scenario`, `vocabulary`,
 `trace`, `snapshot`, `observations`, `trace_digest`, `snapshot_digest`,
