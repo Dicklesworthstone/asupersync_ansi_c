@@ -238,42 +238,42 @@ void asx_runtime_clear_internal(void) {
  * ------------------------------------------------------------------- */
 
 asx_status asx_region_slot_lookup(asx_region_id id, asx_region_slot **out) {
-    uint16_t tag, slot_idx, handle_gen;
+    uint16_t slot_idx, handle_gen;
+    asx_kernel *k = asx_kernel_of(id);
 
     *out = NULL;
     if (!asx_handle_is_valid(id)) return ASX_E_NOT_FOUND;
 
-    tag = asx_handle_type_tag(id);
-    if (tag != ASX_TYPE_REGION || !asx_kernel_owns(id)) return ASX_E_NOT_FOUND;
+    if (asx_handle_type_tag(id) != ASX_TYPE_REGION || k == NULL) return ASX_E_NOT_FOUND;
 
     slot_idx = asx_handle_slot(id);
     if (slot_idx >= ASX_MAX_REGIONS) return ASX_E_NOT_FOUND;
-    if (!g_regions[slot_idx].alive) return ASX_E_NOT_FOUND;
+    if (!k->regions[slot_idx].alive) return ASX_E_NOT_FOUND;
 
     handle_gen = asx_handle_generation(id);
-    if (handle_gen != g_regions[slot_idx].generation) return ASX_E_STALE_HANDLE;
+    if (handle_gen != k->regions[slot_idx].generation) return ASX_E_STALE_HANDLE;
 
-    *out = &g_regions[slot_idx];
+    *out = &k->regions[slot_idx];
     return ASX_OK;
 }
 
 asx_status asx_task_slot_lookup(asx_task_id id, asx_task_slot **out) {
-    uint16_t tag, slot_idx, handle_gen;
+    uint16_t slot_idx, handle_gen;
+    asx_kernel *k = asx_kernel_of(id);
 
     *out = NULL;
     if (!asx_handle_is_valid(id)) return ASX_E_NOT_FOUND;
 
-    tag = asx_handle_type_tag(id);
-    if (tag != ASX_TYPE_TASK || !asx_kernel_owns(id)) return ASX_E_NOT_FOUND;
+    if (asx_handle_type_tag(id) != ASX_TYPE_TASK || k == NULL) return ASX_E_NOT_FOUND;
 
     slot_idx = asx_handle_slot(id);
     if (slot_idx >= ASX_MAX_TASKS) return ASX_E_NOT_FOUND;
-    if (!g_tasks[slot_idx].alive) return ASX_E_NOT_FOUND;
+    if (!k->tasks[slot_idx].alive) return ASX_E_NOT_FOUND;
 
     handle_gen = asx_handle_generation(id);
-    if (handle_gen != g_tasks[slot_idx].generation) return ASX_E_STALE_HANDLE;
+    if (handle_gen != k->tasks[slot_idx].generation) return ASX_E_STALE_HANDLE;
 
-    *out = &g_tasks[slot_idx];
+    *out = &k->tasks[slot_idx];
     return ASX_OK;
 }
 
@@ -1672,22 +1672,22 @@ asx_status asx_task_consume_cost(asx_task_id self, uint64_t cost) {
  * ------------------------------------------------------------------- */
 
 asx_status asx_obligation_slot_lookup(asx_obligation_id id, asx_obligation_slot **out) {
-    uint16_t tag, slot_idx, handle_gen;
+    uint16_t slot_idx, handle_gen;
+    asx_kernel *k = asx_kernel_of(id);
 
     *out = NULL;
     if (!asx_handle_is_valid(id)) return ASX_E_NOT_FOUND;
 
-    tag = asx_handle_type_tag(id);
-    if (tag != ASX_TYPE_OBLIGATION || !asx_kernel_owns(id)) return ASX_E_NOT_FOUND;
+    if (asx_handle_type_tag(id) != ASX_TYPE_OBLIGATION || k == NULL) return ASX_E_NOT_FOUND;
 
     slot_idx = asx_handle_slot(id);
     if (slot_idx >= ASX_MAX_OBLIGATIONS) return ASX_E_NOT_FOUND;
-    if (!g_obligations[slot_idx].alive) return ASX_E_NOT_FOUND;
+    if (!k->obligations[slot_idx].alive) return ASX_E_NOT_FOUND;
 
     handle_gen = asx_handle_generation(id);
-    if (handle_gen != g_obligations[slot_idx].generation) return ASX_E_STALE_HANDLE;
+    if (handle_gen != k->obligations[slot_idx].generation) return ASX_E_STALE_HANDLE;
 
-    *out = &g_obligations[slot_idx];
+    *out = &k->obligations[slot_idx];
     return ASX_OK;
 }
 

@@ -340,24 +340,62 @@ typedef struct {
  * !alive slots. g_*_live counts currently-allocated slots.
  * ------------------------------------------------------------------- */
 
-typedef struct asx_kernel_storage {
+/* One runtime's kernel (K18): its arenas, and the state that belongs to it
+ * and no other. The block is what asx_runtime_storage_size() measures and a
+ * caller may supply (asx_runtime_config.storage). */
+typedef struct asx_kernel {
     asx_region_slot regions[ASX_MAX_REGIONS];
     asx_task_slot tasks[ASX_MAX_TASKS];
     asx_obligation_slot obligations[ASX_MAX_OBLIGATIONS];
-} asx_kernel_storage;
+    uint32_t rt_generation; /* nonzero while an initialized runtime holds it */
+    uint16_t tag;           /* its index in g_kernels; stamped on its handles */
+} asx_kernel;
 
-/* The library's static block, bound whenever no caller block is
- * (resource.c). */
-extern asx_kernel_storage g_kernel_static;
+/* The library's static block, the kernel of tag 0 whenever no caller block
+ * is (resource.c). */
+extern asx_kernel g_kernel_static;
 
-/* Runtime tag of the kernel bound now (K18): stamped on every handle it
- * issues, and every slot lookup refuses a handle carrying another. Tag 0
- * is the first runtime; nothing binds another yet. */
-extern uint16_t g_kernel_tag;
+/* The registry, by runtime tag: the kernel a handle's tag names, or NULL
+ * for a tag no runtime holds. Slot 0 is never NULL: the static block when
+ * no runtime holds it. Only slot 0 is ever bound while the arenas are
+ * still reached through g_regions, g_tasks and g_obligations. */
+extern asx_kernel *g_kernels[ASX_MAX_RUNTIMES];
 
-static inline int asx_kernel_owns(uint64_t handle) {
-    return asx_handle_runtime_tag(handle) == g_kernel_tag;
+static inline asx_kernel *asx_kernel_for_tag(uint16_t tag) {
+    return tag < ASX_MAX_RUNTIMES ? g_kernels[tag] : NULL;
 }
+
+/* The kernel that issued `handle`, or NULL when no runtime holds the tag it
+ * carries: every slot lookup answers ASX_E_NOT_FOUND for such a handle. */
+static inline asx_kernel *asx_kernel_of(uint64_t handle) {
+    return asx_kernel_for_tag(asx_handle_runtime_tag(handle));
+}
+
+/* Which runtime object holds which kernel. An object holds the kernel of
+ * its tag while that kernel records the object's generation. */
+static inline int asx_kernel_holds(uint16_t tag, uint32_t generation) {
+    const asx_kernel *k = asx_kernel_for_tag(tag);
+    return k != NULL && k->rt_generation == generation;
+}
+
+/* Whether any kernel is held by an initialized runtime. */
+static inline int asx_kernel_any_held(void) {
+    uint32_t i;
+    for (i = 0; i < ASX_MAX_RUNTIMES; i++) {
+        if (g_kernels[i] != NULL && g_kernels[i]->rt_generation != 0u) return 1;
+    }
+    return 0;
+}
+
+/* `rt` (its generation set) takes kernel 0. */
+static inline void asx_kernel_hold(asx_runtime *rt) {
+    rt->tag = g_kernels[0]->tag;
+    g_kernels[rt->tag]->rt_generation = rt->generation;
+}
+
+/* Runtime tag stamped by asx_handle_mint: the bound kernel's (0 until the
+ * mint sites take their kernel explicitly). */
+extern uint16_t g_kernel_tag;
 
 /* asx_handle_pack for a handle this kernel issues (same length, so a call
  * site changes by its name only). */
@@ -377,10 +415,11 @@ extern asx_obligation_slot *g_obligations;
 extern uint32_t g_obligation_count;
 extern uint32_t g_obligation_live;
 
-/* Bind the arenas to `storage` (an asx_runtime_storage_size() block aligned
- * to asx_runtime_storage_align(), already validated), zeroing it; NULL binds
- * the library's static block and leaves it as it is. Counters and the rest
- * of the kernel state are cleared by asx_runtime_clear_internal. */
+/* Bind kernel 0 (g_kernels[0] and the arena pointers) to `storage` (an
+ * asx_runtime_storage_size() block aligned to asx_runtime_storage_align(),
+ * already validated), zeroing it; NULL binds the library's static block and
+ * leaves it as it is. Counters and the rest of the kernel state are cleared
+ * by asx_runtime_clear_internal. */
 void asx_kernel_bind_internal(void *storage);
 
 /* The reset of asx_runtime_reset without the rebind to the static block:

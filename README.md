@@ -775,6 +775,7 @@ it drifts from the headers or a new capacity macro is missing.
 | `ASX_MAX_QUIC_STREAMS` | 16 | `include/asx/asx_config.h` |
 | `ASX_MAX_REGIONS` | 8 | `include/asx/asx_config.h` |
 | `ASX_MAX_REGION_CHILDREN` | 8 | `include/asx/asx_config.h` |
+| `ASX_MAX_RUNTIMES` | 1 | `include/asx/asx_config.h` |
 | `ASX_MAX_SESSIONS` | 8 | `include/asx/asx_config.h` |
 | `ASX_MAX_SIGNAL_SUBSCRIPTIONS` | 16 | `include/asx/asx_config.h` |
 | `ASX_MAX_SUPERVISORS` | 8 | `include/asx/asx_config.h` |

@@ -22,14 +22,17 @@
 /* ------------------------------------------------------------------ */
 /* Runtime-owned state storage (K18, bd-9kll.3.20)                     */
 /*                                                                     */
-/* The region, task and obligation arenas are one block. The library's */
-/* static block is bound until a runtime is initialized with its own   */
-/* (asx_runtime_config.storage); lifecycle.c's g_regions, g_tasks and  */
-/* g_obligations point into whichever is bound. Binding moves those    */
-/* three pointers and nothing else.                                    */
+/* The region, task and obligation arenas are one kernel block. The    */
+/* library's static block is registered at tag 0 until a runtime is    */
+/* initialized with its own (asx_runtime_config.storage);              */
+/* lifecycle.c's g_regions, g_tasks and g_obligations point into the   */
+/* kernel of tag 0. Binding moves the registry slot and those three    */
+/* pointers and nothing else.                                          */
 /* ------------------------------------------------------------------ */
 
-asx_kernel_storage g_kernel_static;
+asx_kernel g_kernel_static;
+
+asx_kernel *g_kernels[ASX_MAX_RUNTIMES] = {&g_kernel_static};
 
 /* The runtime tag of the bound kernel: always the first runtime's, 0, until
  * a second runtime may be live. */
@@ -37,10 +40,10 @@ uint16_t g_kernel_tag;
 
 typedef struct {
     char pad;
-    asx_kernel_storage value;
+    asx_kernel value;
 } kernel_storage_alignment;
 
-size_t asx_runtime_storage_size(void) { return sizeof(asx_kernel_storage); }
+size_t asx_runtime_storage_size(void) { return sizeof(asx_kernel); }
 
 size_t asx_runtime_storage_align(void) { return offsetof(kernel_storage_alignment, value); }
 
@@ -60,16 +63,18 @@ asx_status asx_kernel_storage_validate_internal(const void *storage, size_t size
 }
 
 void asx_kernel_bind_internal(void *storage) {
-    asx_kernel_storage *block = &g_kernel_static;
+    asx_kernel *block = &g_kernel_static;
 
     if (storage != NULL) {
-        block = (asx_kernel_storage *)storage;
+        block = (asx_kernel *)storage;
         memset(block, 0, sizeof(*block));
     }
+    block->tag = 0u;
+    g_kernels[0] = block;
     g_regions = block->regions;
     g_tasks = block->tasks;
     g_obligations = block->obligations;
-    g_kernel_tag = 0u;
+    g_kernel_tag = block->tag;
 }
 
 /* A raw reset is an explicit teardown: it ends a binding to a caller's

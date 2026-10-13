@@ -538,6 +538,63 @@ TEST(runtime_arenas_live_in_the_callers_storage_and_return_to_the_static_block) 
     storage_block_free(&blk);
 }
 
+/* K18: the registry names a kernel for the tag of a runtime that holds one
+ * and no other; a runtime object holds the kernel of its tag exactly while
+ * it is initialized, and a caller's block takes the library's place at
+ * tag 0 until the runtime shuts down. */
+TEST(kernel_registry_names_only_the_kernels_runtimes_hold) {
+    asx_runtime rt;
+    asx_runtime_config cfg;
+    asx_runtime_hooks hooks;
+    storage_block blk;
+    asx_region_id region;
+    uint16_t tag;
+
+    asx_runtime_reset();
+    ASSERT_TRUE(g_kernels[0] == &g_kernel_static);
+    ASSERT_TRUE(asx_kernel_for_tag(0u) == &g_kernel_static);
+    ASSERT_EQ(g_kernel_static.tag, (uint16_t)0u);
+    for (tag = 1u; tag < ASX_HANDLE_RT_TAG_LIMIT; tag++) {
+        ASSERT_TRUE(asx_kernel_for_tag(tag) == NULL);
+    }
+    ASSERT_FALSE(asx_kernel_any_held());
+
+    /* A handle is told apart by the tag it carries. */
+    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    ASSERT_TRUE(asx_kernel_of(region) == &g_kernel_static);
+    ASSERT_TRUE(asx_kernel_of(asx_handle_with_runtime_tag(region, 1u)) == NULL);
+
+    /* An initialized runtime holds the kernel of its tag, and only while it
+     * is initialized. */
+    ASSERT_TRUE(storage_block_make(&blk, 0xA5u));
+    make_valid_config(&cfg);
+    make_valid_hooks(&hooks);
+    cfg.storage = blk.block;
+    cfg.storage_size = blk.size;
+    MUST_OK(asx_runtime_init(&rt, &cfg, &hooks));
+    ASSERT_EQ(rt.tag, (uint16_t)0u);
+    ASSERT_TRUE(g_kernels[0] == (asx_kernel *)(void *)blk.block);
+    ASSERT_TRUE(asx_kernel_any_held());
+    ASSERT_TRUE(asx_kernel_holds(rt.tag, rt.generation));
+    ASSERT_FALSE(asx_kernel_holds(rt.tag, rt.generation + 1u));
+    ASSERT_TRUE(asx_runtime_is_initialized(&rt));
+
+    /* A second initialization is refused while the kernel is held. */
+    {
+        asx_runtime second;
+        asx_runtime_config cfg2;
+
+        make_valid_config(&cfg2);
+        ASSERT_EQ(asx_runtime_init(&second, &cfg2, &hooks), ASX_E_INVALID_STATE);
+    }
+
+    asx_runtime_shutdown(&rt);
+    ASSERT_TRUE(g_kernels[0] == &g_kernel_static);
+    ASSERT_FALSE(asx_kernel_any_held());
+    ASSERT_FALSE(asx_runtime_is_initialized(&rt));
+    storage_block_free(&blk);
+}
+
 TEST(runtime_storage_refusals_bind_nothing_and_change_no_byte) {
     asx_runtime rt;
     asx_runtime before;
@@ -1738,6 +1795,7 @@ int main(void) {
     RUN_TEST(conflicting_init_preserves_live_runtime_and_destination);
     RUN_TEST(runtime_storage_size_and_alignment_are_published);
     RUN_TEST(runtime_arenas_live_in_the_callers_storage_and_return_to_the_static_block);
+    RUN_TEST(kernel_registry_names_only_the_kernels_runtimes_hold);
     RUN_TEST(runtime_storage_refusals_bind_nothing_and_change_no_byte);
     RUN_TEST(refused_storage_init_preserves_the_live_runtime_and_the_block);
     RUN_TEST(runtimes_in_turn_in_their_own_blocks_do_not_share_arenas);

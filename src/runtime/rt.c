@@ -31,9 +31,9 @@
 
 asx_io_backend asx_runtime_active_io_backend_selected(void);
 
-/* Generation counter for runtime instances */
+/* Generation counter for runtime instances (a kernel records the one that
+ * holds it: asx_kernel_hold) */
 static uint32_t g_rt_generation = 1u;
-static uint32_t g_active_rt_generation = 0u;
 static asx_io_backend g_active_io_backend = ASX_IO_BACKEND_GHOST;
 
 static int runtime_wait_policy_valid(asx_wait_policy policy) {
@@ -192,7 +192,7 @@ asx_status asx_runtime_init_checked(asx_runtime *rt, const asx_runtime_config *c
     if (st != ASX_OK) return st;
     /* Initialization accepts an uninitialized destination: do not inspect
      * its bytes to authorize replacing the active process-wide runtime. */
-    if (g_active_rt_generation != 0u) return ASX_E_INVALID_STATE;
+    if (asx_kernel_any_held()) return ASX_E_INVALID_STATE;
     /* Step 3: bind the runtime's state storage (the caller's block, zeroed,
      * or the library's) and reset all internal state (deterministic clean
      * slate). Nothing above wrote any state, so a refusal left it intact. */
@@ -260,7 +260,7 @@ asx_status asx_runtime_init_checked(asx_runtime *rt, const asx_runtime_config *c
     rt->hooks = *hooks;
     rt->generation = g_rt_generation++;
     rt->initialized = 1;
-    g_active_rt_generation = rt->generation;
+    asx_kernel_hold(rt);
 
     return ASX_OK;
 }
@@ -336,7 +336,7 @@ void asx_runtime_shutdown(asx_runtime *rt) {
 
 int asx_runtime_is_initialized(const asx_runtime *rt) {
     if (rt == NULL) return 0;
-    return rt->initialized && rt->generation != 0u && rt->generation == g_active_rt_generation;
+    return rt->initialized && rt->generation != 0u && asx_kernel_holds(rt->tag, rt->generation);
 }
 
 /* ------------------------------------------------------------------ */
@@ -494,6 +494,10 @@ asx_io_backend asx_runtime_active_io_backend_selected(void) { return g_active_io
 /* Raw reset is an explicit teardown, including the singleton bootstrap token.
  * Independent runtime-owned state remains a separate architecture change. */
 void asx_runtime_object_reset_internal(void) {
-    g_active_rt_generation = 0u;
+    uint32_t i;
+
+    for (i = 0; i < ASX_MAX_RUNTIMES; i++) {
+        if (g_kernels[i] != NULL) g_kernels[i]->rt_generation = 0u;
+    }
     g_active_io_backend = ASX_IO_BACKEND_GHOST;
 }

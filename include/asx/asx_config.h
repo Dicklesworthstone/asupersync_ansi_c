@@ -1271,7 +1271,24 @@ typedef struct {
     uint32_t generation; /* nonzero when initialized */
     int initialized;     /* guard flag */
     int has_leak_escalation;
+    uint16_t tag; /* the tag of every handle this runtime issues; valid while initialized */
 } asx_runtime;
+
+/* Live runtimes in one process (K18). One kernel is the library's static
+ * block; each further runtime brings its own storage block
+ * (asx_runtime_config.storage), so raising this costs one registry pointer
+ * per runtime, not an arena. The runtime's tag rides in every handle it
+ * issues (ASX_HANDLE_RT_TAG_BITS in asx_ids.h: tags 0 .. 14), hence the
+ * upper bound. */
+#ifndef ASX_MAX_RUNTIMES
+#define ASX_MAX_RUNTIMES 1u
+#endif
+#if (ASX_MAX_RUNTIMES) < 1
+#error "ASX_MAX_RUNTIMES must be at least 1"
+#endif
+#if (ASX_MAX_RUNTIMES) > 15
+#error "ASX_MAX_RUNTIMES must be at most 15 (the handle's runtime tag)"
+#endif
 
 typedef enum {
     ASX_RUNTIME_PRESET_DEFAULT = 0,
@@ -1566,6 +1583,7 @@ static inline uint64_t asx_header_config_fingerprint(void) {
         ASX_HAS_BROWSER_IO,
         ASX_HAS_BROWSER_TRACE,
         ASX_MAX_REGION_CHILDREN,
+        ASX_MAX_RUNTIMES,
         ASX_MAX_REGIONS,
         ASX_MAX_TASKS,
         ASX_MAX_OBLIGATIONS,
@@ -1806,6 +1824,7 @@ static inline uint64_t asx_header_config_fingerprint(void) {
         offsetof(asx_runtime, generation),
         offsetof(asx_runtime, initialized),
         offsetof(asx_runtime, has_leak_escalation),
+        offsetof(asx_runtime, tag),
         sizeof(asx_runtime_builder),
         offsetof(builder_alignment, value),
         offsetof(asx_runtime_builder, config),
