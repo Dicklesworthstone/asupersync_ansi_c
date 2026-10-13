@@ -9,6 +9,7 @@
  */
 /* ASX_CHECKPOINT_WAIVER_FILE("vignette: no kernel loops") */
 
+#include "../test_runtime.h"
 #include "../test_task.h"
 #include <asx/asx.h>
 #include <stdio.h>
@@ -43,10 +44,10 @@ static int scenario_session_link_roundtrip(void) {
 
     printf("--- scenario: session link roundtrip with record capture ---\n");
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_event_log_reset();
 
-    st = asx_region_open(&region);
+    st = asx_region_open(test_runtime(), &region);
     if (st != ASX_OK) {
         printf("  FAIL: region_open returned %s\n", asx_status_str(st));
         return 1;

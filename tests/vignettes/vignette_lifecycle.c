@@ -12,6 +12,7 @@
  */
 /* ASX_CHECKPOINT_WAIVER_FILE("vignette: no kernel loops") */
 
+#include "../test_runtime.h"
 #include <asx/asx.h>
 #include <stdio.h>
 
@@ -97,13 +98,13 @@ static int scenario_minimal(void) {
 
     printf("--- scenario: minimal lifecycle ---\n");
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     /*
-     * ERGO: asx_region_open(&region) is clean — single out-param, returns
+     * ERGO: asx_region_open(test_runtime(), &region) is clean — single out-param, returns
      * status. The must-use attribute catches ignored errors at compile time.
      */
-    st = asx_region_open(&region);
+    st = asx_region_open(test_runtime(), &region);
     if (st != ASX_OK) {
         printf("  FAIL: region_open returned %s\n", asx_status_str(st));
         return 1;
@@ -151,9 +152,9 @@ static int scenario_captured_state(void) {
 
     printf("--- scenario: captured state ---\n");
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    st = asx_region_open(&region);
+    st = asx_region_open(test_runtime(), &region);
     if (st != ASX_OK) return 1;
 
     /* Spawn a task with region-owned captured state. */
@@ -223,9 +224,9 @@ static int scenario_quiescence_manual(void) {
 
     printf("--- scenario: quiescence (manual) ---\n");
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    st = asx_region_open(&region);
+    st = asx_region_open(test_runtime(), &region);
     if (st != ASX_OK) return 1;
 
     st = asx_task_spawn(region, poll_hello, NULL, &task);
@@ -289,9 +290,9 @@ static int scenario_capability_wrapped_scope(void) {
 
     printf("--- scenario: capability-wrapped scope ---\n");
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    st = asx_region_open(&region);
+    st = asx_region_open(test_runtime(), &region);
     if (st != ASX_OK) {
         printf("  FAIL: region_open returned %s\n", asx_status_str(st));
         return 1;
@@ -373,7 +374,7 @@ static int scenario_combinator_orchestration(void) {
 
     printf("--- scenario: combinator orchestration ---\n");
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     retry_policy = asx_retry_policy_immediate(6);
     st = asx_retry_init(&retry, poll_fail_twice_then_ok, &retry_failures, &retry_policy);

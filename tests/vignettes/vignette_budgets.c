@@ -10,6 +10,7 @@
  */
 /* ASX_CHECKPOINT_WAIVER_FILE("vignette: no kernel loops") */
 
+#include "../test_runtime.h"
 #include <asx/asx.h>
 #include <stdio.h>
 
@@ -207,9 +208,9 @@ static int scenario_scheduler_exhaustion(void) {
 
     printf("--- scenario: scheduler budget exhaustion ---\n");
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    st = asx_region_open(&region);
+    st = asx_region_open(test_runtime(), &region);
     if (st != ASX_OK) return 1;
 
     st = asx_task_spawn_captured(region, poll_long_runner, (uint32_t)sizeof(long_runner_state),

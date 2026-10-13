@@ -10,6 +10,7 @@
  */
 /* ASX_CHECKPOINT_WAIVER_FILE("vignette: no kernel loops") */
 
+#include "../test_runtime.h"
 #include <asx/asx.h>
 #include <stdio.h>
 
@@ -174,9 +175,9 @@ static int scenario_commit(void) {
 
     printf("--- scenario: obligation commit ---\n");
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    st = asx_region_open(&region);
+    st = asx_region_open(test_runtime(), &region);
     if (st != ASX_OK) return 1;
 
     st = asx_task_spawn_captured(region, poll_with_obligation, (uint32_t)sizeof(obligated_state),
@@ -236,9 +237,9 @@ static int scenario_abort(void) {
 
     printf("--- scenario: obligation abort ---\n");
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    st = asx_region_open(&region);
+    st = asx_region_open(test_runtime(), &region);
     if (st != ASX_OK) return 1;
 
     st = asx_task_spawn_captured(region, poll_abort_obligation, (uint32_t)sizeof(obligated_state),
@@ -301,9 +302,9 @@ static int scenario_state_query(void) {
 
     printf("--- scenario: obligation state query ---\n");
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
-    st = asx_region_open(&region);
+    st = asx_region_open(test_runtime(), &region);
     if (st != ASX_OK) return 1;
 
     query.region = region;

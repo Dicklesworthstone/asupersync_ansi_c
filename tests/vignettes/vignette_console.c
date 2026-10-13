@@ -32,7 +32,7 @@ int main(void) {
         return 1;
     }
 
-    if (asx_region_open(&region) != ASX_OK) {
+    if (asx_region_open(&rt, &region) != ASX_OK) {
         fprintf(stderr, "region open failed\n");
         asx_runtime_shutdown(&rt);
         return 1;

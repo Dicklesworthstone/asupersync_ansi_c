@@ -13,6 +13,7 @@
  */
 /* ASX_CHECKPOINT_WAIVER_FILE("vignette: no kernel loops") */
 
+#include "../test_runtime.h"
 #include <asx/asx.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -342,7 +343,7 @@ static int scenario_reactor_and_blocking(void) {
 
     printf("--- scenario: reactor and blocking ---\n");
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_waker_reset();
     g_reactor_waits = 0;
 
@@ -420,7 +421,7 @@ static int scenario_native_reactor(void) {
         return 1;
     }
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     g_native_reactor_waits = 0;
     native.read_fd = pipe_fds[0];
 
@@ -495,7 +496,7 @@ static int scenario_builder_and_deadlines(void) {
     printf("--- scenario: builder and deadline monitors ---\n");
 
     memset(&rt, 0, sizeof(rt));
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_auto_instrument_reset();
 
     st = asx_runtime_builder_init_current_thread(&builder);
@@ -585,7 +586,7 @@ static int scenario_end_to_end(void) {
     printf("--- scenario: end-to-end with hooks ---\n");
 
     /* Reset runtime (clears seal). */
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
 
     /* Re-install hooks (reset clears them). */
     {
@@ -596,7 +597,7 @@ static int scenario_end_to_end(void) {
         }
     }
 
-    st = asx_region_open(&region);
+    st = asx_region_open(test_runtime(), &region);
     if (st != ASX_OK) {
         printf("  FAIL: region_open returned %s\n", asx_status_str(st));
         return 1;

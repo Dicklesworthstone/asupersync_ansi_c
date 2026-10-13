@@ -10,6 +10,7 @@
  */
 /* ASX_CHECKPOINT_WAIVER_FILE("vignette: no kernel loops") */
 
+#include "../test_runtime.h"
 #include <asx/asx.h>
 #include <stdio.h>
 #include <string.h>
@@ -42,10 +43,10 @@ static int run_scenario(uint64_t *out_digest) {
     void *state_ptr = NULL;
     det_state *ds;
 
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_trace_reset();
 
-    st = asx_region_open(&region);
+    st = asx_region_open(test_runtime(), &region);
     if (st != ASX_OK) return 1;
 
     st = asx_task_spawn_captured(region, poll_deterministic, (uint32_t)sizeof(det_state), NULL,
