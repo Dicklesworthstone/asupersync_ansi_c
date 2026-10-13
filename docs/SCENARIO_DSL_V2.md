@@ -745,17 +745,41 @@ ends, as dropping a `ManagedSupervisorHandle` aborts the controller
 
 Rust's `Interval` and `DelayQueue` (`time/interval.rs`,
 `time/delay_queue.rs`) are held by the task that makes them under a name.
-None of these steps suspends: they read the clock (`cx.now()` for the
-interval; the queue's `wall_now()`, virtual under the lab) and leave waiting
-to the program's own `sleep` / `sleep_until` steps. So no timer is
-registered on their behalf and no timer event appears for them. (Rust's
-queue owns a `Sleep` that a pending poll would register; C's queue shares
-the task's one sleep timer slot, so a pending poll is outside the DSL.)
+Every step but `delay_queue_poll` leaves the task running: they read the
+clock (`cx.now()` for the interval; the queue's `wall_now()`, virtual under
+the lab) and leave waiting to the program's own `sleep` / `sleep_until`
+steps, so no timer is registered on their behalf. `delay_queue_poll` waits:
+a poll with nothing due arms the queue's own `Sleep` for the earliest
+deadline (its timer events are named as a sleep's, after the task) and the
+step ends when that deadline passes.
+
+**The queue's timer and waker.** The queue keeps the `Sleep` it armed and
+the task's waker (`delay_queue.rs:107-115`). The `Sleep` stays registered
+after the wait: a poll that finds an entry due leaves it, and only a poll
+that finds the queue empty (`:263`) or a `clear` (`:251`) drops it, which
+cancels its timer (`timer.cancelled`) at that step. The
+waker is taken by the first `insert` or `reset` that needs a re-arm (no
+timer armed, or an earlier deadline than the armed one, `:332`) and woken:
+the task running that step is polled once more at the same instant, so the
+dispatch list has one more entry than the steps suggest. C keeps the same
+two fields (`asx_delay_queue`: `armed_for`, `waiter`) and wakes the task
+through `asx_task_wake`. C's task has one timer slot, so while the queue's
+`Sleep` is registered (after a wait, until an empty poll or a `clear`) a
+step that arms another timer (`sleep`, `sleep_until`, `mutex_lock_until`,
+`timeout`, a `race` with `deadline_ns`), a second queue's wait, and a wait
+under a cancel request are outside the DSL: a harness error in both
+runners. A scenario ends such a window with a poll that finds the queue
+empty, or a `clear`, before the next timer step.
 
 | op | Fields | Rust | C | Observation |
 |---|---|---|---|---|
 | `interval_new` | `as`, `period_ns` (at least 1), optional `start_ns`, optional `behavior` (`burst` default, `delay`, `skip`) | `interval(cx.now(), period)` or `interval_at(Time::from_nanos(start_ns), period)` (`interval.rs:443`, `:470`), then `set_missed_tick_behavior` (`:228`) | `asx_interval_init_at` (start = now without `start_ns`) + `asx_interval_set_missed_tick_behavior` | `ASX_OK`, no value |
-| `interval_tick` | `interval` | `iv.poll_tick(cx.now())` (`:261`): `Some(t)` is due, `None` leaves the deadline unmoved (what `tick` returns, `:293`) | `asx_interval_tick_at` | `ASX_OK`; `value` `{"time_ns": <the deadline before the call>, "due": <bool>}`. A due tick moves the deadline by the behavior: Burst one period on (a late interval is ticked once per missed tick), Delay a period after `now`, Skip to the first period boundary after `now`. |
+| `interval_tick` | `interval` | `iv.poll_tick(cx.now())` (`:261`): `Some(t)` is due, `None` leaves the deadline unmoved (what `tick` returns, `:293`) | `asx_interval_tick_at` | `ASX_OK`; `value` `{"time_ns": <the deadline before the call>, "due": <bool>}`. A due tick moves the deadline by the behavior: Burst one period on (a late interval is ticked once per missed tick), Delay a period after `now`, Skip to the first period boundary after `now`; a deadline that would pass the last representable time saturates there and the interval has fired its last tick. |
+| `interval_set_behavior` | `interval`, `behavior` (`burst`, `delay`, `skip`) | `iv.set_missed_tick_behavior(b)` (`:228`) | `asx_interval_set_missed_tick_behavior` | `ASX_OK`, no value. Applies to the next due tick. |
+| `interval_deadline` | `interval` | `iv.deadline()` (`:205`) | `asx_interval_deadline` | `ASX_OK`, u64 `value`: the next tick's time |
+| `interval_remaining` | `interval` | `iv.remaining(cx.now())` (`:309`) | `asx_interval_remaining` | `ASX_OK`, u64 `value`: nanoseconds to the deadline, 0 once due |
+| `interval_is_ready` | `interval` | `iv.is_ready(cx.now())` (`:320`) | `asx_interval_is_ready` | `ASX_OK`, boolean `value`: `now >= deadline` |
+| `interval_reset` / `interval_reset_at` / `interval_reset_after` | `interval`; `at_ns` for `_at`; `after_ns` for `_after` | `iv.reset(cx.now())` / `iv.reset_at(Time::from_nanos(at_ns))` / `iv.reset_after(cx.now(), Duration::from_nanos(after_ns))` (`:342`, `:360`, `:378`) | `asx_interval_reset` / `asx_interval_reset_at` / `asx_interval_reset_after` | `ASX_OK`, no value. The deadline becomes now, the instant, or now plus the delay (saturating); an interval that had fired its last tick ticks again; the behavior is kept. |
 | `delay_queue_new` | `as` | `DelayQueue::new()` | `asx_delay_queue_init` | `ASX_OK` |
 | `delay_queue_insert` | `queue`, `as` (the key's name), `value`, `timeout_ns` | `q.insert(value, Duration::from_nanos(timeout_ns))` (`:139`), saturating at the last representable time | `asx_delay_queue_insert` | `ASX_OK`. C holds `ASX_DELAY_QUEUE_CAPACITY` (16) entries; a scenario stays under it (a harness error otherwise). |
 | `delay_queue_insert_at` | `queue`, `as`, `value`, `deadline_ns` | `q.insert_at(value, Time::from_nanos(deadline_ns))` (`:144`) | `asx_delay_queue_insert_at` | `ASX_OK` |
@@ -765,13 +789,19 @@ the task's one sleep timer slot, so a pending poll is outside the DSL.)
 | `delay_queue_deadline` | `queue`, `key` | `q.deadline(&key)` (`:221`) | `asx_delay_queue_deadline` | `ASX_OK`, u64 `value`; a dead key panics in Rust: a harness error |
 | `delay_queue_len` | `queue` | `q.len()` (`:237`) | `asx_delay_queue_len` | `ASX_OK`, u64 `value` |
 | `delay_queue_clear` | `queue` | `q.clear()` (`:248`) | `asx_delay_queue_clear` | `ASX_OK`; every key is dead afterwards |
-| `delay_queue_poll` | `queue` | `poll_expired(cx)` once (`:260`) | `asx_delay_queue_poll_at` | the next due entry earliest first, ties in insertion order: `ASX_OK` with `{"value", "deadline_ns"}`; an empty queue: `ASX_E_CHANNEL_EMPTY` (Rust `Ready(None)`). Nothing due yet is a harness error: sleep until an entry is due first. |
+| `delay_queue_poll` | `queue` | `poll_expired(cx)` awaited (`:260`) | `asx_delay_queue_poll` (parks on the task's timer for the earliest deadline) | the next due entry earliest first, ties in insertion order: `ASX_OK` with `{"value", "deadline_ns"}`; an empty queue: `ASX_E_CHANNEL_EMPTY` (Rust `Ready(None)`). With nothing due yet the step waits for the earliest deadline (see "The queue's timer and waker" above). |
 
 A key's name stays bound after its entry expired or was removed (the key is
 dead, not unknown), and a name is bound once per task. Scenarios:
 `interval-missed-tick-burst-001`, `interval-missed-tick-delay-001`,
 `interval-missed-tick-skip-001`, `interval-start-at-001`,
-`delay-queue-order-reset-remove-001`, `delay-queue-reset-ties-saturate-001`.
+`interval-reset-family-001`, `interval-set-behavior-001`,
+`interval-saturate-exhausted-001`,
+`delay-queue-order-reset-remove-001`, `delay-queue-reset-ties-saturate-001`,
+`delay-queue-wait-order-001`, `delay-queue-wait-reset-insert-001`,
+`delay-queue-wait-beside-sleeper-001`, `delay-queue-wait-clear-reuse-001`,
+`delay-queue-wait-self-wake-001`, `delay-queue-wait-clear-sleep-001`,
+`delay-queue-wait-then-yield-001`, `delay-queue-wait-drop-timer-001`.
 **Timeout.** The `timeout` step (§3.7) wraps one blocking sync wait in
 `time::timeout(cx.now(), d, inner)` and awaits it. The deadline is the
 clock at the step's first poll plus `ns`, saturating. Each poll follows

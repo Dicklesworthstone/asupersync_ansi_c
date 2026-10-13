@@ -195,6 +195,34 @@ ASX_API uint32_t asx_interval_ticks(const asx_interval_state *state);
 ASX_API ASX_MUST_USE asx_status asx_interval_tick_at(asx_interval_state *state, asx_time now,
                                                      asx_time *out_time, int *out_due);
 
+/* The rest of Rust's Interval surface, on the same state (time/interval.rs).
+ * Before the first tick the deadline is the init_at start time, else `now`
+ * (where the first poll would fix it). All return ASX_OK, or
+ * ASX_E_INVALID_ARGUMENT for a NULL argument. */
+
+/* Interval::deadline (:205): the next tick's time. */
+ASX_API ASX_MUST_USE asx_status asx_interval_deadline(const asx_interval_state *state, asx_time now,
+                                                      asx_time *out_deadline);
+
+/* Interval::remaining (:309): nanoseconds until the deadline, 0 once it is
+ * due. */
+ASX_API ASX_MUST_USE asx_status asx_interval_remaining(const asx_interval_state *state,
+                                                       asx_time now, uint64_t *out_ns);
+
+/* Interval::is_ready (:320): 1 when now >= the deadline. Unlike a tick it
+ * does not look at exhaustion. */
+ASX_API ASX_MUST_USE asx_status asx_interval_is_ready(const asx_interval_state *state, asx_time now,
+                                                      int *out_ready);
+
+/* Interval::reset (:342), reset_at (:360) and reset_after (:378): the
+ * deadline becomes now, the instant, or now + after_ns (saturating at the
+ * last representable time), and an interval that had fired its last tick
+ * ticks again. The missed-tick behavior and the tick count stay. */
+ASX_API ASX_MUST_USE asx_status asx_interval_reset(asx_interval_state *state, asx_time now);
+ASX_API ASX_MUST_USE asx_status asx_interval_reset_at(asx_interval_state *state, asx_time instant);
+ASX_API ASX_MUST_USE asx_status asx_interval_reset_after(asx_interval_state *state, asx_time now,
+                                                         uint64_t after_ns);
+
 /* -------------------------------------------------------------------
  * DelayQueue
  *
@@ -246,6 +274,14 @@ typedef struct {
     asx_delay_heap_item heap[ASX_DELAY_QUEUE_HEAP_CAPACITY];
     uint32_t heap_len;
     uint64_t next_generation;
+    /* The queue's own Sleep and waker (delay_queue.rs:107-115). armed_for is
+     * the deadline the Sleep is registered for; the waker is the task that
+     * last waited (store_waker, :346) and is taken by the first schedule()
+     * that needs a re-arm: no timer, or an earlier deadline (:332). */
+    int has_armed;
+    asx_time armed_for;
+    int has_waker;
+    asx_task_id waiter;
 } asx_delay_queue;
 
 /* What a poll found (Rust's Poll<Option<Expired<T>>>). */

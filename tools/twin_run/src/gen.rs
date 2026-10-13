@@ -1838,6 +1838,9 @@ fn ext_time(ext: &mut Rng, timed: bool, quanta: u64) -> u64 {
 
 /// An interval (DSL §3.9): created with a period of a few quanta, sometimes
 /// a start in the future and a missed-tick behavior, ticked between sleeps.
+/// The steps between read its deadline, remaining time and readiness, change
+/// the behavior mid-run and reset it to now, to an instant or to a delay
+/// from now (sometimes the longest one, which saturates).
 fn ext_interval(ext: &mut Rng, me: &str, n: u64) -> Vec<Value> {
     let q = ext.quantum;
     let name = format!("{me}.iv{n}");
@@ -1849,11 +1852,25 @@ fn ext_interval(ext: &mut Rng, me: &str, n: u64) -> Vec<Value> {
         new["behavior"] = json!(*ext.pick(&["burst", "delay", "skip"]));
     }
     let mut steps = vec![new];
-    for _ in 0..2 + ext.below(4) {
-        steps.push(match ext.below(4) {
+    for _ in 0..2 + ext.below(6) {
+        steps.push(match ext.below(10) {
             0 => json!({"op": "sleep", "ns": q * (1 + ext.below(6))}),
             1 => json!({"op": "yield"}),
-            _ => json!({"op": "interval_tick", "interval": name}),
+            2..=4 => json!({"op": "interval_tick", "interval": name}),
+            5 => json!({"op": *ext.pick(&["interval_deadline", "interval_remaining",
+                                          "interval_is_ready"]), "interval": name}),
+            6 => json!({"op": "interval_set_behavior", "interval": name,
+                        "behavior": *ext.pick(&["burst", "delay", "skip"])}),
+            7 => json!({"op": "interval_reset", "interval": name}),
+            8 => json!({"op": "interval_reset_at", "interval": name, "at_ns": q * ext.below(8)}),
+            _ => {
+                let after = if ext.chance(10) {
+                    u64::MAX
+                } else {
+                    q * ext.below(5)
+                };
+                json!({"op": "interval_reset_after", "interval": name, "after_ns": after})
+            }
         });
     }
     steps
@@ -1867,9 +1884,17 @@ fn ext_interval(ext: &mut Rng, me: &str, n: u64) -> Vec<Value> {
 /// scenario can cancel a task (`timed` false) every entry is due at once
 /// instead, since a cancelled sleep would leave the poll with nothing due,
 /// which is a harness error.
+///
+/// A timed block sometimes lets the poll wait instead: no sleeps precede it,
+/// so it waits on the queue's own timer for whatever is earliest. That timer
+/// stays registered until a poll finds the queue empty or a clear (DSL §3.9),
+/// and no other timer step may run meanwhile, so such a block draws no
+/// sleeps and ends with a clear.
 fn ext_delay_queue(ext: &mut Rng, me: &str, n: u64, timed: bool) -> Vec<Value> {
     let q = ext.quantum;
     let queue = format!("{me}.dq{n}");
+    let waits = timed && ext.chance(40);
+    let mut waited = false;
     let mut steps = vec![json!({"op": "delay_queue_new", "as": queue})];
     // (key name, live)
     let mut keys: Vec<(String, bool)> = Vec::new();
@@ -1944,7 +1969,16 @@ fn ext_delay_queue(ext: &mut Rng, me: &str, n: u64, timed: bool) -> Vec<Value> {
                 }
                 steps.push(json!({"op": "delay_queue_clear", "queue": queue}));
             }
-            9 if timed => steps.push(json!({"op": "sleep", "ns": q * (1 + ext.below(6))})),
+            9 if timed && !waits => {
+                steps.push(json!({"op": "sleep", "ns": q * (1 + ext.below(6))}));
+            }
+            10 if waits => {
+                waited = true;
+                for key in &mut keys {
+                    key.1 = false;
+                }
+                steps.push(json!({"op": "delay_queue_poll", "queue": queue}));
+            }
             10 => {
                 // Everything inserted is due once the program has slept the
                 // longest relative timeout from now and until the latest
@@ -1962,6 +1996,9 @@ fn ext_delay_queue(ext: &mut Rng, me: &str, n: u64, timed: bool) -> Vec<Value> {
             }
             _ => {}
         }
+    }
+    if waited {
+        steps.push(json!({"op": "delay_queue_clear", "queue": queue}));
     }
     steps
 }

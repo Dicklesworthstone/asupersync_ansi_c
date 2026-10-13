@@ -340,6 +340,127 @@ TEST(task_poll_waits_for_the_deadline_on_the_runtime_clock) {
     asx_runtime_shutdown(&g_rt);
 }
 
+/* The queue's own Sleep and waker (delay_queue.rs:107-115, :287-297, :332).
+ * A task id the scheduler does not know stands in for the waiting task: the
+ * wake it gets fails, which the queue treats as a task that is gone. */
+static void use_stepping_clock(void) {
+    const asx_runtime_hooks *orig;
+    asx_runtime_hooks hooks;
+    MUST_OK(asx_runtime_init_default(&g_rt));
+    asx_vtime_init(&g_vt, 0, 1000000ULL); /* 1 ms per clock query */
+    orig = asx_runtime_get_hooks();
+    memcpy(&hooks, orig, sizeof(hooks));
+    hooks.clock.now_ns_fn = asx_vtime_now_ns;
+    hooks.clock.logical_now_ns_fn = asx_vtime_now_ns;
+    hooks.clock.ctx = &g_vt;
+    MUST_OK(asx_runtime_set_hooks(&hooks));
+}
+
+TEST(a_wait_arms_the_earliest_deadline_and_stores_the_waker) {
+    asx_delay_key k;
+    asx_delay_expired e;
+    asx_delay_poll_state s = ASX_DELAY_EMPTY;
+
+    use_stepping_clock();
+    fresh();
+    ASSERT_FALSE(g_q.has_armed);
+    ASSERT_FALSE(g_q.has_waker);
+    MUST_OK(asx_delay_queue_insert_at(&g_q, 1, 50000000ULL, &k));
+    ASSERT_EQ(asx_delay_queue_poll(&g_q, ASX_INVALID_ID, &s, &e), ASX_E_PENDING);
+    ASSERT_TRUE(g_q.has_armed);
+    ASSERT_EQ(g_q.armed_for, (asx_time)50000000ULL);
+    ASSERT_TRUE(g_q.has_waker);
+    /* A later deadline needs no re-arm: the waker stays. */
+    MUST_OK(asx_delay_queue_insert_at(&g_q, 2, 90000000ULL, &k));
+    ASSERT_TRUE(g_q.has_waker);
+    ASSERT_EQ(g_q.armed_for, (asx_time)50000000ULL);
+    /* An equal deadline does not need one either (the test is `<`). */
+    MUST_OK(asx_delay_queue_insert_at(&g_q, 3, 50000000ULL, &k));
+    ASSERT_TRUE(g_q.has_waker);
+    /* An earlier one takes the waker and wakes it, once. */
+    MUST_OK(asx_delay_queue_insert_at(&g_q, 4, 20000000ULL, &k));
+    ASSERT_FALSE(g_q.has_waker);
+    asx_runtime_shutdown(&g_rt);
+}
+
+TEST(the_next_wait_re_arms_and_stores_the_waker_again) {
+    asx_delay_key k;
+    asx_delay_expired e;
+    asx_delay_poll_state s = ASX_DELAY_EMPTY;
+
+    use_stepping_clock();
+    fresh();
+    MUST_OK(asx_delay_queue_insert_at(&g_q, 1, 50000000ULL, &k));
+    ASSERT_EQ(asx_delay_queue_poll(&g_q, ASX_INVALID_ID, &s, &e), ASX_E_PENDING);
+    MUST_OK(asx_delay_queue_insert_at(&g_q, 2, 20000000ULL, &k)); /* takes the waker */
+    ASSERT_FALSE(g_q.has_waker);
+    ASSERT_EQ(g_q.armed_for, (asx_time)50000000ULL); /* re-armed by the next poll */
+    ASSERT_EQ(asx_delay_queue_poll(&g_q, ASX_INVALID_ID, &s, &e), ASX_E_PENDING);
+    ASSERT_EQ(g_q.armed_for, (asx_time)20000000ULL);
+    ASSERT_TRUE(g_q.has_waker);
+    /* A reset to an earlier deadline needs a re-arm just as an insert does. */
+    MUST_OK(asx_delay_queue_reset_at(&g_q, &k, 10000000ULL));
+    ASSERT_FALSE(g_q.has_waker);
+    asx_runtime_shutdown(&g_rt);
+}
+
+TEST(an_empty_poll_and_clear_drop_the_timer_but_not_the_waker) {
+    asx_delay_key k;
+    asx_delay_expired e;
+    asx_delay_poll_state s = ASX_DELAY_EMPTY;
+
+    use_stepping_clock();
+    fresh();
+    MUST_OK(asx_delay_queue_insert_at(&g_q, 1, 50000000ULL, &k));
+    ASSERT_EQ(asx_delay_queue_poll(&g_q, ASX_INVALID_ID, &s, &e), ASX_E_PENDING);
+    MUST_OK(asx_delay_queue_clear(&g_q));
+    ASSERT_FALSE(g_q.has_armed);
+    ASSERT_TRUE(g_q.has_waker);
+    /* No timer is armed, so any insert needs the re-arm. */
+    MUST_OK(asx_delay_queue_insert_at(&g_q, 2, 90000000ULL, &k));
+    ASSERT_FALSE(g_q.has_waker);
+
+    /* The same after an empty poll: wait, drain, poll empty. */
+    fresh();
+    MUST_OK(asx_delay_queue_insert_at(&g_q, 1, 5000000ULL, &k));
+    ASSERT_EQ(asx_delay_queue_poll(&g_q, ASX_INVALID_ID, &s, &e), ASX_E_PENDING);
+    ASSERT_TRUE(g_q.has_armed);
+    MUST_OK(asx_delay_queue_remove(&g_q, &k, &e));
+    ASSERT_EQ(asx_delay_queue_poll(&g_q, ASX_INVALID_ID, &s, &e), ASX_OK);
+    ASSERT_EQ(s, ASX_DELAY_EMPTY);
+    ASSERT_FALSE(g_q.has_armed);
+    ASSERT_TRUE(g_q.has_waker);
+    MUST_OK(asx_delay_queue_insert_at(&g_q, 2, 90000000ULL, &k));
+    ASSERT_FALSE(g_q.has_waker);
+    asx_runtime_shutdown(&g_rt);
+}
+
+TEST(a_due_entry_leaves_the_timer_armed) {
+    asx_delay_key k;
+    asx_delay_expired e;
+    asx_delay_poll_state s = ASX_DELAY_EMPTY;
+    asx_status st = ASX_E_PENDING;
+    int polls = 0;
+
+    use_stepping_clock();
+    fresh();
+    MUST_OK(asx_delay_queue_insert_at(&g_q, 1, 5000000ULL, &k));
+    while (st == ASX_E_PENDING && polls < 50) {
+        st = asx_delay_queue_poll(&g_q, ASX_INVALID_ID, &s, &e);
+        polls++;
+    }
+    ASSERT_EQ(s, ASX_DELAY_EXPIRED);
+    /* Rust yields a due entry without touching the Sleep (:275-286). */
+    ASSERT_TRUE(g_q.has_armed);
+    ASSERT_EQ(g_q.armed_for, (asx_time)5000000ULL);
+    /* A later deadline than the armed one needs no wake; an earlier one does. */
+    MUST_OK(asx_delay_queue_insert_at(&g_q, 2, 9000000ULL, &k));
+    ASSERT_TRUE(g_q.has_waker);
+    MUST_OK(asx_delay_queue_insert_at(&g_q, 3, 4000000ULL, &k));
+    ASSERT_FALSE(g_q.has_waker);
+    asx_runtime_shutdown(&g_rt);
+}
+
 /* ------------------------------------------------------------------ */
 /* Interval::tick as a pure state machine (interval.rs:261-303, :385)   */
 /* ------------------------------------------------------------------ */
@@ -440,6 +561,126 @@ TEST(interval_tick_argument_errors) {
 }
 
 /* ------------------------------------------------------------------ */
+/* The rest of Interval's surface (interval.rs:205, :309, :320, :342-378) */
+/* ------------------------------------------------------------------ */
+
+static asx_time deadline_of(const asx_interval_state *s, asx_time now) {
+    asx_time d = 0;
+    MUST_OK(asx_interval_deadline(s, now, &d));
+    return d;
+}
+
+static uint64_t remaining_of(const asx_interval_state *s, asx_time now) {
+    uint64_t r = 0;
+    MUST_OK(asx_interval_remaining(s, now, &r));
+    return r;
+}
+
+static int ready_of(const asx_interval_state *s, asx_time now) {
+    int r = -1;
+    MUST_OK(asx_interval_is_ready(s, now, &r));
+    return r;
+}
+
+TEST(deadline_remaining_and_readiness_follow_the_clock) {
+    asx_interval_state s;
+    MUST_OK(asx_interval_init_at(&s, 40, 100, 0));
+    /* Before the first tick the deadline is the start. */
+    ASSERT_EQ(deadline_of(&s, 0), (asx_time)40);
+    ASSERT_EQ(remaining_of(&s, 15), (uint64_t)25);
+    ASSERT_FALSE(ready_of(&s, 39));
+    ASSERT_TRUE(ready_of(&s, 40)); /* now >= deadline */
+    ASSERT_EQ(remaining_of(&s, 40), (uint64_t)0);
+    ASSERT_EQ(remaining_of(&s, 900), (uint64_t)0); /* overdue: zero, not negative */
+    /* Reading does not move the deadline; a due tick does. */
+    ASSERT_EQ(deadline_of(&s, 900), (asx_time)40);
+    ASSERT_EQ(tick(&s, 40, NULL), (asx_time)40);
+    ASSERT_EQ(deadline_of(&s, 40), (asx_time)140);
+    ASSERT_EQ(remaining_of(&s, 100), (uint64_t)40);
+}
+
+TEST(without_a_start_the_deadline_is_where_the_first_poll_would_fix_it) {
+    asx_interval_state s;
+    MUST_OK(asx_interval_init(&s, 100, 0));
+    ASSERT_EQ(deadline_of(&s, 700), (asx_time)700);
+    ASSERT_TRUE(ready_of(&s, 700));
+    ASSERT_EQ(remaining_of(&s, 700), (uint64_t)0);
+}
+
+TEST(reset_sets_the_next_deadline_and_keeps_the_behavior_and_the_count) {
+    asx_interval_state s;
+    int due = 0;
+    MUST_OK(asx_interval_init_at(&s, 0, 100, 0));
+    MUST_OK(asx_interval_set_missed_tick_behavior(&s, ASX_MISSED_TICK_SKIP));
+    ASSERT_EQ(tick(&s, 0, &due), (asx_time)0);
+    ASSERT_EQ(asx_interval_ticks(&s), 1u);
+
+    MUST_OK(asx_interval_reset(&s, 250)); /* deadline := now */
+    ASSERT_EQ(deadline_of(&s, 250), (asx_time)250);
+    ASSERT_TRUE(ready_of(&s, 250));
+    ASSERT_EQ(tick(&s, 290, &due), (asx_time)250); /* still Skip: next is 350 */
+    ASSERT_TRUE(due);
+    ASSERT_EQ(deadline_of(&s, 290), (asx_time)350);
+    ASSERT_EQ(asx_interval_ticks(&s), 2u); /* the count is kept */
+
+    MUST_OK(asx_interval_reset_at(&s, 600)); /* deadline := the instant */
+    ASSERT_EQ(deadline_of(&s, 290), (asx_time)600);
+    ASSERT_EQ(remaining_of(&s, 290), (uint64_t)310);
+    ASSERT_EQ(tick(&s, 290, &due), (asx_time)600);
+    ASSERT_FALSE(due);
+
+    MUST_OK(asx_interval_reset_after(&s, 290, 40)); /* deadline := now + after */
+    ASSERT_EQ(deadline_of(&s, 290), (asx_time)330);
+    ASSERT_EQ(remaining_of(&s, 290), (uint64_t)40);
+    ASSERT_FALSE(ready_of(&s, 329));
+    ASSERT_TRUE(ready_of(&s, 330));
+}
+
+TEST(reset_after_saturates_at_the_last_representable_time) {
+    asx_interval_state s;
+    MUST_OK(asx_interval_init_at(&s, 0, 100, 0));
+    MUST_OK(asx_interval_reset_after(&s, 10, UINT64_MAX));
+    ASSERT_EQ(deadline_of(&s, 10), (asx_time)UINT64_MAX);
+    ASSERT_EQ(remaining_of(&s, 10), UINT64_MAX - 10u);
+    ASSERT_FALSE(ready_of(&s, 10));
+    MUST_OK(asx_interval_reset_after(&s, UINT64_MAX - 5u, 100));
+    ASSERT_EQ(deadline_of(&s, 10), (asx_time)UINT64_MAX);
+    MUST_OK(asx_interval_reset_after(&s, 7, 0));
+    ASSERT_EQ(deadline_of(&s, 10), (asx_time)7); /* a zero delay is now */
+}
+
+TEST(a_reset_gives_an_interval_that_fired_its_last_tick_a_new_deadline) {
+    asx_interval_state s;
+    int due = 0;
+    MUST_OK(asx_interval_init_at(&s, UINT64_MAX, 100, 0));
+    ASSERT_EQ(tick(&s, UINT64_MAX, &due), (asx_time)UINT64_MAX);
+    ASSERT_TRUE(due);
+    ASSERT_EQ(tick(&s, UINT64_MAX, &due), (asx_time)UINT64_MAX);
+    ASSERT_FALSE(due); /* exhausted */
+    MUST_OK(asx_interval_reset_at(&s, 5));
+    ASSERT_EQ(tick(&s, 5, &due), (asx_time)5);
+    ASSERT_TRUE(due); /* it ticks again */
+    ASSERT_EQ(deadline_of(&s, 5), (asx_time)105);
+}
+
+TEST(the_interval_extras_refuse_missing_arguments) {
+    asx_interval_state s;
+    asx_time t = 0;
+    uint64_t n = 0;
+    int b = 0;
+    MUST_OK(asx_interval_init_at(&s, 0, 100, 0));
+    ASSERT_EQ(asx_interval_deadline(NULL, 0, &t), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_interval_deadline(&s, 0, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_interval_remaining(NULL, 0, &n), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_interval_remaining(&s, 0, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_interval_is_ready(NULL, 0, &b), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_interval_is_ready(&s, 0, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_interval_reset(NULL, 0), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_interval_reset_at(NULL, 0), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_interval_reset_after(NULL, 0, 0), ASX_E_INVALID_ARGUMENT);
+}
+
+/* ------------------------------------------------------------------ */
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
 
@@ -467,6 +708,10 @@ int main(void) {
     RUN_TEST(argument_errors);
 
     RUN_TEST(task_poll_waits_for_the_deadline_on_the_runtime_clock);
+    RUN_TEST(a_wait_arms_the_earliest_deadline_and_stores_the_waker);
+    RUN_TEST(the_next_wait_re_arms_and_stores_the_waker_again);
+    RUN_TEST(an_empty_poll_and_clear_drop_the_timer_but_not_the_waker);
+    RUN_TEST(a_due_entry_leaves_the_timer_armed);
 
     RUN_TEST(interval_ticks_at_each_period_from_its_start);
     RUN_TEST(interval_first_tick_is_at_now_without_a_start);
@@ -475,6 +720,13 @@ int main(void) {
     RUN_TEST(skip_jumps_to_the_next_aligned_tick_after_now);
     RUN_TEST(a_tick_at_the_last_representable_time_exhausts_the_interval);
     RUN_TEST(interval_tick_argument_errors);
+
+    RUN_TEST(deadline_remaining_and_readiness_follow_the_clock);
+    RUN_TEST(without_a_start_the_deadline_is_where_the_first_poll_would_fix_it);
+    RUN_TEST(reset_sets_the_next_deadline_and_keeps_the_behavior_and_the_count);
+    RUN_TEST(reset_after_saturates_at_the_last_representable_time);
+    RUN_TEST(a_reset_gives_an_interval_that_fired_its_last_tick_a_new_deadline);
+    RUN_TEST(the_interval_extras_refuse_missing_arguments);
 
     TEST_REPORT();
     return test_failures;

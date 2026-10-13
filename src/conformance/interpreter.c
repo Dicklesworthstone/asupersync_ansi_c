@@ -2854,6 +2854,11 @@ typedef struct {
     const char *name;
     uint32_t owner;
     asx_delay_queue queue;
+    /* The queue waited on its own timer and has not since been polled empty
+     * or cleared. Rust's Sleep stays registered for that long; C's single
+     * per-task timer slot cannot hold a second timer beside it, so a step
+     * that arms another timer meanwhile is outside the DSL (§3.9). */
+    int timer_live;
 } it_delay_queue;
 
 typedef struct {
@@ -2892,6 +2897,25 @@ static it_delay_queue *delay_queue_of(const it_task *t, const char *name) {
     return NULL;
 }
 
+/* The queue of `t` whose own timer is still registered, or NULL. */
+static it_delay_queue *live_delay_queue(const it_task *t) {
+    uint32_t i;
+    for (i = 0; i < g_n_delay_queues; i++) {
+        if (g_delay_queues[i].owner == (uint32_t)(t - g_tasks) && g_delay_queues[i].timer_live) {
+            return &g_delay_queues[i];
+        }
+    }
+    return NULL;
+}
+
+/* Whether `step` arms a timer of its own (DSL §3.9): a sleep, a deadline
+ * lock, a standalone timeout, or a race with a deadline. */
+static int step_arms_timer(uint32_t step, const char *op) {
+    return strcmp(op, "sleep") == 0 || strcmp(op, "sleep_until") == 0 ||
+           strcmp(op, "mutex_lock_until") == 0 || strcmp(op, "timeout") == 0 ||
+           (strcmp(op, "race") == 0 && asx_json_get(g_in, step, "deadline_ns") != ASX_JSON_NONE);
+}
+
 static it_delay_key *delay_key_of(const it_task *t, const char *name) {
     uint32_t i;
     for (i = 0; name != NULL && i < g_n_delay_keys; i++) {
@@ -2911,12 +2935,13 @@ static uint32_t delay_expired_value(const asx_delay_expired *e) {
     return o;
 }
 
-/* The interval and DelayQueue steps (DSL §3.9), none of which suspends:
- * they read the clock (Rust cx.now() / wall_now(), virtual under the lab)
- * and leave any waiting to the program's own sleep steps. Returns 1 when
- * `op` is one of them, with the step's result in *out. */
-static int exec_time_op(it_task *t, uint32_t step, uint32_t idx, const char *label, const char *op,
-                        step_result *out) {
+/* The interval and DelayQueue steps (DSL §3.9). They read the clock (Rust
+ * cx.now() / wall_now(), virtual under the lab); only delay_queue_poll
+ * suspends, on the queue's own timer, and leaves any other waiting to the
+ * program's sleep steps. Returns 1 when `op` is one of them, with the
+ * step's result in *out. */
+static int exec_time_op(it_task *t, asx_task_id self, uint32_t step, uint32_t idx,
+                        const char *label, const char *op, step_result *out) {
     uint32_t me = (uint32_t)(t - g_tasks);
     asx_time now = 0;
     uint64_t n = 0;
@@ -2979,6 +3004,71 @@ static int exec_time_op(it_task *t, uint32_t step, uint32_t idx, const char *lab
         observe(t, idx, label, status_node(ASX_OK), value);
         return 1;
     }
+    if (strncmp(op, "interval_", 9) == 0) {
+        /* The rest of Interval's surface (interval.rs:205, :228, :309, :320,
+         * :342, :360, :378): each reads the clock once and names an interval
+         * the task holds. */
+        it_interval *iv = interval_of(t, it_str(step, "interval"));
+        const char *keyword = op + 9;
+        asx_time when = 0;
+        int flag = 0;
+        if (iv == NULL) {
+            it_fail_task(t, idx, "an interval step names an interval this task does not hold");
+            *out = STEP_END;
+            return 1;
+        }
+        if (strcmp(keyword, "set_behavior") == 0) {
+            const char *behavior = it_str(step, "behavior");
+            asx_missed_tick_behavior mode;
+            if (behavior != NULL && strcmp(behavior, "burst") == 0) {
+                mode = ASX_MISSED_TICK_BURST;
+            } else if (behavior != NULL && strcmp(behavior, "delay") == 0) {
+                mode = ASX_MISSED_TICK_DELAY;
+            } else if (behavior != NULL && strcmp(behavior, "skip") == 0) {
+                mode = ASX_MISSED_TICK_SKIP;
+            } else {
+                it_fail_task(t, idx, "interval_set_behavior needs burst, delay or skip");
+                *out = STEP_END;
+                return 1;
+            }
+            observe_status(t, idx, label, asx_interval_set_missed_tick_behavior(&iv->state, mode));
+            return 1;
+        }
+        if (strcmp(keyword, "deadline") == 0) {
+            st = asx_interval_deadline(&iv->state, now, &when);
+            observe(t, idx, label, status_node(st), asx_json_new_u64(g_out, when));
+            return 1;
+        }
+        if (strcmp(keyword, "remaining") == 0) {
+            st = asx_interval_remaining(&iv->state, now, &n);
+            observe(t, idx, label, status_node(st), asx_json_new_u64(g_out, n));
+            return 1;
+        }
+        if (strcmp(keyword, "is_ready") == 0) {
+            st = asx_interval_is_ready(&iv->state, now, &flag);
+            observe(t, idx, label, status_node(st), asx_json_new_bool(g_out, flag));
+            return 1;
+        }
+        if (strcmp(keyword, "reset") == 0) {
+            observe_status(t, idx, label, asx_interval_reset(&iv->state, now));
+            return 1;
+        }
+        if (strcmp(keyword, "reset_at") == 0 || strcmp(keyword, "reset_after") == 0) {
+            const int after = strcmp(keyword, "reset_after") == 0;
+            if (!asx_json_u64(g_in, asx_json_get(g_in, step, after ? "after_ns" : "at_ns"), &n)) {
+                it_fail_task(t, idx, "an interval reset needs its time");
+                *out = STEP_END;
+                return 1;
+            }
+            observe_status(t, idx, label,
+                           after ? asx_interval_reset_after(&iv->state, now, n)
+                                 : asx_interval_reset_at(&iv->state, n));
+            return 1;
+        }
+        it_fail_task(t, idx, "unknown interval step");
+        *out = STEP_END;
+        return 1;
+    }
     if (strcmp(op, "delay_queue_new") == 0) {
         const char *as = it_str(step, "as");
         if (as == NULL || g_n_delay_queues >= IT_MAX_DELAY_QUEUES ||
@@ -2990,6 +3080,7 @@ static int exec_time_op(it_task *t, uint32_t step, uint32_t idx, const char *lab
         st = asx_delay_queue_init(&g_delay_queues[g_n_delay_queues].queue);
         g_delay_queues[g_n_delay_queues].name = as;
         g_delay_queues[g_n_delay_queues].owner = me;
+        g_delay_queues[g_n_delay_queues].timer_live = 0;
         g_n_delay_queues++;
         observe_status(t, idx, label, st);
         return 1;
@@ -3043,23 +3134,50 @@ static int exec_time_op(it_task *t, uint32_t step, uint32_t idx, const char *lab
             return 1;
         }
         if (strcmp(keyword, "clear") == 0) {
+            /* clear() drops the queue's Sleep with its entries (:251) */
+            dq->timer_live = 0;
             observe_status(t, idx, label, asx_delay_queue_clear(&dq->queue));
             return 1;
         }
         if (strcmp(keyword, "poll") == 0) {
-            /* poll_expired(cx) (delay_queue.rs:260): a due entry, the end of
-             * an empty queue (ASX_E_CHANNEL_EMPTY), or a wait the scenario
-             * must not ask for: it would register the queue's own Sleep. */
-            st = asx_delay_queue_poll_at(&dq->queue, now, &state, &e);
-            if (st != ASX_OK || state == ASX_DELAY_WAITING) {
-                it_fail_task(t, idx,
-                             "delay_queue_poll with nothing due: sleep until an entry is due");
+            /* poll_expired(cx) awaited (delay_queue.rs:260): a due entry, the
+             * end of an empty queue (ASX_E_CHANNEL_EMPTY), or a wait on the
+             * queue's own timer for the earliest deadline, after which the
+             * step runs again (phase 1). Rust keeps that Sleep registered
+             * until the queue is polled empty or cleared: while it is, no
+             * other timer step and no second queue's wait is defined. A
+             * cancel request during the wait is outside the DSL too: Rust's
+             * Sleep does not observe it. */
+            const int waited = t->phase == 1u;
+            it_delay_queue *live = live_delay_queue(t);
+            asx_cx cx;
+            (void)asx_cx_init(&cx, t->region, self, ASX_CAP_NONE);
+            if (waited && asx_cx_is_cancelled(&cx)) {
+                it_fail_task(t, idx, "delay_queue_poll waited under a cancel request");
+                *out = STEP_END;
+                return 1;
+            }
+            st = asx_delay_queue_poll(&dq->queue, self, &state, &e);
+            if (st == ASX_E_PENDING) {
+                if (live != NULL && live != dq) {
+                    it_fail_task(t, idx, "a second DelayQueue waits while another's timer is live");
+                    *out = STEP_END;
+                    return 1;
+                }
+                t->phase = 1u;
+                *out = STEP_PENDING;
+                return 1;
+            }
+            if (st != ASX_OK) {
+                it_fail_task(t, idx, "asx_delay_queue_poll failed");
                 *out = STEP_END;
                 return 1;
             }
             if (state == ASX_DELAY_EMPTY) {
+                dq->timer_live = 0; /* an empty poll drops the Sleep (:263) */
                 observe_status(t, idx, label, ASX_E_CHANNEL_EMPTY);
             } else {
+                if (waited) dq->timer_live = 1;
                 observe(t, idx, label, status_node(ASX_OK), delay_expired_value(&e));
             }
             return 1;
@@ -3891,7 +4009,7 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
     /* Interval and DelayQueue steps (DSL §3.9). */
     {
         step_result res;
-        if (exec_time_op(t, step, idx, label, op, &res)) return res;
+        if (exec_time_op(t, self, step, idx, label, op, &res)) return res;
     }
     /* The monitor and link steps that never suspend (DSL §3.10, §3.11). */
     {
@@ -4779,6 +4897,10 @@ static step_result exec_step(it_task *t, asx_task_id self, uint32_t step, uint32
 
     if (op == NULL) {
         it_fail_task(t, idx, "step without op");
+        return STEP_END;
+    }
+    if (t->phase == 0u && step_arms_timer(step, op) && live_delay_queue(t) != NULL) {
+        it_fail_task(t, idx, "a timer step while a DelayQueue's own timer is live (DSL §3.9)");
         return STEP_END;
     }
     {

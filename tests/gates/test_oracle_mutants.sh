@@ -35,6 +35,18 @@
 #                              not named (bd-9kll.9.6)
 #                              -> quiescence-parked-task-*,
 #                                 oneshot-closed-send-no-wake-*
+#   - INTERVAL_BURST_FROM_NOW / INTERVAL_DELAY_FROM_DEADLINE /
+#     INTERVAL_SKIP_ONE_PERIOD one missed-tick rule is swapped for another's
+#                              -> interval-missed-tick-<rule>-*,
+#                                 interval-set-behavior-*
+#   - INTERVAL_RESET_AFTER_IGNORES_NOW reset_after counts from zero
+#                              -> interval-reset-family-*
+#   - DELAY_QUEUE_NO_SELF_WAKE / DELAY_QUEUE_WAKE_ALWAYS /
+#     DELAY_QUEUE_EMPTY_POLL_KEEPS_TIMER / DELAY_QUEUE_CLEAR_KEEPS_TIMER
+#                              the queue's stored waker or armed deadline
+#                              differs from Rust's, so an insert polls the
+#                              task once too few or too many times
+#                              -> delay-queue-wait-*
 # A mutant the corpus does not catch means the fixtures stopped exercising
 # that rule: the gate fails.
 # The raw-ID authorization bypass is tested through actual polling tasks:
@@ -152,6 +164,35 @@ run_mutant WATCH_BORROW_MARKS_SEEN 'watch-receiver-clone-continues-'
 # fixtures below must fail the mutant by itself.
 run_mutant STUCK_TASK_OMITTED 'quiescence-parked-task-001'
 run_mutant STUCK_TASK_OMITTED 'oneshot-closed-send-no-wake-001'
+
+# Each missed-tick rule of Rust's Interval (interval.rs:385-420) has a mutant
+# that swaps it for a neighbour's, and the family of captures that pins it
+# must fail by itself: Burst steps from the missed deadline, Delay from now,
+# Skip to the first boundary after now. interval-set-behavior-001 switches
+# between all three, so each mutant fails it as well.
+run_mutant INTERVAL_BURST_FROM_NOW 'interval-missed-tick-burst-'
+run_mutant INTERVAL_DELAY_FROM_DEADLINE 'interval-missed-tick-delay-'
+run_mutant INTERVAL_SKIP_ONE_PERIOD 'interval-missed-tick-skip-'
+run_mutant INTERVAL_BURST_FROM_NOW 'interval-set-behavior-'
+run_mutant INTERVAL_DELAY_FROM_DEADLINE 'interval-set-behavior-'
+run_mutant INTERVAL_SKIP_ONE_PERIOD 'interval-set-behavior-'
+# reset_after counts from the clock, not from zero.
+run_mutant INTERVAL_RESET_AFTER_IGNORES_NOW 'interval-reset-family-'
+
+# The DelayQueue's stored waker (delay_queue.rs:332): an insert wakes it only
+# when the queue needs a re-arm, which costs the task one more poll at that
+# instant. A queue that never wakes, one that always wakes, and ones that
+# keep the armed deadline across an empty poll or a clear each change the
+# dispatch list of the capture that pins the rule.
+run_mutant DELAY_QUEUE_NO_SELF_WAKE 'delay-queue-wait-self-wake-'
+run_mutant DELAY_QUEUE_NO_SELF_WAKE 'delay-queue-wait-clear-sleep-'
+run_mutant DELAY_QUEUE_WAKE_ALWAYS 'delay-queue-wait-reset-insert-'
+run_mutant DELAY_QUEUE_EMPTY_POLL_KEEPS_TIMER 'delay-queue-wait-self-wake-'
+run_mutant DELAY_QUEUE_CLEAR_KEEPS_TIMER 'delay-queue-wait-clear-sleep-'
+# Each also leaves the timer registered after the queue dropped its Sleep, a
+# trace and snapshot difference for a task that goes on instead of ending.
+run_mutant DELAY_QUEUE_EMPTY_POLL_KEEPS_TIMER 'delay-queue-wait-drop-timer-'
+run_mutant DELAY_QUEUE_CLEAR_KEEPS_TIMER 'delay-queue-wait-drop-timer-'
 
 # The scenario parser cannot reach depth 64; the actual public boundary
 # test must catch acceptance of depth 65, without a compile/empty-run pass.

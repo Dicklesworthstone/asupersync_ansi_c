@@ -224,11 +224,24 @@ static uint64_t interval_take_due(asx_interval_state *s, asx_time now, uint64_t 
         return 1u;
     }
     switch (s->missed_tick_behavior) {
-    case ASX_MISSED_TICK_DELAY: next = interval_add(now, s->period_ns); break;
+    case ASX_MISSED_TICK_DELAY:
+#ifdef ASX_MUTANT_INTERVAL_DELAY_FROM_DEADLINE
+        /* Planted bug, compiled only by tests/gates/test_oracle_mutants.sh:
+         * Delay restarts the period from the missed deadline, as Burst does. */
+        next = interval_add(d, s->period_ns);
+#else
+        next = interval_add(now, s->period_ns);
+#endif
+        break;
     case ASX_MISSED_TICK_SKIP: {
         uint64_t skip = (now - d) / s->period_ns;
         skip = skip == UINT64_MAX ? skip : skip + 1u;
         next = skip > UINT64_MAX / s->period_ns ? UINT64_MAX : interval_add(d, skip * s->period_ns);
+#ifdef ASX_MUTANT_INTERVAL_SKIP_ONE_PERIOD
+        /* Planted bug: Skip moves one period on, so a late interval stays
+         * behind its schedule instead of jumping past `now`. */
+        next = interval_add(d, s->period_ns);
+#endif
         break;
     }
     case ASX_MISSED_TICK_BURST:
@@ -237,6 +250,11 @@ static uint64_t interval_take_due(asx_interval_state *s, asx_time now, uint64_t 
         due = q == UINT64_MAX ? q : q + 1u;
         if (due > room) due = room;
         next = due > UINT64_MAX / s->period_ns ? UINT64_MAX : interval_add(d, due * s->period_ns);
+#ifdef ASX_MUTANT_INTERVAL_BURST_FROM_NOW
+        /* Planted bug: Burst restarts the period from `now`, as Delay does,
+         * so the schedule drifts and a late interval stops catching up. */
+        next = interval_add(now, s->period_ns);
+#endif
         break;
     }
     }
@@ -310,6 +328,56 @@ asx_status asx_interval_tick_at(asx_interval_state *state, asx_time now, asx_tim
     return ASX_OK;
 }
 
+/* The next tick's time: the live deadline, else where the first poll
+ * would fix it (the init_at start, else the time it is asked at). */
+static asx_time interval_deadline_at(const asx_interval_state *s, asx_time now) {
+    if (s->initialized) return asx_deadline_target(&s->deadline);
+    return s->has_start ? s->start_ns : now;
+}
+
+asx_status asx_interval_deadline(const asx_interval_state *state, asx_time now,
+                                 asx_time *out_deadline) {
+    if (state == NULL || out_deadline == NULL) return ASX_E_INVALID_ARGUMENT;
+    *out_deadline = interval_deadline_at(state, now);
+    return ASX_OK;
+}
+
+asx_status asx_interval_remaining(const asx_interval_state *state, asx_time now, uint64_t *out_ns) {
+    asx_time d;
+    if (state == NULL || out_ns == NULL) return ASX_E_INVALID_ARGUMENT;
+    d = interval_deadline_at(state, now);
+    *out_ns = now >= d ? 0u : d - now;
+    return ASX_OK;
+}
+
+asx_status asx_interval_is_ready(const asx_interval_state *state, asx_time now, int *out_ready) {
+    if (state == NULL || out_ready == NULL) return ASX_E_INVALID_ARGUMENT;
+    *out_ready = now >= interval_deadline_at(state, now) ? 1 : 0;
+    return ASX_OK;
+}
+
+asx_status asx_interval_reset_at(asx_interval_state *state, asx_time instant) {
+    asx_status st;
+    if (state == NULL) return ASX_E_INVALID_ARGUMENT;
+    st = asx_deadline_init(&state->deadline, instant);
+    if (st != ASX_OK) return st;
+    state->initialized = 1;
+    state->exhausted = 0;
+    return ASX_OK;
+}
+
+asx_status asx_interval_reset(asx_interval_state *state, asx_time now) {
+    return asx_interval_reset_at(state, now);
+}
+
+asx_status asx_interval_reset_after(asx_interval_state *state, asx_time now, uint64_t after_ns) {
+#ifdef ASX_MUTANT_INTERVAL_RESET_AFTER_IGNORES_NOW
+    /* Planted bug: the delay counts from zero, not from the clock. */
+    now = 0;
+#endif
+    return asx_interval_reset_at(state, interval_add(now, after_ns));
+}
+
 /* ===================================================================
  * DelayQueue (Rust time/delay_queue.rs)
  * =================================================================== */
@@ -370,6 +438,38 @@ static void dq_schedule(asx_delay_queue *q, asx_time deadline, uint64_t schedule
                 dq_heap_push(q, q->entries[i].deadline, q->entries[i].schedule, i);
             }
         }
+    }
+    /* A task parked on a later deadline (or on nothing) must re-arm: the
+     * stored waker is taken and woken (delay_queue.rs:332). The wake is a
+     * real one even when the waiter is the task running this call: it is
+     * polled once more at the same instant. A task that is gone needs
+     * none. */
+#ifdef ASX_MUTANT_DELAY_QUEUE_NO_SELF_WAKE
+    /* Planted bug: an insert or reset never wakes the stored waker, so the
+     * task is not polled again at the instant of the insert. */
+    if (0) {
+#elif defined(ASX_MUTANT_DELAY_QUEUE_WAKE_ALWAYS)
+    /* Planted bug: every insert wakes the waker, not only one that needs a
+     * re-arm. */
+    if (q->has_waker) {
+#else
+    if (q->has_waker && (!q->has_armed || deadline < q->armed_for)) {
+#endif
+        asx_status wake_st = asx_task_wake(q->waiter);
+        q->has_waker = 0;
+        (void)wake_st; /* a task that is gone needs no wake */
+    }
+}
+
+/* The queue's Sleep is dropped (an empty poll, :263, or clear, :251): its
+ * registered timer is cancelled in the trace at once, as Rust's drop of a
+ * registered Sleep records, and the armed deadline is forgotten. The timer
+ * is the waiting task's. */
+static void dq_drop_timer(asx_delay_queue *q) {
+    if (!q->has_armed) return;
+    q->has_armed = 0;
+    if (asx_task_cancel_timer(q->waiter) != ASX_OK) {
+        /* outside a scheduler poll no timer is registered */
     }
 }
 
@@ -488,6 +588,10 @@ asx_status asx_delay_queue_clear(asx_delay_queue *queue) {
     }
     queue->len = 0u;
     queue->heap_len = 0u;
+#ifndef ASX_MUTANT_DELAY_QUEUE_CLEAR_KEEPS_TIMER
+    /* (the mutant keeps the Sleep across a clear) */
+    dq_drop_timer(queue); /* the Sleep goes; the waker stays (:248) */
+#endif
     return ASX_OK;
 }
 
@@ -529,6 +633,22 @@ asx_status asx_delay_queue_poll(asx_delay_queue *queue, asx_task_id self,
 
     if (st != ASX_OK) return st;
     st = asx_delay_queue_poll_at(queue, now, out_state, out);
-    if (st != ASX_OK || *out_state != ASX_DELAY_WAITING) return st;
+    if (st != ASX_OK) return st;
+    if (*out_state == ASX_DELAY_EMPTY) {
+#ifndef ASX_MUTANT_DELAY_QUEUE_EMPTY_POLL_KEEPS_TIMER
+        /* (the mutant keeps the Sleep across an empty poll) */
+        dq_drop_timer(queue); /* an empty poll drops the Sleep (:263) */
+#endif
+        return ASX_OK;
+    }
+    if (*out_state != ASX_DELAY_WAITING) return ASX_OK;
+    /* Arm the Sleep for the earliest deadline unless it is, then store the
+     * waker (:287-297). */
+    if (!queue->has_armed || queue->armed_for != out->deadline) {
+        queue->has_armed = 1;
+        queue->armed_for = out->deadline;
+    }
+    queue->waiter = self;
+    queue->has_waker = 1;
     return park_until(self, out->deadline);
 }

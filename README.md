@@ -9,14 +9,14 @@
 ![C99](https://img.shields.io/badge/C-C99-00599C)
 ![No external deps](https://img.shields.io/badge/dependencies-none-brightgreen)
 ![Deterministic replay](https://img.shields.io/badge/replay-deterministic-orange)
-![Public API declarations](https://img.shields.io/badge/public%20API-2%2C248%20declarations-blue)
+![Public API declarations](https://img.shields.io/badge/public%20API-2%2C254%20declarations-blue)
 ![C test programs](https://img.shields.io/badge/tests-238%20programs-brightgreen)
 ![9 profiles](https://img.shields.io/badge/profiles-9%20deployment%20targets-blue)
 [![License: MIT+Rider](https://img.shields.io/badge/License-MIT%2BOpenAI%2FAnthropic%20Rider-blue.svg)](./LICENSE)
 
 </div>
 
-Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->2,248<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->238<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
+Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->2,254<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->238<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
 
 <div align="center">
 <h3>Quick Source Build</h3>
@@ -41,7 +41,7 @@ make test
 The port targets asupersync commit `5e60b1c4c` (2026-10).
 
 - **Compared with the Rust runtime, and matching:**
-  - `make conformance` runs <!-- fact:rust_fixtures -->346<!-- /fact --> scenarios captured from asupersync's `LabRuntime` (`fixtures/rust_reference_v2`) through the C runtime. Each must match the capture's trace class, final snapshot, step observations and lab dispatch order. Checked obligation handoff is included: same-region quota reuse, cross-region ownership changes, chained transfers, refusals and destination-body token drop.
+  - `make conformance` runs <!-- fact:rust_fixtures -->357<!-- /fact --> scenarios captured from asupersync's `LabRuntime` (`fixtures/rust_reference_v2`) through the C runtime. Each must match the capture's trace class, final snapshot, step observations and lab dispatch order. Checked obligation handoff is included: same-region quota reuse, cross-region ownership changes, chained transfers, refusals and destination-body token drop.
   - CI also generates 200 scenarios on every push and compares the two runtimes live (`make fuzz-differential`, seed 9).
   - It checks that the two trace canonicalizers agree on 100,000 random traces (`make canon-differential`).
   - It compares the kernel constants and defaults no scenario observes, such as cancel-kind tables, budgets, the timer limit, supervision defaults and lab batch sizes, with Rust's (`make check-rust-constants`). `twin_run` reads Rust's values from the pinned crate into `schemas/rust_kernel_constants.json`. Each value matches or is declared n/a with a reason; the gate keeps no list of accepted differences.
@@ -59,7 +59,7 @@ The port targets asupersync commit `5e60b1c4c` (2026-10).
 
 | Feature | What It Gives You |
 |---|---|
-| **<!-- fact:api_declarations -->2,248<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> header families** | Async runtime API: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
+| **<!-- fact:api_declarations -->2,254<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> header families** | Async runtime API: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
 | **No external dependencies** | Pure C runtime core; ships into constrained and audited environments unchanged |
 | **Deterministic replay and trace hashing** | Deterministic builds replay a scenario exactly from its seed and input; trace digests let you diff behavior across builds, profiles, and codec modes |
 | **Structured cancellation with witness protocol** | 11 cancel kinds with severity lattice, witness phase tracking, and cleanup budgets (advisory as in Rust; an opt-in hard bound) |
@@ -1559,7 +1559,7 @@ Differences from Rust that cannot change what fires or in which order: a cancell
 
 ### DelayQueue and Interval
 
-`asx_delay_queue` (`include/asx/time/sleep.h`) is Rust's `DelayQueue`: a caller-owned queue of 16 `uint64_t` values that each come due at their own deadline. Entries come out earliest deadline first with ties in insertion order, `asx_delay_queue_reset()` moves an entry and counts as a new insertion (it orders after peers already due at that time), and a key dies with its entry even when its slot is reused. `asx_delay_queue_poll_at()` takes the time; `asx_delay_queue_poll()` reads the runtime clock and waits on the task's traced sleep timer for the earliest deadline, sharing that one timer slot with the task's other sleeps. `asx_interval_tick_at()` is `Interval::tick` as a pure transition: one tick per call, and the deadline moves by the missed-tick behavior (Burst a period on, so a late interval is ticked once per missed tick; Delay a period after the tick's time; Skip to the first boundary after it) only when a tick is due. Both are exercised against Rust by the DSL's `interval_*` and `delay_queue_*` steps, none of which suspends.
+`asx_delay_queue` (`include/asx/time/sleep.h`) is Rust's `DelayQueue`: a caller-owned queue of 16 `uint64_t` values that each come due at their own deadline. Entries come out earliest deadline first with ties in insertion order, `asx_delay_queue_reset()` moves an entry and counts as a new insertion (it orders after peers already due at that time), and a key dies with its entry even when its slot is reused. `asx_delay_queue_poll_at()` takes the time; `asx_delay_queue_poll()` reads the runtime clock and waits on the task's traced sleep timer for the earliest deadline, sharing that one timer slot with the task's other sleeps. `asx_interval_tick_at()` is `Interval::tick` as a pure transition: one tick per call, and the deadline moves by the missed-tick behavior (Burst a period on, so a late interval is ticked once per missed tick; Delay a period after the tick's time; Skip to the first boundary after it) only when a tick is due. The queue also keeps what Rust's keeps for a waiting task: the deadline its timer is armed for and the waiter, which an insert or reset needing a re-arm wakes (the task is then polled once more at that instant). `asx_interval_deadline()`, `_remaining()`, `_is_ready()` and the `_reset` family complete `Interval`'s surface. Both are exercised against Rust by the DSL's `interval_*` and `delay_queue_*` steps; only `delay_queue_poll` suspends.
 
 ### Ghost Monitors (Debug-Mode Safety Net)
 
@@ -2983,7 +2983,7 @@ It has not been benchmarked against live builds here, and the two differ in more
 
 ### Can I embed this as a library without the CLI?
 
-Yes. The C API is first-class: <!-- fact:api_declarations -->2,248<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact -->
+Yes. The C API is first-class: <!-- fact:api_declarations -->2,254<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact -->
 public header families in the current `include/asx/` tree, and one umbrella
 `#include <asx/asx.h>`. The repository is library-first: `make install`
 installs only `libasx.a` and the headers. The `asx` CLI (`version`, `info`,
