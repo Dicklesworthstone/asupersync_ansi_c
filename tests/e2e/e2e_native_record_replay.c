@@ -2,8 +2,9 @@
  * e2e_native_record_replay.c — RP3: a real native HTTP server run, recorded
  * to a journal and replayed without sockets (bd-9kll.11.3)
  *
- * One binary, three modes, driven by native_record_replay.sh. Built against
- * a live POSIX library (DETERMINISTIC=0).
+ * One binary, five modes, driven by native_record_replay.sh (record, load,
+ * replay) and native_crash_continuity.sh (record-crash, load, replay-prefix).
+ * Built against a live POSIX library (DETERMINISTIC=0).
  *
  *   record JOURNAL
  *       Run the HTTP server (GET /hello, POST /echo) on a loopback port with
@@ -27,6 +28,26 @@
  *       ones. Prints "REPLAY_DIGEST", "REPLAY_SERVED", "REAL_NET_CALLS" and
  *       "REPLAY_OK", or "REPLAY_REFUSED <error> seq=N kind=K what=...".
  *
+ *   record-crash JOURNAL CKPTLOG KILL_AT      (bd-9kll.11.4, RP4)
+ *       As record, but the journal persists at chain commit points to
+ *       JOURNAL through the POSIX file store (write, fsync per commit), a
+ *       chain every 8 records, and each commit appends the checkpoint it
+ *       carries ("CKPT seq=.. records=.. bytes=.. valid=.. events=..
+ *       digest=..") to CKPTLOG. When the stream reaches KILL_AT bytes the
+ *       process writes what precedes that byte and kills itself with
+ *       SIGKILL: no flush, no finish, a torn tail wherever the offset
+ *       falls. KILL_AT 0 never kills.
+ *
+ *   replay-prefix JOURNAL [RUST_REV]
+ *       Run the same server program under asx_journal_replay_prefix(): the
+ *       committed prefix of a cut journal is replayed with no socket opened
+ *       and every trace checkpoint verified, ending at the cut. Prints
+ *       "PREFIX complete=.. bytes=.. records=.. cut_seq=.. reason=..",
+ *       "PREFIX_PROGRESS served=.. checkpoints=.. seq=.. events=..
+ *       digest=..", "REAL_NET_CALLS" and "REPLAY_CUT seq=N" (or, for a
+ *       complete journal, "REPLAY_DIGEST" and "REPLAY_OK"; else
+ *       "REPLAY_REFUSED ...").
+ *
  * Exit status: 0 on success, 1 on a failure, 2 on a usage error.
  *
  * SPDX-License-Identifier: MIT
@@ -47,6 +68,7 @@
 #include <asx/runtime/trace.h>
 #include <asx/signal/signal.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <signal.h>
 #include <stdio.h>
@@ -265,6 +287,134 @@ static int run_record(const char *journal_path) {
 }
 
 /* ------------------------------------------------------------------ */
+/* record-crash: persist at chains, die by SIGKILL at a stream offset  */
+/* ------------------------------------------------------------------ */
+
+/* Small enough that a window is often handed over in pieces, so a kill
+ * lands mid-window as often as at a commit point. */
+#define CRASH_STAGE_BYTES 1024u
+#define CRASH_CHAIN_EVERY 8u
+
+typedef struct {
+    asx_posix_journal_file file;
+    int ckpt_fd;
+    uint64_t kill_at; /* the stream offset the process dies at; 0 = never */
+    uint64_t offered; /* stream bytes handed to the sink so far */
+} crash_store;
+
+/* The file store's sink, except that the process is killed when the stream
+ * reaches kill_at: what precedes that byte is written, nothing after it
+ * exists, and there is no chance to flush or finish. */
+static asx_status crash_sink(void *ctx, const uint8_t *bytes, uint32_t len) {
+    crash_store *s = (crash_store *)ctx;
+    if (s->kill_at != 0u && s->offered + (uint64_t)len >= s->kill_at) {
+        uint32_t keep = (uint32_t)(s->kill_at - s->offered);
+        if (keep > 0u) (void)asx_posix_journal_file_sink(&s->file, bytes, keep);
+        (void)kill(getpid(), SIGKILL);
+        _exit(137); /* not reached: SIGKILL cannot be caught */
+    }
+    s->offered += (uint64_t)len;
+    return asx_posix_journal_file_sink(&s->file, bytes, len);
+}
+
+/* fsync the prefix, then log the checkpoint the commit carries: the
+ * independent record of what the stream's chains say, written by the
+ * recorder itself as it goes. */
+static asx_status crash_commit(void *ctx, const asx_journal_commit *c) {
+    crash_store *s = (crash_store *)ctx;
+    char line[192];
+    int n;
+    asx_status st = asx_posix_journal_file_commit(&s->file, c);
+    if (st != ASX_OK) return st;
+    n = snprintf(line, sizeof(line),
+                 "CKPT seq=%llu records=%llu bytes=%llu valid=%d events=%llu digest=%016llx "
+                 "final=%d\n",
+                 (unsigned long long)c->chain_seq, (unsigned long long)c->data_records,
+                 (unsigned long long)c->stream_bytes, c->trace_valid,
+                 (unsigned long long)c->trace_events, (unsigned long long)c->trace_digest,
+                 c->final);
+    if (n <= 0 || (size_t)n >= sizeof(line)) return ASX_E_BUFFER_TOO_SMALL;
+    if (write(s->ckpt_fd, line, (size_t)n) != (ssize_t)n) return ASX_E_RESOURCE_EXHAUSTED;
+    return ASX_OK;
+}
+
+static uint8_t g_crash_stage[CRASH_STAGE_BYTES];
+
+static int run_record_crash(const char *journal_path, const char *ckpt_path,
+                            const char *kill_text) {
+    asx_runtime rt;
+    asx_runtime_config cfg;
+    asx_runtime_hooks hooks;
+    asx_journal journal;
+    asx_journal_config jcfg;
+    asx_journal_stats jst;
+    crash_store store;
+    serve_ctx ctx;
+    asx_status st;
+    asx_status js;
+
+    memset(&store, 0, sizeof(store));
+    store.kill_at = strtoull(kill_text, NULL, 10);
+    store.ckpt_fd = open(ckpt_path, O_WRONLY | O_CREAT | O_EXCL, 0600);
+    if (store.ckpt_fd < 0) {
+        fprintf(stderr, "e2e_native_record_replay: cannot create %s\n", ckpt_path);
+        return 1;
+    }
+    st = asx_posix_journal_file_open(&store.file, journal_path);
+    if (st != ASX_OK) return fail("journal file", st);
+
+    memset(&jcfg, 0, sizeof(jcfg));
+    jcfg.sink_fn = crash_sink;
+    jcfg.sink_ctx = &store;
+    jcfg.buffer = g_crash_stage;
+    jcfg.buffer_cap = CRASH_STAGE_BYTES;
+    jcfg.chain_every = CRASH_CHAIN_EVERY;
+    jcfg.persist = ASX_JOURNAL_PERSIST_CHAIN;
+    jcfg.commit_every_chains = 1u;
+    jcfg.commit_fn = crash_commit;
+    jcfg.config_fingerprint = ASX_CONFIG_FINGERPRINT;
+    jcfg.rust_rev_hash = asx_journal_text_hash(RR_RUST_REV);
+    jcfg.build_hash = asx_journal_text_hash(RR_BUILD_TAG);
+
+    st = asx_posix_hooks_install(&hooks);
+    if (st == ASX_OK) st = asx_runtime_config_init(&cfg);
+    if (st == ASX_OK) st = asx_journal_init(&journal, &jcfg);
+    if (st == ASX_OK) st = asx_journal_wrap_hooks(&journal, &hooks);
+    if (st == ASX_OK) st = asx_runtime_init(&rt, &cfg, &hooks);
+    if (st != ASX_OK) {
+        asx_journal_uninstall();
+        return fail("journal and runtime setup", st);
+    }
+    if (asx_net_get_backend() != ASX_NET_BACKEND_NATIVE) {
+        fprintf(stderr, "e2e_native_record_replay: needs a live POSIX build (native sockets)\n");
+        asx_runtime_shutdown(&rt);
+        asx_journal_uninstall();
+        return 1;
+    }
+
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.announce = 1;
+    st = serve_program(&ctx);
+    asx_runtime_shutdown(&rt);
+    asx_journal_uninstall();
+    js = asx_journal_finish(&journal);
+    asx_journal_get_stats(&journal, &jst);
+    (void)asx_posix_journal_file_close(&store.file);
+    (void)close(store.ckpt_fd);
+
+    printf("STATS served=%u accepted=%u timed_out=%u drain_closed=%u rejected=%u\n",
+           (unsigned)ctx.served, (unsigned)ctx.accepted, (unsigned)ctx.timed_out,
+           (unsigned)ctx.drain_closed, (unsigned)ctx.rejected);
+    printf("DIGEST %016llx\n", (unsigned long long)ctx.digest);
+    printf("JOURNAL %llu commits=%llu fsyncs=%llu\n", (unsigned long long)store.file.bytes,
+           (unsigned long long)jst.commits, (unsigned long long)store.file.syncs);
+    fflush(stdout);
+    if (st != ASX_OK) return fail("server run", st);
+    if (js != ASX_OK) return fail("journal", js);
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* replay                                                              */
 /* ------------------------------------------------------------------ */
 
@@ -278,6 +428,7 @@ static const char *error_name(asx_replay_error e) {
     case ASX_REPLAY_E_DIVERGED: return "DIVERGED";
     case ASX_REPLAY_E_EXHAUSTED: return "EXHAUSTED";
     case ASX_REPLAY_E_RUNTIME: return "RUNTIME";
+    case ASX_REPLAY_E_CUT: return "CUT";
     default: return "?";
     }
 }
@@ -354,6 +505,64 @@ static int run_replay(const char *journal_path, const char *digest_hex, const ch
     printf("REPLAY_OK\n");
     fflush(stdout);
     return 0;
+}
+
+/* Replay the committed prefix of a journal that may have been cut: the
+ * server program runs against it with no socket opened, every committed
+ * record is reproduced and every trace checkpoint on the way verified, and
+ * the run ends at the cut with its seq. Exit 0 for a cut or a complete
+ * stream consumed exactly, with no native network call made. */
+static int run_replay_prefix(const char *journal_path, const char *rust_rev) {
+    size_t len = 0u;
+    uint8_t *bytes = read_file(journal_path, &len);
+    asx_replay_identity id;
+    asx_replay_report rep;
+    asx_replay_prefix pfx;
+    asx_replay_error err;
+    asx_status ps = ASX_OK;
+    serve_ctx ctx;
+    uint32_t calls_before;
+    uint32_t calls;
+
+    if (bytes == NULL) {
+        fprintf(stderr, "e2e_native_record_replay: cannot read %s\n", journal_path);
+        return 1;
+    }
+    id.rust_rev_hash = asx_journal_text_hash(rust_rev != NULL ? rust_rev : RR_RUST_REV);
+    id.build_hash = asx_journal_text_hash(RR_BUILD_TAG);
+    memset(&ctx, 0, sizeof(ctx));
+    memset(&rep, 0, sizeof(rep));
+    memset(&pfx, 0, sizeof(pfx));
+    ctx.announce = 0;
+
+    calls_before = asx_native_net_real_calls();
+    err = asx_journal_replay_prefix(bytes, len, &id, NULL, serve_program, &ctx, &ps, &rep, &pfx);
+    calls = asx_native_net_real_calls() - calls_before;
+    free(bytes);
+
+    printf("PREFIX complete=%d bytes=%llu records=%llu cut_seq=%llu reason=%s stream=%llu\n",
+           pfx.complete, (unsigned long long)pfx.committed_bytes,
+           (unsigned long long)pfx.committed_records, (unsigned long long)pfx.cut_seq,
+           error_name(pfx.cut_reason), (unsigned long long)pfx.stream_bytes);
+    printf("PREFIX_PROGRESS served=%llu checkpoints=%llu seq=%llu events=%llu digest=%016llx\n",
+           (unsigned long long)pfx.served, (unsigned long long)pfx.checkpoints,
+           (unsigned long long)pfx.checkpoint_seq, (unsigned long long)pfx.checkpoint_events,
+           (unsigned long long)pfx.checkpoint_digest);
+    printf("REAL_NET_CALLS %u\n", (unsigned)calls);
+    if (err == ASX_REPLAY_E_CUT) {
+        printf("REPLAY_CUT seq=%llu what=%s program_status=%s\n", (unsigned long long)rep.seq,
+               rep.what != NULL ? rep.what : "", asx_status_str(ps));
+    } else if (err == ASX_REPLAY_OK) {
+        printf("REPLAY_DIGEST %016llx\n", (unsigned long long)ctx.digest);
+        printf("REPLAY_SERVED %u\n", (unsigned)ctx.served);
+        printf("REPLAY_OK\n");
+    } else {
+        printf("REPLAY_REFUSED %s seq=%llu kind=%u what=%s program_status=%s\n", error_name(err),
+               (unsigned long long)rep.seq, (unsigned)rep.expected_kind,
+               rep.what != NULL ? rep.what : "", asx_status_str(ps));
+    }
+    fflush(stdout);
+    return (err == ASX_REPLAY_E_CUT || err == ASX_REPLAY_OK) && calls == 0u ? 0 : 1;
 }
 
 /* ------------------------------------------------------------------ */
@@ -523,13 +732,21 @@ static int usage(const char *argv0) {
     fprintf(stderr,
             "usage: %s record JOURNAL\n"
             "       %s load PORT\n"
-            "       %s replay JOURNAL DIGEST SERVED [RUST_REV]\n",
-            argv0, argv0, argv0);
+            "       %s replay JOURNAL DIGEST SERVED [RUST_REV]\n"
+            "       %s record-crash JOURNAL CKPTLOG KILL_AT\n"
+            "       %s replay-prefix JOURNAL [RUST_REV]\n",
+            argv0, argv0, argv0, argv0, argv0);
     return 2;
 }
 
 int main(int argc, char **argv) {
     if (argc >= 3 && strcmp(argv[1], "record") == 0) return run_record(argv[2]);
+    if (argc >= 5 && strcmp(argv[1], "record-crash") == 0) {
+        return run_record_crash(argv[2], argv[3], argv[4]);
+    }
+    if (argc >= 3 && strcmp(argv[1], "replay-prefix") == 0) {
+        return run_replay_prefix(argv[2], argc >= 4 ? argv[3] : NULL);
+    }
     if (argc >= 3 && strcmp(argv[1], "load") == 0) {
         unsigned long port = strtoul(argv[2], NULL, 10);
         if (port == 0ul || port > 65535ul) return usage(argv[0]);

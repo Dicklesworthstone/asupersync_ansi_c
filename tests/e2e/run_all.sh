@@ -38,6 +38,7 @@
 #   GATE-E2E-SERVER        server_shutdown.sh
 #   GATE-E2E-HTTP          http_robustness.sh
 #   GATE-E2E-RECORD-REPLAY native_record_replay.sh
+#   GATE-E2E-CRASH-CONTINUITY native_crash_continuity.sh
 #   GATE-E2E-PARALLEL-SWARM parallel_swarm.sh
 #   GATE-E2E-EXAMPLES      examples_smoke.sh
 #   GATE-E2E-BROWSER       browser_smoke.sh
@@ -139,6 +140,7 @@ E2E_FAMILIES=(
     "GATE-E2E-SERVER:server_shutdown.sh"
     "GATE-E2E-HTTP:http_robustness.sh"
     "GATE-E2E-RECORD-REPLAY:native_record_replay.sh"
+    "GATE-E2E-CRASH-CONTINUITY:native_crash_continuity.sh"
     "GATE-E2E-PARALLEL-SWARM:parallel_swarm.sh"
     "GATE-E2E-EXAMPLES:examples_smoke.sh"
     "GATE-E2E-BROWSER:browser_smoke.sh"

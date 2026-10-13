@@ -569,6 +569,7 @@ E2E_ALL_SCRIPTS := \
 	$(E2E_SCRIPT_DIR)/foundational_contracts.sh \
 	$(E2E_SCRIPT_DIR)/examples_smoke.sh \
 	$(E2E_SCRIPT_DIR)/native_record_replay.sh \
+	$(E2E_SCRIPT_DIR)/native_crash_continuity.sh \
 	$(E2E_SCRIPT_DIR)/browser_smoke.sh
 
 E2E_VERTICAL_SCRIPTS := \
@@ -589,7 +590,7 @@ E2E_VERTICAL_SCRIPTS := \
 .PHONY: model-check fixture-integrity fixtures-promote test-gates test-capacity-x4 test-resource-classes
 .PHONY: print-capacity-macros capacity-table
 .PHONY: test-asan test-asan-live test-tsan
-.PHONY: test test-unit test-combinator-contract test-actor-supervision-harness test-browser-focused test-browser-minimal-focused test-invariants test-conformance-c test-vignettes examples test-examples test-e2e test-e2e-vertical test-e2e-parallel test-e2e-posix-adapter test-e2e-network-surface test-e2e-native-record-replay test-e2e-actor-supervision wave-c-acceptance-demo test-abi-shim abi-check
+.PHONY: test test-unit test-combinator-contract test-actor-supervision-harness test-browser-focused test-browser-minimal-focused test-invariants test-conformance-c test-vignettes examples test-examples test-e2e test-e2e-vertical test-e2e-parallel test-e2e-posix-adapter test-e2e-network-surface test-e2e-native-record-replay test-e2e-native-crash-continuity test-e2e-actor-supervision wave-c-acceptance-demo test-abi-shim abi-check
 .PHONY: formal-cbmc formal-algebraic formal-tv formal-litmus formal-codegen formal-check
 .PHONY: check-evidence-bundle
 .PHONY: conformance codec-equivalence profile-parity parallel-parity crate-acceptance-gate resource-pressure-gate
@@ -1583,6 +1584,15 @@ test-e2e-network-surface:
 test-e2e-native-record-replay:
 	@chmod +x $(E2E_SCRIPT_DIR)/harness.sh $(E2E_SCRIPT_DIR)/native_record_replay.sh 2>/dev/null || true
 	@$(E2E_SCRIPT_DIR)/native_record_replay.sh
+
+# RP4: the same server killed (SIGKILL) at ASX_E2E_KILL_POINTS random offsets
+# of its journal stream (default 50, seeded by ASX_E2E_SEED); the survivor of
+# each is replayed as a recovery replay: every committed record reproduced,
+# the trace checkpoints equal to the recorder's log, the run ending at the cut
+# with its seq. Gate: GATE-E2E-CRASH-CONTINUITY.
+test-e2e-native-crash-continuity:
+	@chmod +x $(E2E_SCRIPT_DIR)/harness.sh $(E2E_SCRIPT_DIR)/native_crash_continuity.sh 2>/dev/null || true
+	@$(E2E_SCRIPT_DIR)/native_crash_continuity.sh
 
 test-e2e-actor-supervision:
 	@chmod +x $(E2E_SCRIPT_DIR)/harness.sh $(E2E_SCRIPT_DIR)/actor_supervision.sh 2>/dev/null || true
@@ -2947,6 +2957,7 @@ help:
 	@echo "  test-e2e-posix-adapter Run POSIX reactor/readiness adapter smoke"
 	@echo "  test-e2e-network-surface Run deterministic network primitive e2e smoke"
 	@echo "  test-e2e-native-record-replay Record a native HTTP server run, replay it with no sockets, require a bit-exact digest"
+	@echo "  test-e2e-native-crash-continuity SIGKILL a recorded server at random stream offsets, replay each survivor's committed prefix"
 	@echo "  test-e2e-actor-supervision Run deterministic actor/supervision semantic e2e smoke"
 	@echo "  wave-c-acceptance-demo Run Wave C user-facing acceptance evidence bundle"
 	@echo "  conformance        Rust fixture parity verification"
