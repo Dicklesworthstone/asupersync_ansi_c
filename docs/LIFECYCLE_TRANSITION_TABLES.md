@@ -379,7 +379,7 @@ Phase transitions where `next.phase.rank() < prev.phase.rank()`. Rust reports `C
 
 ### 4.4 Cancellation Kinds (11 Variants with Severity Ladder)
 
-Severities and cleanup budgets match Rust exactly: `CancelKind::severity` (`src/types/cancel.rs:473`) and `CancelReason::cleanup_budget` (`src/types/cancel.rs:1027`), C `asx_cancel_severity` (`include/asx/asx_ids.h:172`) and `asx_cancel_cleanup_budget` (`src/core/cancel.c:35`). The cleanup budget is `Budget::new()` (no deadline, no cost quota) with the poll quota and priority set from the table below. The C ordinals in the Enum Value column are Rust's declaration order: ParentCancelled=7, ResourceUnavailable=8, Shutdown=9, LinkedExit=10 (`src/types/cancel.rs:264`, `include/asx/asx_ids.h:149`; `bd-9kll.2.18`, DEC-006), so severity is not monotone in the ordinal. Vocabulary v2 encodes kinds by name (C_REFINEMENT_MAP row `def.cancel.reason_kinds`).
+Severities and cleanup budgets match Rust exactly: `CancelKind::severity` (`src/types/cancel.rs:473`) and `CancelReason::cleanup_budget` (`src/types/cancel.rs:1027`), C `asx_cancel_severity` (`include/asx/asx_ids.h:221`) and `asx_cancel_cleanup_budget` (`src/core/cancel.c:35`). The cleanup budget is `Budget::new()` (no deadline, no cost quota) with the poll quota and priority set from the table below. The C ordinals in the Enum Value column are Rust's declaration order: ParentCancelled=7, ResourceUnavailable=8, Shutdown=9, LinkedExit=10 (`src/types/cancel.rs:264`, `include/asx/asx_ids.h:149`; `bd-9kll.2.18`, DEC-006), so severity is not monotone in the ordinal. Vocabulary v2 encodes kinds by name (C_REFINEMENT_MAP row `def.cancel.reason_kinds`).
 
 | Kind | Enum Value | Severity | Cleanup Quota | Cleanup Priority | Category |
 |------|-----------|----------|--------------|-----------------|----------|
@@ -849,7 +849,7 @@ Values are from `include/asx/asx_status.h`. "Never returned" means no code under
 
 ## Appendix B: State Encoding Reference
 
-For the bitmasked generational typestate handles (`[ 16-bit type_tag | 16-bit state_mask | 32-bit arena_index ]`). This is a C-only encoding (Rust ids are typed arena indices). In C the 32-bit index is itself `[generation:16 | slot:16]` (`include/asx/asx_ids.h:78`), and the generation is what detects stale handles.
+For the bitmasked generational typestate handles (`[ 16-bit type_tag | 16-bit state_mask | 32-bit arena_index ]`). This is a C-only encoding (Rust ids are typed arena indices). In C the 32-bit index is itself `[generation:16 | slot:16]` (`include/asx/asx_ids.h:78`), and the generation is what detects stale handles. The mask's bits 0-5 are the state encoding below (one bit per state); bits 6-9 are the issuing runtime's tag (K18, tag 0 for the first runtime) and bits 10-15 are reserved zero.
 
 ### B.1 Type Tags
 
@@ -872,7 +872,7 @@ For the bitmasked generational typestate handles (`[ 16-bit type_tag | 16-bit st
 | `Finalizing` | `0x0008` | `0000 0000 0000 1000` |
 | `Closed` | `0x0010` | `0000 0000 0001 0000` |
 
-The mask values match the code (`1 << state`), but no API endpoint checks them: a handle's state mask is set when the handle is packed (for example `asx_region_handle_for_slot` always packs the `Open` bit) and is never updated, and `asx_handle_state_allowed` (`include/asx/asx_ids.h:71`) has no caller under `src/`. Endpoints validate a handle by type tag, slot bounds, liveness and generation (`asx_region_slot_lookup` (`src/runtime/lifecycle.c:240`)) and then check the state stored in the slot.
+The mask values match the code (`1 << state`), but no API endpoint checks them: a handle's state mask is set when the handle is packed (for example `asx_region_handle_for_slot` always packs the `Open` bit) and is never updated, and `asx_handle_state_allowed` (`include/asx/asx_ids.h:89`) has no caller under `src/`. Endpoints validate a handle by type tag, slot bounds, liveness and generation (`asx_region_slot_lookup` (`src/runtime/lifecycle.c:240`)) and then check the state stored in the slot.
 
 ---
 

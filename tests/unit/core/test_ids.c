@@ -84,8 +84,74 @@ TEST(type_tags_nonzero) {
     ASSERT_NE(ASX_TYPE_CHANNEL, (uint16_t)0);
 }
 
+/* ------------------------------------------------------------------ */
+/* Runtime tag (K18): mask bits 6-9                                    */
+/* ------------------------------------------------------------------ */
+
+TEST(runtime_tag_layout_constants_are_the_documented_ones) {
+    ASSERT_EQ(ASX_HANDLE_STATE_BITS, 6u);
+    ASSERT_EQ(ASX_HANDLE_STATE_BITS_MASK, (uint16_t)0x003F);
+    ASSERT_EQ(ASX_HANDLE_RT_TAG_SHIFT, 6u);
+    ASSERT_EQ(ASX_HANDLE_RT_TAG_BITS, 4u);
+    ASSERT_EQ(ASX_HANDLE_RT_TAG_MASK, (uint16_t)0x03C0);
+    ASSERT_EQ(ASX_HANDLE_RT_TAG_LIMIT, 15u);
+}
+
+TEST(runtime_tag_zero_leaves_every_issued_handle_byte_identical) {
+    uint16_t s;
+
+    /* Handles are issued with (1 << state) as the mask. */
+    for (s = 0; s <= (uint16_t)ASX_REGION_CLOSED; s++) {
+        uint64_t h = asx_handle_pack(ASX_TYPE_REGION, (uint16_t)(1u << s), 0x00030002u);
+        ASSERT_EQ(asx_handle_runtime_tag(h), (uint16_t)0);
+        ASSERT_EQ(asx_handle_with_runtime_tag(h, 0u), h);
+    }
+    for (s = 0; s <= (uint16_t)ASX_TASK_COMPLETED; s++) {
+        uint64_t h = asx_handle_pack(ASX_TYPE_TASK, (uint16_t)(1u << s), 0x00030002u);
+        ASSERT_EQ(asx_handle_runtime_tag(h), (uint16_t)0);
+        ASSERT_EQ(asx_handle_with_runtime_tag(h, 0u), h);
+    }
+    for (s = 0; s <= (uint16_t)ASX_OBLIGATION_LEAKED; s++) {
+        uint64_t h = asx_handle_pack(ASX_TYPE_OBLIGATION, (uint16_t)(1u << s), 0x00030002u);
+        ASSERT_EQ(asx_handle_runtime_tag(h), (uint16_t)0);
+        ASSERT_EQ(asx_handle_with_runtime_tag(h, 0u), h);
+    }
+}
+
+TEST(runtime_tag_roundtrips_for_every_usable_tag_and_changes_only_its_bits) {
+    uint64_t h = asx_handle_pack(ASX_TYPE_TASK, 0x0022, 0x00050007u);
+    uint16_t tag;
+
+    for (tag = 0; tag < (uint16_t)ASX_HANDLE_RT_TAG_LIMIT; tag++) {
+        uint64_t t = asx_handle_with_runtime_tag(h, tag);
+        ASSERT_EQ(asx_handle_runtime_tag(t), tag);
+        ASSERT_EQ(asx_handle_type_tag(t), ASX_TYPE_TASK);
+        ASSERT_EQ(asx_handle_index(t), (uint32_t)0x00050007u);
+        ASSERT_EQ((uint16_t)(asx_handle_state_mask(t) & ASX_HANDLE_STATE_BITS_MASK),
+                  (uint16_t)0x0022);
+        ASSERT_EQ(asx_handle_with_runtime_tag(t, 0u), h);
+    }
+}
+
+TEST(runtime_tag_never_admits_a_state_and_tagged_handles_differ) {
+    uint64_t a = asx_handle_pack(ASX_TYPE_REGION, 0x0001, 0x00000000u);
+    uint64_t b = asx_handle_with_runtime_tag(a, 1u);
+
+    /* Same slot and generation, different runtime: different handles. */
+    ASSERT_NE(a, b);
+    ASSERT_EQ(asx_handle_slot(a), asx_handle_slot(b));
+    ASSERT_EQ(asx_handle_generation(a), asx_handle_generation(b));
+    ASSERT_TRUE(asx_handle_state_allowed(b, 0x0001));
+    ASSERT_FALSE(asx_handle_state_allowed(b, ASX_HANDLE_RT_TAG_MASK));
+    ASSERT_FALSE(asx_handle_state_allowed(b, (uint16_t)0xFFC0));
+}
+
 int main(void) {
     fprintf(stderr, "=== test_ids ===\n");
+    RUN_TEST(runtime_tag_layout_constants_are_the_documented_ones);
+    RUN_TEST(runtime_tag_zero_leaves_every_issued_handle_byte_identical);
+    RUN_TEST(runtime_tag_roundtrips_for_every_usable_tag_and_changes_only_its_bits);
+    RUN_TEST(runtime_tag_never_admits_a_state_and_tagged_handles_differ);
     RUN_TEST(handle_pack_unpack_roundtrip);
     RUN_TEST(handle_pack_max_values);
     RUN_TEST(handle_pack_zero);

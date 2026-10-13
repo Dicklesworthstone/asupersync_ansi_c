@@ -9,8 +9,15 @@
  *   - slot index bounds
  *   - generation match (stored in arena slot, not in handle)
  *   - liveness/state legality
+ *   - runtime tag match (the issuing runtime, see below)
  *
- * State masks enable O(1) admission gating: handle.state_mask & expected_mask.
+ * The 16-bit mask field is split:
+ *   bits 0-5   lifecycle state when the handle was issued, one bit per state
+ *              (1 << state); O(1) admission gating: state_mask & expected_mask
+ *   bits 6-9   runtime tag: which live runtime issued the handle (K18). The
+ *              first runtime is tag 0, so its handles are byte-identical to
+ *              handles issued before the tag existed
+ *   bits 10-15 reserved, zero
  *
  * SPDX-License-Identifier: MIT
  */
@@ -67,9 +74,34 @@ static inline uint32_t asx_handle_index(uint64_t h) { return (uint32_t)(h & 0xFF
 
 static inline int asx_handle_is_valid(uint64_t h) { return h != ASX_INVALID_ID; }
 
-/* O(1) state admission check: returns nonzero if current state is allowed */
+/* The mask field's parts (see the header comment). */
+#define ASX_HANDLE_STATE_BITS 6u
+#define ASX_HANDLE_STATE_BITS_MASK ((uint16_t)0x003F)
+#define ASX_HANDLE_RT_TAG_SHIFT 6u
+#define ASX_HANDLE_RT_TAG_BITS 4u
+#define ASX_HANDLE_RT_TAG_MASK ((uint16_t)0x03C0)
+/* Runtime tags 0 .. ASX_HANDLE_RT_TAG_LIMIT - 1 name a runtime: at most 15
+ * live runtimes; the highest tag value is reserved. */
+#define ASX_HANDLE_RT_TAG_LIMIT 15u
+
+/* O(1) state admission check: returns nonzero if current state is allowed.
+ * Only the state bits take part; the runtime tag never admits. */
 static inline int asx_handle_state_allowed(uint64_t h, uint16_t allowed_mask) {
-    return (asx_handle_state_mask(h) & allowed_mask) != 0;
+    return (asx_handle_state_mask(h) & allowed_mask & ASX_HANDLE_STATE_BITS_MASK) != 0;
+}
+
+/* The runtime tag of a handle: 0 for the first runtime. */
+static inline uint16_t asx_handle_runtime_tag(uint64_t h) {
+    return (uint16_t)((asx_handle_state_mask(h) & ASX_HANDLE_RT_TAG_MASK) >>
+                      ASX_HANDLE_RT_TAG_SHIFT);
+}
+
+/* h with its runtime tag set to `tag` (only the tag bits change). */
+static inline uint64_t asx_handle_with_runtime_tag(uint64_t h, uint16_t tag) {
+    uint64_t tag_field = (uint64_t)ASX_HANDLE_RT_TAG_MASK << 32;
+    uint64_t value = ((uint64_t)tag << ASX_HANDLE_RT_TAG_SHIFT) << 32;
+
+    return (h & ~tag_field) | (value & tag_field);
 }
 
 /*
@@ -130,6 +162,23 @@ typedef enum {
     ASX_OBLIGATION_ABORTED = 2,
     ASX_OBLIGATION_LEAKED = 3
 } asx_obligation_state;
+
+/*
+ * Compile-time layout checks: every lifecycle state a handle's mask encodes
+ * (1 << state) lies in the state bits, below the runtime tag, and the tag
+ * bits neither overlap them nor run out of values. A state added past bit 5
+ * fails the build here rather than corrupting a runtime tag.
+ */
+#define ASX_HANDLE_LAYOUT_ASSERT(name, expr) typedef char asx_handle_assert_##name[(expr) ? 1 : -1]
+
+ASX_HANDLE_LAYOUT_ASSERT(region_states_fit, (unsigned)ASX_REGION_CLOSED < ASX_HANDLE_STATE_BITS);
+ASX_HANDLE_LAYOUT_ASSERT(task_states_fit, (unsigned)ASX_TASK_COMPLETED < ASX_HANDLE_STATE_BITS);
+ASX_HANDLE_LAYOUT_ASSERT(obligation_states_fit,
+                         (unsigned)ASX_OBLIGATION_LEAKED < ASX_HANDLE_STATE_BITS);
+ASX_HANDLE_LAYOUT_ASSERT(state_and_tag_bits_disjoint,
+                         (ASX_HANDLE_STATE_BITS_MASK & ASX_HANDLE_RT_TAG_MASK) == 0u &&
+                             ASX_HANDLE_STATE_BITS == ASX_HANDLE_RT_TAG_SHIFT &&
+                             ASX_HANDLE_RT_TAG_LIMIT < (1u << ASX_HANDLE_RT_TAG_BITS));
 
 /* ------------------------------------------------------------------ */
 /* Outcome severity lattice                                           */

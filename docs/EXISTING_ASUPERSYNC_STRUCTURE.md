@@ -1372,7 +1372,7 @@ C codes from `include/asx/asx_status.h`; Rust equivalents in `docs/CANONICAL_VOC
 
 ## 17. Handle Encoding Reference
 
-Bitmasked generational typestate handles: `[ 16-bit type_tag | 16-bit state_mask | 32-bit arena_index ]` (C only; Rust ids are typed arena indices). The 32-bit index is itself `[generation:16 | slot:16]` (`include/asx/asx_ids.h:78`); the generation is what detects stale handles.
+Bitmasked generational typestate handles: `[ 16-bit type_tag | 16-bit state_mask | 32-bit arena_index ]` (C only; Rust ids are typed arena indices). The 32-bit index is itself `[generation:16 | slot:16]` (`include/asx/asx_ids.h:78`); the generation is what detects stale handles. The 16-bit mask is `[state bits 0-5 | runtime tag bits 6-9 | reserved 10-15]` (K18, `bd-9kll.3.20`): the tag names the issuing runtime, tag 0 is the first runtime and the encoding handles always had, and `asx_ids.h` asserts at compile time that every region, task and obligation state fits in bits 0-5.
 
 ### 17.1 Type Tags
 
@@ -1395,7 +1395,7 @@ Bitmasked generational typestate handles: `[ 16-bit type_tag | 16-bit state_mask
 | `Finalizing` | `0x0008` |
 | `Closed` | `0x0010` |
 
-The mask values match the code (`1 << state`), but no endpoint checks them: the mask is set when a handle is packed and never updated, and `asx_handle_state_allowed` (`include/asx/asx_ids.h:71`) has no caller under `src/`. Endpoints validate type tag, slot bounds, liveness and generation, then read the state from the slot (`asx_region_slot_lookup` (`src/runtime/lifecycle.c:240`)).
+The mask values match the code (`1 << state`), but no endpoint checks them: the mask is set when a handle is packed and never updated, and `asx_handle_state_allowed` (`include/asx/asx_ids.h:89`) has no caller under `src/`. Endpoints validate type tag, slot bounds, liveness and generation, then read the state from the slot (`asx_region_slot_lookup` (`src/runtime/lifecycle.c:240`)).
 
 ---
 

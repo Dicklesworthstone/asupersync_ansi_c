@@ -1060,7 +1060,7 @@ Timers use a `{slot, generation}` struct handle instead, and cancel witnesses ar
 
 When a slot is recycled, its generation counter increments (channel, timer and witness counters skip zero to avoid sentinel collision). Old handles still carry the old generation, so a stale handle fails in O(1): `ASX_E_STALE_HANDLE` if the slot has been reused, `ASX_E_NOT_FOUND` if it is free. The check is a single `uint16_t` comparison, with no hash table lookups or reference counting.
 
-Each handle also carries a 16-bit state mask recording the entity's state when the handle was issued (`asx_handle_state_allowed`). It is not updated afterwards; the runtime checks state from the arena slot.
+Each handle also carries a 16-bit mask field. Its bits 0-5 record the entity's state when the handle was issued, one bit per state (`asx_handle_state_allowed`); it is not updated afterwards, and the runtime checks state from the arena slot. Bits 6-9 are the **runtime tag** (`asx_handle_runtime_tag`, `asx_handle_with_runtime_tag`): which live runtime issued the handle, 0 to 14 (at most 15 live runtimes; a build's capacity is 1 by default). The first runtime is tag 0, so its handles are byte-identical to handles issued before the tag existed and every recorded digest is unchanged. Bits 10-15 are reserved zero. Every lifecycle state fits in bits 0-5, and `asx_ids.h` fails the build if a state is added past bit 5. A handle names its runtime, so two runtimes that issue the same slot and generation issue different handles, and a handle is refused by a runtime that did not issue it instead of resolving to that runtime's coincident slot.
 
 Region, task, obligation and channel lookups check the type tag, so type confusion across those entity families is caught at the handle layer, not deep inside business logic.
 
@@ -1624,7 +1624,7 @@ The constraints are a bitmask of forbidden behaviors (`ASX_FORBID_SILENT_DROP`, 
 - **PATCH**: Bug fixes with no API or ABI change.
 
 Five surfaces are ABI-critical (changes require a MAJOR bump):
-1. Handle layout: the 64-bit `[type_tag:16][state_mask:16][gen:16][slot:16]` format.
+1. Handle layout: the 64-bit `[type_tag:16][state_mask:16][gen:16][slot:16]` format, with the mask field split into state bits 0-5, runtime tag bits 6-9 and reserved zero bits 10-15 (`ASX_ABI_HANDLE_STATE_BITS`, `ASX_ABI_HANDLE_RT_TAG_SHIFT`, `ASX_ABI_HANDLE_RT_TAG_BITS`; the consumer shim checks them against `asx_ids.h`). The tag took bits no handle used, so tag 0 is the old encoding and the unreleased major 3 needs no second bump.
 2. Enumeration values: numeric assignments for all lifecycle state enums are frozen.
 3. Status code families: error code numbers are permanent. New codes are appended.
 4. `asx_runtime_hooks` struct: field order and function signatures are frozen.

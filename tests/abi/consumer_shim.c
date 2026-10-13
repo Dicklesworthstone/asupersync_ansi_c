@@ -161,6 +161,46 @@ static void test_handle_sizes(void) {
     SHIM_CHECK(sizeof(asx_time) == ASX_ABI_SIZEOF_TIME, "asx_time size matches ABI");
 }
 
+/* --- Handle layout (the 16-bit mask field: state bits, runtime tag) --- */
+
+static void test_handle_layout(void) {
+    uint64_t h;
+    uint64_t tagged;
+
+    fprintf(stderr, "--- Handle layout ---\n");
+
+    SHIM_CHECK(ASX_HANDLE_STATE_BITS == ASX_ABI_HANDLE_STATE_BITS,
+               "state bits match the frozen ABI split");
+    SHIM_CHECK(ASX_HANDLE_RT_TAG_SHIFT == ASX_ABI_HANDLE_RT_TAG_SHIFT,
+               "runtime tag shift matches the frozen ABI split");
+    SHIM_CHECK(ASX_HANDLE_RT_TAG_BITS == ASX_ABI_HANDLE_RT_TAG_BITS,
+               "runtime tag width matches the frozen ABI split");
+    SHIM_CHECK(ASX_ABI_HANDLE_RT_TAG_SHIFT == ASX_ABI_HANDLE_STATE_BITS,
+               "the runtime tag starts where the state bits end");
+
+    /* Every lifecycle state's mask bit lies below the tag. */
+    SHIM_CHECK(((1u << (unsigned)ASX_REGION_CLOSED) & ASX_HANDLE_RT_TAG_MASK) == 0u,
+               "highest region state bit lies below the tag");
+    SHIM_CHECK(((1u << (unsigned)ASX_TASK_COMPLETED) & ASX_HANDLE_RT_TAG_MASK) == 0u,
+               "highest task state bit lies below the tag");
+    SHIM_CHECK(((1u << (unsigned)ASX_OBLIGATION_LEAKED) & ASX_HANDLE_RT_TAG_MASK) == 0u,
+               "highest obligation state bit lies below the tag");
+
+    /* Tag 0 is the encoding handles always had; another tag changes only
+     * its own bits, and a refused reader sees the tag. */
+    h = asx_handle_pack(ASX_TYPE_TASK, (uint16_t)(1u << (unsigned)ASX_TASK_COMPLETED),
+                        asx_handle_pack_index(7u, 3u));
+    SHIM_CHECK(asx_handle_runtime_tag(h) == 0u, "an issued handle is tag 0");
+    SHIM_CHECK(asx_handle_with_runtime_tag(h, 0u) == h, "tag 0 is the identity");
+    tagged = asx_handle_with_runtime_tag(h, 5u);
+    SHIM_CHECK(tagged != h, "another runtime's handle is a different value");
+    SHIM_CHECK(asx_handle_runtime_tag(tagged) == 5u, "the tag reads back");
+    SHIM_CHECK(asx_handle_slot(tagged) == asx_handle_slot(h) &&
+                   asx_handle_generation(tagged) == asx_handle_generation(h),
+               "same slot and generation");
+    SHIM_CHECK(asx_handle_type_tag(tagged) == asx_handle_type_tag(h), "the type tag is untouched");
+}
+
 /* --- Frozen enum values --- */
 
 static void test_frozen_enums(void) {
@@ -645,6 +685,7 @@ int main(int argc, char **argv) {
     if (argc != 1) return 2;
     test_abi_version();
     test_handle_sizes();
+    test_handle_layout();
     test_frozen_enums();
     test_config_pattern();
     test_symbol_resolution();

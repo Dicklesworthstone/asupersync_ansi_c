@@ -17,6 +17,8 @@
  *
  * 1. Opaque handle layout (asx_region_id, asx_task_id, etc.)
  *    - 64-bit format: [type_tag:16][state_mask:16][gen:16][slot:16]
+ *    - state_mask: bits 0-5 lifecycle state (1 << state), bits 6-9 the
+ *      issuing runtime's tag (0 for the first runtime), bits 10-15 zero
  *
  * 2. Enumeration values — numeric assignments are frozen:
  *    - asx_region_state, asx_task_state, asx_obligation_state
@@ -129,6 +131,15 @@ extern "C" {
 #define ASX_ABI_SIZEOF_CHANNEL_ID 8u
 #define ASX_ABI_SIZEOF_STATUS 4u
 #define ASX_ABI_SIZEOF_TIME 8u
+
+/* Frozen split of a handle's 16-bit mask field: lifecycle state in bits
+ * 0-5 (one bit per state), the issuing runtime's tag in bits 6-9, bits 10-15
+ * reserved zero. Tag 0 is the first runtime, whose handles are byte-identical
+ * to handles issued before the tag existed. The ABI consumer shim checks
+ * these against the ASX_HANDLE_* constants of asx_ids.h. */
+#define ASX_ABI_HANDLE_STATE_BITS 6u
+#define ASX_ABI_HANDLE_RT_TAG_SHIFT 6u
+#define ASX_ABI_HANDLE_RT_TAG_BITS 4u
 
 /* -----------------------------------------------------------------------
  * ABI-frozen enum sentinel values
