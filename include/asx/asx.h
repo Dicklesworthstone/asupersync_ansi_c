@@ -127,9 +127,8 @@
 #include <asx/signal/signal.h>
 #endif
 
-/* Actor model, supervision, and gen_server */
+/* Actor model (GenServers), and supervision */
 #include <asx/actor/actor.h>
-#include <asx/actor/gen_server.h>
 #include <asx/actor/supervisor.h>
 
 /* Dynamic task collection */

@@ -564,12 +564,6 @@ ASX_API asx_resource_limits asx_resource_limits_for_class(asx_resource_class cls
 #ifndef ASX_SUPERVISOR_MAX_RESTARTS
 #define ASX_SUPERVISOR_MAX_RESTARTS 32u
 #endif
-#ifndef ASX_GEN_SERVER_MAILBOX_SIZE
-#define ASX_GEN_SERVER_MAILBOX_SIZE 16u
-#endif
-#ifndef ASX_GEN_SERVER_MAX_INSTANCES
-#define ASX_GEN_SERVER_MAX_INSTANCES 8u
-#endif
 #ifndef ASX_MAX_SIGNAL_SUBSCRIPTIONS
 #define ASX_MAX_SIGNAL_SUBSCRIPTIONS 16u
 #endif
@@ -1782,8 +1776,6 @@ static inline uint64_t asx_header_config_fingerprint(void) {
         ASX_SUPERVISOR_MAX_DEPS,
         ASX_SUPERVISOR_NAME_MAX,
         ASX_SUPERVISOR_MAX_RESTARTS,
-        ASX_GEN_SERVER_MAILBOX_SIZE,
-        ASX_GEN_SERVER_MAX_INSTANCES,
         ASX_MAX_SIGNAL_SUBSCRIPTIONS,
         ASX_BUF_CAPACITY,
         ASX_SERVICE_BUFFER_CAPACITY,

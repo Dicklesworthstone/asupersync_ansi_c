@@ -255,70 +255,139 @@ static int run_actor_lifecycle(unsigned long long *digest) {
     return 1;
 }
 
+/* A named counter GenServer (Rust spawn_named_gen_server): a call adds its
+ * request to the count and replies with it (0 reads it), a cast adds its
+ * message. The counts of calls and casts handled are the behaviour's own
+ * state, as a Rust handler keeps its own. */
 typedef struct {
     uint64_t count;
+    uint32_t calls;
+    uint32_t casts;
     uint32_t terminated;
-} e2e_server_state;
+} e2e_counter_state;
 
-static e2e_server_state g_server_state;
-
-static asx_status server_init(void *args, void **out_state) {
-    (void)args;
-    memset(&g_server_state, 0, sizeof(g_server_state));
-    *out_state = &g_server_state;
-    return ASX_OK;
-}
-
-static asx_status server_call(void *state, uint64_t request, uint64_t *reply) {
-    e2e_server_state *s = (e2e_server_state *)state;
-    if (request != 0u) { s->count += request; }
+static asx_status e2e_counter_call(void *state, uint64_t request, uint64_t *reply,
+                                   asx_actor_handle self) {
+    e2e_counter_state *s = (e2e_counter_state *)state;
+    (void)self;
+    s->calls++;
+    s->count += request;
     *reply = s->count;
     return ASX_OK;
 }
 
-static asx_status server_cast(void *state, uint64_t message) {
-    e2e_server_state *s = (e2e_server_state *)state;
-    s->count += message;
+static asx_status e2e_counter_cast(void *state, uint64_t msg, asx_actor_handle self) {
+    e2e_counter_state *s = (e2e_counter_state *)state;
+    (void)self;
+    s->casts++;
+    s->count += msg;
     return ASX_OK;
 }
 
-static void server_terminate(void *state, asx_status reason) {
-    e2e_server_state *s = (e2e_server_state *)state;
+static void e2e_counter_terminate(void *state, asx_status reason, asx_actor_handle self) {
+    e2e_counter_state *s = (e2e_counter_state *)state;
     (void)reason;
+    (void)self;
     s->terminated = 1u;
 }
 
+/* One client task: call 5, cast 7, call 0, each polled like the Rust future
+ * it ports (ASX_E_PENDING: not yet, repeat with the same op). */
+typedef struct {
+    asx_actor_handle server;
+    asx_cx cx;
+    asx_actor_op op;
+    uint32_t step;
+    uint64_t reply_first;
+    uint64_t reply_last;
+    asx_status failure;
+} e2e_counter_client;
+
+static asx_status e2e_counter_client_poll(void *user_data, asx_task_id self) {
+    e2e_counter_client *c = (e2e_counter_client *)user_data;
+    (void)self;
+    while (c->step < 3u) {
+        asx_status st;
+        if (c->step == 0u) {
+            st = asx_actor_call(c->server, &c->cx, 5u, &c->op, &c->reply_first);
+        } else if (c->step == 1u) {
+            st = asx_actor_cast(c->server, &c->cx, 7u, &c->op);
+        } else {
+            st = asx_actor_call(c->server, &c->cx, 0u, &c->op, &c->reply_last);
+        }
+        if (st == ASX_E_PENDING) return ASX_E_PENDING;
+        if (st != ASX_OK && c->failure == ASX_OK) c->failure = st;
+        c->step++;
+        memset(&c->op, 0, sizeof(c->op)); /* a fresh op per step */
+    }
+    return ASX_OK;
+}
+
 static int run_gen_server(unsigned long long *digest) {
-    const asx_gen_server_callbacks callbacks = {server_init, server_call, server_cast,
-                                                server_terminate};
-    asx_gen_server_ref ref;
-    uint64_t reply = 0u;
+    asx_actor_behavior behavior;
+    e2e_counter_state state;
+    e2e_counter_client client;
+    asx_name_registry registry;
+    asx_named_actor named;
+    asx_task_id holder = ASX_INVALID_ID;
+    asx_task_id server_task = ASX_INVALID_ID;
+    asx_task_id client_task = ASX_INVALID_ID;
+    asx_region_id root;
+    asx_region_id region = ASX_INVALID_ID;
+    asx_status st;
 
     asx_runtime_reset(test_runtime());
-    if (asx_gen_server_start_named(&ref, "counter", &callbacks, NULL) != ASX_OK) {
+    memset(&state, 0, sizeof(state));
+    memset(&behavior, 0, sizeof(behavior)); /* every optional hook NULL, REJECT overflow */
+    behavior.handle_call = e2e_counter_call;
+    behavior.handle_cast = e2e_counter_cast;
+    behavior.terminate = e2e_counter_terminate;
+
+    /* A named server and its caller live outside the root region, as in Rust. */
+    root = make_region();
+    if (root == ASX_INVALID_ID || asx_region_open_child(root, &region) != ASX_OK ||
+        asx_name_registry_init(&registry) != ASX_OK ||
+        asx_actor_spawn_named(&named, &registry, "counter", region, &behavior, &state, 4u, 0u) !=
+            ASX_OK) {
         scenario_line("gen_server.request_reply", 0, "start_failed");
         return 0;
     }
-    if (strcmp(asx_gen_server_name(ref), "counter") != 0) {
+    if (asx_actor_task_id(named.actor, &server_task) != ASX_OK ||
+        asx_name_whereis(&registry, "counter", &holder) != ASX_OK || holder != server_task) {
         scenario_line("gen_server.request_reply", 0, "name_mismatch");
         return 0;
     }
-    if (asx_gen_server_call(ref, 5u, &reply) != ASX_OK || reply != 5u ||
-        asx_gen_server_cast(ref, 7u) != ASX_OK || asx_gen_server_call(ref, 0u, &reply) != ASX_OK ||
-        reply != 12u || asx_gen_server_calls_handled(ref) != 2u ||
-        asx_gen_server_casts_handled(ref) != 1u) {
+
+    memset(&client, 0, sizeof(client));
+    client.server = named.actor;
+    st = asx_task_spawn(region, e2e_counter_client_poll, &client, &client_task);
+    if (st == ASX_OK) st = asx_cx_init(&client.cx, region, client_task, ASX_CAP_NONE);
+    if (st != ASX_OK) {
+        scenario_line("gen_server.request_reply", 0, "client_failed");
+        return 0;
+    }
+    drive_region(region, 64u);
+    if (client.failure != ASX_OK || client.step != 3u || client.reply_first != 5u ||
+        client.reply_last != 12u || state.calls != 2u || state.casts != 1u) {
         scenario_line("gen_server.request_reply", 0, "dispatch_mismatch");
         return 0;
     }
-    if (asx_gen_server_stop(ref) != ASX_OK || !g_server_state.terminated ||
-        !asx_gen_server_is_finished(ref)) {
+
+    if (asx_actor_stop(named.actor) != ASX_OK) {
+        scenario_line("gen_server.request_reply", 0, "stop_mismatch");
+        return 0;
+    }
+    drive_region(region, 64u);
+    if (!state.terminated || asx_actor_is_alive(named.actor) ||
+        asx_named_actor_release_name(&named, &registry, 0u) != ASX_OK ||
+        asx_name_whereis(&registry, "counter", &holder) != ASX_E_NOT_FOUND) {
         scenario_line("gen_server.request_reply", 0, "stop_mismatch");
         return 0;
     }
 
     scenario_line("gen_server.request_reply", 1, "calls=2 casts=1 count=12 name=counter");
-    *digest = mix_u64(*digest, reply);
-    *digest = mix_u64(*digest, asx_gen_server_calls_handled(ref));
+    *digest = mix_u64(*digest, client.reply_last);
+    *digest = mix_u64(*digest, state.calls);
     return 1;
 }
 

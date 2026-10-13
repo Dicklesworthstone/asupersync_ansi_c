@@ -267,8 +267,7 @@ SYNC_SRC := \
 
 ACTOR_SRC := \
 	src/actor/actor.c \
-	src/actor/supervisor.c \
-	src/actor/gen_server.c
+	src/actor/supervisor.c
 
 NET_SRC := \
 	src/net/net.c \
@@ -494,7 +493,9 @@ UNIT_TEST_SRC := $(wildcard tests/unit/core/*_test.c) \
                  $(wildcard tests/unit/observability/*_test.c) \
                  $(wildcard tests/unit/observability/test_*.c) \
                  $(wildcard tests/unit/conformance/test_*.c)
-UNIT_TEST_SRC := $(sort $(UNIT_TEST_SRC))
+# The task-less GenServer's test (bd-t20v): its subject left the library; the
+# file leaves the tree with its git rm, and until then it is not built.
+UNIT_TEST_SRC := $(filter-out tests/unit/actor/test_gen_server.c,$(sort $(UNIT_TEST_SRC)))
 
 INVARIANT_TEST_SRC := $(wildcard tests/invariant/lifecycle/*_test.c) \
                       $(wildcard tests/invariant/lifecycle/test_*.c) \
@@ -983,7 +984,6 @@ test-combinator-contract: $(COMBINATOR_CONTRACT_TEST_BIN)
 
 ACTOR_SUPERVISION_HARNESS_TEST_BIN := \
 	$(TEST_DIR)/unit/actor/test_actor \
-	$(TEST_DIR)/unit/actor/test_gen_server \
 	$(TEST_DIR)/unit/actor/test_supervisor
 
 test-actor-supervision-harness: $(ACTOR_SUPERVISION_HARNESS_TEST_BIN)
@@ -1012,7 +1012,6 @@ BROWSER_FOCUSED_TEST_BIN := \
 	$(TEST_DIR)/unit/runtime/test_blocking \
 	$(TEST_DIR)/unit/runtime/test_io_driver \
 	$(TEST_DIR)/unit/actor/test_actor \
-	$(TEST_DIR)/unit/actor/test_gen_server \
 	$(TEST_DIR)/unit/actor/test_supervisor \
 	$(TEST_DIR)/unit/sync/test_sync \
 	$(TEST_DIR)/unit/bytes/test_buf \
@@ -3651,7 +3650,7 @@ help:
 	@echo "  test               Run all tests (unit + invariant + vignettes)"
 	@echo "  test-unit          Unit tests per module"
 	@echo "  test-combinator-contract Run combinator/plan/service contract suites"
-	@echo "  test-actor-supervision-harness Run actor/gen_server/supervision semantic harness suites"
+	@echo "  test-actor-supervision-harness Run actor (GenServer) and supervision semantic harness suites"
 	@echo "  test-invariants    Lifecycle invariant tests"
 	@echo "  test-vignettes     API ergonomics usage vignettes (public headers)"
 	@echo "  test-e2e           Run all e2e scenario lanes"

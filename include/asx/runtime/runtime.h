@@ -1454,9 +1454,8 @@ typedef enum {
     ASX_RESET_SLOT_SIGNAL = 7,
     ASX_RESET_SLOT_EPOCH = 8,
     ASX_RESET_SLOT_AFFINITY = 9,
-    ASX_RESET_SLOT_GEN_SERVER = 10,
-    ASX_RESET_SLOT_DEADLINE_MONITOR = 11,
-    ASX_RESET_SLOT_COUNT = 12
+    ASX_RESET_SLOT_DEADLINE_MONITOR = 10,
+    ASX_RESET_SLOT_COUNT = 11
 } asx_reset_slot;
 
 /* Runtime-internal: `hook` becomes the reset of `slot`. Idempotent; a slot

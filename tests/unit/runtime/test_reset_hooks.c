@@ -14,7 +14,6 @@
 
 #include "../../test_harness.h"
 #include "../../test_runtime.h"
-#include <asx/actor/gen_server.h>
 #include <asx/asx.h>
 #include <asx/core/affinity.h>
 #include <asx/core/epoch.h>
@@ -506,34 +505,6 @@ TEST(contended_mutex_is_cleared_by_a_runtime_reset) {
     ASSERT_TRUE(asx_contended_mutex_try_lock(h, &guard) != ASX_OK);
 }
 
-static asx_status server_init(void *args, void **out_state) {
-    (void)args;
-    *out_state = NULL;
-    return ASX_OK;
-}
-
-static asx_status server_call(void *state, uint64_t request, uint64_t *reply) {
-    (void)state;
-    *reply = request;
-    return ASX_OK;
-}
-
-TEST(gen_server_is_cleared_by_a_runtime_reset) {
-    asx_gen_server_callbacks cb;
-    asx_gen_server_ref ref;
-
-    memset(&cb, 0, sizeof(cb));
-    cb.init = server_init;
-    cb.handle_call = server_call;
-    asx_gen_server_reset();
-    forget();
-    ASSERT_EQ(asx_gen_server_start(&ref, &cb, NULL), ASX_OK);
-    ASSERT_TRUE(registered(ASX_RESET_SLOT_GEN_SERVER));
-    ASSERT_EQ(asx_gen_server_get_state(ref), ASX_GEN_SERVER_RUNNING);
-    asx_runtime_reset(test_runtime());
-    ASSERT_TRUE(asx_gen_server_get_state(ref) != ASX_GEN_SERVER_RUNNING);
-}
-
 TEST(deadline_monitor_is_cleared_by_a_runtime_reset) {
     asx_deadline_monitor_handle h;
 
@@ -593,7 +564,6 @@ int main(void) {
 #endif
     RUN_TEST(pool_is_cleared_by_a_runtime_reset);
     RUN_TEST(contended_mutex_is_cleared_by_a_runtime_reset);
-    RUN_TEST(gen_server_is_cleared_by_a_runtime_reset);
     RUN_TEST(deadline_monitor_is_cleared_by_a_runtime_reset);
     RUN_TEST(symbol_registry_survives_a_runtime_reset);
     TEST_REPORT();
