@@ -139,8 +139,8 @@ TEST(rng_replicates_rust_det_rng_for_every_seed_and_value_of_the_derived_documen
         ASSERT_EQ(asx_scheduler_use_lab_dispatch(seed), ASX_OK);
         for (k = 0; k < count && bad == UINT64_MAX; k++) {
             uint64_t want = 0;
-            ASSERT_TRUE(asx_json_u64(&g_rng_doc, asx_json_item(&g_rng_doc, values, (uint32_t)k),
-                                     &want));
+            ASSERT_TRUE(
+                asx_json_u64(&g_rng_doc, asx_json_item(&g_rng_doc, values, (uint32_t)k), &want));
             if (asx_lab_rng_next() != want) bad = k;
         }
         /* The seed is in `seed`, the first mismatching output index in `bad`. */
