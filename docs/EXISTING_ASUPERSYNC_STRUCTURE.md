@@ -744,7 +744,7 @@ When channel is full (`used_slots >= capacity`):
 
 **Rust evidence:** `src/channel/mpsc.rs:374` (`has_waiting_sender`), `src/channel/mpsc.rs:732` (`try_reserve`), `src/channel/mpsc.rs:1129` (waiter registration)
 
-**Historical C drift (fixed 2026-10-10, bd-wy6n):** the original audit found that cancel-requested producers could lose their FIFO position and that settling could wake both the cancelling head and its successor. The current code retains every non-dead queued task in `asx_wait_queue_live_ahead` (`src/sync/wait_queue.c:344-357`, used at `src/channel/mpsc.c:670`) and lets a cancel-pending head retain its wake unit until it leaves (`asx_wait_queue_settle`, `src/sync/wait_queue.c:309-342`). Unit test: `tests/unit/channel/test_channel_wake.c` `cancel_pending_front_producer_keeps_its_place`; no fixture has a cancel-pending producer. This source correction does not by itself establish complete multi-sender Rust fixture coverage.
+**Historical C drift (fixed 2026-10-10, bd-wy6n):** the original audit found that cancel-requested producers could lose their FIFO position and that settling could wake both the cancelling head and its successor. The current code retains every non-dead queued task in `asx_wait_queue_live_ahead` (`src/sync/wait_queue.c:394-407`, used at `src/channel/mpsc.c:670`) and lets a cancel-pending head retain its wake unit until it leaves (`asx_wait_queue_settle`, `src/sync/wait_queue.c:359-392`). Unit test: `tests/unit/channel/test_channel_wake.c` `cancel_pending_front_producer_keeps_its_place`; no fixture has a cancel-pending producer. This source correction does not by itself establish complete multi-sender Rust fixture coverage.
 
 ### 9.5 Eviction Mode
 
@@ -1410,7 +1410,7 @@ These IDs are this document's own (they are also in `schemas/invariant_schema.js
 | `INV-CH-01` | `used_slots = queue.len() + reserved <= capacity` at all times | Capacity | Holds (`src/channel/mpsc.rs:349`); C `src/channel/mpsc.c:677-678` |
 | `INV-CH-02` | Messages delivered in FIFO order | Ordering | Holds; C ring buffer |
 | `INV-CH-03` | Waiters serviced in FIFO order (arrival order in the token queue; there is no monotonic ID) | Fairness | Holds as corrected |
-| `INV-CH-04` | `try_reserve` returns `Full` when a live waiter is queued | Fairness | Holds in Rust; C now retains cancel-requested waiters (`src/sync/wait_queue.c:344-357`; historical drift in §9.4) |
+| `INV-CH-04` | `try_reserve` returns `Full` when a live waiter is queued | Fairness | Holds in Rust; C now retains cancel-requested waiters (`src/sync/wait_queue.c:394-407`; historical drift in §9.4) |
 | `INV-CH-05` | Cancelled reserve does not consume capacity | Cancel safety | Holds (checkpoint before `reserved += 1`); C `src/channel/mpsc.c:1026-1039` |
 | `INV-CH-06` | Cancelled recv does not consume message | Cancel safety | Holds (checkpoint before pop) |
 | `INV-CH-07` | `receiver_dropped` monotone: `false -> true`, never reverses | State monotonicity | Holds; C closed states never reopen |
