@@ -335,6 +335,9 @@ ASX_API void asx_actor_op_drop(asx_actor_handle actor, asx_actor_op *op);
 #ifndef ASX_NAME_REGISTRY_CAPACITY
 #define ASX_NAME_REGISTRY_CAPACITY 16u
 #endif
+#if (ASX_NAME_REGISTRY_CAPACITY) < 1
+#error "ASX_NAME_REGISTRY_CAPACITY must be at least 1"
+#endif
 #ifndef ASX_NAME_MAX_LEN
 #define ASX_NAME_MAX_LEN 63u
 #endif

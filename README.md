@@ -668,6 +668,7 @@ it drifts from the headers or a new capacity macro is missing.
 | Macro | Default | Defined in |
 |---|---|---|
 | `ASX_ACTOR_MAILBOX_CAPACITY` | 64 | `include/asx/asx_config.h` |
+| `ASX_ACTOR_SYSTEM_LANE_CAPACITY` | 16 | `include/asx/actor/actor.h` |
 | `ASX_AFFINITY_TABLE_CAPACITY` | 256 | `include/asx/asx_config.h` |
 | `ASX_BROADCAST_MAX_CAPACITY` | 32 | `include/asx/asx_config.h` |
 | `ASX_BUF_CAPACITY` | 4096 | `include/asx/asx_config.h` |
@@ -720,6 +721,7 @@ it drifts from the headers or a new capacity macro is missing.
 | `ASX_MAX_WATCHES` | 16 | `include/asx/asx_config.h` |
 | `ASX_MAX_WORKERS` | 64 | `include/asx/asx_config.h` |
 | `ASX_MAX_WS_CONNECTIONS` | 8 | `include/asx/asx_config.h` |
+| `ASX_NAME_REGISTRY_CAPACITY` | 16 | `include/asx/actor/actor.h` |
 | `ASX_POSIX_BLOCKING_QUEUE_CAPACITY` | 8 | `src/platform/posix/hooks.c` |
 | `ASX_POSIX_BLOCKING_WORKERS` | 4 | `src/platform/posix/hooks.c` |
 | `ASX_RESOLVER_CACHE_CAPACITY` | 8 | `include/asx/asx_config.h` |
