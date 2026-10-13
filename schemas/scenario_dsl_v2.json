@@ -22,7 +22,7 @@
                      "oracles": {"type": "array", "uniqueItems": true, "items": {"enum": [
                        "all", "task_leak", "obligation_leak", "quiescence", "finalizer",
                        "region_tree", "deadline_monotone", "cancellation_protocol",
-                       "cancel_correctness", "cancel_debt"]}}}
+                       "cancel_correctness", "cancel_debt", "task_counters"]}}}
     },
     "requires": {"type": "array", "uniqueItems": true, "items": {"enum": ["unbounded_queue"]}},
     "regions": {"type": "array", "items": {

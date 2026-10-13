@@ -46,7 +46,9 @@ The bead's "24" is the count of `OracleSuite::report` entries; the registry has
   `tests/unit/runtime/test_oracle.c`): `task_leak`, `obligation_leak`,
   `quiescence`, `finalizer`, `region_tree`, `deadline_monotone`,
   `cancellation_protocol` (the region part), `cancel_correctness` and
-  `cancel_debt`, by Rust's registry names. Each is one read-only pass over the
+  `cancel_debt`, by Rust's registry names, and `task_counters`, which has no
+  Rust twin (a region's live-task counter against its tasks, the ground under
+  `task_leak` and `quiescence`). Each is one read-only pass over the
   arenas, run once at the end of a run: `asx_oracle_*(lab, ctx)` for the lab
   suite, `asx_oracle_check_named(name)` for a caller without a lab, and the
   conformance interpreter's `lab.oracles` / `ASX_ORACLES` (off by default, so
@@ -158,11 +160,11 @@ pair, and the cheapest checks, each over state the kernel already keeps, are:
    non-cleanup task of it has a pending cancel, and a parent's cancel is not
    later than its child's (the second needs the trace, not state: a child may
    legitimately be cancelled before its parent is).
-3. **Counter consistency** (`task_leak`, `quiescence`): not done. Between
-   steps a region's live-task count equals the live, non-completed tasks that
-   name it (lab admissions pending are counted in the region and must be
-   included deliberately), and likewise for the arenas' live counters and
-   free lists. It reads the kernel's counters, which K18 (bd-9kll.3.20) is
+3. **Counter consistency** (`task_leak`, `quiescence`): the region part is
+   DONE as `task_counters`: a region's live-task count equals the live,
+   non-completed tasks that name it (a lab admission still pending is counted
+   in the region and is a live slot). Not done: the arenas' live counters and
+   free lists against their slots, which read counters K18 (bd-9kll.3.20) is
    moving into the kernel, so it lands after that move.
 4. **End-of-run completeness** (`obligation_leak`, `region_leak`): not done.
    `region_leak` needs "stuck for longer than a bound", which state alone does

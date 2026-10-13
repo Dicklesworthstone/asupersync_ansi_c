@@ -333,6 +333,38 @@ static asx_oracle_result check_cancel_debt(void) {
                           "every requested cancel has a task that will see it", 0u);
 }
 
+/* A region's live-task counter (what its close decision reads, and what
+ * task_leak trusts) against the live, not completed tasks that name it. The
+ * counter counts a task from its spawn, a lab admission still pending
+ * included, to its completion, so every such task is a live slot in a state
+ * that is not terminal. Rust has no oracle of this name: the counter is the
+ * ground under task_leak and quiescence. The scan covers the whole arena. */
+static asx_oracle_result check_task_counters(void) {
+    const asx_kernel *k = g_kernels[0];
+    uint32_t bad = 0;
+    uint32_t i;
+    for (i = 0; i < ASX_MAX_REGIONS; i++) {
+        const asx_region_slot *r = &k->regions[i];
+        uint32_t j;
+        uint32_t n = 0;
+        /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
+        if (!r->alive) continue;
+        for (j = 0; j < ASX_MAX_TASKS; j++) {
+            const asx_task_slot *t = &k->tasks[j];
+            /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
+            if (!t->alive || asx_task_is_terminal(t->state)) continue;
+            if (oracle_names_region(t->region, i, r->generation)) n++;
+        }
+        if (n != r->task_count) bad++;
+    }
+    if (bad != 0u) {
+        return oracle_verdict(ASX_ORACLE_FAIL, "task_counters",
+                              "a region's live-task counter disagrees with its tasks", bad);
+    }
+    return oracle_verdict(ASX_ORACLE_PASS, "task_counters",
+                          "every region's live-task counter matches its tasks", 0u);
+}
+
 /* The lab contract the older oracles have: NULL fails, an uninitialized lab
  * is inconclusive. The state itself is the runtime's, not the lab's. */
 static int oracle_lab_refused(const asx_lab *lab, const char *name, asx_oracle_result *out) {
@@ -410,6 +442,13 @@ asx_oracle_result asx_oracle_cancel_debt(const asx_lab *lab, void *ctx) {
     return check_cancel_debt();
 }
 
+asx_oracle_result asx_oracle_task_counters(const asx_lab *lab, void *ctx) {
+    asx_oracle_result r;
+    (void)ctx;
+    if (oracle_lab_refused(lab, "task_counters", &r)) return r;
+    return check_task_counters();
+}
+
 typedef struct {
     const char *name;
     asx_oracle_result (*check)(void);
@@ -425,6 +464,7 @@ static const oracle_entry g_oracle_table[] = {
     {"cancellation_protocol", check_cancel_propagation},
     {"cancel_correctness", check_cancel_correctness},
     {"cancel_debt", check_cancel_debt},
+    {"task_counters", check_task_counters},
 };
 
 #define ORACLE_TABLE_COUNT (sizeof(g_oracle_table) / sizeof(g_oracle_table[0]))

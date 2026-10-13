@@ -61,12 +61,13 @@ TEST(kernel_oracles_carry_rusts_registry_names_and_unknown_names_fail) {
                                        "deadline_monotone",
                                        "cancellation_protocol",
                                        "cancel_correctness",
-                                       "cancel_debt"};
+                                       "cancel_debt",
+                                       "task_counters"};
     uint32_t i;
     asx_oracle_result r;
-    ASSERT_EQ(asx_oracle_kernel_count(), 9u);
-    for (i = 0; i < 9u; i++) { ASSERT_STR_EQ(asx_oracle_kernel_name(i), want[i]); }
-    ASSERT_TRUE(asx_oracle_kernel_name(9u) == NULL);
+    ASSERT_EQ(asx_oracle_kernel_count(), 10u);
+    for (i = 0; i < 10u; i++) { ASSERT_STR_EQ(asx_oracle_kernel_name(i), want[i]); }
+    ASSERT_TRUE(asx_oracle_kernel_name(10u) == NULL);
     r = check("no_such_oracle");
     ASSERT_EQ((int)r.verdict, (int)ASX_ORACLE_FAIL);
     ASSERT_STR_EQ(r.oracle_name, "unknown");
@@ -386,6 +387,53 @@ TEST(cancel_debt_names_a_requested_cancel_that_nothing_will_run) {
     ASSERT_EQ((int)check("cancel_debt").verdict, (int)ASX_ORACLE_FAIL);
 }
 
+TEST(task_counters_names_a_region_whose_counter_disagrees_with_its_tasks) {
+    asx_region_id rid;
+    asx_region_id other;
+    asx_task_id a;
+    asx_task_id b;
+    asx_region_slot *region = NULL;
+    asx_task_slot *ts = NULL;
+    asx_oracle_result r;
+    asx_budget budget;
+
+    fresh();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open_child(rid, &other), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &a), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(other, poll_pending, NULL, &b), ASX_OK);
+    ASSERT_EQ(asx_region_slot_lookup(rid, &region), ASX_OK);
+    ASSERT_TRUE(all_pass());
+
+    /* A counter that ran ahead of its tasks, and one that fell behind. */
+    region->task_count += 1u;
+    r = check("task_counters");
+    ASSERT_EQ((int)r.verdict, (int)ASX_ORACLE_FAIL);
+    ASSERT_EQ(r.detail_count, 1u);
+    ASSERT_STR_EQ(r.message, "a region's live-task counter disagrees with its tasks");
+    region->task_count -= 2u;
+    ASSERT_EQ((int)check("task_counters").verdict, (int)ASX_ORACLE_FAIL);
+    region->task_count += 1u;
+    ASSERT_EQ((int)check("task_counters").verdict, (int)ASX_ORACLE_PASS);
+
+    /* A task that completed and was not counted off: a different state, the
+     * same disagreement. The kernel does both in one call. */
+    ASSERT_EQ(asx_task_slot_lookup(b, &ts), ASX_OK);
+    ts->state = ASX_TASK_COMPLETED;
+    r = check("task_counters");
+    ASSERT_EQ((int)r.verdict, (int)ASX_ORACLE_FAIL);
+    ASSERT_EQ(r.detail_count, 1u);
+
+    /* The kernel's own completion keeps them equal. */
+    fresh();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &a), ASX_OK);
+    ASSERT_EQ((int)check("task_counters").verdict, (int)ASX_ORACLE_PASS);
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
+    ASSERT_EQ((int)check("task_counters").verdict, (int)ASX_ORACLE_PASS);
+}
+
 int main(void) {
     fprintf(stderr, "=== test_oracle ===\n");
     RUN_TEST(kernel_oracles_carry_rusts_registry_names_and_unknown_names_fail);
@@ -400,6 +448,7 @@ int main(void) {
     RUN_TEST(cancellation_protocol_names_a_child_a_region_cancel_did_not_reach);
     RUN_TEST(cancel_correctness_names_a_witness_that_is_not_its_tasks);
     RUN_TEST(cancel_debt_names_a_requested_cancel_that_nothing_will_run);
+    RUN_TEST(task_counters_names_a_region_whose_counter_disagrees_with_its_tasks);
     TEST_REPORT();
     return test_failures;
 }
