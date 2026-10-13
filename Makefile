@@ -3462,6 +3462,139 @@ test-baremetal-qemu: $(CONFORMANCE_RUNNER)
 	fi
 
 # ---------------------------------------------------------------------------
+# test-musl-qemu — the library on musl for OpenWrt-class targets, run under
+# qemu-user (bd-9kll.15.8)
+#
+# The library (EMBEDDED_ROUTER profile, resource classes MUSL_CLASSES) and
+# the conformance runner are cross-built statically against musl for a
+# big-endian 32-bit MIPS (o32, soft float, mips32r2: OpenWrt's mips_24kc) and
+# for aarch64 (OpenWrt's aarch64_generic), by `zig cc`, which carries clang
+# and the musl sources and builds a real musl libc.a for each triple. The
+# runner replays the fixtures of tests/baremetal/subset.txt under qemu-mips
+# and qemu-aarch64; tools/baremetal/compare_replay.sh compares each line (id,
+# semantic digest, projection digest) with the host runner's, with resource
+# class 1 differing exactly on tests/baremetal/exceeds_r1.txt, as on the bare
+# metal images. A planted one-byte corruption of one fixture must change that
+# fixture's line and no other.
+#
+# The footprint a router application pays is the kernel-only static app
+# tools/musl/kernel_min.c: one region, one task, one channel, linked against
+# the kernel-only sources (-DASX_KERNEL_ONLY=1, no interpreter, CLI or
+# protocol models) with --gc-sections. Its text/data/bss per target and class
+# is printed to $(MUSL_DIR)/footprint.txt next to the runner binary's.
+#
+# Needs zig (MUSL_ZIG, `zig` or `python3 -m ziglang` from the PyPI package
+# ziglang==0.14.1) and qemu-mips and qemu-aarch64 (qemu-user); absent, the
+# target SKIPs unless STRICT_GATES=1 (FAIL_ON_MISSING_CROSS_TOOLCHAINS or
+# FAIL_ON_MISSING_RUNNERS), which makes it fail. This is musl built from
+# source by zig, not OpenWrt's own toolchain or a device (bd-9kll.15.8's
+# device half stays open).
+# ---------------------------------------------------------------------------
+MUSL_ZIG ?= zig
+MUSL_DIR := $(BUILD_DIR)/musl
+MUSL_CLASSES ?= 1 2
+MUSL_CONTROL_CLASS ?= 2
+MUSL_CONTROL_ID ?= $(BM_CONTROL_ID)
+MUSL_KERNEL_MIN_LINE := kernel-min: region ok, task ok, channel ok (42), quiescent
+# name:zig target:extra compile flags:qemu-user binary
+MUSL_TARGETS := mips:mips-linux-musleabi:-mcpu=mips32r2:qemu-mips \
+                aarch64:aarch64-linux-musl::qemu-aarch64
+
+ifneq ($(MUSL_VARIANT),)
+MUSL_VDIR := $(MUSL_DIR)/$(MUSL_VARIANT)
+MUSL_CC := $(MUSL_ZIG) cc -target $(MUSL_TRIPLE) $(MUSL_ARCHFLAGS)
+MUSL_CFLAGS := $(STD_FLAGS) $(WARN_FLAGS) -O2 -DNDEBUG -ffunction-sections -fdata-sections \
+               $(INC_FLAGS) -I$(CURDIR)/src $(CODEC_DEF) $(DET_DEF) \
+               -DASX_PROFILE_EMBEDDED_ROUTER -DASX_RESOURCE_CLASS=$(MUSL_CLASS_NUM)
+MUSL_FULL_OBJ := $(patsubst src/%.c,$(MUSL_VDIR)/full/%.o,$(LIB_SRC))
+MUSL_KERN_OBJ := $(patsubst src/%.c,$(MUSL_VDIR)/kernel/%.o,$(KERNEL_SRC))
+
+$(MUSL_VDIR)/full/%.o: src/%.c
+	@mkdir -p $(@D)
+	@$(MUSL_CC) $(MUSL_CFLAGS) $(DEP_FLAGS) -c $< -o $@
+
+$(MUSL_VDIR)/kernel/%.o: src/%.c
+	@mkdir -p $(@D)
+	@$(MUSL_CC) $(MUSL_CFLAGS) -DASX_KERNEL_ONLY=1 $(DEP_FLAGS) -c $< -o $@
+
+$(MUSL_VDIR)/libasx_full.a: $(MUSL_FULL_OBJ)
+	@tmp="$@.$$$$.tmp"; $(MUSL_ZIG) ar rcs "$$tmp" $^ && mv "$$tmp" "$@"
+
+$(MUSL_VDIR)/libasx_kernel.a: $(MUSL_KERN_OBJ)
+	@tmp="$@.$$$$.tmp"; $(MUSL_ZIG) ar rcs "$$tmp" $^ && mv "$$tmp" "$@"
+
+$(MUSL_VDIR)/asx-conformance: tools/conformance/runner.c $(MUSL_VDIR)/libasx_full.a
+	@$(MUSL_CC) $(MUSL_CFLAGS) -static -Wl,--gc-sections -o $@ $^
+
+$(MUSL_VDIR)/kernel_min: tools/musl/kernel_min.c $(MUSL_VDIR)/libasx_kernel.a
+	@$(MUSL_CC) $(MUSL_CFLAGS) -DASX_KERNEL_ONLY=1 -static -Wl,--gc-sections -o $@ $^
+
+.PHONY: musl-variant
+musl-variant: $(MUSL_VDIR)/asx-conformance $(MUSL_VDIR)/kernel_min
+
+-include $(MUSL_FULL_OBJ:.o=.d) $(MUSL_KERN_OBJ:.o=.d)
+endif
+
+.PHONY: test-musl-qemu
+test-musl-qemu: $(CONFORMANCE_RUNNER)
+	@echo "[asx] test-musl-qemu: $(words $(BM_FIXTURES)) fixture(s) x classes $(MUSL_CLASSES) on musl mips (big-endian) and aarch64 under qemu-user..."
+	@if $(MUSL_ZIG) version >/dev/null 2>&1 && command -v qemu-mips >/dev/null 2>&1 && \
+	    command -v qemu-aarch64 >/dev/null 2>&1; then \
+		mkdir -p $(MUSL_DIR) && \
+		$(TEST_EXEC) $(CONFORMANCE_RUNNER) replay $(BM_FIXTURES) > $(MUSL_DIR)/native.txt; \
+		rc=$$?; [ $$rc -le 1 ] || { echo "[asx] test-musl-qemu: FAIL (native replay exit $$rc)"; exit 1; }; \
+		digests=$$(grep -c ' sha256:.* sha256:' $(MUSL_DIR)/native.txt); \
+		[ "$$digests" -gt 0 ] || { echo "[asx] test-musl-qemu: FAIL (no digest line: nothing compared)"; exit 1; }; \
+		sh tools/baremetal/embed_fixtures.sh $(MUSL_DIR)/control/control.c --corrupt $(MUSL_CONTROL_ID) \
+		        fixtures/rust_reference_v2/$(MUSL_CONTROL_ID).json || exit 1; \
+		: > $(MUSL_DIR)/footprint.txt; \
+		for t in $(MUSL_TARGETS); do \
+			name=$${t%%:*}; rest=$${t#*:}; triple=$${rest%%:*}; rest=$${rest#*:}; \
+			flags=$${rest%%:*}; qemu=$${rest#*:}; \
+			for cls in $(MUSL_CLASSES); do \
+				v=$$name-c$$cls; d=$(MUSL_DIR)/$$v; \
+				$(MAKE) --no-print-directory musl-variant MUSL_VARIANT=$$v MUSL_TRIPLE=$$triple \
+				        MUSL_ARCHFLAGS="$$flags" MUSL_CLASS_NUM=$$cls > $(MUSL_DIR)/$$v.build.log 2>&1 || \
+				    { echo "[asx] test-musl-qemu: FAIL ($$name class $$cls build; tail of $(MUSL_DIR)/$$v.build.log:)"; \
+				      tail -8 $(MUSL_DIR)/$$v.build.log; exit 1; }; \
+				$$qemu $$d/asx-conformance replay $(BM_FIXTURES) > $$d/qemu.txt 2> $$d/qemu.err; \
+				flag=; [ "$$cls" = "1" ] && flag="--expect-differ $(BM_EXCEEDS_R1)"; \
+				if sh tools/baremetal/compare_replay.sh $(MUSL_DIR)/native.txt $$d/qemu.txt $$flag > $$d/compare.txt 2>&1; then \
+					echo "[asx] test-musl-qemu: $$name class $$cls: $$(tail -1 $$d/compare.txt)"; \
+				else \
+					echo "[asx] test-musl-qemu: FAIL ($$name class $$cls):"; cat $$d/compare.txt; exit 1; \
+				fi; \
+				got=$$($$qemu $$d/kernel_min 2>&1); krc=$$?; \
+				if [ $$krc -eq 0 ] && [ "$$got" = "$(MUSL_KERNEL_MIN_LINE)" ]; then \
+					echo "[asx] test-musl-qemu: $$name class $$cls kernel_min: $$got"; \
+				else \
+					echo "[asx] test-musl-qemu: FAIL ($$name class $$cls kernel_min exit $$krc: $$got)"; exit 1; \
+				fi; \
+				{ echo "$$name class $$cls (asx-conformance, then kernel_min):"; \
+				  python3 -I tools/musl/elf_size.py $$d/asx-conformance $$d/kernel_min; } >> $(MUSL_DIR)/footprint.txt; \
+			done; \
+			case " $(MUSL_CLASSES) " in *" $(MUSL_CONTROL_CLASS) "*) ;; \
+				*) echo "[asx] test-musl-qemu: FAIL (MUSL_CONTROL_CLASS $(MUSL_CONTROL_CLASS) is not in MUSL_CLASSES)"; exit 1 ;; esac; \
+			d=$(MUSL_DIR)/$$name-c$(MUSL_CONTROL_CLASS); \
+			$$qemu $$d/asx-conformance replay \
+			        $(subst fixtures/rust_reference_v2/$(MUSL_CONTROL_ID).json,$(MUSL_DIR)/control/corrupted-$(MUSL_CONTROL_ID).json,$(BM_FIXTURES)) \
+			        > $$d/control.txt 2> $$d/control.err; \
+			if sh tools/baremetal/compare_replay.sh $(MUSL_DIR)/native.txt $$d/control.txt --expect-differ $(MUSL_CONTROL_ID) > $$d/control-compare.txt 2>&1; then \
+				echo "[asx] test-musl-qemu: $$name planted control ($(MUSL_CONTROL_ID), one byte): $$(tail -1 $$d/control-compare.txt)"; \
+			else \
+				echo "[asx] test-musl-qemu: FAIL ($$name planted control not detected):"; cat $$d/control-compare.txt; exit 1; \
+			fi; \
+		done; \
+		echo "[asx] test-musl-qemu: footprint (bytes; $(MUSL_DIR)/footprint.txt):"; cat $(MUSL_DIR)/footprint.txt; \
+		echo "[asx] test-musl-qemu: PASS (musl mips + aarch64 x classes $(MUSL_CLASSES), $(words $(BM_FIXTURES)) fixture(s), $$digests digest line(s) on the host)"; \
+	elif [ "$(FAIL_ON_MISSING_CROSS_TOOLCHAINS)" = "1" ] || [ "$(FAIL_ON_MISSING_RUNNERS)" = "1" ]; then \
+		echo "[asx] test-musl-qemu: FAIL ($(MUSL_ZIG), qemu-mips and qemu-aarch64 are required; strict mode)"; \
+		exit 1; \
+	else \
+		echo "[asx] test-musl-qemu: SKIP ($(MUSL_ZIG), qemu-mips or qemu-aarch64 not found)"; \
+	fi
+
+# ---------------------------------------------------------------------------
 # QEMU smoke test
 # ---------------------------------------------------------------------------
 qemu-smoke:
@@ -3546,6 +3679,7 @@ help:
 	@echo "  embedded-portability-proof Compact EMBEDDED_ROUTER/R1 portability proof"
 	@echo "  cross-baremetal-all All 8 bare-metal ARM/RISC-V targets"
 	@echo "  test-baremetal-qemu Fixtures on bare-metal Cortex-M4 + RISC-V 32 under qemu-system, digests equal the host's"
+	@echo "  test-musl-qemu     musl mips (BE) + aarch64 under qemu-user: digests equal the host's, kernel-only app footprint"
 	@echo "  bench              Performance benchmarks (JSON output)"
 	@echo "  bench-json         Benchmarks (JSON-only to stdout)"
 	@echo "  parallel-bench-json PARALLEL worker-count baseline JSON"
