@@ -619,8 +619,9 @@ ascending reference (DOWN-ORDER) and the task's own monitors end silently.
 The built-in servers (`counter`, `echo` and the budget probes) answer every
 system message with one user trace, so a server's DOWNs are in the trace and
 compare as events: `down:ref=<reference> reason=<kind> vt=<ns>` (`vt` is the
-virtual time of the exit, `SystemMsg::Down`'s `completion_vt`; `exit` and
-`timeout` for the other two kinds). No new event kind is involved. A
+virtual time of the exit, `SystemMsg::Down`'s `completion_vt`;
+`exit:reason=<kind> vt=<ns>` and `timeout` for the other two kinds). No new
+event kind is involved. A
 server's handler runs only if the server runs: a cancelled server drops its
 system lane, as it does its mailbox (§3.8).
 

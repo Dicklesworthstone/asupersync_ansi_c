@@ -829,7 +829,13 @@ fn trace_system_msg(cx: &Cx, msg: &SystemMsg) {
             down_reason_kind(&notification.reason),
             completion_vt.as_nanos()
         )),
-        SystemMsg::Exit { .. } => cx.trace("exit"),
+        SystemMsg::Exit {
+            exit_vt, reason, ..
+        } => cx.trace(&format!(
+            "exit:reason={} vt={}",
+            down_reason_kind(reason),
+            exit_vt.as_nanos()
+        )),
         SystemMsg::Timeout { .. } => cx.trace("timeout"),
     }
 }

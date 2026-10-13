@@ -2884,6 +2884,157 @@ static int exec_watch_op(it_task *t, uint32_t step, uint32_t idx, const char *la
     return 0;
 }
 
+static it_server *server_by_name(const char *name);
+
+/* Monitors (DSL §3.10). A task's `monitor` and a server's `server_monitor`
+ * are held by name until `demonitor` / `server_demonitor`; the table is
+ * bounded by the runtime's own (ASX_MONITOR_CAPACITY). */
+typedef struct {
+    const char *name;
+    uint32_t owner;     /* index in g_tasks of the task that made it */
+    const char *target; /* the monitored task's name */
+    asx_monitor_ref ref;
+    int server; /* made by server_monitor */
+    int dropped;
+} it_monitor;
+
+static it_monitor g_monitors[ASX_MONITOR_CAPACITY];
+static uint32_t g_n_monitors = 0;
+
+static it_monitor *monitor_of(const it_task *t, const char *name, int server) {
+    uint32_t i;
+    uint32_t owner = (uint32_t)(t - g_tasks);
+    if (name == NULL) return NULL;
+    for (i = 0; i < g_n_monitors; i++) {
+        const it_monitor *m = &g_monitors[i];
+        if (m->owner == owner && m->server == server && !m->dropped && strcmp(m->name, name) == 0) {
+            return &g_monitors[i];
+        }
+    }
+    return NULL;
+}
+
+/* A DOWN's or an EXIT's reason as the DSL names it (twin_run's
+ * down_reason_kind). */
+static const char *down_reason_kind(asx_outcome_severity severity) {
+    switch (severity) {
+    case ASX_OUTCOME_OK: return "normal";
+    case ASX_OUTCOME_ERR: return "error";
+    case ASX_OUTCOME_CANCELLED: return "cancelled";
+    case ASX_OUTCOME_PANICKED: return "panicked";
+    }
+    return "error";
+}
+
+/* handle_info of the built-in servers: one user trace per system message,
+ * the text twin_run's trace_system_msg writes (DSL §3.10). */
+static asx_status server_info(void *state, const asx_actor_info_msg *m, asx_actor_handle self) {
+    asx_task_id task = ASX_INVALID_ID;
+    char message[96];
+    (void)state;
+    if (m->kind == ASX_ACTOR_INFO_USER || asx_actor_task_id(self, &task) != ASX_OK) return ASX_OK;
+    if (m->kind == ASX_ACTOR_INFO_DOWN) {
+        (void)snprintf(message, sizeof(message), "down:ref=%llu reason=%s vt=%llu",
+                       (unsigned long long)m->ref, down_reason_kind(m->reason.severity),
+                       (unsigned long long)m->vt);
+    } else if (m->kind == ASX_ACTOR_INFO_EXIT) {
+        (void)snprintf(message, sizeof(message), "exit:reason=%s vt=%llu",
+                       down_reason_kind(m->reason.severity), (unsigned long long)m->vt);
+    } else {
+        (void)snprintf(message, sizeof(message), "timeout");
+    }
+    asx_trace_user(task, message);
+    return ASX_OK;
+}
+
+/* The monitor steps. Returns 1 when `op` is one; `may_wait` is 0 where a
+ * step may not suspend (inside `masked`): the suspending ones are then not
+ * handled. `label` is the observation's op. */
+static int exec_monitor_op(it_task *t, asx_task_id self, uint32_t step, uint32_t idx,
+                           const char *label, const char *op, int may_wait, step_result *out) {
+    asx_status st;
+    it_monitor *m;
+
+    *out = STEP_NEXT;
+    if (strcmp(op, "demonitor") == 0 || strcmp(op, "server_demonitor") == 0) {
+        int server = op[0] == 's';
+        m = monitor_of(t, it_str(step, "monitor"), server);
+        if (m == NULL || (server && server_by_name(it_str(step, "server")) == NULL)) {
+            it_fail_task(t, idx, "demonitor of a monitor this task does not hold");
+            *out = STEP_END;
+            return 1;
+        }
+        /* Dropping the Monitor / GenServerHandle::demonitor: a command of
+         * the region-command lane (DSL §3.10). */
+        if (server) {
+            asx_demonitor(m->ref);
+        } else {
+            asx_monitor_release(m->ref);
+        }
+        m->dropped = 1;
+        observe_status(t, idx, label, ASX_OK);
+        return 1;
+    }
+    if (!may_wait) return 0;
+    if (strcmp(op, "monitor") == 0 || strcmp(op, "server_monitor") == 0) {
+        int server = op[0] == 's';
+        const char *as = it_str(step, "as");
+        it_task *target = task_by_name(it_str(step, "task"));
+        it_server *srv = server ? server_by_name(it_str(step, "server")) : NULL;
+        asx_monitor_ref ref = 0;
+        if (as == NULL || target == NULL || !target->spawned || monitor_of(t, as, server) != NULL ||
+            g_n_monitors >= ASX_MONITOR_CAPACITY || (server && (srv == NULL || srv->released))) {
+            it_fail_task(t, idx, "monitor needs a new `as`, a spawned task and room for a monitor");
+            *out = STEP_END;
+            return 1;
+        }
+        st = server ? asx_monitor_open_server_poll(self, srv->handle, target->id, &ref)
+                    : asx_monitor_open_poll(self, target->id, &ref);
+        if (st == ASX_E_PENDING) {
+            *out = STEP_PENDING;
+            return 1;
+        }
+        if (st == ASX_OK) {
+            m = &g_monitors[g_n_monitors++];
+            m->name = as;
+            m->owner = (uint32_t)(t - g_tasks);
+            m->target = target->name;
+            m->ref = ref;
+            m->server = server;
+            m->dropped = 0;
+        }
+        observe(t, idx, label, status_node(st),
+                st == ASX_OK ? asx_json_new_u64(g_out, ref) : ASX_JSON_NONE);
+        return 1;
+    }
+    if (strcmp(op, "await_down") == 0) {
+        asx_down down;
+        m = monitor_of(t, it_str(step, "monitor"), 0);
+        if (m == NULL) {
+            it_fail_task(t, idx, "await_down of a monitor this task does not hold");
+            *out = STEP_END;
+            return 1;
+        }
+        st = asx_monitor_down_poll(self, &t->cx, m->ref, &down);
+        if (st == ASX_E_PENDING) {
+            *out = STEP_PENDING;
+            return 1;
+        }
+        if (st == ASX_OK) {
+            uint32_t value = asx_json_new_object(g_out);
+            asx_json_set(g_out, value, "monitored", asx_json_new_string(g_out, m->target));
+            asx_json_set(g_out, value, "reason",
+                         asx_json_new_string(g_out, down_reason_kind(down.reason.severity)));
+            asx_json_set(g_out, value, "ref", asx_json_new_u64(g_out, down.ref));
+            observe(t, idx, label, status_node(ASX_OK), value);
+        } else {
+            observe_status(t, idx, label, st);
+        }
+        return 1;
+    }
+    return 0;
+}
+
 /* Steps that never suspend; the only ones allowed inside `masked`. */
 static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32_t idx,
                              const char *label);
@@ -3251,6 +3402,11 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
         step_result res;
         if (exec_time_op(t, step, idx, label, op, &res)) return res;
     }
+    /* The monitor steps that never suspend (DSL §3.10). */
+    {
+        step_result res;
+        if (exec_monitor_op(t, self, step, idx, label, op, 0, &res)) return res;
+    }
     /* Non-blocking oneshot, broadcast and watch sends (DSL §3.6). */
     if (strcmp(op, "oneshot_send") == 0 || strcmp(op, "broadcast_send") == 0 ||
         strcmp(op, "watch_send") == 0) {
@@ -3558,10 +3714,11 @@ static asx_budget probe_stop_budget(void *state) {
 }
 
 static const asx_actor_behavior g_counter_behavior = {
-    NULL, counter_cast, counter_call, NULL, NULL, NULL, ASX_ACTOR_OVERFLOW_REJECT, NULL};
+    NULL, counter_cast, counter_call, NULL, NULL, NULL, ASX_ACTOR_OVERFLOW_REJECT, server_info};
 /* `latest`: a counter that drops its oldest queued cast when full. */
 static const asx_actor_behavior g_latest_behavior = {
-    NULL, counter_cast, counter_call, NULL, NULL, NULL, ASX_ACTOR_OVERFLOW_DROP_OLDEST, NULL};
+    NULL,       counter_cast, counter_call, NULL, NULL, NULL, ASX_ACTOR_OVERFLOW_DROP_OLDEST,
+    server_info};
 static const asx_actor_behavior g_budgets_behavior = {probe_init,
                                                       counter_cast,
                                                       counter_call,
@@ -3569,7 +3726,7 @@ static const asx_actor_behavior g_budgets_behavior = {probe_init,
                                                       probe_start_budget,
                                                       NULL,
                                                       ASX_ACTOR_OVERFLOW_REJECT,
-                                                      NULL};
+                                                      server_info};
 static const asx_actor_behavior g_budgets_stop_behavior = {probe_init,
                                                            counter_cast,
                                                            counter_call,
@@ -3577,9 +3734,9 @@ static const asx_actor_behavior g_budgets_stop_behavior = {probe_init,
                                                            probe_start_budget,
                                                            probe_stop_budget,
                                                            ASX_ACTOR_OVERFLOW_REJECT,
-                                                           NULL};
+                                                           server_info};
 static const asx_actor_behavior g_echo_behavior = {
-    NULL, NULL, echo_call, NULL, NULL, NULL, ASX_ACTOR_OVERFLOW_REJECT, NULL};
+    NULL, NULL, echo_call, NULL, NULL, NULL, ASX_ACTOR_OVERFLOW_REJECT, server_info};
 
 static it_server *server_by_name(const char *name) {
     uint32_t i;
@@ -4019,6 +4176,7 @@ static step_result exec_step(it_task *t, asx_task_id self, uint32_t step, uint32
         if (exec_channel_wait(t, step, idx, op, &r)) return r;
         if (exec_group(t, self, step, idx, op, &r)) return r;
         if (exec_server(t, step, idx, op, &r)) return r;
+        if (exec_monitor_op(t, self, step, idx, op, op, 1, &r)) return r;
         if (exec_supervisor(t, self, step, idx, op, &r)) return r;
     }
     if (strcmp(op, "yield") == 0) {
@@ -5209,6 +5367,7 @@ static asx_status conformance_run(const asx_json_doc *in, uint32_t scenario, asx
     g_n_delay_queues = 0;
     g_n_delay_keys = 0;
     g_n_servers = 0;
+    g_n_monitors = 0;
     g_n_sups = 0;
     g_n_regions = 0;
     g_n_events = 0;
