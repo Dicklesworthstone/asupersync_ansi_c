@@ -706,12 +706,39 @@ macro is `-DASX_RESOURCE_CLASS=N`). The six arenas in this table
 (`ASX_MAX_REGIONS`, `ASX_MAX_TASKS`, `ASX_MAX_TIMERS`, `ASX_MAX_OBLIGATIONS`,
 `ASX_MAX_CHANNELS`, `ASX_TRACE_CAPACITY`) are then sized from that class: the
 class limit is both the compiled capacity and the point where allocation
-fails with `ASX_E_RESOURCE_EXHAUSTED`. Other capacities keep their defaults,
-and an explicit `-DASX_MAX_*` still overrides the class. The class is a build
+fails with `ASX_E_RESOURCE_EXHAUSTED`. The thirteen capacities of the next
+table are tightened by R1 only; every other capacity keeps its default, and
+an explicit `-DASX_MAX_*` still overrides the class. The class is a build
 choice, independent of `PROFILE`. Without a class, the arenas keep the
 unclassed defaults listed in the capacity table below (`ASX_MAX_REGIONS`,
 `ASX_MAX_TASKS`, ...). `make test-resource-classes` runs the unit suite built
 for each class.
+
+Capacities R1 also tightens (R2, R3 and an unclassed build keep the default
+of the capacity table below; the footprint is what a class is for, a slot of
+the in-memory network arenas holds a 4 KiB buffer):
+
+| Capacity | Macro | R1 (Tight) | Default |
+|---|---|---|---|
+| Region capture arena, bytes per region | `ASX_REGION_CAPTURE_ARENA_BYTES` | <!-- fact:class_r1_max_region_capture_bytes -->2048<!-- /fact --> | 16384 |
+| UDP sockets | `ASX_MAX_UDP_SOCKETS` | <!-- fact:class_r1_max_udp_sockets -->4<!-- /fact --> | 16 |
+| Unix datagram sockets | `ASX_MAX_UNIX_DGRAM_SOCKETS` | <!-- fact:class_r1_max_unix_dgram_sockets -->2<!-- /fact --> | 8 |
+| Unix streams | `ASX_MAX_UNIX_STREAMS` | <!-- fact:class_r1_max_unix_streams -->4<!-- /fact --> | 16 |
+| TCP streams | `ASX_MAX_TCP_STREAMS` | <!-- fact:class_r1_max_tcp_streams -->4<!-- /fact --> | 16 |
+| Actors | `ASX_MAX_ACTORS` | <!-- fact:class_r1_max_actors -->4<!-- /fact --> | 16 |
+| Actor mailbox | `ASX_ACTOR_MAILBOX_CAPACITY` | <!-- fact:class_r1_max_actor_mailbox -->16<!-- /fact --> | 64 |
+| Supervisors | `ASX_MAX_SUPERVISORS` | <!-- fact:class_r1_max_supervisors -->2<!-- /fact --> | 8 |
+| File-system entries | `ASX_MAX_FS_ENTRIES` | <!-- fact:class_r1_max_fs_entries -->4<!-- /fact --> | 16 |
+| Task error ledgers | `ASX_ERROR_LEDGER_TASK_SLOTS` | <!-- fact:class_r1_max_ledger_tasks -->16<!-- /fact --> | 64 |
+| Event log events | `ASX_EVENT_LOG_CAPACITY` | <!-- fact:class_r1_max_event_log -->64<!-- /fact --> | 512 |
+| Hindsight events | `ASX_HINDSIGHT_CAPACITY` | <!-- fact:class_r1_max_hindsight_events -->32<!-- /fact --> | 256 |
+| Scheduler event log events | `ASX_SCHED_EVENT_LOG_CAPACITY` | <!-- fact:class_r1_max_sched_events -->64<!-- /fact --> | 256 |
+
+With these, the R1 kernel-only quickstart links with about 286 KiB of bss
+(293,120 B) instead of 910 KiB (931,904 B) (`make size-report`, CORE,
+release, gcc 15 x86-64, before and after); the remaining bulk is
+the in-memory UDP and Unix datagram queues (4 datagrams of
+`ASX_BUF_CAPACITY` bytes per socket).
 
 ### Capacity Macros
 
@@ -744,6 +771,8 @@ it drifts from the headers or a new capacity macro is missing.
 | `ASX_BUF_CAPACITY` | 4096 | `include/asx/asx_config.h` |
 | `ASX_CHANNEL_MAX_CAPACITY` | 64 | `include/asx/asx_config.h` |
 | `ASX_CLEANUP_STACK_CAPACITY` | 32 | `include/asx/asx_config.h` |
+| `ASX_ERROR_LEDGER_TASK_SLOTS` | 64 | `include/asx/asx_config.h` |
+| `ASX_EVENT_LOG_CAPACITY` | 512 | `include/asx/asx_config.h` |
 | `ASX_EVIDENCE_SINK_CAPACITY` | 64 | `include/asx/asx_config.h` |
 | `ASX_FS_FILE_CAPACITY` | 1024 | `include/asx/asx_config.h` |
 | `ASX_GHOST_BORROW_TABLE_CAPACITY` | 128 | `include/asx/asx_config.h` |
@@ -797,6 +826,7 @@ it drifts from the headers or a new capacity macro is missing.
 | `ASX_NAME_REGISTRY_CAPACITY` | 16 | `include/asx/actor/actor.h` |
 | `ASX_POSIX_BLOCKING_QUEUE_CAPACITY` | 8 | `src/platform/posix/hooks.c` |
 | `ASX_POSIX_BLOCKING_WORKERS` | 4 | `src/platform/posix/hooks.c` |
+| `ASX_REGION_CAPTURE_ARENA_BYTES` | 16384 | `include/asx/asx_config.h` |
 | `ASX_RESOLVER_CACHE_CAPACITY` | 8 | `include/asx/asx_config.h` |
 | `ASX_RESOLVER_HOST_CAPACITY` | 256 | `include/asx/asx_config.h` |
 | `ASX_SCHED_EVENT_LOG_CAPACITY` | 256 | `src/runtime/scheduler.c` |

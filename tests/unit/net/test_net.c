@@ -872,6 +872,14 @@ TEST(net_reset_clears_all_state) {
 
 #define NET_EPOCH_MAX 6u
 
+/* The heavy epoch's sizes, within the build's arenas (R1 has 4 UDP
+ * sockets, 2 Unix datagram sockets and 4 TCP streams): a TCP connection
+ * holds two streams, a Unix datagram test needs two sockets. */
+#define NET_MIN_U(a, b) ((uint32_t)(a) < (uint32_t)(b) ? (uint32_t)(a) : (uint32_t)(b))
+#define NET_EPOCH_UDP NET_MIN_U(NET_EPOCH_MAX, ASX_MAX_UDP_SOCKETS)
+#define NET_EPOCH_UNIX NET_MIN_U(NET_EPOCH_MAX, ASX_MAX_UNIX_DGRAM_SOCKETS)
+#define NET_EPOCH_TCP NET_MIN_U(4u, ASX_MAX_TCP_STREAMS / 2u)
+
 /* UDP: socket 0 is connected to socket 1 and has queued two datagrams on
  * each of sockets 1..n-1. All stay open. */
 static int net_dirty_udp(uint32_t n) {
@@ -1026,13 +1034,13 @@ static int net_unix_fresh(uint32_t n) {
 TEST(net_reset_after_heavy_use_leaves_no_stale_state) {
     /* heavy epoch, then a reset that must clear every slot it used */
     asx_net_reset();
-    ASSERT_TRUE(net_dirty_udp(NET_EPOCH_MAX));
-    ASSERT_TRUE(net_dirty_tcp(4u));
-    ASSERT_TRUE(net_dirty_unix(NET_EPOCH_MAX));
+    ASSERT_TRUE(net_dirty_udp(NET_EPOCH_UDP));
+    ASSERT_TRUE(net_dirty_tcp(NET_EPOCH_TCP));
+    ASSERT_TRUE(net_dirty_unix(NET_EPOCH_UNIX));
     asx_net_reset();
-    ASSERT_TRUE(net_udp_fresh(NET_EPOCH_MAX));
+    ASSERT_TRUE(net_udp_fresh(NET_EPOCH_UDP));
     ASSERT_TRUE(net_tcp_fresh());
-    ASSERT_TRUE(net_unix_fresh(NET_EPOCH_MAX));
+    ASSERT_TRUE(net_unix_fresh(NET_EPOCH_UNIX));
 
     /* a light epoch only dirties the low slots; the reset clears those and
      * the high slots, cleared by the reset before, are still clean */
@@ -1041,19 +1049,19 @@ TEST(net_reset_after_heavy_use_leaves_no_stale_state) {
     ASSERT_TRUE(net_dirty_tcp(2u));
     ASSERT_TRUE(net_dirty_unix(2u));
     asx_net_reset();
-    ASSERT_TRUE(net_udp_fresh(NET_EPOCH_MAX));
+    ASSERT_TRUE(net_udp_fresh(NET_EPOCH_UDP));
     ASSERT_TRUE(net_tcp_fresh());
-    ASSERT_TRUE(net_unix_fresh(NET_EPOCH_MAX));
+    ASSERT_TRUE(net_unix_fresh(NET_EPOCH_UNIX));
 
     /* and heavy again after the light one */
     asx_net_reset();
-    ASSERT_TRUE(net_dirty_udp(NET_EPOCH_MAX));
-    ASSERT_TRUE(net_dirty_tcp(4u));
-    ASSERT_TRUE(net_dirty_unix(NET_EPOCH_MAX));
+    ASSERT_TRUE(net_dirty_udp(NET_EPOCH_UDP));
+    ASSERT_TRUE(net_dirty_tcp(NET_EPOCH_TCP));
+    ASSERT_TRUE(net_dirty_unix(NET_EPOCH_UNIX));
     asx_net_reset();
-    ASSERT_TRUE(net_udp_fresh(NET_EPOCH_MAX));
+    ASSERT_TRUE(net_udp_fresh(NET_EPOCH_UDP));
     ASSERT_TRUE(net_tcp_fresh());
-    ASSERT_TRUE(net_unix_fresh(NET_EPOCH_MAX));
+    ASSERT_TRUE(net_unix_fresh(NET_EPOCH_UNIX));
 
     asx_net_reset();
 }

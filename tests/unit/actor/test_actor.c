@@ -589,7 +589,10 @@ static void test_cast_from_task_waits_for_capacity(void) {
     ASSERT(c.steps[3].status == ASX_OK && c.steps[3].reply == 7u, "the call sees all three");
 }
 
-static void test_full_mailbox_of_64_parks_the_next_cast(void) {
+/* A mailbox at the build's largest capacity (64 by default, 16 in R1): the
+ * log holds 80 messages. */
+static void test_full_mailbox_at_the_largest_capacity_parks_the_next_cast(void) {
+    enum { CAP = ASX_ACTOR_MAILBOX_CAPACITY };
     rec_state s;
     asx_actor_handle h;
     client c;
@@ -598,18 +601,19 @@ static void test_full_mailbox_of_64_parks_the_next_cast(void) {
     int in_order = 1;
     setup();
     cr = child_region();
-    h = spawn_rec(g_root, &s, 64);
-    for (i = 0; i < 64u; i++) MUST_OK(asx_actor_try_cast(h, i));
-    ASSERT(asx_actor_try_cast(h, 999) == ASX_E_CHANNEL_FULL, "the 65th try_cast is refused");
+    h = spawn_rec(g_root, &s, CAP);
+    for (i = 0; i < (uint32_t)CAP; i++) MUST_OK(asx_actor_try_cast(h, i));
+    ASSERT(asx_actor_try_cast(h, 999) == ASX_E_CHANNEL_FULL,
+           "the try_cast past the capacity is refused");
     memset(&c, 0, sizeof(c));
-    client_add(&c, CL_CAST, 64);
+    client_add(&c, CL_CAST, CAP);
     client_start(&c, h, cr);
     run(cr); /* the client's cast waits: the server has not run */
-    ASSERT(c.steps[0].status == ASX_E_PENDING, "the 65th cast parks");
+    ASSERT(c.steps[0].status == ASX_E_PENDING, "the cast past the capacity parks");
     run(g_root);
     ASSERT(c.steps[0].status == ASX_OK, "a receive woke it and it was sent");
-    ASSERT(s.casts == 65u, "all 65 handled");
-    for (i = 0; i < 65u; i++) in_order = in_order && s.log[i] == i;
+    ASSERT(s.casts == (uint32_t)CAP + 1u, "all handled");
+    for (i = 0; i < (uint32_t)CAP + 1u; i++) in_order = in_order && s.log[i] == i;
     ASSERT(in_order, "in FIFO order, the parked cast last");
 }
 
@@ -2144,7 +2148,7 @@ int main(void) {
     RUN(test_call_from_task_gets_reply);
     RUN(test_call_from_root_region_is_rejected);
     RUN(test_cast_from_task_waits_for_capacity);
-    RUN(test_full_mailbox_of_64_parks_the_next_cast);
+    RUN(test_full_mailbox_at_the_largest_capacity_parks_the_next_cast);
 
     RUN(test_stop_runs_terminate);
     RUN(test_stop_before_first_poll_skips_init);

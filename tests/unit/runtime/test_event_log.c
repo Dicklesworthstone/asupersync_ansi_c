@@ -260,12 +260,15 @@ TEST(replay_verify_rejects_inconsistent_arguments) {
     ASSERT_EQ(asx_event_replay_verify(&one, 2, 1, 0, &div), ASX_E_INVALID_ARGUMENT);
 }
 
-/* RB1 class: the log stores the first 512 events only. A run that matches
- * the stored window but differs after it must not verify. */
+/* RB1 class: the log stores the first ASX_EVENT_LOG_CAPACITY events only
+ * (512 by default, 64 in R1). A run that matches the stored window but
+ * differs after it must not verify. */
 TEST(replay_verify_sees_a_divergence_beyond_the_stored_window) {
     static reference_run ref;
     asx_replay_divergence div;
-    const uint32_t total = (uint32_t)ASX_EVENT_LOG_CAPACITY + 188u; /* 700 */
+    const uint32_t total = (uint32_t)ASX_EVENT_LOG_CAPACITY + 188u;          /* 700 by default */
+    const uint32_t beyond = (uint32_t)ASX_EVENT_LOG_CAPACITY + 88u;          /* 600 */
+    const uint32_t inside = ((uint32_t)ASX_EVENT_LOG_CAPACITY * 25u) / 128u; /* 100 */
 
     asx_runtime_reset();
     emit_run(total, UINT32_MAX);
@@ -273,13 +276,14 @@ TEST(replay_verify_sees_a_divergence_beyond_the_stored_window) {
     ASSERT_EQ(ref.stored, (uint32_t)ASX_EVENT_LOG_CAPACITY);
     ASSERT_EQ(ref.total, total);
 
-    /* the same 700 events: verified, and 512 compared */
+    /* the same events: verified, and the whole window compared */
     emit_run(total, UINT32_MAX);
     ASSERT_EQ(asx_event_replay_verify(ref.events, ref.stored, ref.total, ref.chain, &div), ASX_OK);
     ASSERT_EQ(div.compared, (uint32_t)ASX_EVENT_LOG_CAPACITY);
 
-    /* event 600 differs: the stored 512 and the total match, the chain does not */
-    emit_run(total, 600u);
+    /* an event past the window differs: the stored window and the total
+     * match, the chain does not */
+    emit_run(total, beyond);
     ASSERT_EQ(asx_event_replay_verify(ref.events, ref.stored, ref.total, ref.chain, &div),
               ASX_E_EQUIVALENCE_MISMATCH);
     ASSERT_TRUE(div.chain_mismatch);
@@ -289,13 +293,13 @@ TEST(replay_verify_sees_a_divergence_beyond_the_stored_window) {
     ASSERT_EQ(div.first_divergence_index, (uint32_t)ASX_EVENT_LOG_CAPACITY);
     ASSERT_TRUE(div.expected_chain != div.actual_chain);
 
-    /* event 100 differs: inside the window, named exactly */
-    emit_run(total, 100u);
+    /* an event inside the window differs: named exactly */
+    emit_run(total, inside);
     ASSERT_EQ(asx_event_replay_verify(ref.events, ref.stored, ref.total, ref.chain, &div),
               ASX_E_EQUIVALENCE_MISMATCH);
-    ASSERT_EQ(div.first_divergence_index, 100u);
+    ASSERT_EQ(div.first_divergence_index, inside);
     ASSERT_EQ(div.actual.entity_id, (uint64_t)0xBADu);
-    ASSERT_EQ(div.expected.entity_id, (uint64_t)101u);
+    ASSERT_EQ(div.expected.entity_id, (uint64_t)inside + 1u);
 }
 
 TEST(replay_verify_refuses_a_stored_prefix_of_a_longer_run) {

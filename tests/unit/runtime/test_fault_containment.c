@@ -570,6 +570,11 @@ TEST(containment_event_ordering_is_deterministic) {
         asx_scheduler_event events_1[256];
         asx_scheduler_event events_2[256];
 
+        /* The log keeps the first events only (256 by default, 64 in R1):
+         * past that asx_scheduler_event_get fails and leaves the slot as it
+         * was, the same zero in both runs. */
+        memset(events_1, 0, sizeof(events_1));
+        memset(events_2, 0, sizeof(events_2));
         for (i = 0; i < event_count_1 && i < 256u; i++) {
             (void)asx_scheduler_event_get(i, &events_1[i]);
         }

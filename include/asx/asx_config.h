@@ -250,6 +250,73 @@ ASX_API asx_resource_limits asx_resource_limits_for_class(asx_resource_class cls
 #endif
 #endif
 
+/* Capacities a class also sizes (bd-dkfs). The six arenas above are not the
+ * whole of a footprint: each slot of the in-memory network arenas holds a
+ * 4 KiB datagram or inbox, a region embeds its capture arena, and the actor,
+ * supervisor, ledger and ring tables were sized for the unclassed default
+ * whatever the class, so R1 linked about 900 KiB of bss. R1 takes the tight
+ * value below for each; R2, R3 and an unclassed build keep the default the
+ * macro is given where it is defined, so nothing outside R1 changes, and an
+ * explicit -DASX_* wins over the class. Like the six arenas, an R1 limit is
+ * both the footprint and the point of deterministic exhaustion
+ * (ASX_E_RESOURCE_EXHAUSTED). README "Resource Classes" lists them; the x4
+ * lane (CAPACITY_X4_CFLAGS) raises each 4x over its default. */
+#define ASX_CLASS_R1_MAX_REGION_CAPTURE_BYTES 2048u
+#define ASX_CLASS_R1_MAX_UDP_SOCKETS 4u
+#define ASX_CLASS_R1_MAX_UNIX_DGRAM_SOCKETS 2u
+#define ASX_CLASS_R1_MAX_UNIX_STREAMS 4u
+#define ASX_CLASS_R1_MAX_TCP_STREAMS 4u
+#define ASX_CLASS_R1_MAX_ACTORS 4u
+#define ASX_CLASS_R1_MAX_ACTOR_MAILBOX 16u
+#define ASX_CLASS_R1_MAX_SUPERVISORS 2u
+#define ASX_CLASS_R1_MAX_FS_ENTRIES 4u
+#define ASX_CLASS_R1_MAX_LEDGER_TASKS 16u
+#define ASX_CLASS_R1_MAX_EVENT_LOG 64u
+#define ASX_CLASS_R1_MAX_HINDSIGHT_EVENTS 32u
+#define ASX_CLASS_R1_MAX_SCHED_EVENTS 64u
+
+#if defined(ASX_RESOURCE_CLASS) && ASX_RESOURCE_CLASS == 1
+#if !defined(ASX_REGION_CAPTURE_ARENA_BYTES)
+#define ASX_REGION_CAPTURE_ARENA_BYTES ASX_CLASS_R1_MAX_REGION_CAPTURE_BYTES
+#endif
+#if !defined(ASX_MAX_UDP_SOCKETS)
+#define ASX_MAX_UDP_SOCKETS ASX_CLASS_R1_MAX_UDP_SOCKETS
+#endif
+#if !defined(ASX_MAX_UNIX_DGRAM_SOCKETS)
+#define ASX_MAX_UNIX_DGRAM_SOCKETS ASX_CLASS_R1_MAX_UNIX_DGRAM_SOCKETS
+#endif
+#if !defined(ASX_MAX_UNIX_STREAMS)
+#define ASX_MAX_UNIX_STREAMS ASX_CLASS_R1_MAX_UNIX_STREAMS
+#endif
+#if !defined(ASX_MAX_TCP_STREAMS)
+#define ASX_MAX_TCP_STREAMS ASX_CLASS_R1_MAX_TCP_STREAMS
+#endif
+#if !defined(ASX_MAX_ACTORS)
+#define ASX_MAX_ACTORS ASX_CLASS_R1_MAX_ACTORS
+#endif
+#if !defined(ASX_ACTOR_MAILBOX_CAPACITY)
+#define ASX_ACTOR_MAILBOX_CAPACITY ASX_CLASS_R1_MAX_ACTOR_MAILBOX
+#endif
+#if !defined(ASX_MAX_SUPERVISORS)
+#define ASX_MAX_SUPERVISORS ASX_CLASS_R1_MAX_SUPERVISORS
+#endif
+#if !defined(ASX_MAX_FS_ENTRIES)
+#define ASX_MAX_FS_ENTRIES ASX_CLASS_R1_MAX_FS_ENTRIES
+#endif
+#if !defined(ASX_ERROR_LEDGER_TASK_SLOTS)
+#define ASX_ERROR_LEDGER_TASK_SLOTS ASX_CLASS_R1_MAX_LEDGER_TASKS
+#endif
+#if !defined(ASX_EVENT_LOG_CAPACITY)
+#define ASX_EVENT_LOG_CAPACITY ASX_CLASS_R1_MAX_EVENT_LOG
+#endif
+#if !defined(ASX_HINDSIGHT_CAPACITY)
+#define ASX_HINDSIGHT_CAPACITY ASX_CLASS_R1_MAX_HINDSIGHT_EVENTS
+#endif
+#if !defined(ASX_SCHED_EVENT_LOG_CAPACITY)
+#define ASX_SCHED_EVENT_LOG_CAPACITY ASX_CLASS_R1_MAX_SCHED_EVENTS
+#endif
+#endif
+
 /* Effective resource and public-layout defaults are resolved here, before
  * any individual module header is included. Applications including only
  * runtime/rt.h therefore use the same values as umbrella consumers. */
@@ -298,11 +365,31 @@ ASX_API asx_resource_limits asx_resource_limits_for_class(asx_resource_class cls
 #ifndef ASX_REGION_CAPTURE_ARENA_BYTES
 #define ASX_REGION_CAPTURE_ARENA_BYTES 16384u
 #endif
+/* Captured task state is carved at 8-byte offsets: less would hold none. */
+#if (ASX_REGION_CAPTURE_ARENA_BYTES) < 8u
+#error "ASX_REGION_CAPTURE_ARENA_BYTES must be at least 8"
+#endif
 #ifndef ASX_MAX_MASK_DEPTH
 #define ASX_MAX_MASK_DEPTH 64u
 #endif
 #ifndef ASX_MAX_CANCEL_WITNESSES
 #define ASX_MAX_CANCEL_WITNESSES 64u
+#endif
+/* Per-task error ledgers (asx_status.h's ASX_ERROR_LEDGER_DEPTH entries
+ * each); a task past the last slot shares the fallback ledger. */
+#ifndef ASX_ERROR_LEDGER_TASK_SLOTS
+#define ASX_ERROR_LEDGER_TASK_SLOTS 64u
+#endif
+#if (ASX_ERROR_LEDGER_TASK_SLOTS) < 1
+#error "ASX_ERROR_LEDGER_TASK_SLOTS must be at least 1"
+#endif
+/* Operation-level event log (asx/runtime/event.h): the first events of a run
+ * are stored, the hash chain covers all of them. */
+#ifndef ASX_EVENT_LOG_CAPACITY
+#define ASX_EVENT_LOG_CAPACITY 512u
+#endif
+#if (ASX_EVENT_LOG_CAPACITY) < 1
+#error "ASX_EVENT_LOG_CAPACITY must be at least 1"
 #endif
 #ifndef ASX_CLEANUP_STACK_CAPACITY
 #define ASX_CLEANUP_STACK_CAPACITY 32

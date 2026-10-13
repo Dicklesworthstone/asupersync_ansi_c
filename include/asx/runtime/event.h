@@ -12,6 +12,7 @@
 #ifndef ASX_RUNTIME_EVENT_H
 #define ASX_RUNTIME_EVENT_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_ids.h>
 #include <asx/asx_status.h>
@@ -54,7 +55,8 @@ typedef struct {
     asx_status status;  /* ASX_OK for success events */
 } asx_event_record;
 
-enum { ASX_EVENT_LOG_CAPACITY = 512u };
+/* ASX_EVENT_LOG_CAPACITY, the events the log stores, is a capacity macro of
+ * asx_config.h: a resource class sizes it. */
 
 /* ------------------------------------------------------------------ */
 /* Event log API                                                       */

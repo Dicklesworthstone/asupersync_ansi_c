@@ -312,11 +312,15 @@ static uint64_t hs_ref_fnv_le(uint64_t hash, uint64_t v, uint32_t width) {
 
 TEST(hindsight_digest_within_capacity_is_fold_of_readable_events) {
     uint64_t expected = 0x517cc1b727220a95ULL;
+    /* Within the capacity: 40 events, fewer where the ring is smaller
+     * (32 in R1). */
+    const uint32_t n =
+        (uint32_t)ASX_HINDSIGHT_CAPACITY < 40u ? (uint32_t)ASX_HINDSIGHT_CAPACITY : 40u;
     uint32_t i;
 
     asx_hindsight_reset();
     asx_trace_reset();
-    for (i = 0; i < 40u; i++) {
+    for (i = 0; i < n; i++) {
         asx_hindsight_event ev;
 
         /* Interleave trace events so trace_seq takes several values */

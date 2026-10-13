@@ -219,7 +219,8 @@ ASX_API ASX_MUST_USE int asx_status_is_cancel(asx_status s);
 /* ------------------------------------------------------------------ */
 
 #define ASX_ERROR_LEDGER_DEPTH 16u
-#define ASX_ERROR_LEDGER_TASK_SLOTS 64u
+/* ASX_ERROR_LEDGER_TASK_SLOTS, the number of task ledgers, is a capacity
+ * macro of asx_config.h: a resource class sizes it. */
 
 typedef struct asx_error_ledger_entry {
     asx_task_id task_id;
