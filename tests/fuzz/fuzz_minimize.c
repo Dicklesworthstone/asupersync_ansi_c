@@ -776,7 +776,7 @@ static uint64_t min_execute_digest(const min_scenario *sc) {
 
     asx_runtime_reset(test_runtime());
     asx_scheduler_event_reset();
-    asx_channel_reset();
+    asx_channel_reset(test_runtime());
     asx_timer_wheel_reset(asx_timer_wheel_global(test_runtime()));
     min_reset_task_states();
 
@@ -1155,7 +1155,7 @@ static int min_predicate_has_poisoned_spawn(const min_scenario *sc, void *user_d
     memset(&hs, 0, sizeof(hs));
     asx_runtime_reset(test_runtime());
     asx_scheduler_event_reset();
-    asx_channel_reset();
+    asx_channel_reset(test_runtime());
     asx_timer_wheel_reset(asx_timer_wheel_global(test_runtime()));
     min_reset_task_states();
 

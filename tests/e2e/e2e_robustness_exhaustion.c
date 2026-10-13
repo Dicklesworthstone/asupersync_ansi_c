@@ -154,7 +154,7 @@ static void scenario_region_arena_exhaustion(void) {
 static void scenario_channel_capacity_exhaustion(void) {
     SCENARIO_BEGIN("robust-exhaustion-003.channel_full");
     asx_runtime_reset(test_runtime());
-    asx_channel_reset();
+    asx_channel_reset(test_runtime());
 
     asx_region_id rid;
     asx_channel_id cid;

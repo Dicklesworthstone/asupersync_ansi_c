@@ -152,6 +152,10 @@ TEST(two_runtimes_have_independent_regions_tasks_and_quiescence) {
     asx_pool_handle poa;
     asx_pool_handle pob;
     asx_contended_mutex_handle cmb;
+    asx_channel_id cha;
+    asx_channel_id chb;
+    asx_send_permit chpermit;
+    uint64_t chval;
 
     memset(&a, 0, sizeof(a));
     memset(&b, 0, sizeof(b));
@@ -307,6 +311,20 @@ TEST(two_runtimes_have_independent_regions_tasks_and_quiescence) {
     ASSERT_EQ(asx_contended_mutex_unlock(gb), ASX_OK);
     ASSERT_EQ(asx_contended_mutex_close(cmb), ASX_OK);
 
+    /* Channels likewise: a channel belongs to the runtime of its region; the
+     * same slot index, told apart by the tag, and a message of one is not
+     * the other's. */
+    ASSERT_EQ(asx_channel_create(ra, 2u, &cha), ASX_OK);
+    ASSERT_EQ(asx_channel_create(rb, 2u, &chb), ASX_OK);
+    ASSERT_EQ(asx_handle_runtime_tag(cha), (uint16_t)0u);
+    ASSERT_EQ(asx_handle_runtime_tag(chb), (uint16_t)1u);
+    ASSERT_EQ(asx_handle_slot(cha), asx_handle_slot(chb));
+    ASSERT_EQ(asx_channel_try_reserve(chb, &chpermit), ASX_OK);
+    ASSERT_EQ(asx_send_permit_send(&chpermit, 41u), ASX_OK);
+    ASSERT_EQ(asx_channel_try_recv(cha, &chval), ASX_E_WOULD_BLOCK);
+    ASSERT_EQ(asx_channel_try_recv(chb, &chval), ASX_OK);
+    ASSERT_EQ(chval, 41u);
+
     /* A handle of the other runtime is no member of this one's world. */
     ASSERT_EQ(asx_task_watch(ta, tb), ASX_E_NOT_FOUND);
     ASSERT_EQ(asx_obligation_reserve_ex(ra, ASX_OBLIGATION_KIND_GENERIC, tb, &ob), ASX_E_NOT_FOUND);
@@ -370,12 +388,12 @@ TEST(a_second_runtime_is_refused_by_name_while_a_shared_subsystem_is_in_use) {
     cfg_b.storage = blk.block;
     cfg_b.storage_size = blk.size;
 
-    /* A channel is in use: a second runtime would share the table. */
+    /* A watch channel is in use: a second runtime would share the table. */
     ASSERT_EQ(asx_runtime_init(&a, &cfg_a, &hooks), ASX_OK);
     ASSERT_EQ(asx_region_open(&a, &ra), ASX_OK);
-    ASSERT_EQ(asx_channel_create(ra, 4u, &ch), ASX_OK);
+    ASSERT_EQ(asx_watch_create(0u, &wtx, &wrx), ASX_OK);
     ASSERT_EQ(asx_runtime_init(&b, &cfg_b, &hooks), ASX_E_INVALID_STATE);
-    ASSERT_TRUE(reason_names("channels"));
+    ASSERT_TRUE(reason_names("watches"));
     ASSERT_FALSE(asx_runtime_is_initialized(&b));
     ASSERT_TRUE(g_kernels[1] == NULL);
 
@@ -396,8 +414,7 @@ TEST(a_second_runtime_is_refused_by_name_while_a_shared_subsystem_is_in_use) {
      * state, naming themselves, and a runtime's own state is not refused. */
     ASSERT_EQ(asx_runtime_init(&b, &cfg_b, &hooks), ASX_OK);
     ASSERT_EQ(asx_region_open(&a, &ra), ASX_OK);
-    ASSERT_EQ(asx_channel_create(ra, 4u, &ch), ASX_E_INVALID_STATE);
-    ASSERT_TRUE(reason_names("channels"));
+    ASSERT_EQ(asx_channel_create(ra, 4u, &ch), ASX_OK);
     ASSERT_EQ(asx_watch_create(0u, &wtx, &wrx), ASX_E_INVALID_STATE);
     ASSERT_TRUE(reason_names("watches"));
     ASSERT_EQ(asx_contended_mutex_create(&a, &cm), ASX_OK);
@@ -410,7 +427,7 @@ TEST(a_second_runtime_is_refused_by_name_while_a_shared_subsystem_is_in_use) {
 
     /* One runtime again: the subsystem takes state, as before. */
     asx_runtime_shutdown(&b);
-    ASSERT_EQ(asx_channel_create(ra, 4u, &ch), ASX_OK);
+    ASSERT_EQ(asx_watch_create(0u, &wtx, &wrx), ASX_OK);
     asx_runtime_shutdown(&a);
     two_block_free(&blk);
 }

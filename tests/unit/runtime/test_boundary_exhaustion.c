@@ -34,7 +34,7 @@ static void reset_all(void) {
     asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     asx_trace_reset(test_runtime());
-    asx_channel_reset();
+    asx_channel_reset(test_runtime());
     asx_replay_clear_reference();
 }
 

@@ -56,7 +56,7 @@ static asx_region_id g_rid;
 
 static void setup(void) {
     asx_runtime_reset(test_runtime());
-    asx_channel_reset();
+    asx_channel_reset(test_runtime());
     asx_oneshot_reset();
     asx_broadcast_reset();
     asx_watch_reset();
@@ -237,11 +237,11 @@ TEST(a_runtime_reset_drops_what_a_live_channel_still_queues_once) {
     put(closed, 93);
     MUST_OK(asx_channel_close_receiver(closed)); /* 93 is discarded here */
     ASSERT_EQ(g_rec.n, 1u);
-    asx_channel_reset();
+    asx_channel_reset(test_runtime());
     ASSERT_EQ(g_rec.n, 3u); /* 91, 92 now; 93 not again */
     ASSERT_EQ(g_rec.seen[1], (uint64_t)91);
     ASSERT_EQ(g_rec.seen[2], (uint64_t)92);
-    asx_channel_reset();
+    asx_channel_reset(test_runtime());
     ASSERT_EQ(g_rec.n, 3u);
 }
 
@@ -251,7 +251,7 @@ TEST(set_discard_argument_errors) {
     ch = make_channel(2);
     ASSERT_EQ(asx_channel_set_discard(ASX_INVALID_ID, rec_fn, &g_rec), ASX_E_INVALID_ARGUMENT);
     MUST_OK(asx_channel_set_discard(ch, NULL, NULL));
-    asx_channel_reset();
+    asx_channel_reset(test_runtime());
     ASSERT_TRUE(asx_channel_set_discard(ch, rec_fn, &g_rec) != ASX_OK); /* stale or gone */
 }
 

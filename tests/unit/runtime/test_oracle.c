@@ -659,8 +659,10 @@ TEST(channel_atomicity_names_counters_that_disagree_with_a_channels_permits_and_
     ASSERT_TRUE(all_pass());
     ASSERT_EQ((int)check("channel_atomicity").verdict, (int)ASX_ORACLE_PASS);
 
-    n = asx_channel_slot_count_internal();
-    for (i = 0; i < n && !found; i++) { found = asx_channel_accounting_get_internal(i, &a); }
+    n = asx_channel_slot_count_internal(g_kernels[0]);
+    for (i = 0; i < n && !found; i++) {
+        found = asx_channel_accounting_get_internal(g_kernels[0], i, &a);
+    }
     ASSERT_TRUE(found);
     ASSERT_EQ(a.capacity, 4u);
     ASSERT_EQ(a.queued, 1u);

@@ -65,7 +65,7 @@ int main(void) {
     uint64_t value = 0;
 
     asx_runtime_reset(&g_rt);
-    asx_channel_reset();
+    asx_channel_reset(&g_rt);
     if (asx_region_open(&g_rt, &region) != ASX_OK) return fail("region_open");
     if (asx_channel_create(region, 4u, &channel) != ASX_OK) return fail("channel_create");
     if (asx_task_spawn_captured(region, poll_sender, (uint32_t)sizeof(sender_state), NULL, &task,

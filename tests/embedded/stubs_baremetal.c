@@ -34,7 +34,7 @@ void asx_diagnostic_reset(void) {}
 void asx_adapter_reset_all(void) {}
 
 /* Channel stubs (not linked in FREESTANDING archive) */
-void asx_channel_reset(void) {}
+void asx_channel_reset(const asx_runtime *rt) { (void)rt; }
 int asx_broadcast_try_recv(void) { return -1; }
 int asx_channel_try_recv(void) { return -1; }
 int asx_watch_has_changed(void) { return 0; }

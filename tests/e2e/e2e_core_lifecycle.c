@@ -707,7 +707,7 @@ static void scenario_timer_deterministic_order(void) {
 static void scenario_channel_reserve_send_recv(void) {
     SCENARIO_BEGIN("channel.reserve_send_recv");
     asx_runtime_reset(test_runtime());
-    asx_channel_reset();
+    asx_channel_reset(test_runtime());
 
     asx_region_id rid;
     asx_channel_id cid;
@@ -736,7 +736,7 @@ static void scenario_channel_reserve_send_recv(void) {
 static void scenario_channel_reserve_abort(void) {
     SCENARIO_BEGIN("channel.reserve_abort");
     asx_runtime_reset(test_runtime());
-    asx_channel_reset();
+    asx_channel_reset(test_runtime());
 
     asx_region_id rid;
     asx_channel_id cid;
@@ -760,7 +760,7 @@ static void scenario_channel_reserve_abort(void) {
 static void scenario_channel_fifo_order(void) {
     SCENARIO_BEGIN("channel.fifo_order");
     asx_runtime_reset(test_runtime());
-    asx_channel_reset();
+    asx_channel_reset(test_runtime());
 
     asx_region_id rid;
     asx_channel_id cid;
@@ -789,7 +789,7 @@ static void scenario_channel_fifo_order(void) {
 static void scenario_channel_close_sender(void) {
     SCENARIO_BEGIN("channel.close_sender");
     asx_runtime_reset(test_runtime());
-    asx_channel_reset();
+    asx_channel_reset(test_runtime());
 
     asx_region_id rid;
     asx_channel_id cid;

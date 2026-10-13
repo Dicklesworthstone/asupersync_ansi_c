@@ -42,7 +42,7 @@ static asx_region_id g_rid;
 
 static void setup(void) {
     asx_runtime_reset(test_runtime());
-    asx_channel_reset();
+    asx_channel_reset(test_runtime());
     CH_IGNORE(asx_region_open(test_runtime(), &g_rid));
 }
 
@@ -878,7 +878,7 @@ TEST(reset_clears_all) {
     setup();
     ASSERT_EQ(asx_channel_create(g_rid, 4, &ch), ASX_OK);
 
-    asx_channel_reset();
+    asx_channel_reset(test_runtime());
 
     ASSERT_NE(asx_channel_get_state(ch, &st), ASX_OK);
 }
@@ -936,19 +936,19 @@ static int ch_epoch_fresh(uint32_t n) {
 TEST(reset_after_heavy_use_leaves_no_stale_state) {
     setup();
     ASSERT_TRUE(ch_epoch_dirty(CH_EPOCH_MAX));
-    asx_channel_reset();
+    asx_channel_reset(test_runtime());
     ASSERT_TRUE(ch_epoch_fresh(CH_EPOCH_MAX));
 
     /* a light epoch dirties only the low slots; the high ones were cleared
      * by the reset before and must still be clean */
-    asx_channel_reset();
+    asx_channel_reset(test_runtime());
     ASSERT_TRUE(ch_epoch_dirty(2u));
-    asx_channel_reset();
+    asx_channel_reset(test_runtime());
     ASSERT_TRUE(ch_epoch_fresh(CH_EPOCH_MAX));
 
-    asx_channel_reset();
+    asx_channel_reset(test_runtime());
     ASSERT_TRUE(ch_epoch_dirty(CH_EPOCH_MAX));
-    asx_channel_reset();
+    asx_channel_reset(test_runtime());
     ASSERT_TRUE(ch_epoch_fresh(CH_EPOCH_MAX));
 }
 

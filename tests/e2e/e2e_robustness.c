@@ -245,7 +245,7 @@ static void scenario_timer_exhaustion(void) {
 static void scenario_channel_full(void) {
     SCENARIO_BEGIN("exhaustion.channel_full");
     asx_runtime_reset(test_runtime());
-    asx_channel_reset();
+    asx_channel_reset(test_runtime());
 
     asx_region_id rid;
     asx_channel_id cid;
@@ -470,7 +470,7 @@ static void scenario_resource_query_accuracy(void) {
 static void scenario_recv_empty_would_block(void) {
     SCENARIO_BEGIN("misuse.recv_empty");
     asx_runtime_reset(test_runtime());
-    asx_channel_reset();
+    asx_channel_reset(test_runtime());
 
     asx_region_id rid;
     asx_channel_id cid;
@@ -492,7 +492,7 @@ static void scenario_recv_empty_would_block(void) {
 static void scenario_reserve_after_sender_closed(void) {
     SCENARIO_BEGIN("misuse.reserve_after_close");
     asx_runtime_reset(test_runtime());
-    asx_channel_reset();
+    asx_channel_reset(test_runtime());
 
     asx_region_id rid;
     asx_channel_id cid;

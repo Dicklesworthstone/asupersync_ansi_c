@@ -266,7 +266,7 @@ static asx_region_id g_rid;
 
 static void eq_setup(void) {
     asx_runtime_reset(test_runtime());
-    asx_channel_reset();
+    asx_channel_reset(test_runtime());
     EQ_IGNORE(asx_region_open(test_runtime(), &g_rid));
 }
 

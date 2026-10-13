@@ -66,7 +66,7 @@ static void scenario_reserve_send_recv(void) {
     SCENARIO_BEGIN("channel_flow.reserve_send_recv");
 
     asx_runtime_reset(&g_rt);
-    asx_channel_reset();
+    asx_channel_reset(&g_rt);
 
     asx_region_id rid;
     SCENARIO_CHECK(asx_region_open(&g_rt, &rid) == ASX_OK, "region_open");
@@ -108,7 +108,7 @@ static void scenario_reserve_abort(void) {
     SCENARIO_BEGIN("channel_flow.reserve_abort");
 
     asx_runtime_reset(&g_rt);
-    asx_channel_reset();
+    asx_channel_reset(&g_rt);
 
     asx_region_id rid;
     SCENARIO_CHECK(asx_region_open(&g_rt, &rid) == ASX_OK, "region_open");
@@ -144,7 +144,7 @@ static void scenario_close_sender(void) {
     SCENARIO_BEGIN("channel_flow.close_sender");
 
     asx_runtime_reset(&g_rt);
-    asx_channel_reset();
+    asx_channel_reset(&g_rt);
 
     asx_region_id rid;
     SCENARIO_CHECK(asx_region_open(&g_rt, &rid) == ASX_OK, "region_open");

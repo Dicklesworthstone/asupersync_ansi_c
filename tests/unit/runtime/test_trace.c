@@ -717,7 +717,7 @@ TEST(trace_channel_events_emitted_by_runtime) {
     uint64_t value;
 
     asx_runtime_reset(test_runtime());
-    asx_channel_reset();
+    asx_channel_reset(test_runtime());
     asx_trace_reset(test_runtime());
 
     ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);

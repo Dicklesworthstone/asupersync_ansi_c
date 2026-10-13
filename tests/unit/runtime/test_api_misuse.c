@@ -44,7 +44,7 @@ static asx_status poll_pending(void *data, asx_task_id self) {
 TEST(channel_create_invalid_region) {
     asx_channel_id cid;
     asx_runtime_reset(test_runtime());
-    asx_channel_reset();
+    asx_channel_reset(test_runtime());
 
     /* Channel slot lookup returns INVALID_ARGUMENT for bad handles */
     ASSERT_EQ(asx_channel_create(ASX_INVALID_ID, 16, &cid), ASX_E_INVALID_ARGUMENT);
@@ -55,7 +55,7 @@ TEST(channel_create_zero_capacity) {
     asx_channel_id cid;
 
     asx_runtime_reset(test_runtime());
-    asx_channel_reset();
+    asx_channel_reset(test_runtime());
 
     ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_channel_create(rid, 0, &cid), ASX_E_INVALID_ARGUMENT);
@@ -65,7 +65,7 @@ TEST(channel_create_null_output) {
     asx_region_id rid;
 
     asx_runtime_reset(test_runtime());
-    asx_channel_reset();
+    asx_channel_reset(test_runtime());
 
     ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_channel_create(rid, 16, NULL), ASX_E_INVALID_ARGUMENT);
@@ -76,7 +76,7 @@ TEST(channel_create_exceeds_max_capacity) {
     asx_channel_id cid;
 
     asx_runtime_reset(test_runtime());
-    asx_channel_reset();
+    asx_channel_reset(test_runtime());
 
     ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_channel_create(rid, ASX_CHANNEL_MAX_CAPACITY + 1, &cid), ASX_E_INVALID_ARGUMENT);
@@ -91,7 +91,7 @@ TEST(channel_double_close_sender) {
     asx_channel_id cid;
 
     asx_runtime_reset(test_runtime());
-    asx_channel_reset();
+    asx_channel_reset(test_runtime());
 
     ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_channel_create(rid, 16, &cid), ASX_OK);
@@ -106,7 +106,7 @@ TEST(channel_double_close_receiver) {
     asx_channel_id cid;
 
     asx_runtime_reset(test_runtime());
-    asx_channel_reset();
+    asx_channel_reset(test_runtime());
 
     ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_channel_create(rid, 16, &cid), ASX_OK);
@@ -117,14 +117,14 @@ TEST(channel_double_close_receiver) {
 
 TEST(channel_close_sender_invalid_handle) {
     asx_runtime_reset(test_runtime());
-    asx_channel_reset();
+    asx_channel_reset(test_runtime());
 
     ASSERT_EQ(asx_channel_close_sender(ASX_INVALID_ID), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(channel_close_receiver_invalid_handle) {
     asx_runtime_reset(test_runtime());
-    asx_channel_reset();
+    asx_channel_reset(test_runtime());
 
     ASSERT_EQ(asx_channel_close_receiver(ASX_INVALID_ID), ASX_E_INVALID_ARGUMENT);
 }
@@ -139,7 +139,7 @@ TEST(channel_reserve_after_sender_close) {
     asx_send_permit permit;
 
     asx_runtime_reset(test_runtime());
-    asx_channel_reset();
+    asx_channel_reset(test_runtime());
 
     ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_channel_create(rid, 16, &cid), ASX_OK);
@@ -155,7 +155,7 @@ TEST(channel_reserve_after_receiver_close) {
     asx_send_permit permit;
 
     asx_runtime_reset(test_runtime());
-    asx_channel_reset();
+    asx_channel_reset(test_runtime());
 
     ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_channel_create(rid, 16, &cid), ASX_OK);
@@ -168,7 +168,7 @@ TEST(channel_reserve_after_receiver_close) {
 TEST(channel_recv_invalid_handle) {
     uint64_t val;
     asx_runtime_reset(test_runtime());
-    asx_channel_reset();
+    asx_channel_reset(test_runtime());
 
     ASSERT_EQ(asx_channel_try_recv(ASX_INVALID_ID, &val), ASX_E_INVALID_ARGUMENT);
 }
@@ -179,7 +179,7 @@ TEST(channel_recv_empty_open) {
     uint64_t val;
 
     asx_runtime_reset(test_runtime());
-    asx_channel_reset();
+    asx_channel_reset(test_runtime());
 
     ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_channel_create(rid, 16, &cid), ASX_OK);
@@ -194,7 +194,7 @@ TEST(channel_recv_empty_sender_closed) {
     uint64_t val;
 
     asx_runtime_reset(test_runtime());
-    asx_channel_reset();
+    asx_channel_reset(test_runtime());
 
     ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_channel_create(rid, 16, &cid), ASX_OK);
@@ -209,7 +209,7 @@ TEST(channel_get_state_null) {
     asx_channel_id cid;
 
     asx_runtime_reset(test_runtime());
-    asx_channel_reset();
+    asx_channel_reset(test_runtime());
 
     ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_channel_create(rid, 16, &cid), ASX_OK);
@@ -222,7 +222,7 @@ TEST(channel_queue_len_null) {
     asx_channel_id cid;
 
     asx_runtime_reset(test_runtime());
-    asx_channel_reset();
+    asx_channel_reset(test_runtime());
 
     ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     ASSERT_EQ(asx_channel_create(rid, 16, &cid), ASX_OK);
@@ -233,7 +233,7 @@ TEST(channel_queue_len_null) {
 TEST(channel_reserve_invalid_handle) {
     asx_send_permit permit;
     asx_runtime_reset(test_runtime());
-    asx_channel_reset();
+    asx_channel_reset(test_runtime());
 
     ASSERT_EQ(asx_channel_try_reserve(ASX_INVALID_ID, &permit), ASX_E_INVALID_ARGUMENT);
 }
@@ -245,7 +245,7 @@ TEST(channel_capacity_exhaustion) {
     asx_send_permit overflow;
 
     asx_runtime_reset(test_runtime());
-    asx_channel_reset();
+    asx_channel_reset(test_runtime());
 
     ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     /* Capacity 2: can reserve 2, third fails */

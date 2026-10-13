@@ -139,7 +139,7 @@ static void record_order(uint32_t value) {
 
 static void reset_all(void) {
     asx_runtime_reset(test_runtime());
-    asx_channel_reset();
+    asx_channel_reset(test_runtime());
     asx_ghost_reset();
     asx_parallel_reset();
     asx_waker_reset(test_runtime());

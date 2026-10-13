@@ -79,7 +79,7 @@ static asx_status poll_checkpoint_forever(void *data, asx_task_id self) {
 
 static void reset_all(void) {
     asx_runtime_reset(test_runtime());
-    asx_channel_reset();
+    asx_channel_reset(test_runtime());
     asx_trace_reset(test_runtime());
     asx_timer_wheel_reset(asx_timer_wheel_global(test_runtime()));
 }

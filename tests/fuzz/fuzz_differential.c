@@ -560,7 +560,7 @@ static void fuzz_execute(const fuzz_scenario *sc, fuzz_execution *exec) {
 
     /* Reset all runtime state for clean execution */
     asx_runtime_reset(test_runtime());
-    asx_channel_reset();
+    asx_channel_reset(test_runtime());
     asx_timer_wheel_reset(asx_timer_wheel_global(test_runtime()));
     fuzz_reset_task_states();
 

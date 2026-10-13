@@ -590,7 +590,7 @@ static bench_stats bench_channel_send(void) {
         uint32_t m_i;
 
         asx_runtime_reset(test_runtime());
-        asx_channel_reset();
+        asx_channel_reset(test_runtime());
         (void)asx_region_open(test_runtime(), &rid);
         (void)asx_channel_create(rid, ASX_CHANNEL_MAX_CAPACITY, &cid);
 
@@ -627,7 +627,7 @@ static bench_stats bench_channel_recv(void) {
         uint32_t m_i;
 
         asx_runtime_reset(test_runtime());
-        asx_channel_reset();
+        asx_channel_reset(test_runtime());
         (void)asx_region_open(test_runtime(), &rid);
         (void)asx_channel_create(rid, ASX_CHANNEL_MAX_CAPACITY, &cid);
 
@@ -898,7 +898,7 @@ static bench_stats bench_parallel_mpsc_contention(uint32_t worker_count, uint32_
 
         bench_parallel_config_init(&cfg, worker_count);
         asx_runtime_reset(test_runtime());
-        asx_channel_reset();
+        asx_channel_reset(test_runtime());
         asx_parallel_reset();
         (void)asx_parallel_init(&cfg);
         (void)asx_region_open(test_runtime(), &rid);
