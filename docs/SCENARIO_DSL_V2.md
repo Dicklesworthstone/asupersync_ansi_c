@@ -76,7 +76,8 @@ Companion files:
   - `oracles` (optional) names C-side kernel-state oracles to run once when
     the run has ended, by Rust's registry names (`task_leak`,
     `obligation_leak`, `quiescence`, `finalizer`, `region_tree`,
-    `deadline_monotone`, `cancellation_protocol`) or `"all"`
+    `deadline_monotone`, `cancellation_protocol`, `cancel_correctness`,
+    `cancel_debt`) or `"all"`
     (`docs/LAB_ORACLE_CATALOG.md`). A violation fails the run with the
     oracle's message. Rust ignores the field (its `LabRuntime` runs the oracles
     it feeds regardless). `ASX_ORACLES=all` in the runner's environment does

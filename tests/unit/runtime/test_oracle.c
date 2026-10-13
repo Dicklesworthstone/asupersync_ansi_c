@@ -43,7 +43,7 @@ static void fresh(void) {
 
 static asx_oracle_result check(const char *name) { return asx_oracle_check_named(name); }
 
-/* All seven, the passing run: every verdict PASS. */
+/* Every kernel-state oracle, the passing run: every verdict PASS. */
 static int all_pass(void) {
     uint32_t i;
     for (i = 0; i < asx_oracle_kernel_count(); i++) {
@@ -53,14 +53,20 @@ static int all_pass(void) {
 }
 
 TEST(kernel_oracles_carry_rusts_registry_names_and_unknown_names_fail) {
-    static const char *const want[] = {
-        "task_leak",   "obligation_leak",   "quiescence",           "finalizer",
-        "region_tree", "deadline_monotone", "cancellation_protocol"};
+    static const char *const want[] = {"task_leak",
+                                       "obligation_leak",
+                                       "quiescence",
+                                       "finalizer",
+                                       "region_tree",
+                                       "deadline_monotone",
+                                       "cancellation_protocol",
+                                       "cancel_correctness",
+                                       "cancel_debt"};
     uint32_t i;
     asx_oracle_result r;
-    ASSERT_EQ(asx_oracle_kernel_count(), 7u);
-    for (i = 0; i < 7u; i++) { ASSERT_STR_EQ(asx_oracle_kernel_name(i), want[i]); }
-    ASSERT_TRUE(asx_oracle_kernel_name(7u) == NULL);
+    ASSERT_EQ(asx_oracle_kernel_count(), 9u);
+    for (i = 0; i < 9u; i++) { ASSERT_STR_EQ(asx_oracle_kernel_name(i), want[i]); }
+    ASSERT_TRUE(asx_oracle_kernel_name(9u) == NULL);
     r = check("no_such_oracle");
     ASSERT_EQ((int)r.verdict, (int)ASX_ORACLE_FAIL);
     ASSERT_STR_EQ(r.oracle_name, "unknown");
@@ -276,6 +282,110 @@ TEST(cancellation_protocol_names_a_child_a_region_cancel_did_not_reach) {
     ASSERT_EQ((int)check("cancellation_protocol").verdict, (int)ASX_ORACLE_PASS);
 }
 
+static void request_cancel(asx_region_id rid, asx_task_id t) {
+    asx_cancel_reason req;
+    memset(&req, 0, sizeof(req));
+    req.kind = ASX_CANCEL_USER;
+    req.origin_region = rid;
+    req.origin_task = ASX_INVALID_ID;
+    req.timestamp = 5u;
+    ASSERT_EQ(asx_cancel_request(t, &req), ASX_OK);
+}
+
+TEST(cancel_correctness_names_a_witness_that_is_not_its_tasks) {
+    asx_region_id rid;
+    asx_task_id t;
+    asx_task_slot *ts = NULL;
+    asx_oracle_result r;
+    uint32_t epoch;
+
+    /* The kernel's own witness is its task's. */
+    fresh();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &t), ASX_OK);
+    request_cancel(rid, t);
+    ASSERT_EQ(asx_task_slot_lookup(t, &ts), ASX_OK);
+    ASSERT_TRUE(ts->cancel_witness != ASX_INVALID_ID);
+    ASSERT_TRUE(all_pass());
+
+    /* The task's record moved to another epoch than its witness's. */
+    epoch = ts->cancel_epoch;
+    ts->cancel_epoch = epoch + 1u;
+    r = check("cancel_correctness");
+    ASSERT_EQ((int)r.verdict, (int)ASX_ORACLE_FAIL);
+    ASSERT_EQ(r.detail_count, 1u);
+    ASSERT_STR_EQ(r.message, "a cancel witness carries another epoch than its task's");
+    ts->cancel_epoch = epoch;
+    ASSERT_EQ((int)check("cancel_correctness").verdict, (int)ASX_ORACLE_PASS);
+
+    /* A witness that ran ahead of the phase its task is in. */
+    ASSERT_EQ(asx_cancel_witness_advance(ts->cancel_witness, ASX_CANCEL_PHASE_FINALIZING), ASX_OK);
+    r = check("cancel_correctness");
+    ASSERT_EQ((int)r.verdict, (int)ASX_ORACLE_FAIL);
+    ASSERT_STR_EQ(r.message, "a cancel witness is ahead of its task's cancel phase");
+    ts->cancel_phase = ASX_CANCEL_PHASE_FINALIZING;
+    ASSERT_EQ((int)check("cancel_correctness").verdict, (int)ASX_ORACLE_PASS);
+
+    /* A completed task that kept its witness (the kernel releases it at
+     * completion). */
+    ts->state = ASX_TASK_COMPLETED;
+    r = check("cancel_correctness");
+    ASSERT_EQ((int)r.verdict, (int)ASX_ORACLE_FAIL);
+    ASSERT_STR_EQ(r.message, "a completed task still holds an active cancel witness");
+    ASSERT_EQ(asx_cancel_witness_release(ts->cancel_witness), ASX_OK);
+    ASSERT_EQ((int)check("cancel_correctness").verdict, (int)ASX_ORACLE_PASS);
+}
+
+TEST(cancel_debt_names_a_requested_cancel_that_nothing_will_run) {
+    asx_region_id rid;
+    asx_task_id t;
+    asx_task_slot *ts = NULL;
+    asx_oracle_result r;
+
+    /* Without lab dispatch the sweep's idle handling delivers the cancel:
+     * the same state is not a violation, and the oracle says it did not look. */
+    fresh();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &t), ASX_OK);
+    request_cancel(rid, t);
+    ASSERT_EQ(asx_task_slot_lookup(t, &ts), ASX_OK);
+    ts->lab_scheduled = 0u;
+    r = check("cancel_debt");
+    ASSERT_EQ((int)r.verdict, (int)ASX_ORACLE_PASS);
+    ASSERT_TRUE(strstr(r.message, "no lab dispatch") != NULL);
+
+    /* Under lab dispatch the request scheduled the task. */
+    fresh();
+    ASSERT_EQ(asx_scheduler_use_lab_dispatch(1u), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &t), ASX_OK);
+    request_cancel(rid, t);
+    ASSERT_EQ(asx_task_slot_lookup(t, &ts), ASX_OK);
+    ASSERT_EQ((int)ts->state, (int)ASX_TASK_CANCEL_REQUESTED);
+    ASSERT_TRUE(ts->lab_scheduled != 0u);
+    ASSERT_TRUE(all_pass());
+
+    /* A wake that never arrived: not scheduled, not polled since, nothing armed. */
+    ts->lab_scheduled = 0u;
+    r = check("cancel_debt");
+    ASSERT_EQ((int)r.verdict, (int)ASX_ORACLE_FAIL);
+    ASSERT_EQ(r.detail_count, 1u);
+    ASSERT_STR_EQ(r.message, "a task has a cancel requested and nothing will run it");
+
+    /* Polled since, it is the task's own business; masked, it defers; armed
+     * with a timer, the timer runs it. */
+    ts->cancel_polled = 1u;
+    ASSERT_EQ((int)check("cancel_debt").verdict, (int)ASX_ORACLE_PASS);
+    ts->cancel_polled = 0u;
+    ts->mask_depth = 1u;
+    ASSERT_EQ((int)check("cancel_debt").verdict, (int)ASX_ORACLE_PASS);
+    ts->mask_depth = 0u;
+    ts->timer_armed = 1u;
+    ASSERT_EQ((int)check("cancel_debt").verdict, (int)ASX_ORACLE_PASS);
+    ts->timer_armed = 0u;
+    ASSERT_EQ((int)check("cancel_debt").verdict, (int)ASX_ORACLE_FAIL);
+}
+
 int main(void) {
     fprintf(stderr, "=== test_oracle ===\n");
     RUN_TEST(kernel_oracles_carry_rusts_registry_names_and_unknown_names_fail);
@@ -288,6 +398,8 @@ int main(void) {
     RUN_TEST(region_tree_names_a_second_root_and_an_unlisted_child);
     RUN_TEST(deadline_monotone_names_a_child_with_a_later_deadline_than_its_parent);
     RUN_TEST(cancellation_protocol_names_a_child_a_region_cancel_did_not_reach);
+    RUN_TEST(cancel_correctness_names_a_witness_that_is_not_its_tasks);
+    RUN_TEST(cancel_debt_names_a_requested_cancel_that_nothing_will_run);
     TEST_REPORT();
     return test_failures;
 }

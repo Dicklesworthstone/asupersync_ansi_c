@@ -91,7 +91,9 @@ typedef asx_oracle_result (*asx_oracle_fn)(const asx_lab *lab, void *ctx);
 /* Quiescence oracle: checks that no tasks remain active. */
 ASX_API asx_oracle_result asx_oracle_quiescence(const asx_lab *lab, void *ctx);
 
-/* Leak oracle: checks that all regions and obligations are resolved. */
+/* Leak oracle: checks that every live region is closed. Obligations are the
+ * obligation_leak oracle's (asx_oracle_obligation_leak): a closed region that
+ * holds a reserved one. */
 ASX_API asx_oracle_result asx_oracle_leak(const asx_lab *lab, void *ctx);
 
 /* Replay oracle: checks that two runs produce identical results. */
@@ -129,6 +131,17 @@ ASX_API asx_oracle_result asx_oracle_deadline_monotone(const asx_lab *lab, void 
  * not closed child of a region with a cancel requested has one too. */
 ASX_API asx_oracle_result asx_oracle_cancel_propagation(const asx_lab *lab, void *ctx);
 
+/* cancel_correctness: every active cancel witness is its task's own (same
+ * task, region and cancel epoch, a non-zero epoch, a phase not ahead of the
+ * task's), and no completed task still holds one. */
+ASX_API asx_oracle_result asx_oracle_cancel_correctness(const asx_lab *lab, void *ctx);
+
+/* cancel_debt: under lab dispatch, no task has a cancel requested and
+ * nothing left to run it (not scheduled, not polled since, not masked, no
+ * timer). Without lab dispatch the sweep's idle handling delivers the
+ * cancel and the oracle passes without looking. */
+ASX_API asx_oracle_result asx_oracle_cancel_debt(const asx_lab *lab, void *ctx);
+
 /* The kernel-state oracles are also reachable by Rust's registry name, for a
  * caller with no asx_lab (the conformance interpreter). The number of them. */
 ASX_API uint32_t asx_oracle_kernel_count(void);
@@ -138,8 +151,9 @@ ASX_API uint32_t asx_oracle_kernel_count(void);
 ASX_API const char *asx_oracle_kernel_name(uint32_t index);
 
 /* Run the named kernel-state oracle (task_leak, obligation_leak, quiescence,
- * finalizer, region_tree, deadline_monotone, cancellation_protocol). An
- * unknown or NULL name fails with the oracle name "unknown". */
+ * finalizer, region_tree, deadline_monotone, cancellation_protocol,
+ * cancel_correctness, cancel_debt). An unknown or NULL name fails with the
+ * oracle name "unknown". */
 ASX_API asx_oracle_result asx_oracle_check_named(const char *name);
 
 /* Render a replay result as JSON for retained diagnostics/artifacts. */

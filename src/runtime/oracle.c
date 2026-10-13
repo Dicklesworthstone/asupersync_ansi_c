@@ -12,6 +12,7 @@
  */
 
 #include "runtime_internal.h"
+#include <asx/core/cancel.h>
 #include <asx/core/transition.h>
 #include <asx/runtime/replay.h>
 #include <string.h>
@@ -243,6 +244,95 @@ static asx_oracle_result check_cancel_propagation(void) {
                           "every cancel reached its descendant regions", 0u);
 }
 
+/* Whether a task handle names slot `slot` of kernel `k` at `generation`. */
+static int oracle_names_task(const asx_kernel *k, asx_task_id id, uint32_t slot,
+                             uint16_t generation) {
+    return id != ASX_INVALID_ID && asx_handle_runtime_tag(id) == k->tag &&
+           (uint32_t)asx_handle_slot(id) == slot && asx_handle_generation(id) == generation;
+}
+
+/* Rust's cancel_correctness oracle validates the stream of witnesses a task's
+ * cancel produced (types/cancel.rs CancelWitness::validate_initial and
+ * validate_transition). The kernel keeps one witness per cancelled task, so
+ * what is checkable from state is: the first-witness rule (a non-zero epoch),
+ * the witness's identity against its task's record (the same task, region and
+ * epoch: validate_transition's TaskMismatch, RegionMismatch and EpochMismatch
+ * cases), that its phase is not ahead of the task's (a regression is the
+ * reverse), and that a completed task has released it. A witness the task
+ * record names that is no longer active is released and is not read. The
+ * scan covers the whole arena: a slot past the high-water mark is never
+ * alive. */
+static asx_oracle_result check_cancel_correctness(void) {
+    const asx_kernel *k = g_kernels[0];
+    const char *first = NULL;
+    uint32_t bad = 0;
+    uint32_t i;
+    for (i = 0; i < ASX_MAX_TASKS; i++) {
+        const asx_task_slot *t = &k->tasks[i];
+        asx_cancel_witness_info w;
+        const char *why = NULL;
+        /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
+        if (!t->alive || t->cancel_witness == ASX_INVALID_ID) continue;
+        if (asx_cancel_witness_info_get(t->cancel_witness, &w) != ASX_OK) continue;
+        if (asx_task_is_terminal(t->state)) {
+            why = "a completed task still holds an active cancel witness";
+        } else if (asx_cancel_witness_validate_initial(&w) != ASX_OK) {
+            why = "a cancel witness carries epoch 0";
+        } else if (!oracle_names_task(k, w.task, i, t->generation)) {
+            why = "a cancel witness names another task";
+        } else if (w.region != t->region) {
+            why = "a cancel witness names another region than its task's";
+        } else if (w.epoch != t->cancel_epoch) {
+            why = "a cancel witness carries another epoch than its task's";
+        } else if ((int)w.phase > (int)t->cancel_phase) {
+            why = "a cancel witness is ahead of its task's cancel phase";
+        }
+        if (why != NULL) {
+            bad++;
+            if (first == NULL) first = why;
+        }
+    }
+    if (bad != 0u) return oracle_verdict(ASX_ORACLE_FAIL, "cancel_correctness", first, bad);
+    return oracle_verdict(ASX_ORACLE_PASS, "cancel_correctness",
+                          "every active cancel witness matches its task", 0u);
+}
+
+/* Cancel debt, as far as state can say it: a cancel was requested of a task
+ * and nothing is left that will deliver it. Under lab dispatch a request
+ * schedules its task (the waker of the task, lab/runtime.rs), so a task whose
+ * record holds a request it has not acknowledged (CANCEL_REQUESTED: a budget
+ * cancel the task raised on itself is not one, it is not on the record), that
+ * has not been polled since, is not masked, and is neither scheduled, in a
+ * poll, awaiting an admission or an open, nor armed with a timer, is a lost
+ * wake: the cancel is owed and nobody will pay it. The sweep scheduler's idle
+ * handling unparks such a task on its own (sched_unpark_cancelled), so there
+ * the state is not a violation and the oracle does not look. */
+static asx_oracle_result check_cancel_debt(void) {
+    const asx_kernel *k = g_kernels[0];
+    uint32_t bad = 0;
+    uint32_t i;
+    if (!asx_lab_dispatch_active()) {
+        return oracle_verdict(ASX_ORACLE_PASS, "cancel_debt",
+                              "no lab dispatch: the sweep's idle handling delivers a cancel", 0u);
+    }
+    for (i = 0; i < ASX_MAX_TASKS; i++) {
+        const asx_task_slot *t = &k->tasks[i];
+        /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
+        if (!t->alive || t->state != ASX_TASK_CANCEL_REQUESTED) continue;
+        if (t->mask_depth != 0u || t->cancel_polled || t->in_poll) continue;
+        if (t->lab_scheduled || t->lab_admission_pending) continue;
+        if (t->timer_armed || t->deadline_timer_armed) continue;
+        if (t->region_wait == ASX_REGION_WAIT_OPEN) continue;
+        bad++;
+    }
+    if (bad != 0u) {
+        return oracle_verdict(ASX_ORACLE_FAIL, "cancel_debt",
+                              "a task has a cancel requested and nothing will run it", bad);
+    }
+    return oracle_verdict(ASX_ORACLE_PASS, "cancel_debt",
+                          "every requested cancel has a task that will see it", 0u);
+}
+
 /* The lab contract the older oracles have: NULL fails, an uninitialized lab
  * is inconclusive. The state itself is the runtime's, not the lab's. */
 static int oracle_lab_refused(const asx_lab *lab, const char *name, asx_oracle_result *out) {
@@ -306,6 +396,20 @@ asx_oracle_result asx_oracle_cancel_propagation(const asx_lab *lab, void *ctx) {
     return check_cancel_propagation();
 }
 
+asx_oracle_result asx_oracle_cancel_correctness(const asx_lab *lab, void *ctx) {
+    asx_oracle_result r;
+    (void)ctx;
+    if (oracle_lab_refused(lab, "cancel_correctness", &r)) return r;
+    return check_cancel_correctness();
+}
+
+asx_oracle_result asx_oracle_cancel_debt(const asx_lab *lab, void *ctx) {
+    asx_oracle_result r;
+    (void)ctx;
+    if (oracle_lab_refused(lab, "cancel_debt", &r)) return r;
+    return check_cancel_debt();
+}
+
 typedef struct {
     const char *name;
     asx_oracle_result (*check)(void);
@@ -319,6 +423,8 @@ static const oracle_entry g_oracle_table[] = {
     {"region_tree", check_region_tree},
     {"deadline_monotone", check_deadline_monotone},
     {"cancellation_protocol", check_cancel_propagation},
+    {"cancel_correctness", check_cancel_correctness},
+    {"cancel_debt", check_cancel_debt},
 };
 
 #define ORACLE_TABLE_COUNT (sizeof(g_oracle_table) / sizeof(g_oracle_table[0]))
