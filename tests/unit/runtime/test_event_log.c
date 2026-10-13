@@ -121,6 +121,68 @@ TEST(hash_chain_differs_for_different_events) {
     ASSERT_NE(h1, h2);
 }
 
+/* The chain is folded lazily (when read, or when the full log must take an
+ * event it cannot keep): its value is FNV-1a, byte by byte, over each
+ * event's kind (u32), entity (u64) and sequence (u32), little-endian,
+ * from the FNV offset basis, however many events there are, wherever it is
+ * read, including zero ids and full-width ones. */
+static uint64_t chain_ref_le(uint64_t hash, uint64_t v, uint32_t width) {
+    uint32_t i;
+    for (i = 0; i < width; i++) {
+        hash ^= (v >> (8u * i)) & 0xFFu;
+        hash *= 1099511628211ULL;
+    }
+    return hash;
+}
+
+static asx_event_kind chain_kind(uint32_t i) {
+    return (i % 4u == 0u)   ? ASX_EVENT_TASK_SPAWN
+           : (i % 4u == 1u) ? ASX_EVENT_TASK_POLL
+           : (i % 4u == 2u) ? ASX_EVENT_TASK_COMPLETE
+                            : ASX_EVENT_REGION_OPEN;
+}
+
+static uint64_t chain_entity(uint32_t i) {
+    return (i % 3u == 0u) ? 0u : (uint64_t)i * 0x9E3779B97F4A7C15ULL;
+}
+
+TEST(hash_chain_matches_byte_reference_across_capacity_and_reads) {
+    const uint32_t cap = (uint32_t)ASX_EVENT_LOG_CAPACITY;
+    const uint32_t total = 2u * cap + 7u;
+    uint64_t expected = 14695981039346656037ULL;
+    uint32_t i;
+
+    asx_runtime_reset();
+    asx_event_log_reset();
+    for (i = 0; i < total; i++) {
+        asx_event_emit(chain_kind(i), chain_entity(i), (uint64_t)i, ASX_OK);
+        expected = chain_ref_le(expected, (uint32_t)chain_kind(i), 4u);
+        expected = chain_ref_le(expected, chain_entity(i), 8u);
+        expected = chain_ref_le(expected, i, 4u);
+        /* read just before, at and just after the log fills, then at
+         * intervals and at the end (a read changes nothing) */
+        if (i == 0u || i + 1u == cap - 1u || i + 1u == cap || i + 1u == cap + 1u ||
+            i + 1u == 2u * cap || i % 61u == 0u || i + 1u == total) {
+            ASSERT_EQ(asx_event_hash_chain(), expected);
+            ASSERT_EQ(asx_event_hash_chain(), expected);
+        }
+    }
+    ASSERT_EQ(asx_event_log_count(), total);
+    ASSERT_EQ(asx_event_hash_chain(), expected);
+
+    /* the same run never read until the end */
+    asx_event_log_reset();
+    for (i = 0; i < total; i++) asx_event_emit(chain_kind(i), chain_entity(i), (uint64_t)i, ASX_OK);
+    ASSERT_EQ(asx_event_hash_chain(), expected);
+
+    /* a reset forgets the events not yet folded */
+    asx_event_log_reset();
+    ASSERT_EQ(asx_event_hash_chain(), 14695981039346656037ULL);
+    asx_event_emit(ASX_EVENT_REGION_OPEN, 1u, 0u, ASX_OK);
+    asx_event_log_reset();
+    ASSERT_EQ(asx_event_hash_chain(), 14695981039346656037ULL);
+}
+
 /* ------------------------------------------------------------------ */
 /* Kind string table                                                   */
 /* ------------------------------------------------------------------ */
@@ -451,6 +513,7 @@ int main(void) {
     RUN_TEST(hash_chain_is_deterministic);
     asx_runtime_reset();
     RUN_TEST(hash_chain_differs_for_different_events);
+    RUN_TEST(hash_chain_matches_byte_reference_across_capacity_and_reads);
     asx_runtime_reset();
     RUN_TEST(event_kind_str_known);
     asx_runtime_reset();

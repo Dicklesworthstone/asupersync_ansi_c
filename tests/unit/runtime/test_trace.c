@@ -7,6 +7,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../../../src/runtime/fnv_fold.h"
 #include "../../test_harness.h"
 #include "../../test_io_fd.h"
 #include <asx/asx.h>
@@ -1092,6 +1093,49 @@ TEST(trace_digest_reads_at_ring_boundaries_match_reference) {
     }
 }
 
+/* The runtime's digests fold fields with fnv_fold.h (src/runtime): it owes
+ * multiplications by the prime and pays them with one multiply before the
+ * next nonzero byte. Any mix of widths 1..8 and of zero, small, wide and
+ * high-byte-only values, read at any point, must equal the byte loop; a run
+ * of zero fields longer than the owed bound exercises its normalization. */
+TEST(fnv_fold_matches_the_byte_loop_for_any_field_sequence) {
+    asx_fnv_fold f;
+    uint64_t model = 0x517cc1b727220a95ULL;
+    uint64_t x = 0x243F6A8885A308D3ULL;
+    uint32_t i;
+    uint32_t j;
+
+    asx_fnv_fold_init(&f, model);
+    ASSERT_EQ(asx_fnv_fold_value(&f), model);
+    for (i = 0u; i < 4000u; i++) {
+        uint32_t width = 1u + (uint32_t)((x >> 33) % 8u);
+        uint64_t v;
+        uint32_t shape = (uint32_t)((x >> 20) % 6u);
+
+        x = x * 6364136223846793005ULL + 1442695040888963407ULL;
+        v = x ^ (x >> 29);
+        if (width < 8u) v &= ((uint64_t)1 << (8u * width)) - 1u;
+        if (shape == 0u) v = 0u;                                      /* a zero field */
+        if (shape == 1u) v &= 0xFFu;                                  /* one low byte */
+        if (shape == 2u) v &= (uint64_t)0xFFu << (8u * (width - 1u)); /* only the top byte */
+        if (shape == 3u) v = (i % 2u == 0u) ? 0u : v;                 /* alternating zeros */
+        asx_fnv_fold_le(&f, v, width);
+        model = fnv1a_le_reference(model, v, width);
+        if (i % 7u == 0u || shape == 0u) { ASSERT_EQ(asx_fnv_fold_value(&f), model); }
+    }
+    ASSERT_EQ(asx_fnv_fold_value(&f), model);
+
+    /* 40 all-zero 8-byte fields: more zero bytes than ASX_FNV_MAX_OWED */
+    for (j = 0u; j < 40u; j++) {
+        asx_fnv_fold_le(&f, 0u, 8u);
+        model = fnv1a_le_reference(model, 0u, 8u);
+        ASSERT_EQ(asx_fnv_fold_value(&f), model);
+    }
+    asx_fnv_fold_le(&f, 0x0100u, 4u);
+    model = fnv1a_le_reference(model, 0x0100u, 4u);
+    ASSERT_EQ(asx_fnv_fold_value(&f), model);
+}
+
 TEST(trace_kind_totals_exact_beyond_capacity) {
     uint32_t i;
 
@@ -1538,6 +1582,7 @@ int main(void) {
     RUN_TEST(trace_digest_is_fnv1a_over_le_event_fields);
     RUN_TEST(trace_digest_pinned_values_for_long_sequence);
     RUN_TEST(trace_digest_reads_at_ring_boundaries_match_reference);
+    RUN_TEST(fnv_fold_matches_the_byte_loop_for_any_field_sequence);
     RUN_TEST(trace_kind_totals_exact_beyond_capacity);
     RUN_TEST(trace_truncated_export_roundtrip_and_continuity);
     RUN_TEST(trace_import_rejects_inconsistent_truncation);

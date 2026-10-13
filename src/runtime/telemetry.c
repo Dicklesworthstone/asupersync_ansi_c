@@ -11,6 +11,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "fnv_fold.h"
 #define ASX_INTERNAL_TRACE_FAMILY_ACCESS 1
 #include <asx/runtime/telemetry.h>
 #include <asx/runtime/trace.h>
@@ -21,49 +22,11 @@
  * ------------------------------------------------------------------- */
 
 static asx_telemetry_tier g_tier = ASX_TELEMETRY_FORENSIC;
-static uint64_t g_rolling_digest = 0x517cc1b727220a95ULL;
+#define ASX_TELEMETRY_DIGEST_SEED 0x517cc1b727220a95ULL
+static asx_fnv_fold g_rolling_digest = {ASX_TELEMETRY_DIGEST_SEED, 0u};
 static uint32_t g_emitted_count;
 static uint32_t g_filtered_count;
 static uint32_t g_rolling_sequence;
-
-/* -------------------------------------------------------------------
- * FNV-1a helpers (local copy to avoid cross-TU dependency)
- * ------------------------------------------------------------------- */
-
-static uint64_t telem_fnv1a_mix(uint64_t hash, const void *data, uint32_t len) {
-    const uint8_t *p = (const uint8_t *)data;
-    uint32_t i;
-
-    for (i = 0; i < len; i++) {
-        hash ^= (uint64_t)p[i];
-        hash *= 0x00000100000001B3ULL;
-    }
-    return hash;
-}
-
-/* Endian-safe FNV-1a helpers — serialize to little-endian bytes before
- * hashing so that digests are identical on LE and BE platforms (bd-3h6). */
-static uint64_t telem_fnv1a_mix_u32(uint64_t hash, uint32_t v) {
-    uint8_t bytes[4];
-    bytes[0] = (uint8_t)(v & 0xFFu);
-    bytes[1] = (uint8_t)((v >> 8) & 0xFFu);
-    bytes[2] = (uint8_t)((v >> 16) & 0xFFu);
-    bytes[3] = (uint8_t)((v >> 24) & 0xFFu);
-    return telem_fnv1a_mix(hash, bytes, 4);
-}
-
-static uint64_t telem_fnv1a_mix_u64(uint64_t hash, uint64_t v) {
-    uint8_t bytes[8];
-    bytes[0] = (uint8_t)(v & 0xFFu);
-    bytes[1] = (uint8_t)((v >> 8) & 0xFFu);
-    bytes[2] = (uint8_t)((v >> 16) & 0xFFu);
-    bytes[3] = (uint8_t)((v >> 24) & 0xFFu);
-    bytes[4] = (uint8_t)((v >> 32) & 0xFFu);
-    bytes[5] = (uint8_t)((v >> 40) & 0xFFu);
-    bytes[6] = (uint8_t)((v >> 48) & 0xFFu);
-    bytes[7] = (uint8_t)((v >> 56) & 0xFFu);
-    return telem_fnv1a_mix(hash, bytes, 8);
-}
 
 /* -------------------------------------------------------------------
  * Tier retention policy
@@ -144,10 +107,10 @@ void asx_telemetry_emit(asx_trace_event_kind kind, uint64_t entity_id, uint64_t 
     /* Always update rolling digest (tier-independent).
      * Use endian-safe helpers so digest is identical on LE/BE (bd-3h6). */
     k = (uint32_t)kind;
-    g_rolling_digest = telem_fnv1a_mix_u32(g_rolling_digest, g_rolling_sequence);
-    g_rolling_digest = telem_fnv1a_mix_u32(g_rolling_digest, k);
-    g_rolling_digest = telem_fnv1a_mix_u64(g_rolling_digest, entity_id);
-    g_rolling_digest = telem_fnv1a_mix_u64(g_rolling_digest, aux);
+    asx_fnv_fold_le(&g_rolling_digest, g_rolling_sequence, 4u);
+    asx_fnv_fold_le(&g_rolling_digest, k, 4u);
+    asx_fnv_fold_le(&g_rolling_digest, entity_id, 8u);
+    asx_fnv_fold_le(&g_rolling_digest, aux, 8u);
     if (g_rolling_sequence < UINT32_MAX) g_rolling_sequence++;
     if (g_emitted_count < UINT32_MAX) g_emitted_count++;
 
@@ -163,10 +126,10 @@ void asx_telemetry_emit(asx_trace_event_kind kind, uint64_t entity_id, uint64_t 
  * Rolling digest
  * ------------------------------------------------------------------- */
 
-uint64_t asx_telemetry_digest(void) { return g_rolling_digest; }
+uint64_t asx_telemetry_digest(void) { return asx_fnv_fold_value(&g_rolling_digest); }
 
 void asx_telemetry_digest_reset(void) {
-    g_rolling_digest = 0x517cc1b727220a95ULL;
+    asx_fnv_fold_init(&g_rolling_digest, ASX_TELEMETRY_DIGEST_SEED);
     g_rolling_sequence = 0;
 }
 
@@ -184,7 +147,7 @@ uint32_t asx_telemetry_filtered_count(void) { return g_filtered_count; }
 
 void asx_telemetry_reset(void) {
     g_tier = ASX_TELEMETRY_FORENSIC;
-    g_rolling_digest = 0x517cc1b727220a95ULL;
+    asx_fnv_fold_init(&g_rolling_digest, ASX_TELEMETRY_DIGEST_SEED);
     g_emitted_count = 0;
     g_filtered_count = 0;
     g_rolling_sequence = 0;

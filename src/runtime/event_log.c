@@ -10,6 +10,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "fnv_fold.h"
 #include <asx/asx_status.h>
 #include <asx/core/ghost.h>
 #include <asx/runtime/event.h>
@@ -20,7 +21,6 @@
 /* ------------------------------------------------------------------ */
 
 #define FNV_OFFSET 14695981039346656037ULL
-#define FNV_PRIME 1099511628211ULL
 
 /* ------------------------------------------------------------------ */
 /* Global state                                                        */
@@ -28,7 +28,16 @@
 
 static asx_event_record g_event_log[ASX_EVENT_LOG_CAPACITY];
 static uint32_t g_event_count;
-static uint64_t g_hash_chain;
+
+/* The hash chain is FNV-1a over each event's (kind, entity, sequence), in
+ * order, and covers every event emitted. It is folded lazily: an event the
+ * log keeps is folded when the chain is read or when the log is full and
+ * the next event, which it cannot keep, must be folded first and the kept
+ * ones before it. g_hash_folded of the kept events are in g_hash_chain. A
+ * run that never reads the chain pays nothing for it; the value read is the
+ * one an eager fold at each emit gives (test_event_log). */
+static asx_fnv_fold g_hash_chain;
+static uint32_t g_hash_folded;
 
 /* Planted memory bug (bd-9kll.2.22), compiled only in the gate build
  * tests/gates/test_conformance_monitors.sh: every logged event reads one
@@ -55,27 +64,26 @@ static uint32_t g_mutant_spawns;
 #endif
 
 /* ------------------------------------------------------------------ */
-/* Internal: hash a single byte into the chain                         */
+/* Internal: fold events into the chain                                */
 /* ------------------------------------------------------------------ */
 
-static uint64_t fnv_byte(uint64_t h, unsigned char b) {
-    h ^= (uint64_t)b;
-    h *= FNV_PRIME;
-    return h;
+/* The chain's field order is part of its contract: kind, entity, sequence,
+ * each little-endian at its width. */
+static void chain_fold(asx_event_kind kind, uint64_t entity_id, uint32_t sequence) {
+    asx_fnv_fold_le(&g_hash_chain, (uint32_t)kind, 4u);
+    asx_fnv_fold_le(&g_hash_chain, entity_id, 8u);
+    asx_fnv_fold_le(&g_hash_chain, sequence, 4u);
 }
 
-static uint64_t fnv_u32(uint64_t h, uint32_t v) {
-    h = fnv_byte(h, (unsigned char)(v & 0xFFu));
-    h = fnv_byte(h, (unsigned char)((v >> 8) & 0xFFu));
-    h = fnv_byte(h, (unsigned char)((v >> 16) & 0xFFu));
-    h = fnv_byte(h, (unsigned char)((v >> 24) & 0xFFu));
-    return h;
-}
-
-static uint64_t fnv_u64(uint64_t h, uint64_t v) {
-    h = fnv_u32(h, (uint32_t)(v & 0xFFFFFFFFu));
-    h = fnv_u32(h, (uint32_t)((v >> 32) & 0xFFFFFFFFu));
-    return h;
+/* Fold the kept events the chain has not taken yet. */
+static void chain_settle(void) {
+    uint32_t kept = g_event_count < ASX_EVENT_LOG_CAPACITY ? g_event_count : ASX_EVENT_LOG_CAPACITY;
+    while (g_hash_folded < kept) {
+        /* ASX_CHECKPOINT_WAIVER("bounded: at most ASX_EVENT_LOG_CAPACITY kept events") */
+        const asx_event_record *e = &g_event_log[g_hash_folded];
+        chain_fold(e->kind, e->entity_id, e->sequence);
+        g_hash_folded++;
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -89,7 +97,8 @@ void asx_event_log_reset(void) {
 
     memset(g_event_log, 0, (size_t)used * sizeof(g_event_log[0]));
     g_event_count = 0;
-    g_hash_chain = FNV_OFFSET;
+    asx_fnv_fold_init(&g_hash_chain, FNV_OFFSET);
+    g_hash_folded = 0u;
 #ifdef ASX_MUTANT_SPAWN_ORDINAL_CANCEL
     g_mutant_spawns = 0u;
 #endif
@@ -149,12 +158,12 @@ uint32_t asx_event_emit(asx_event_kind kind, uint64_t entity_id, uint64_t parent
         e->parent_id = parent_id;
         e->sequence = seq;
         e->status = status;
+    } else {
+        /* The log is full and cannot keep this event, but the hash chain
+         * always advances: it takes what the log holds, then this event. */
+        chain_settle();
+        chain_fold(kind, entity_id, seq);
     }
-
-    /* Hash chain always advances even if ring is full */
-    g_hash_chain = fnv_u32(g_hash_chain, (uint32_t)kind);
-    g_hash_chain = fnv_u64(g_hash_chain, entity_id);
-    g_hash_chain = fnv_u32(g_hash_chain, seq);
 
     /* Saturate at UINT32_MAX */
     if (g_event_count < UINT32_MAX) { g_event_count++; }
@@ -172,7 +181,10 @@ int asx_event_log_get(uint32_t index, asx_event_record *out) {
     return 1;
 }
 
-uint64_t asx_event_hash_chain(void) { return g_hash_chain; }
+uint64_t asx_event_hash_chain(void) {
+    chain_settle();
+    return asx_fnv_fold_value(&g_hash_chain);
+}
 
 /* ------------------------------------------------------------------ */
 /* Event kind string table                                             */
@@ -260,6 +272,7 @@ asx_status asx_event_replay_verify(const asx_event_record *expected, uint32_t ex
     uint32_t i;
     uint32_t window;
     uint32_t compare_limit;
+    uint64_t actual_chain;
 
     if (divergence == NULL) return ASX_E_INVALID_ARGUMENT;
     memset(divergence, 0, sizeof(*divergence));
@@ -269,12 +282,13 @@ asx_status asx_event_replay_verify(const asx_event_record *expected, uint32_t ex
     /* The log stores the first ASX_EVENT_LOG_CAPACITY events; the count
      * and the hash chain cover every event emitted. */
     window = g_event_count < ASX_EVENT_LOG_CAPACITY ? g_event_count : ASX_EVENT_LOG_CAPACITY;
+    actual_chain = asx_event_hash_chain();
     divergence->expected_count = expected_total;
     divergence->actual_count = g_event_count;
     divergence->expected_chain = expected_chain;
-    divergence->actual_chain = g_hash_chain;
+    divergence->actual_chain = actual_chain;
     divergence->count_mismatch = expected_total != g_event_count;
-    divergence->chain_mismatch = expected_chain != g_hash_chain;
+    divergence->chain_mismatch = expected_chain != actual_chain;
 
     compare_limit = expected_events < window ? expected_events : window;
     divergence->compared = compare_limit;

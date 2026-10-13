@@ -15,6 +15,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "fnv_fold.h"
 #include "runtime_internal.h"
 #include <asx/asx.h>
 #include <asx/platform/atomics.h>
@@ -110,50 +111,41 @@ static uint64_t fnv1a_mix(uint64_t hash, const void *data, uint32_t len) {
     return hash;
 }
 
-/* ASX_TRACE_FNV_PRIME^k mod 2^64 for k = 0..8. */
-static const uint64_t g_fnv_prime_pow[9] = {
-    0x1ULL,
-    0x100000001b3ULL,
-    0x366000002e329ULL,
-    0x8a97b0004e7feabULL,
-    0x9ffaac085635bc91ULL,
-    0xcaee32a7d4f6a63ULL,
-    0xdc966432edf1c639ULL,
-    0xc5527b8a51d3d2dbULL,
-    0x1efac7090aef4a21ULL,
+/* ASX_FNV_PRIME^k mod 2^64 for k = 0 .. ASX_FNV_MAX_OWED: the multiplies
+ * a fold owes (fnv_fold.h, which every rolling digest of the runtime
+ * folds with). */
+const uint64_t asx_fnv_prime_pow_internal[ASX_FNV_MAX_OWED + 1u] = {
+    0x0000000000000001ULL, 0x00000100000001b3ULL, 0x000366000002e329ULL, 0x08a97b0004e7feabULL,
+    0x9ffaac085635bc91ULL, 0x0caee32a7d4f6a63ULL, 0xdc966432edf1c639ULL, 0xc5527b8a51d3d2dbULL,
+    0x1efac7090aef4a21ULL, 0x936a555d949af613ULL, 0x18a5210383502249ULL, 0x30b961f8212a420bULL,
+    0xf54383a05ace38b1ULL, 0x8ff15a7a4c6a54c3ULL, 0x017180cfd8ae0759ULL, 0x21e53a2d2fb67c3bULL,
+    0x4efe15c813151841ULL, 0x4ed743f86cd83673ULL, 0xcffef220f3648569ULL, 0xd2bad6fd93ceb16bULL,
+    0xe22cbbe2283778d1ULL, 0x897c124a56424b23ULL, 0xe01e375092a5ac79ULL, 0x790476e92f84119bULL,
+    0x26a7a93bbd69ea61ULL, 0x18cef182daf942d3ULL, 0x20e7345a158c8c89ULL, 0x756a7e129dd2cccbULL,
+    0x56c104a22d31fcf1ULL, 0x9bf7d092cbf0cd83ULL, 0xf6e4ec708a2d3599ULL, 0xb4335c3acad212fbULL,
+    0x0558b2e6a2f64081ULL,
 };
 
-/* FNV-1a over the `width` little-endian bytes of v. Every event is
- * folded as it is emitted, so this is on the scheduler's hot path, and
- * an FNV step is a serial xor-multiply. A zero byte's step is a bare
- * multiply by the prime, so the run of zero high bytes (most sequences,
- * kinds and aux values have one) folds as one multiply by a power of the
- * prime: the same digest as the byte loop, in fewer serial steps
- * (test_trace's trace_digest_is_fnv1a_over_le_event_fields checks it). */
-static uint64_t fnv1a_mix_le(uint64_t hash, uint64_t v, uint32_t width) {
-    while (v != 0u) {
-        hash = (hash ^ (v & 0xFFu)) * ASX_TRACE_FNV_PRIME;
-        v >>= 8;
-        width--;
-    }
-    return hash * g_fnv_prime_pow[width];
-}
-
-/* Fold one event into a digest. The field order is part of the digest
- * contract (ASX_TRACE_SCHEMA_DIGEST_EVENT_FIELDS); it must not change. */
-static uint64_t trace_digest_fold(uint64_t hash, const asx_trace_event *e) {
-    hash = fnv1a_mix_le(hash, e->sequence, 4u);
-    hash = fnv1a_mix_le(hash, (uint32_t)e->kind, 4u);
-    hash = fnv1a_mix_le(hash, e->entity_id, 8u);
-    hash = fnv1a_mix_le(hash, e->aux, 8u);
-    return hash;
+/* Fold one event into a digest. Every event is folded as it leaves the
+ * ring, so this is on the scheduler's hot path; fnv_fold.h folds the four
+ * fixed-width fields as FNV-1a over their little-endian bytes without
+ * formatting them and with one serial step per nonzero byte (test_trace's
+ * trace_digest_is_fnv1a_over_le_event_fields checks the value against a
+ * byte loop). The field order is part of the digest contract
+ * (ASX_TRACE_SCHEMA_DIGEST_EVENT_FIELDS); it must not change. */
+static void trace_digest_fold(asx_fnv_fold *f, const asx_trace_event *e) {
+    asx_fnv_fold_le(f, e->sequence, 4u);
+    asx_fnv_fold_le(f, (uint32_t)e->kind, 4u);
+    asx_fnv_fold_le(f, e->entity_id, 8u);
+    asx_fnv_fold_le(f, e->aux, 8u);
 }
 
 static uint64_t trace_digest_of(const asx_trace_event *events, uint32_t count) {
-    uint64_t hash = ASX_TRACE_DIGEST_SEED;
+    asx_fnv_fold f;
     uint32_t i;
-    for (i = 0; i < count; i++) hash = trace_digest_fold(hash, &events[i]);
-    return hash;
+    asx_fnv_fold_init(&f, ASX_TRACE_DIGEST_SEED);
+    for (i = 0; i < count; i++) trace_digest_fold(&f, &events[i]);
+    return asx_fnv_fold_value(&f);
 }
 
 /* -------------------------------------------------------------------
@@ -180,7 +172,8 @@ static uint64_t trace_digest_of(const asx_trace_event *events, uint32_t count) {
 static asx_trace_event g_trace_ring[ASX_TRACE_CAPACITY];
 static uint64_t g_trace_emitted;
 static uint64_t g_trace_folded;
-static uint64_t g_trace_digest_state = ASX_TRACE_DIGEST_SEED; /* over [0, g_trace_folded) */
+/* over [0, g_trace_folded); the multiplies it owes are paid by the read */
+static asx_fnv_fold g_trace_digest = {ASX_TRACE_DIGEST_SEED, 0u};
 static uint64_t g_trace_kind_totals[ASX_TRACE_KIND_SLOTS];
 static asx_trace_observer_fn g_trace_observer;
 static void *g_trace_observer_ctx;
@@ -217,9 +210,6 @@ static void trace_record(asx_trace_event_kind kind, uint64_t entity_id, uint64_t
                          const asx_trace_payload *payload) {
     static const asx_trace_payload none = {0};
     asx_trace_event *e;
-    asx_trace_event copy;
-    asx_trace_observer_fn observer = NULL;
-    void *observer_ctx = NULL;
     uint32_t slot;
 
     trace_lock();
@@ -227,7 +217,7 @@ static void trace_record(asx_trace_event_kind kind, uint64_t entity_id, uint64_t
     if (g_trace_emitted - g_trace_folded >= ASX_TRACE_CAPACITY) {
         /* The ring holds ASX_TRACE_CAPACITY unfolded events, and this slot
          * holds the oldest: fold it before it is overwritten. */
-        g_trace_digest_state = trace_digest_fold(g_trace_digest_state, &g_trace_ring[slot]);
+        trace_digest_fold(&g_trace_digest, &g_trace_ring[slot]);
         g_trace_folded++;
     }
     e = &g_trace_ring[slot];
@@ -237,20 +227,19 @@ static void trace_record(asx_trace_event_kind kind, uint64_t entity_id, uint64_t
     e->aux = aux;
     if ((uint32_t)kind < ASX_TRACE_KIND_SLOTS) g_trace_kind_totals[(uint32_t)kind]++;
     g_trace_emitted++;
-    copy = *e;
     if (g_trace_observer != NULL && !g_trace_observing) {
-        observer = g_trace_observer;
-        observer_ctx = g_trace_observer_ctx;
+        /* Only an observed event is copied. The observer runs outside the
+         * lock: one that emits records its own events. */
+        asx_trace_event copy = *e;
+        asx_trace_observer_fn observer = g_trace_observer;
+        void *observer_ctx = g_trace_observer_ctx;
         g_trace_observing = 1;
-    }
-    trace_unlock();
-    /* Outside the lock: an observer that emits records its own events. */
-    if (observer != NULL) {
+        trace_unlock();
         observer(observer_ctx, &copy, payload != NULL ? payload : &none);
         trace_lock();
         g_trace_observing = 0;
-        trace_unlock();
     }
+    trace_unlock();
 }
 
 void asx_trace_emit_payload_internal(asx_trace_event_kind kind, uint64_t entity_id, uint64_t aux,
@@ -314,7 +303,7 @@ int asx_trace_event_get_seq(uint64_t seq, asx_trace_event *out) {
 void asx_trace_reset(void) {
     g_trace_emitted = 0u;
     g_trace_folded = 0u;
-    g_trace_digest_state = ASX_TRACE_DIGEST_SEED;
+    asx_fnv_fold_init(&g_trace_digest, ASX_TRACE_DIGEST_SEED);
     memset(g_trace_kind_totals, 0, sizeof(g_trace_kind_totals));
 }
 
@@ -326,10 +315,10 @@ static uint64_t trace_digest_settle(void) {
         /* bounded: at most ASX_TRACE_CAPACITY events are ever unfolded */
         const asx_trace_event *oldest = &g_trace_ring[g_trace_folded % ASX_TRACE_CAPACITY];
 
-        g_trace_digest_state = trace_digest_fold(g_trace_digest_state, oldest);
+        trace_digest_fold(&g_trace_digest, oldest);
         g_trace_folded++;
     }
-    return g_trace_digest_state;
+    return asx_fnv_fold_value(&g_trace_digest);
 }
 
 static uint64_t trace_digest_now(void) {

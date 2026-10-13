@@ -12,6 +12,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "fnv_fold.h"
 #include <asx/core/ghost.h>
 #include <asx/runtime/hindsight.h>
 #define ASX_INTERNAL_TRACE_FAMILY_ACCESS 1
@@ -29,54 +30,40 @@
 
 #define ASX_HINDSIGHT_DIGEST_SEED 0x517cc1b727220a95ULL
 
-static uint64_t hs_fnv1a_mix(uint64_t hash, const void *data, uint32_t len) {
-    const uint8_t *p = (const uint8_t *)data;
-    uint32_t i;
-
-    for (i = 0; i < len; i++) {
-        hash ^= (uint64_t)p[i];
-        hash *= 0x00000100000001B3ULL;
-    }
-    return hash;
-}
-
-static uint64_t hs_fnv1a_mix_u32(uint64_t hash, uint32_t v) {
-    uint8_t bytes[4];
-    bytes[0] = (uint8_t)(v & 0xFFu);
-    bytes[1] = (uint8_t)((v >> 8) & 0xFFu);
-    bytes[2] = (uint8_t)((v >> 16) & 0xFFu);
-    bytes[3] = (uint8_t)((v >> 24) & 0xFFu);
-    return hs_fnv1a_mix(hash, bytes, 4);
-}
-
-static uint64_t hs_fnv1a_mix_u64(uint64_t hash, uint64_t v) {
-    uint8_t bytes[8];
-    bytes[0] = (uint8_t)(v & 0xFFu);
-    bytes[1] = (uint8_t)((v >> 8) & 0xFFu);
-    bytes[2] = (uint8_t)((v >> 16) & 0xFFu);
-    bytes[3] = (uint8_t)((v >> 24) & 0xFFu);
-    bytes[4] = (uint8_t)((v >> 32) & 0xFFu);
-    bytes[5] = (uint8_t)((v >> 40) & 0xFFu);
-    bytes[6] = (uint8_t)((v >> 48) & 0xFFu);
-    bytes[7] = (uint8_t)((v >> 56) & 0xFFu);
-    return hs_fnv1a_mix(hash, bytes, 8);
+/* One event's fields, FNV-1a over each one's little-endian bytes in this
+ * order (fnv_fold.h folds them without formatting them into bytes, the
+ * same value as a byte loop). The field order is part of the digest
+ * contract. */
+static void hs_digest_fold(asx_fnv_fold *f, const asx_hindsight_event *e) {
+    asx_fnv_fold_le(f, e->sequence, 4u);
+    asx_fnv_fold_le(f, (uint32_t)e->kind, 4u);
+    asx_fnv_fold_le(f, e->entity_id, 8u);
+    asx_fnv_fold_le(f, e->observed_value, 8u);
+    asx_fnv_fold_le(f, e->trace_seq, 4u);
 }
 
 /* -------------------------------------------------------------------
  * Ring buffer state
  *
  * The ring keeps the most recent ASX_HINDSIGHT_CAPACITY events. The
- * digest is rolling: every logged event is folded into it as it is
- * logged, so it covers the whole log however many events the ring has
- * already overwritten. For a log that fits in the ring it equals a fold
- * over the stored events.
+ * digest is rolling: every logged event is folded into it, so it covers
+ * the whole log however many events the ring has already overwritten.
+ * For a log that fits in the ring it equals a fold over the stored events.
+ *
+ * Events are folded lazily, in order: when the ring is about to overwrite
+ * one, or when the digest is read. g_digest_folded events (of
+ * g_write_index) are in g_digest; the rest, at most the capacity, are in
+ * the ring unfolded. A clock read logs one of these events, so a run that
+ * never reads the digest does not pay for it, and the value read is the
+ * one an eager fold at each log gives (test_hindsight).
  * ------------------------------------------------------------------- */
 
 static asx_hindsight_event g_ring[ASX_HINDSIGHT_CAPACITY];
 static uint32_t g_write_index;   /* next slot to write (wrapping) */
 static uint32_t g_total_count;   /* total events ever logged */
 static uint32_t g_next_sequence; /* monotonic per-event sequence */
-static uint64_t g_digest_state = ASX_HINDSIGHT_DIGEST_SEED;
+static asx_fnv_fold g_digest = {ASX_HINDSIGHT_DIGEST_SEED, 0u};
+static uint32_t g_digest_folded; /* in g_write_index's count, wrapping with it */
 
 /* Default flush policy: both triggers enabled */
 static asx_hindsight_policy g_policy = {1, 1};
@@ -86,11 +73,26 @@ static asx_hindsight_policy g_policy = {1, 1};
  * ------------------------------------------------------------------- */
 
 void asx_hindsight_init(void) {
-    memset(g_ring, 0, sizeof(g_ring));
+    /* Slots are written in order from 0, so only the first min(total,
+     * capacity) are dirty; the rest are still zero. */
+    uint32_t used = g_total_count < ASX_HINDSIGHT_CAPACITY ? g_total_count : ASX_HINDSIGHT_CAPACITY;
+
+    memset(g_ring, 0, (size_t)used * sizeof(g_ring[0]));
     g_write_index = 0;
     g_total_count = 0;
     g_next_sequence = 0;
-    g_digest_state = ASX_HINDSIGHT_DIGEST_SEED;
+    asx_fnv_fold_init(&g_digest, ASX_HINDSIGHT_DIGEST_SEED);
+    g_digest_folded = 0;
+}
+
+/* Fold the events the ring holds and the digest has not taken, oldest
+ * first. */
+static void hs_digest_settle(void) {
+    while (g_digest_folded != g_write_index) {
+        /* ASX_CHECKPOINT_WAIVER("bounded: at most ASX_HINDSIGHT_CAPACITY unfolded events") */
+        hs_digest_fold(&g_digest, &g_ring[g_digest_folded % ASX_HINDSIGHT_CAPACITY]);
+        g_digest_folded++;
+    }
 }
 
 void asx_hindsight_reset(void) { asx_hindsight_init(); }
@@ -103,6 +105,13 @@ void asx_hindsight_log(asx_nd_event_kind kind, uint64_t entity_id, uint64_t obse
     uint32_t idx = g_write_index % ASX_HINDSIGHT_CAPACITY;
     asx_hindsight_event *e = &g_ring[idx];
 
+    if (g_write_index - g_digest_folded >= ASX_HINDSIGHT_CAPACITY) {
+        /* The ring holds ASX_HINDSIGHT_CAPACITY unfolded events and this
+         * slot holds the oldest: fold it before it is overwritten. */
+        hs_digest_fold(&g_digest, e);
+        g_digest_folded++;
+    }
+
     e->sequence = g_next_sequence;
     if (g_next_sequence < UINT32_MAX) g_next_sequence++;
     e->kind = kind;
@@ -111,13 +120,6 @@ void asx_hindsight_log(asx_nd_event_kind kind, uint64_t entity_id, uint64_t obse
     /* Sequence of the next trace event (low 32 bits, matching the trace
      * event sequence field), so the link survives ring wrap-around. */
     e->trace_seq = (uint32_t)(asx_trace_emitted_total() & 0xFFFFFFFFu);
-
-    /* Field order is part of the digest contract. */
-    g_digest_state = hs_fnv1a_mix_u32(g_digest_state, e->sequence);
-    g_digest_state = hs_fnv1a_mix_u32(g_digest_state, (uint32_t)e->kind);
-    g_digest_state = hs_fnv1a_mix_u64(g_digest_state, e->entity_id);
-    g_digest_state = hs_fnv1a_mix_u64(g_digest_state, e->observed_value);
-    g_digest_state = hs_fnv1a_mix_u32(g_digest_state, e->trace_seq);
 
     g_write_index++;
     if (g_total_count < UINT32_MAX) g_total_count++;
@@ -285,7 +287,10 @@ asx_status asx_hindsight_flush_json(asx_hindsight_flush_buffer *out) {
  * Rolling digest
  * ------------------------------------------------------------------- */
 
-uint64_t asx_hindsight_digest(void) { return g_digest_state; }
+uint64_t asx_hindsight_digest(void) {
+    hs_digest_settle();
+    return asx_fnv_fold_value(&g_digest);
+}
 
 /* -------------------------------------------------------------------
  * Flush on divergence
