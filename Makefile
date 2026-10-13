@@ -2358,11 +2358,16 @@ FUZZ_PARSERS_DIR := build/fuzz-parsers
 FUZZ_PARSERS_SECONDS ?= 60
 FUZZ_PARSERS_SEEDS := tests/fuzz/parsers_seeds
 FUZZ_PARSERS_SAN := -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer
+# Extra compiler flags for the instrumented library only (not the harnesses).
+# tests/gates/test_fuzz_parser_mutants.sh passes -DASX_MUTANT_<TARGET> here to
+# build a parser with its planted bug (bd-9kll.16.7); nothing else sets it.
+FUZZ_PARSERS_EXTRA_CFLAGS ?=
 
 .PHONY: fuzz-parsers fuzz-parsers-smoke fuzz-parsers-replay
 fuzz-parsers:
 	@$(MAKE) --no-print-directory $(FUZZ_PARSERS_DIR)/lib/libasx.a BUILD_DIR=$(FUZZ_PARSERS_DIR) \
-		CC=$(FUZZ_PARSERS_CC) CFLAGS='-fsanitize=fuzzer-no-link $(FUZZ_PARSERS_SAN)'
+		CC=$(FUZZ_PARSERS_CC) \
+		CFLAGS='-fsanitize=fuzzer-no-link $(FUZZ_PARSERS_SAN) $(FUZZ_PARSERS_EXTRA_CFLAGS)'
 	@mkdir -p $(FUZZ_PARSERS_DIR)/bin
 	@for t in $(FUZZ_PARSER_TARGETS); do \
 		$(FUZZ_PARSERS_CC) $(STD_FLAGS) -g -O1 $(INC_FLAGS) $(PROFILE_DEF) $(CODEC_DEF) $(DET_DEF) \

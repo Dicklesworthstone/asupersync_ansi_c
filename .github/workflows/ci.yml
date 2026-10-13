@@ -485,7 +485,12 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq jq
+          sudo apt-get install -y -qq jq clang
+          # tests/gates/test_fuzz_parser_mutants.sh builds the parser fuzz
+          # harnesses with clang and libFuzzer's runtime: the generic package
+          # where the release has one, else the one matching the clang.
+          sudo apt-get install -y -qq libclang-rt-dev ||
+            sudo apt-get install -y -qq "libclang-rt-$(clang -dumpversion | cut -d. -f1)-dev"
           # tests/gates/test_strict_gates.sh runs format-check over scratch
           # files with the pinned formatter.
           pipx install clang-format==18.1.8
