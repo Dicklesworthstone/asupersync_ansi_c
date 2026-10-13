@@ -7,9 +7,18 @@ The same bytes go to asupersync's parser (pinned rev 5e60b1c4c, through
 (the ASX_DIFF_* mode of tests/fuzz/fuzz_parsers.c). Each prints one JSON
 outcome per input; this script compares them:
 
-  1. accepted or rejected (a complete request versus anything else);
-  2. when both accept: method, target, version, headers, trailers, body
-     length and body digest, and the bytes the first request used.
+  1. accepted or rejected (a complete message or frame versus anything
+     else);
+  2. when both accept: method and target (or status and reason), version,
+     headers, trailers, body length and body digest, and the bytes the first
+     message used; for a WebSocket frame, fin, rsv, opcode, masked, mask
+     key, payload length and digest, and the bytes used;
+  3. when both reject a frame: the close code the receiver fails the
+     connection with (it goes on the wire; a cut-short frame has none).
+
+The targets: http-request, http-response (a case per request method, GET,
+HEAD and CONNECT, since the method frames the body) and ws-frame (a case per
+receiver role, client and server, since the masking rule differs).
 
 Two rejections are not a divergence (the parsers name their reasons
 differently); the reasons are recorded in the statistics only.
@@ -36,6 +45,8 @@ Signatures (stable across runs and across minimization):
                                      not (c-accepts or rust-accepts, with the
                                      rejecting side's reason)
   both-accept:<field>[:<detail>]     both accepted, <field> differs
+  both-reject:close-code:<r>/<c>     both rejected a frame, with different
+                                     close codes (Rust / C)
 
 Modes: observe (default) prints and exits 0; gate exits 1 when a signature
 is not listed in --known (`signature | bead | note` per line), so a new
@@ -110,11 +121,31 @@ def header_diff(rust, c, fold):
     return "name-case" if name_case else None
 
 
-FIELDS = ("method", "target", "version", "headers", "trailers", "body_len", "body_fnv", "consumed")
+FIELDS = (
+    "method",
+    "target",
+    "status",
+    "reason",
+    "version",
+    "headers",
+    "trailers",
+    "body_len",
+    "body_fnv",
+    "fin",
+    "rsv",
+    "opcode",
+    "masked",
+    "mask_key",
+    "payload_len",
+    "payload_fnv",
+    "consumed",
+)
 
 
 def accepted_difference(rust, c, fold_header_case):
-    """The signature of the first field two accepted requests differ in."""
+    """The signature of the first field two accepted messages differ in (a
+    field a message kind does not have is absent from both and compares
+    equal)."""
     found = None
     for field in FIELDS:
         rv, cv = rust.get(field), c.get(field)
@@ -127,6 +158,16 @@ def accepted_difference(rust, c, fold_header_case):
         if found is not None:
             break
     return found
+
+
+def rejected_difference(rust, c):
+    """The signature of two rejections that differ where it is observable: the
+    close code a WebSocket receiver fails the connection with goes on the wire
+    (an HTTP rejection carries none, and a frame cut short has none)."""
+    rc, cc = rust.get("close_code"), c.get("close_code")
+    if rc is not None and cc is not None and rc != cc:
+        return "both-reject:close-code:%s/%s" % (rc, cc)
+    return None
 
 
 def classify_pair(rust, c, fold_header_case=False):
@@ -147,7 +188,7 @@ def classify_pair(rust, c, fold_header_case=False):
     elif rust_accepts:
         found = accepted_difference(rust, c, fold_header_case)
     else:
-        found = None
+        found = rejected_difference(rust, c)
     return found
 
 
@@ -275,19 +316,66 @@ def run_batches(argv_prefix, files, env=None):
     return out
 
 
-class Backend:
-    """The two parsers, as functions from file paths to outcome maps."""
+RESPONSE_METHODS = ("GET", "HEAD", "CONNECT")
 
-    def __init__(self, twin_cmd, c_driver, c_env):
+# The cases one input of a target is: a response is framed by the method of
+# the request it answers, a frame is received by a client or by a server (the
+# masking rule differs). Each is compared and reduced separately.
+TARGET_LABELS = {
+    "http-response": RESPONSE_METHODS,
+    "ws-frame": ("client", "server"),
+}
+
+# The prefix of a family key for a target with labels (`response@GET ...`).
+KEY_PREFIX = {"http-response": "response", "ws-frame": "ws-frame"}
+
+
+def flatten_by_label(outcomes, labels):
+    """{name: {LABEL: outcome}} -> {name@LABEL: outcome}. A crash or a hang
+    has no labels and is the outcome of every one."""
+    flat = {}
+    for name, outcome in outcomes.items():
+        for label in labels:
+            if outcome.get("kind") == "crash":
+                flat["%s@%s" % (name, label)] = outcome
+            else:
+                flat["%s@%s" % (name, label)] = outcome.get(
+                    label, {"kind": "error", "detail": "no outcome for " + label}
+                )
+    return flat
+
+
+def key_target(key):
+    """The target a family key belongs to (a key without a prefix is a
+    request's)."""
+    for target, prefix in KEY_PREFIX.items():
+        if key.startswith(prefix + "@"):
+            return target
+    return "http-request"
+
+
+class Backend:
+    """The two parsers, as functions from file paths to outcome maps. For a
+    target with labels (TARGET_LABELS) the maps are keyed name@LABEL."""
+
+    def __init__(self, twin_cmd, c_driver, c_env, target="http-request"):
         self.twin_cmd = twin_cmd
         self.c_driver = c_driver
         self.c_env = c_env
+        self.target = target
+
+    def _shaped(self, outcomes):
+        if self.target in TARGET_LABELS:
+            return flatten_by_label(outcomes, TARGET_LABELS[self.target])
+        return outcomes
 
     def rust(self, files):
-        return run_batches(self.twin_cmd + ["parse-diff", "http-request"], files)
+        return self._shaped(
+            run_batches(self.twin_cmd + ["parse-diff", self.target], files)
+        )
 
     def c(self, files):
-        return run_batches([self.c_driver], files, env=self.c_env)
+        return self._shaped(run_batches([self.c_driver], files, env=self.c_env))
 
 
 # ---------------------------------------------------------------------------
@@ -314,10 +402,17 @@ def classify(inputs, rust, c, fold):
     return groups, stats
 
 
-def make_tester(want, backend, workdir, fold):
+def case_key(base, method):
+    """The key of a file's outcome: the file, and the request method for a
+    response (name@METHOD)."""
+    return "%s@%s" % (base, method) if method else base
+
+
+def make_tester(want, backend, workdir, fold, method=None):
     """A test_batch for minimize()/simplify(): True for each candidate whose
-    divergence class is still `want`. Candidates are written to fixed names
-    under workdir (overwritten each round, nothing accumulates)."""
+    divergence class is still `want` (for a response, under `method`).
+    Candidates are written to fixed names under workdir (overwritten each
+    round, nothing accumulates)."""
     os.makedirs(workdir, exist_ok=True)
 
     def test_batch(cands):
@@ -330,7 +425,12 @@ def make_tester(want, backend, workdir, fold):
         rust = backend.rust(paths)
         c = backend.c(paths)
         return [
-            classify_pair(rust[os.path.basename(p)], c[os.path.basename(p)], fold) == want
+            classify_pair(
+                rust[case_key(os.path.basename(p), method)],
+                c[case_key(os.path.basename(p), method)],
+                fold,
+            )
+            == want
             for p in paths
         ]
 
@@ -338,18 +438,26 @@ def make_tester(want, backend, workdir, fold):
 
 
 def reduce_group(want, members, backend, workdir, fold, limit):
-    """{minimized bytes: [count, example name]} for the members of one
-    divergence class: each of up to `limit` members (the smallest first) is
-    minimized and then simplified, so inputs that differ only in bytes the
-    divergence does not depend on collapse into one class of root cause.
-    Returns the classes and the number of members left unreduced."""
-    tester = make_tester(want, backend, workdir, fold)
+    """{(minimized bytes, method): [count, example name]} for the members of
+    one divergence class (a member is named file or file@METHOD): each of up
+    to `limit` members (the smallest first) is minimized and then simplified,
+    so inputs that differ only in bytes the divergence does not depend on
+    collapse into one class of root cause. Returns the classes and the number
+    of members left unreduced."""
+    testers = {}
     classes = {}
     seen = {}
     for name, data in members[:limit]:
-        if data not in seen:
-            seen[data] = simplify(minimize(data, tester), tester)
-        entry = classes.setdefault(seen[data], [0, name])
+        method = name.partition("@")[2] or None
+        key = (data, method)
+        if key not in seen:
+            if method not in testers:
+                testers[method] = make_tester(want, backend, workdir, fold, method)
+            # A frame is binary: a NUL fills a byte whose value does not
+            # matter, where text is filled with "a".
+            filler = b"\x00" if getattr(backend, "target", "") == "ws-frame" else b"a"
+            seen[key] = simplify(minimize(data, testers[method]), testers[method], filler)
+        entry = classes.setdefault((seen[key], method), [0, name])
         entry[0] += 1
     return classes, max(0, len(members) - limit)
 
@@ -388,34 +496,103 @@ def request_shape(data):
     return ",".join(tags)
 
 
-def family_key(sig, shape):
-    return "%s [%s]" % (sig, shape) if shape else sig
+def response_shape(data):
+    """The feature of a (minimized) response that stays after reduction:
+    empty lines before the status line, a status that is not three digits or
+    that carries no body by itself (1xx, 204, 304), a missing reason phrase."""
+    tags = []
+    body = data
+    if body[:2] == b"\r\n" or body[:1] == b"\n":
+        tags.append("leading-empty-line")
+        while body[:2] == b"\r\n" or body[:1] == b"\n":
+            body = body[2:] if body[:2] == b"\r\n" else body[1:]
+    tokens = body.split(b"\n", 1)[0].rstrip(b"\r").split(b" ", 2)
+    if len(tokens) >= 2:
+        status = tokens[1]
+        if len(status) != 3 or not status.isdigit():
+            tags.append("status=malformed")
+        elif status[:1] == b"1":
+            tags.append("status=1xx")
+        elif status in (b"204", b"304"):
+            tags.append("status=" + status.decode("ascii"))
+        if len(tokens) == 2:
+            tags.append("no-reason")
+    return ",".join(tags)
 
 
-def build_rows(groups, inputs_dir, backend, workdir, fold, limit):
-    """One row per divergence family (signature plus the request shape that
-    remains after reduction): its input count and its classes, each a
-    minimized input with how many inputs reduced to it, one example, and
-    both parsers' outcomes on the minimized input. With limit 0 nothing is
-    reduced and the first member's own bytes are its class."""
+def ws_shape(data):
+    """The feature of a (minimized) frame that stays after reduction, read
+    from its first two bytes: a set reserved bit, a reserved or a control
+    opcode, FIN clear, and the length form (7-bit lengths are the plain
+    case). It splits a rejection whose reason both parsers name coarsely into
+    the root causes a bead is recorded for."""
+    if len(data) < 2:
+        return "short"
+    tags = []
+    first, second = data[0], data[1]
+    opcode = first & 0x0F
+    if first & 0x70:
+        tags.append("rsv")
+    if opcode in (3, 4, 5, 6, 7) or opcode >= 0x0B:
+        tags.append("opcode=reserved")
+    elif opcode >= 8:
+        tags.append("control")
+        if not first & 0x80:
+            tags.append("fin=0")
+    if second & 0x7F == 126:
+        tags.append("len=16bit")
+    elif second & 0x7F == 127:
+        tags.append("len=64bit")
+    return ",".join(tags)
+
+
+def shape_of(target, data):
+    if target == "http-response":
+        return response_shape(data)
+    if target == "ws-frame":
+        return ws_shape(data)
+    return request_shape(data)
+
+
+def family_key(sig, shape, label=None, target="http-response"):
+    """`<signature> [<shape>]`, prefixed `response@GET ` or `ws-frame@client `
+    for a target whose input is several cases."""
+    key = "%s [%s]" % (sig, shape) if shape else sig
+    return "%s@%s %s" % (KEY_PREFIX[target], label, key) if label else key
+
+
+def build_rows(groups, inputs_dir, backend, workdir, fold, limit, target="http-request"):
+    """One row per divergence family (signature plus the message shape that
+    remains after reduction, plus the request method for a response): its
+    input count and its classes, each a minimized input with how many inputs
+    reduced to it, one example, and both parsers' outcomes on the minimized
+    input. With limit 0 nothing is reduced and the first member's own bytes
+    are its class."""
     os.makedirs(workdir, exist_ok=True)
     rows = []
     for sig in sorted(groups):
         members = []
-        order = sorted(groups[sig], key=lambda n: (os.path.getsize(os.path.join(inputs_dir, n)), n))
+        order = sorted(
+            groups[sig],
+            key=lambda n: (os.path.getsize(os.path.join(inputs_dir, n.partition("@")[0])), n),
+        )
         for name in order:
-            with open(os.path.join(inputs_dir, name), "rb") as fh:
+            with open(os.path.join(inputs_dir, name.partition("@")[0]), "rb") as fh:
                 members.append((name, fh.read()))
         if limit > 0:
             classes, unreduced = reduce_group(sig, members, backend, workdir, fold, limit)
         else:
-            classes, unreduced = {members[0][1]: [1, members[0][0]]}, len(members) - 1
+            first_method = members[0][0].partition("@")[2] or None
+            classes = {(members[0][1], first_method): [1, members[0][0]]}
+            unreduced = len(members) - 1
         by_shape = {}
-        for small, entry in classes.items():
-            by_shape.setdefault(request_shape(small), {})[small] = entry
+        for (small, method), entry in classes.items():
+            by_shape.setdefault((shape_of(target, small), method), {})[small] = entry
         by_name = dict(members)
-        for n, shape in enumerate(sorted(by_shape)):
-            keyed = sorted(by_shape[shape].items(), key=lambda kv: (-kv[1][0], len(kv[0]), kv[0]))
+        for n, (shape, method) in enumerate(sorted(by_shape, key=lambda k: (k[0], k[1] or ""))):
+            keyed = sorted(
+                by_shape[(shape, method)].items(), key=lambda kv: (-kv[1][0], len(kv[0]), kv[0])
+            )
             paths = []
             for k, (small, _) in enumerate(keyed):
                 path = os.path.join(workdir, "class_%d.bin" % k)
@@ -425,7 +602,7 @@ def build_rows(groups, inputs_dir, backend, workdir, fold, limit):
             rust, c = backend.rust(paths), backend.c(paths)
             out_classes = []
             for k, (small, (count, example)) in enumerate(keyed):
-                base = "class_%d.bin" % k
+                base = case_key("class_%d.bin" % k, method)
                 out_classes.append(
                     {
                         "minimized": escaped(small),
@@ -441,7 +618,8 @@ def build_rows(groups, inputs_dir, backend, workdir, fold, limit):
                 {
                     "signature": sig,
                     "shape": shape,
-                    "key": family_key(sig, shape),
+                    "method": method,
+                    "key": family_key(sig, shape, method, target),
                     "count": sum(cls["count"] for cls in out_classes)
                     + (unreduced if n == 0 else 0),
                     "unreduced": unreduced if n == 0 else 0,
@@ -468,7 +646,7 @@ def load_known(path):
 def render(header, rows, stats, known):
     lines = list(header)
     lines.append(
-        "inputs: %d  both-accept-equal/reject: %d/%d  diverged: %d  signatures: %d"
+        "cases: %d  both-accept-equal/reject: %d/%d  diverged: %d  families: %d"
         % (
             stats["total"],
             stats["accepted_both"],
@@ -499,12 +677,12 @@ def render(header, rows, stats, known):
     return "\n".join(lines) + "\n"
 
 
-def beads_script(rows, known, seed, count):
+def beads_script(rows, known, seed, count, target="http-request"):
     out = ["#!/usr/bin/env bash", "# One bead per divergence not yet recorded; review, then run."]
     for row in rows:
         if row["key"] in known:
             continue
-        title = "parser-diff http-request: %s" % row["key"]
+        title = "parser-diff %s: %s" % (target, row["key"])
         desc = [
             "Differential parser fuzzing (bd-9kll.16.2), seed %d count %d: asupersync "
             "5e60b1c4c and the C parser disagree on %d input(s), %d class(es) after "
@@ -544,11 +722,12 @@ def do_run(args):
     env = dict(os.environ)
     if args.c_require_host is not None:
         env["ASX_DIFF_REQUIRE_HOST"] = args.c_require_host
-    backend = Backend(twin_cmd, args.c_driver, env)
+    target = args.target
+    backend = Backend(twin_cmd, args.c_driver, env, target)
 
     status, _ = launch(
         twin_cmd
-        + ["parse-fuzz", "http-request", "--seed", str(args.seed), "--count", str(args.count)]
+        + ["parse-fuzz", target, "--seed", str(args.seed), "--count", str(args.count)]
         + ["--out", out],
         None,
         BATCH_TIMEOUT,
@@ -568,16 +747,21 @@ def do_run(args):
         sys.stderr.write("parser_differential: the Rust outcomes do not cover the corpus\n")
         return 2
     c = backend.c(paths)
+    if target in TARGET_LABELS:
+        rust = flatten_by_label(rust, TARGET_LABELS[target])
+        cases = sorted(rust)
+    else:
+        cases = names
     fold = args.fold_header_case
-    groups, stats = classify(names, rust, c, fold)
-    stats["total"] = len(names)
+    groups, stats = classify(cases, rust, c, fold)
+    stats["total"] = len(cases)
 
     rows = build_rows(groups, inputs_dir, backend, os.path.join(out, "min"), fold,
-                      0 if args.no_minimize else args.max_minimize)
+                      0 if args.no_minimize else args.max_minimize, target)
 
     known = load_known(args.known)
     header = [
-        "parser differential: http-request, seed %d, count %d" % (args.seed, args.count),
+        "parser differential: %s, seed %d, count %d" % (target, args.seed, args.count),
         "rust: asupersync 5e60b1c4c (twin_run parse-diff); c: %s" % args.c_driver,
         "assumptions: fold-header-case=%s c-require-host=%s"
         % (fold, "default" if args.c_require_host is None else args.c_require_host),
@@ -600,12 +784,15 @@ def do_run(args):
             sort_keys=True,
         )
     with open(os.path.join(out, "beads.sh"), "w", encoding="utf-8") as fh:
-        fh.write(beads_script(rows, known, args.seed, args.count))
+        fh.write(beads_script(rows, known, args.seed, args.count, target))
     sys.stdout.write(text)
 
     seen = [r["key"] for r in rows]
     new = [key for key in seen if key not in known]
-    stale = [key for key in known if key not in seen]
+    # A key of a target with labels is `response@<METHOD> ...` or
+    # `ws-frame@<role> ...`; a run reports as stale only the keys of its own
+    # target, as the other targets' keys are not its to see.
+    stale = [key for key in known if key not in seen and key_target(key) == target]
     for key in stale:
         sys.stdout.write(
             "known, not observed in this run (fixed, or seen only in another "
@@ -670,6 +857,48 @@ class FakeBackend:
 
     def c(self, files):
         return {os.path.basename(f): self._c(self._read(f)) for f in files}
+
+
+class FakeResponseBackend:
+    """Pretend response parsers. Rust accepts anything starting with 'H' for
+    every request method; C does too, except that it rejects an input holding
+    'B' when the method is HEAD (a body where HEAD has none)."""
+
+    @staticmethod
+    def _outcome(data, c_side, method):
+        if not data:
+            return {"kind": "empty"}
+        if data[:1] != b"H":
+            return {"kind": "error", "detail": "BadStatus"}
+        if c_side and method == "HEAD" and b"B" in data:
+            return {"kind": "error", "detail": "head-body"}
+        return {
+            "kind": "complete",
+            "status": 200,
+            "reason": "OK",
+            "version": "HTTP/1.1",
+            "headers": [],
+            "trailers": [],
+            "body_len": 0,
+            "body_fnv": "0",
+            "consumed": len(data),
+        }
+
+    def _side(self, files, c_side):
+        out = {}
+        for path in files:
+            with open(path, "rb") as fh:
+                data = fh.read()
+            out[os.path.basename(path)] = {
+                m: self._outcome(data, c_side, m) for m in RESPONSE_METHODS
+            }
+        return flatten_by_label(out, RESPONSE_METHODS)
+
+    def rust(self, files):
+        return self._side(files, False)
+
+    def c(self, files):
+        return self._side(files, True)
 
 
 def selftest():
@@ -756,16 +985,16 @@ def selftest():
         members = [("00001.bin", names["00001.bin"]), ("00004.bin", names["00004.bin"])]
         classes, unreduced = reduce_group("rust-accepts/c-rejects:xy", members, backend,
                                           os.path.join(tmp, "min"), False, 10)
-        check(classes == {b"GXY": [2, "00001.bin"]} and unreduced == 0,
+        check(classes == {(b"GXY", None): [2, "00001.bin"]} and unreduced == 0,
               "both xy inputs reduce to one class that keeps the G the Rust side needs, got %r"
               % classes)
         classes, unreduced = reduce_group("rust-accepts/c-rejects:xy", members, backend,
                                           os.path.join(tmp, "min"), False, 1)
-        check(classes == {b"GXY": [1, "00001.bin"]} and unreduced == 1,
+        check(classes == {(b"GXY", None): [1, "00001.bin"]} and unreduced == 1,
               "the limit leaves the rest unreduced, got %r %r" % (classes, unreduced))
         classes, _ = reduce_group("both-accept:method", [("00002.bin", names["00002.bin"])],
                                   backend, os.path.join(tmp, "min"), False, 10)
-        check(classes == {b"GZ": [1, "00002.bin"]},
+        check(classes == {(b"GZ", None): [1, "00002.bin"]},
               "the method divergence reduces to GZ, got %r" % classes)
         rows = build_rows(groups, tmp, backend, os.path.join(tmp, "min"), False, 10)
         check([r["signature"] for r in rows] == sorted(groups)
@@ -779,6 +1008,102 @@ def selftest():
     needs_gx = lambda cands: [c[:1] == b"G" and b"X" in c for c in cands]  # noqa: E731
     check(simplify(b"GbXcd", needs_gx) == b"GaXaa", "simplify fills what the test does not need")
     check(simplify(b"aaaa", needs_gx) == b"aaaa", "an input already of filler is left alone")
+
+    # A response is a case per request method, compared and reduced apart.
+    flat = flatten_by_label({"a.bin": {"GET": {"kind": "empty"}, "HEAD": {"kind": "x"}}},
+                            RESPONSE_METHODS)
+    check(flat["a.bin@GET"] == {"kind": "empty"} and flat["a.bin@HEAD"] == {"kind": "x"}
+          and flat["a.bin@CONNECT"]["detail"] == "no outcome for CONNECT",
+          "flatten_by_label names a case per method, got %r" % sorted(flat))
+    crash = flatten_by_label({"b.bin": {"kind": "crash", "detail": "exit -11"}},
+                             RESPONSE_METHODS)
+    check(all(v["kind"] == "crash" for v in crash.values()) and len(crash) == 3,
+          "a crash is the outcome of every method")
+    check(case_key("a.bin", None) == "a.bin" and case_key("a.bin", "HEAD") == "a.bin@HEAD",
+          "case_key")
+    check(family_key("sig", "", "HEAD") == "response@HEAD sig"
+          and family_key("sig", "status=1xx", "GET") == "response@GET sig [status=1xx]"
+          and family_key("sig", "x") == "sig [x]"
+          and family_key("sig", "rsv", "client", "ws-frame") == "ws-frame@client sig [rsv]",
+          "family_key with a label")
+    check(key_target("response@GET sig") == "http-response"
+          and key_target("ws-frame@server sig [rsv]") == "ws-frame"
+          and key_target("sig [leading-empty-line]") == "http-request",
+          "key_target names the target of a family key")
+
+    # A frame is a case per receiver role; two rejections that differ in the
+    # close code are a divergence, a cut-short frame (no code) is not.
+    frame = {"kind": "complete", "fin": True, "rsv": 0, "opcode": 1, "masked": False,
+             "mask_key": "", "payload_len": 0, "payload_fnv": "0", "consumed": 2}
+    for field, other in (("fin", False), ("rsv", 4), ("opcode", 2), ("masked", True),
+                         ("mask_key", "00000000"), ("payload_len", 1), ("payload_fnv", "1")):
+        check(classify_pair(frame, dict(frame, **{field: other})) == "both-accept:" + field,
+              "a frame that differs in %s is a both-accept divergence" % field)
+    check(classify_pair({"kind": "error", "detail": "ControlFrameTooLarge", "close_code": 1009},
+                        {"kind": "error", "detail": "header-check", "close_code": 1002})
+          == "both-reject:close-code:1009/1002", "different close codes diverge")
+    check(classify_pair({"kind": "error", "detail": "x", "close_code": 1002},
+                        {"kind": "error", "detail": "y", "close_code": 1002}) is None
+          and classify_pair({"kind": "error", "detail": "incomplete"},
+                            {"kind": "error", "detail": "header-check", "close_code": 1002})
+          is None, "equal codes, or no code on one side, are not a divergence")
+    ws_shapes = {
+        b"\x81\x05": "",
+        b"\xc1\x00": "rsv",
+        b"\x83\x00": "opcode=reserved",
+        b"\x8b\x00": "opcode=reserved",
+        b"\x09\x00": "control,fin=0",
+        b"\x89\x7e": "control,len=16bit",
+        b"\x82\xff": "len=64bit",
+        b"\x81": "short",
+    }
+    for raw, want in ws_shapes.items():
+        check(ws_shape(raw) == want, "ws_shape(%r) = %r" % (raw, ws_shape(raw)))
+    with tempfile.TemporaryDirectory() as tmp:
+        rb = FakeResponseBackend()
+        names = {"00000.bin": b"HTTP/1.1 200 OK", "00001.bin": b"HxxBxx", "00002.bin": b"junk"}
+        for name, data in names.items():
+            with open(os.path.join(tmp, name), "wb") as fh:
+                fh.write(data)
+        files = [os.path.join(tmp, n) for n in sorted(names)]
+        rust, c = rb.rust(files), rb.c(files)
+        cases = sorted(rust)
+        groups, stats = classify(cases, rust, c, False)
+        check(sorted(groups) == ["rust-accepts/c-rejects:head-body"]
+              and groups["rust-accepts/c-rejects:head-body"] == ["00001.bin@HEAD"],
+              "only the HEAD case of the input with a body diverges, got %r" % groups)
+        check(stats["total"] if "total" in stats else True, "stats")
+        rows = build_rows(groups, tmp, rb, os.path.join(tmp, "min"), False, 10,
+                          "http-response")
+        check(len(rows) == 1 and rows[0]["key"] == "response@HEAD rust-accepts/c-rejects:head-body"
+              and rows[0]["classes"][0]["minimized"] == "HB"
+              and rows[0]["classes"][0]["c"]["detail"] == "head-body",
+              "the response row is keyed by method and reduced to HB, got %r" % rows)
+
+    # Two accepted responses that differ in the status or the reason.
+    ok = FakeResponseBackend._outcome(b"H", False, "GET")
+    check(classify_pair(ok, dict(ok, status=201)) == "both-accept:status",
+          "a different status is a both-accept divergence")
+    check(classify_pair(ok, dict(ok, reason="Okay")) == "both-accept:reason",
+          "a different reason is a both-accept divergence")
+    check(classify_pair(ok, dict(ok)) is None, "equal responses agree")
+
+    shapes = {
+        b"HTTP/1.1 200 OK\r\n\r\n": "",
+        b"\r\nHTTP/1.1 200 OK\r\n\r\n": "leading-empty-line",
+        b"HTTP/1.1 200\r\n\r\n": "no-reason",
+        b"HTTP/1.1 20 OK\r\n\r\n": "status=malformed",
+        b"HTTP/1.1 +200 OK\r\n\r\n": "status=malformed",
+        b"HTTP/1.1 100 Continue\r\n\r\n": "status=1xx",
+        b"HTTP/1.1 204 No Content\r\n\r\n": "status=204",
+        b"HTTP/1.1 304 \r\n\r\n": "status=304",
+    }
+    for raw, want in shapes.items():
+        check(response_shape(raw) == want,
+              "response_shape(%r) = %r" % (raw, response_shape(raw)))
+    check(shape_of("http-response", b"HTTP/1.1 200\r\n\r\n") == "no-reason"
+          and shape_of("http-request", b"GET // HTTP/1.1\r\n\r\n") == "target=double-slash",
+          "shape_of dispatches on the target")
 
     # The request shape that splits one coarse reject reason into families.
     shapes = {
@@ -825,7 +1150,11 @@ def main(argv):
     sub = ap.add_subparsers(dest="cmd")
     run = sub.add_parser("run", help="run one corpus through both parsers and compare")
     run.add_argument("--twin-run", required=True, help="twin_run command (binary or cargo run)")
-    run.add_argument("--c-driver", required=True, help="the ASX_DIFF_HTTP_REQUEST binary")
+    run.add_argument("--c-driver", required=True, help="the ASX_DIFF_* binary of --target")
+    run.add_argument("--target", choices=("http-request", "http-response", "ws-frame"),
+                     default="http-request",
+                     help="the parser to compare (a response is a case per request method, "
+                     "a frame a case per receiver role)")
     run.add_argument("--out", required=True)
     run.add_argument("--seed", type=int, default=1)
     run.add_argument("--count", type=int, default=2000)

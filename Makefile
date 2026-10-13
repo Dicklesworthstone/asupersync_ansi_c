@@ -2604,8 +2604,10 @@ fuzz-parsers-replay: $(LIB_A)
 
 # parser-differential — the same bytes to asupersync's parser and to ours
 # (bd-9kll.16.2). twin_run parse-fuzz writes a seeded corpus and the Rust
-# outcomes (tools/twin_run/src/parsediff.rs), the ASX_DIFF_HTTP_REQUEST mode
-# of tests/fuzz/fuzz_parsers.c prints the C outcomes, and
+# outcomes (tools/twin_run/src/parsediff.rs), the ASX_DIFF_HTTP_REQUEST,
+# ASX_DIFF_HTTP_RESPONSE or ASX_DIFF_WS_FRAME mode of tests/fuzz/fuzz_parsers.c
+# prints the C outcomes (PARSER_DIFF_TARGET=http-request, http-response or
+# ws-frame), and
 # tools/ci/parser_differential.py compares them, groups the differences by
 # signature and request shape, and reduces the diverging inputs to classes of
 # minimized input (report in $(PARSER_DIFF_OUT)). PARSER_DIFF_MODE=observe
@@ -2620,16 +2622,22 @@ PARSER_DIFF_COUNT ?= 2000
 PARSER_DIFF_MODE ?= observe
 PARSER_DIFF_REQUIRE_HOST ?=
 PARSER_DIFF_OUT ?= $(PARSER_DIFF_DIR)/out
+PARSER_DIFF_TARGET ?= http-request
 
 .PHONY: parser-diff-build parser-differential parser-differential-selftest
 parser-diff-build: $(LIB_A)
 	@mkdir -p $(PARSER_DIFF_DIR)
 	@$(CC) $(ALL_CFLAGS) -DASX_FUZZ_STANDALONE -DASX_DIFF_HTTP_REQUEST \
 		-o $(PARSER_DIFF_DIR)/http_request tests/fuzz/fuzz_parsers.c $(LIB_A) $(ALL_LDFLAGS)
+	@$(CC) $(ALL_CFLAGS) -DASX_FUZZ_STANDALONE -DASX_DIFF_HTTP_RESPONSE \
+		-o $(PARSER_DIFF_DIR)/http_response tests/fuzz/fuzz_parsers.c $(LIB_A) $(ALL_LDFLAGS)
+	@$(CC) $(ALL_CFLAGS) -DASX_FUZZ_STANDALONE -DASX_DIFF_WS_FRAME \
+		-o $(PARSER_DIFF_DIR)/ws_frame tests/fuzz/fuzz_parsers.c $(LIB_A) $(ALL_LDFLAGS)
 
 parser-differential: parser-diff-build
 	@python3 tools/ci/parser_differential.py run --twin-run "$(TWIN_RUN)" \
-		--c-driver $(PARSER_DIFF_DIR)/http_request --out $(PARSER_DIFF_OUT) \
+		--target $(PARSER_DIFF_TARGET) \
+		--c-driver $(PARSER_DIFF_DIR)/$(subst -,_,$(PARSER_DIFF_TARGET)) --out $(PARSER_DIFF_OUT) \
 		--seed $(PARSER_DIFF_SEED) --count $(PARSER_DIFF_COUNT) --mode $(PARSER_DIFF_MODE) \
 		$(if $(PARSER_DIFF_REQUIRE_HOST),--c-require-host $(PARSER_DIFF_REQUIRE_HOST)) \
 		--known tools/ci/parser_differential_known.txt

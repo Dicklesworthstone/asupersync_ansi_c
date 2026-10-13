@@ -51,6 +51,16 @@
  *                           REQUIRE_HOST=0 in the environment turns off
  *                           the parser's Host requirement, so a divergence
  *                           it hides can be reached.
+ *   ASX_DIFF_HTTP_RESPONSE  the first HTTP/1.1 response in the file, once as
+ *                           the answer to a GET, once to a HEAD and once to
+ *                           a CONNECT (what frames its body): the outcome is
+ *                           an object keyed by those method names.
+ *   ASX_DIFF_WS_FRAME       the first WebSocket frame in the file, once as
+ *                           received by a client and once by a server (the
+ *                           masking rule differs): header decode and check,
+ *                           unmasked payload, close-payload rules; a
+ *                           rejected frame carries the close code the
+ *                           receiver fails with, which is compared.
  *
  * SPDX-License-Identifier: MIT
  */
@@ -93,6 +103,48 @@ FUZZ_HELPER const char *g_input_name = "";
 FUZZ_HELPER void fuzz_fail(const char *what) {
     fprintf(stderr, "fuzz_parsers: property violated: %s\n", what);
     abort();
+}
+
+/* Differential mode output (ASX_DIFF_*). The JSON string whose code points
+ * are the n bytes of s (Latin-1), so equal bytes print equal on both sides
+ * whatever they hold. */
+FUZZ_HELPER void diff_put_string(const char *s, size_t n) {
+    size_t i;
+    putchar('"');
+    for (i = 0; i < n; i++) {
+        unsigned b = (unsigned char)s[i];
+        if (b == (unsigned)'"' || b == (unsigned)'\\') {
+            putchar('\\');
+            putchar((int)b);
+        } else if (b < 0x20u) {
+            printf("\\u%04x", b);
+        } else if (b < 0x80u) {
+            putchar((int)b);
+        } else {
+            putchar((int)(0xC0u | (b >> 6)));
+            putchar((int)(0x80u | (b & 0x3Fu)));
+        }
+    }
+    putchar('"');
+}
+
+FUZZ_HELPER void diff_put_cstr(const char *s) { diff_put_string(s, strlen(s)); }
+
+/* One line: {"input": <file>, "outcome": <outcome>} */
+FUZZ_HELPER void diff_begin(void) {
+    fputs("{\"input\":", stdout);
+    diff_put_cstr(g_input_name);
+    fputs(",\"outcome\":", stdout);
+}
+
+FUZZ_HELPER void diff_end(void) { fputs("}\n", stdout); }
+
+/* The outcome objects carry no newline: a response, or a frame, prints one
+ * per request method or receiver role inside one line. */
+FUZZ_HELPER void diff_error(const char *detail) {
+    fputs("{\"kind\":\"error\",\"detail\":", stdout);
+    diff_put_cstr(detail);
+    putchar('}');
 }
 
 /* Chunk sizes vary with the input's first byte: 1..8 bytes, or the rest. */
@@ -686,39 +738,15 @@ static void fuzz_one(const uint8_t *data, size_t size) {
     }
 }
 
-#elif defined(ASX_DIFF_HTTP_REQUEST)
+#elif defined(ASX_DIFF_HTTP_REQUEST) || defined(ASX_DIFF_HTTP_RESPONSE)
 
 #include <asx/net/http.h>
 
 #ifndef ASX_FUZZ_STANDALONE
-#error "ASX_DIFF_HTTP_REQUEST needs ASX_FUZZ_STANDALONE (one outcome line per file)"
+#error "the ASX_DIFF_* modes need ASX_FUZZ_STANDALONE (one outcome line per file)"
 #endif
 
 static uint8_t g_head[8192];
-
-/* The JSON string whose code points are the n bytes of s (Latin-1), so equal
- * bytes print equal on both sides whatever they hold. */
-static void diff_put_string(const char *s, size_t n) {
-    size_t i;
-    putchar('"');
-    for (i = 0; i < n; i++) {
-        unsigned b = (unsigned char)s[i];
-        if (b == (unsigned)'"' || b == (unsigned)'\\') {
-            putchar('\\');
-            putchar((int)b);
-        } else if (b < 0x20u) {
-            printf("\\u%04x", b);
-        } else if (b < 0x80u) {
-            putchar((int)b);
-        } else {
-            putchar((int)(0xC0u | (b >> 6)));
-            putchar((int)(0x80u | (b & 0x3Fu)));
-        }
-    }
-    putchar('"');
-}
-
-static void diff_put_cstr(const char *s) { diff_put_string(s, strlen(s)); }
 
 static void diff_put_fields(const asx_http_parser *p, int trailers) {
     uint32_t n = trailers ? asx_http_parser_trailer_count(p) : asx_http_parser_header_count(p);
@@ -740,28 +768,18 @@ static void diff_put_fields(const asx_http_parser *p, int trailers) {
     putchar(']');
 }
 
-/* One line: {"input": <file>, "outcome": <outcome>} */
-static void diff_begin(void) {
-    fputs("{\"input\":", stdout);
-    diff_put_cstr(g_input_name);
-    fputs(",\"outcome\":", stdout);
-}
-
-static void diff_end(void) { fputs("}\n", stdout); }
-
-static void diff_error(const char *detail) {
-    fputs("{\"kind\":\"error\",\"detail\":", stdout);
-    diff_put_cstr(detail);
-    putchar('}');
-    diff_end();
-}
-
-static void diff_complete(const asx_http_parser *p, uint64_t body_len, uint64_t body_fnv,
-                          uint32_t consumed) {
-    fputs("{\"kind\":\"complete\",\"method\":", stdout);
-    diff_put_cstr(asx_http_method_str(asx_http_parser_method(p)));
-    fputs(",\"target\":", stdout);
-    diff_put_cstr(asx_http_parser_target(p));
+static void diff_complete(const asx_http_parser *p, asx_http_parse_kind kind, uint64_t body_len,
+                          uint64_t body_fnv, uint32_t consumed) {
+    fputs("{\"kind\":\"complete\",", stdout);
+    if (kind == ASX_HTTP_PARSE_REQUEST) {
+        fputs("\"method\":", stdout);
+        diff_put_cstr(asx_http_method_str(asx_http_parser_method(p)));
+        fputs(",\"target\":", stdout);
+        diff_put_cstr(asx_http_parser_target(p));
+    } else {
+        printf("\"status\":%u,\"reason\":", (unsigned)asx_http_parser_status(p));
+        diff_put_cstr(asx_http_parser_reason(p));
+    }
     fputs(",\"version\":", stdout);
     diff_put_cstr(asx_http_version_str(asx_http_parser_version(p)));
     fputs(",\"headers\":", stdout);
@@ -770,14 +788,15 @@ static void diff_complete(const asx_http_parser *p, uint64_t body_len, uint64_t 
     diff_put_fields(p, 1);
     printf(",\"body_len\":%llu,\"body_fnv\":\"%016llx\",\"consumed\":%lu}",
            (unsigned long long)body_len, (unsigned long long)body_fnv, (unsigned long)consumed);
-    diff_end();
 }
 
-/* The first request in the input, fed in one piece and then end of input.
+/* The first message in the input, fed in one piece and then end of input; a
+ * response is decoded as the answer to a request of method `answers`.
  * Accepted means the parser reported MESSAGE_COMPLETE; anything else (a
  * protocol error, a limit, input cut short, input that holds no message)
  * is an error with the parser's own reason in "detail". */
-static void fuzz_one(const uint8_t *data, size_t size) {
+static void diff_message(asx_http_parse_kind kind, asx_http_method answers, const uint8_t *data,
+                         size_t size) {
     asx_http_limits limits;
     asx_http_parser p;
     asx_http_event ev;
@@ -788,10 +807,8 @@ static void fuzz_one(const uint8_t *data, size_t size) {
     uint64_t fnv = UINT64_C(0xcbf29ce484222325);
     asx_status st;
 
-    diff_begin();
     if (size == 0u) {
         fputs("{\"kind\":\"empty\"}", stdout);
-        diff_end();
         return;
     }
     if (size > (1u << 20)) {
@@ -800,10 +817,10 @@ static void fuzz_one(const uint8_t *data, size_t size) {
     }
     asx_http_limits_init(&limits);
     if (env != NULL && env[0] == '0') limits.require_host = 0u;
-    if (asx_http_parser_init(&p, ASX_HTTP_PARSE_REQUEST, &limits, g_head,
-                             (uint32_t)sizeof(g_head)) != ASX_OK) {
+    if (asx_http_parser_init(&p, kind, &limits, g_head, (uint32_t)sizeof(g_head)) != ASX_OK) {
         fuzz_fail("http parser init");
     }
+    if (kind == ASX_HTTP_PARSE_RESPONSE) asx_http_parser_set_request_method(&p, answers);
     guard = 4u * (uint32_t)size + 64u;
     for (;;) {
         uint32_t used = 0;
@@ -821,7 +838,7 @@ static void fuzz_one(const uint8_t *data, size_t size) {
             }
             body_len += ev.len;
         } else if (ev.kind == ASX_HTTP_EVENT_MESSAGE_COMPLETE) {
-            diff_complete(&p, body_len, fnv, pos);
+            diff_complete(&p, kind, body_len, fnv, pos);
             return;
         } else if (ev.kind == ASX_HTTP_EVENT_NONE) {
             break;
@@ -831,10 +848,142 @@ static void fuzz_one(const uint8_t *data, size_t size) {
     if (st != ASX_OK) {
         diff_error(asx_http_parse_error_str(asx_http_parser_error(&p)));
     } else if (ev.kind == ASX_HTTP_EVENT_MESSAGE_COMPLETE) {
-        diff_complete(&p, body_len, fnv, pos);
+        diff_complete(&p, kind, body_len, fnv, pos);
     } else {
         diff_error("no message in the input");
     }
+}
+
+static void fuzz_one(const uint8_t *data, size_t size) {
+    diff_begin();
+#if defined(ASX_DIFF_HTTP_REQUEST)
+    diff_message(ASX_HTTP_PARSE_REQUEST, ASX_HTTP_GET, data, size);
+#else
+    {
+        static const asx_http_method answered[3] = {ASX_HTTP_GET, ASX_HTTP_HEAD, ASX_HTTP_CONNECT};
+        uint32_t i;
+        putchar('{');
+        for (i = 0; i < 3u; i++) {
+            if (i > 0u) putchar(',');
+            diff_put_cstr(asx_http_method_str(answered[i]));
+            putchar(':');
+            diff_message(ASX_HTTP_PARSE_RESPONSE, answered[i], data, size);
+        }
+        putchar('}');
+    }
+#endif
+    diff_end();
+}
+
+#elif defined(ASX_DIFF_WS_FRAME)
+
+#include <asx/net/websocket.h>
+
+#ifndef ASX_FUZZ_STANDALONE
+#error "the ASX_DIFF_* modes need ASX_FUZZ_STANDALONE (one outcome line per file)"
+#endif
+
+/* The payload limit of twin_run's ws-frame target (WS_MAX_PAYLOAD in
+ * tools/twin_run/src/parsediff.rs): RFC 6455 leaves it to the endpoint, and
+ * both sides apply this one so that a size policy hides nothing. */
+#define DIFF_WS_MAX_PAYLOAD 65536u
+
+static uint8_t g_ws_payload[DIFF_WS_MAX_PAYLOAD];
+
+/* An error outcome. close_code is what the receiver fails the connection
+ * with (0: nothing was violated yet, the frame is only cut short). */
+static void diff_ws_error(const char *detail, unsigned close_code) {
+    fputs("{\"kind\":\"error\",\"detail\":", stdout);
+    diff_put_cstr(detail);
+    if (close_code != 0u) printf(",\"close_code\":%u", close_code);
+    putchar('}');
+}
+
+/* The first frame in the input as the receiver `role` decodes it, end of
+ * input signalled. The header functions are the ones the engine runs
+ * (ws_on_header), the payload is unmasked with asx_ws_mask, and a close
+ * frame's payload is held to what ws_on_close_frame holds it to: the engine
+ * also assembles messages and checks text UTF-8, which is above a frame. */
+static void diff_ws_frame(asx_ws_role role, const uint8_t *data, size_t size) {
+    asx_ws_frame_header h;
+    asx_status st;
+    uint16_t code;
+    uint32_t plen;
+    uint32_t i;
+    uint64_t fnv = UINT64_C(0xcbf29ce484222325);
+
+    if (size == 0u) {
+        fputs("{\"kind\":\"empty\"}", stdout);
+        return;
+    }
+    if (size > (1u << 20)) {
+        diff_ws_error("input too large", 0u);
+        return;
+    }
+    st = asx_ws_header_decode(data, (uint32_t)size, &h);
+    if (st == ASX_E_PENDING) {
+        diff_ws_error("incomplete", 0u);
+        return;
+    }
+    if (st != ASX_OK) {
+        diff_ws_error("header-malformed", ASX_WS_CLOSE_PROTOCOL_ERROR);
+        return;
+    }
+    /* A decoded header is entirely within the input (ASX_E_PENDING says
+     * otherwise); a longer one has read its mask key from past the end. */
+    if (h.header_len > size) fuzz_fail("ws header decode succeeded past the end of its input");
+    code = asx_ws_header_check(&h, role);
+    if (code != 0u) {
+        diff_ws_error("header-check", code);
+        return;
+    }
+    if (h.payload_len > DIFF_WS_MAX_PAYLOAD) {
+        diff_ws_error("payload-too-large", ASX_WS_CLOSE_MESSAGE_TOO_BIG);
+        return;
+    }
+    plen = (uint32_t)h.payload_len;
+    if ((uint64_t)size - h.header_len < plen) {
+        diff_ws_error("incomplete", 0u);
+        return;
+    }
+    memcpy(g_ws_payload, data + h.header_len, plen);
+    if (h.masked) asx_ws_mask(g_ws_payload, plen, h.mask_key, 0u);
+    if (h.opcode == ASX_WS_OPCODE_CLOSE && plen > 0u) {
+        if (plen == 1u) {
+            diff_ws_error("close-payload-length", ASX_WS_CLOSE_PROTOCOL_ERROR);
+            return;
+        }
+        if (!asx_ws_close_code_receivable(
+                (uint16_t)(((unsigned)g_ws_payload[0] << 8) | (unsigned)g_ws_payload[1]))) {
+            diff_ws_error("close-code", ASX_WS_CLOSE_PROTOCOL_ERROR);
+            return;
+        }
+        if (!asx_ws_utf8_valid(g_ws_payload + 2, plen - 2u)) {
+            diff_ws_error("close-reason-utf8", ASX_WS_CLOSE_INVALID_PAYLOAD);
+            return;
+        }
+    }
+    for (i = 0; i < plen; i++)
+        fnv = (fnv ^ (uint64_t)g_ws_payload[i]) * UINT64_C(0x00000100000001b3);
+    printf(
+        "{\"kind\":\"complete\",\"fin\":%s,\"rsv\":%u,\"opcode\":%u,\"masked\":%s,\"mask_key\":\"",
+        h.fin ? "true" : "false", (unsigned)h.rsv, (unsigned)h.opcode, h.masked ? "true" : "false");
+    if (h.masked) {
+        printf("%02x%02x%02x%02x", (unsigned)h.mask_key[0], (unsigned)h.mask_key[1],
+               (unsigned)h.mask_key[2], (unsigned)h.mask_key[3]);
+    }
+    printf("\",\"payload_len\":%lu,\"payload_fnv\":\"%016llx\",\"consumed\":%lu}",
+           (unsigned long)plen, (unsigned long long)fnv, (unsigned long)(h.header_len + plen));
+}
+
+static void fuzz_one(const uint8_t *data, size_t size) {
+    diff_begin();
+    fputs("{\"client\":", stdout);
+    diff_ws_frame(ASX_WS_ROLE_CLIENT, data, size);
+    fputs(",\"server\":", stdout);
+    diff_ws_frame(ASX_WS_ROLE_SERVER, data, size);
+    putchar('}');
+    diff_end();
 }
 
 #else

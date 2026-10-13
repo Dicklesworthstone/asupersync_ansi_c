@@ -18,6 +18,28 @@
 # 3846ec4. No both-accept:* family was found: on the ~4000 requests both
 # parsers accept, method, target, version, headers, trailers, body and
 # bytes used agree.
+#
+# A response key starts with `response@<METHOD> ` (the request method the
+# response is decoded against: GET, HEAD, CONNECT), and the bracketed shape
+# adds the status class (status=1xx, status=204, status=304) when a bodyless
+# status splits a reason. Responses were recorded from seed 3 / 6000 inputs
+# (the CI step) and seed 1 / 2000 inputs, the same Rust revision against the
+# C parser at 1d6d08a (src/net/http.c is unchanged to 0f29977). No
+# both-accept:* family was found: on the ~5400 (response, method) pairs both
+# parsers accept, status, reason, version, headers, trailers, body length and
+# digest, and bytes used agree. Every response family reduces to one of five
+# root causes (bd-9kll.16.2.9 to .13) or to bd-9kll.16.2.8.
+#
+# A WebSocket frame key starts with `ws-frame@<role> ` (the receiver, client or
+# server), and the bracketed shape reads the first two bytes of the minimized
+# frame (rsv, opcode=reserved, control, fin=0, len=16bit, len=64bit). Recorded
+# from seed 5 / 8000 inputs (the CI step) and seed 1 / 2000 inputs, the same
+# Rust revision against the C header functions of src/net/websocket.c at
+# 1d6d08a (frame code unchanged to 0f29977). No accept/reject split and no
+# both-accept:* family was found: on the ~2500 frames both accept, fin, rsv,
+# opcode, mask, key, payload length and digest and bytes used agree. The two
+# families differ only in the close code both reject with
+# (bd-9kll.16.2.14, .15).
 
 c-accepts/rust-rejects:BadRequestLine [leading-empty-line] | bd-9kll.16.2.1 | RFC 9112 2.2 SHOULD ignore a leading empty line: Rust deviates, C follows
 c-accepts/rust-rejects:BadRequestLine [leading-empty-line,target=authority-empty-port] | bd-9kll.16.2.1 | the leading empty line hides bd-9kll.16.2.4
@@ -28,3 +50,44 @@ rust-accepts/c-rejects:duplicate-host | bd-9kll.16.2.5 | RFC 9112 3.2 MUST 400: 
 rust-accepts/c-rejects:missing-host | bd-9kll.16.2.6 | RFC 9112 3.2 MUST 400: C default policy, Rust never checks Host
 rust-accepts/c-rejects:unknown-method | bd-9kll.16.2.7 | extension methods: Rust accepts, C has a closed set (501)
 rust-accepts/c-rejects:bad-chunk-extension | bd-9kll.16.2.8 | chunk-ext 5; : Rust accepts an invalid chunk-ext, C correct
+response@CONNECT c-accepts/rust-rejects:BadRequestLine [leading-empty-line,no-reason] | bd-9kll.16.2.9 | empty line before the status line: C skips it (RFC 9112 2.2 covers the request-line only), Rust rejects
+response@GET c-accepts/rust-rejects:BadRequestLine [leading-empty-line,no-reason] | bd-9kll.16.2.9 | same root cause under GET
+response@HEAD c-accepts/rust-rejects:BadRequestLine [leading-empty-line,no-reason] | bd-9kll.16.2.9 | same root cause under HEAD
+response@CONNECT c-accepts/rust-rejects:BadRequestLine [leading-empty-line,status=1xx,no-reason] | bd-9kll.16.2.9 | same root cause, 1xx
+response@GET c-accepts/rust-rejects:BadRequestLine [leading-empty-line,status=1xx,no-reason] | bd-9kll.16.2.9 | same root cause, 1xx
+response@HEAD c-accepts/rust-rejects:BadRequestLine [leading-empty-line,status=1xx,no-reason] | bd-9kll.16.2.9 | same root cause, 1xx
+response@CONNECT c-accepts/rust-rejects:BadRequestLine [leading-empty-line,status=204,no-reason] | bd-9kll.16.2.9 | same root cause, 204 (seed 1)
+response@GET c-accepts/rust-rejects:BadRequestLine [leading-empty-line,status=204,no-reason] | bd-9kll.16.2.9 | same root cause, 204 (seed 1)
+response@HEAD c-accepts/rust-rejects:BadRequestLine [leading-empty-line,status=204,no-reason] | bd-9kll.16.2.9 | same root cause, 204 (seed 1)
+response@GET c-accepts/rust-rejects:BadTransferEncoding [no-reason] | bd-9kll.16.2.10 | Transfer-Encoding other than exactly chunked: Rust rejects, C close-delimited (RFC 9112 6.3 item 4) or chunked-final
+response@GET rust-accepts/c-rejects:bad-chunk-extension [no-reason] | bd-9kll.16.2.8 | chunk-ext 5; in a response: the same shared chunk decoder
+response@GET rust-accepts/c-rejects:bad-transfer-encoding [no-reason] | bd-9kll.16.2.11 | HTTP/1.0 response with Transfer-Encoding chunked: Rust accepts, C rejects (RFC 9112 6.1 MUST)
+response@CONNECT rust-accepts/c-rejects:bad-status [no-reason] | bd-9kll.16.2.12 | status 600..999: Rust accepts, C bad-status (RFC 9110 15 SHOULD treat as 5xx)
+response@GET rust-accepts/c-rejects:bad-status [no-reason] | bd-9kll.16.2.12 | status 600..999
+response@HEAD rust-accepts/c-rejects:bad-status [no-reason] | bd-9kll.16.2.12 | status 600..999
+response@CONNECT rust-accepts/c-rejects:bad-content-length [no-reason] | bd-9kll.16.2.13 | C validates the framing fields of a response whose framing is fixed by status/method (RFC 9110 9.3.6 MUST ignore for CONNECT 2xx)
+response@HEAD rust-accepts/c-rejects:bad-content-length [no-reason] | bd-9kll.16.2.13 | same root cause, HEAD (RFC 9112 6.3 item 1)
+response@CONNECT rust-accepts/c-rejects:bad-content-length [status=1xx,no-reason] | bd-9kll.16.2.13 | same root cause, 1xx
+response@GET rust-accepts/c-rejects:bad-content-length [status=1xx,no-reason] | bd-9kll.16.2.13 | same root cause, 1xx
+response@HEAD rust-accepts/c-rejects:bad-content-length [status=1xx,no-reason] | bd-9kll.16.2.13 | same root cause, 1xx
+response@CONNECT rust-accepts/c-rejects:bad-content-length [status=204,no-reason] | bd-9kll.16.2.13 | same root cause, 204 (seed 1)
+response@GET rust-accepts/c-rejects:bad-content-length [status=204,no-reason] | bd-9kll.16.2.13 | same root cause, 204 (seed 1)
+response@HEAD rust-accepts/c-rejects:bad-content-length [status=204,no-reason] | bd-9kll.16.2.13 | same root cause, 204 (seed 1)
+response@CONNECT rust-accepts/c-rejects:bad-transfer-encoding [no-reason] | bd-9kll.16.2.13 | same root cause, Transfer-Encoding
+response@HEAD rust-accepts/c-rejects:bad-transfer-encoding [no-reason] | bd-9kll.16.2.13 | same root cause, Transfer-Encoding
+response@CONNECT rust-accepts/c-rejects:bad-transfer-encoding [status=1xx,no-reason] | bd-9kll.16.2.13 | same root cause, 1xx
+response@GET rust-accepts/c-rejects:bad-transfer-encoding [status=1xx,no-reason] | bd-9kll.16.2.13 | same root cause, 1xx
+response@HEAD rust-accepts/c-rejects:bad-transfer-encoding [status=1xx,no-reason] | bd-9kll.16.2.13 | same root cause, 1xx
+response@CONNECT rust-accepts/c-rejects:content-length-and-transfer-encoding [no-reason] | bd-9kll.16.2.13 | same root cause, Content-Length with Transfer-Encoding
+response@HEAD rust-accepts/c-rejects:content-length-and-transfer-encoding [no-reason] | bd-9kll.16.2.13 | same root cause, Content-Length with Transfer-Encoding
+response@CONNECT rust-accepts/c-rejects:content-length-and-transfer-encoding [status=304,no-reason] | bd-9kll.16.2.13 | same root cause, 304
+response@GET rust-accepts/c-rejects:content-length-and-transfer-encoding [status=304,no-reason] | bd-9kll.16.2.13 | same root cause, 304
+response@HEAD rust-accepts/c-rejects:content-length-and-transfer-encoding [status=304,no-reason] | bd-9kll.16.2.13 | same root cause, 304
+response@CONNECT rust-accepts/c-rejects:duplicate-content-length [no-reason] | bd-9kll.16.2.13 | same root cause, duplicate Content-Length
+response@HEAD rust-accepts/c-rejects:duplicate-content-length [no-reason] | bd-9kll.16.2.13 | same root cause, duplicate Content-Length
+ws-frame@client both-reject:close-code:1009/1002 [control,len=16bit] | bd-9kll.16.2.14 | control frame over 125 bytes: Rust 1009, C 1002 (RFC 6455 5.5 protocol violation)
+ws-frame@server both-reject:close-code:1009/1002 [control,len=16bit] | bd-9kll.16.2.14 | same root cause under the server role
+ws-frame@client both-reject:close-code:1009/1002 [control,len=64bit] | bd-9kll.16.2.14 | same root cause, 64-bit length form
+ws-frame@server both-reject:close-code:1009/1002 [control,len=64bit] | bd-9kll.16.2.14 | same root cause, 64-bit length form
+ws-frame@client both-reject:close-code:1002/1007 [control] | bd-9kll.16.2.15 | close reason not UTF-8: Rust 1002, C 1007 (Autobahn 7.5.1 accepts either)
+ws-frame@server both-reject:close-code:1002/1007 [control] | bd-9kll.16.2.15 | same root cause under the server role

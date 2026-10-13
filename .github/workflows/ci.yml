@@ -1144,6 +1144,28 @@ jobs:
             PARSER_DIFF_OUT=build/parser-differential/out-nohost \
             ASX_TWIN_BIN=tools/twin_run/target/release/twin_run
 
+      # Responses: each input is decoded as the answer to a GET, a HEAD and a
+      # CONNECT (the request method frames the body), so 6000 inputs are
+      # 18000 cases.
+      - name: Parser differential, HTTP response (seed 3, 6000 inputs, observes)
+        run: |
+          make parser-differential PARSER_DIFF_MODE=observe PARSER_DIFF_TARGET=http-response \
+            PARSER_DIFF_SEED=3 PARSER_DIFF_COUNT=6000 \
+            PARSER_DIFF_OUT=build/parser-differential/out-response \
+            ASX_TWIN_BIN=tools/twin_run/target/release/twin_run
+
+      # WebSocket frames: each input is received as a client and as a server
+      # (the masking rule differs), so 8000 inputs are 16000 cases. The
+      # corpus holds every header prefix of each base frame (a decoder that
+      # counts the mask key short accepts a header that is not there), and a
+      # rejected frame carries the close code the receiver fails with.
+      - name: Parser differential, WebSocket frame (seed 5, 8000 inputs, observes)
+        run: |
+          make parser-differential PARSER_DIFF_MODE=observe PARSER_DIFF_TARGET=ws-frame \
+            PARSER_DIFF_SEED=5 PARSER_DIFF_COUNT=8000 \
+            PARSER_DIFF_OUT=build/parser-differential/out-ws \
+            ASX_TWIN_BIN=tools/twin_run/target/release/twin_run
+
       - name: Upload parser differential report
         if: always()
         uses: actions/upload-artifact@v4
@@ -1156,6 +1178,12 @@ jobs:
             build/parser-differential/out-nohost/report.txt
             build/parser-differential/out-nohost/report.json
             build/parser-differential/out-nohost/beads.sh
+            build/parser-differential/out-response/report.txt
+            build/parser-differential/out-response/report.json
+            build/parser-differential/out-response/beads.sh
+            build/parser-differential/out-ws/report.txt
+            build/parser-differential/out-ws/report.json
+            build/parser-differential/out-ws/beads.sh
           if-no-files-found: ignore
 
       - name: Upload divergent scenarios
