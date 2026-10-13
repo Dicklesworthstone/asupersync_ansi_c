@@ -1004,6 +1004,18 @@ reduction is tracked in `bd-dkfs`, and the report's per-object ranking
 (`report.txt`, `--bss-top`) says where the remaining bss is. These are host
 numbers: nothing here has been measured on a device.
 
+The quickstart column has moved since that report (`bd-dkfs`; measured by
+hand with `make kernel-only-quickstart BUILD_TYPE=release PROFILE=CORE
+RESOURCE_CLASS=1` at `82d9677`, not by a new `make size-report`): 438,832 B at
+`771d46c`, 410,223 B once the network, file-system, process and signal
+modules were no longer linked unless used (they register their reset when
+first used), 131,226 B with release builds compiling `-ffunction-sections
+-fdata-sections` and linking `--gc-sections` (`-dead_strip` on Darwin), and
+112,042 B without the host's unwind tables. That is 152,144 B of bss and a
+flash figure under the 128 KiB hard threshold and over the 64 KiB target.
+The kernel archive, the other figure in the table, is a sum of objects: it
+does not move with a link flag.
+
 The perf workflow (`.github/workflows/perf.yml`, pushes to `main`) uses separate
 `build/perf-core` and `build/perf-hft` directories. A CORE SLO failure no
 longer suppresses HFT or CORE size/cold-start collection when their build
