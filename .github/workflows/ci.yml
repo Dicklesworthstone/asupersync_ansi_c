@@ -1418,6 +1418,56 @@ jobs:
         run: make test-wasm32-replay FAIL_ON_MISSING_RUNNERS=1
 
   # ---------------------------------------------------------------------------
+  # baremetal-qemu — fixtures on bare-metal Cortex-M4 and RISC-V 32 under
+  # qemu-system (bd-9kll.15.7). The library is cross-built (arm-none-eabi
+  # with newlib, riscv64-unknown-elf with picolibc) at resource classes 1 to
+  # 3, linked with a harness that replays the fixtures of
+  # tests/baremetal/subset.txt compiled in as arrays and prints each one's
+  # semantic and projection digests through semihosting; the lines must equal
+  # the host runner's (class 1 may differ exactly on exceeds_r1.txt), and a
+  # planted one-byte corruption must be detected. Footprints are printed and
+  # kept as an artifact. The packages are apt's; strict mode makes any
+  # missing tool a failure, not a SKIP.
+  # ---------------------------------------------------------------------------
+  baremetal-qemu:
+    name: "bare metal: Cortex-M4 + RISC-V 32 under qemu"
+    runs-on: ubuntu-latest
+    needs: [check]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the cross toolchains and qemu
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc-arm-none-eabi libnewlib-arm-none-eabi \
+            gcc-riscv64-unknown-elf picolibc-riscv64-unknown-elf \
+            qemu-system-arm qemu-system-misc
+          # Newer releases carry the RISC-V systems in their own package.
+          sudo apt-get install -y -qq qemu-system-riscv || true
+          arm-none-eabi-gcc --version | head -1
+          riscv64-unknown-elf-gcc --version | head -1
+          qemu-system-arm --version | head -1
+          qemu-system-riscv32 --version | head -1
+
+      - name: Fixtures on Cortex-M4 and RISC-V 32 under qemu, digests equal the host's
+        run: make test-baremetal-qemu FAIL_ON_MISSING_CROSS_TOOLCHAINS=1 FAIL_ON_MISSING_RUNNERS=1
+
+      - name: Upload footprint and replay output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: baremetal-qemu-${{ github.run_id }}
+          path: |
+            build/baremetal/footprint.txt
+            build/baremetal/native.txt
+            build/baremetal/*/size.txt
+            build/baremetal/*/qemu.txt
+            build/baremetal/*/compare.txt
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # ---------------------------------------------------------------------------
   # embedded-matrix — router-class cross-target builds + QEMU
   # ---------------------------------------------------------------------------
   embedded-matrix:

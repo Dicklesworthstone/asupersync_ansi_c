@@ -188,7 +188,7 @@ naming the subsystem. Threading them is the remaining work of `bd-9kll.3.20`.
    In constrained systems, "best effort" often means undefined behavior. `asx` uses deterministic exhaustion and failure-atomic boundaries. Arena sizes are fixed at build time, and every resource class (R1/R2/R3) publishes concrete limits.
 
 4. **Portable core, specialized adapters**
-   Core logic is platform-neutral ANSI C. OS- or device-specific behavior lives behind profile/platform adapters. CI builds and tests it on Linux with GCC and Clang, on five router-class ISAs under QEMU, on 32-bit x86, and on Windows with MSVC (deterministic builds; Windows has no native I/O yet). Bare-metal targets have make targets (`make cross-baremetal-*`) that CI does not run, and there is no WebAssembly build yet.
+   Core logic is platform-neutral ANSI C. OS- or device-specific behavior lives behind profile/platform adapters. CI builds and tests it on Linux with GCC and Clang, on five router-class ISAs under QEMU, on 32-bit x86, and on Windows with MSVC (deterministic builds; Windows has no native I/O yet). A Cortex-M4 and a RISC-V 32 bare-metal image replay 331 of the conformance fixtures under qemu-system and print the host's digests (`make test-baremetal-qemu`, the `baremetal-qemu` job; footprints in "Measured footprint"); the other `make cross-baremetal-*` targets are builds CI does not run.
 
 5. **Evidence-gated optimization**
    Performance work requires baseline artifacts, hotspot evidence, semantic proof, and rollback path. Instrumentation modules for latency histograms, jitter tracking, and deadline/watchdog compliance (aimed at the HFT and automotive profiles) record the samples an application feeds them.
@@ -1049,6 +1049,41 @@ first used), 131,226 B with release builds compiling `-ffunction-sections
 flash figure under the 128 KiB hard threshold and over the 64 KiB target.
 The kernel archive, the other figure in the table, is a sum of objects: it
 does not move with a link flag.
+
+**On bare-metal cores, under qemu** (`make test-baremetal-qemu`, measured at
+`dec63cd` on worker B with arm-none-eabi-gcc 14.2.1 + newlib 4.6,
+riscv64-unknown-elf-gcc 14.2.0 + picolibc 1.8.10 and qemu 10.2.1; `-O2
+-DNDEBUG`, `--gc-sections`; not a device). Each image is the library, the
+conformance interpreter, a harness and the 331 embedded fixtures
+(`tests/baremetal/subset.txt`: every v2 fixture of at most 16 KiB), linked
+for a Cortex-M4 (FREESTANDING, `mps2-an386`) or a RISC-V 32 core
+(EMBEDDED_ROUTER, `rv32imac`, `virt`). Every digest line it prints equals the
+host's on classes 2 and 3; class 1 differs from the host on exactly 18
+fixtures, which need more arena slots than R1 has (4 regions, 2
+supervisors; `tests/baremetal/exceeds_r1.txt`). Bytes; flash is text + data,
+RAM is bss (it includes a 32 KiB stack and a 64 KiB heap reservation).
+"Kernel" is the part of the library the interpreter links, not a kernel-only
+application; "image" adds the interpreter (whose static buffers are most of
+the bss) and 1.8 MB of fixtures.
+
+| Core, class | Image flash | Image bss | Kernel flash | Kernel bss |
+|---|---|---|---|---|
+| Cortex-M4, R1 | 2,125,704 | 5,383,824 | 140,555 | 134,589 |
+| Cortex-M4, R2 | 2,125,192 | 6,545,600 | 140,127 | 684,173 |
+| Cortex-M4, R3 | 2,126,280 | 10,193,984 | 141,167 | 2,005,517 |
+| RISC-V 32, R1 | 2,131,002 | 5,298,664 | 168,565 | 135,168 |
+| RISC-V 32, R2 | 2,132,018 | 6,470,040 | 169,811 | 685,904 |
+| RISC-V 32, R3 | 2,131,418 | 10,154,328 | 169,255 | 2,009,360 |
+
+The kernel's flash is 137 KiB on the Cortex-M4 and 165 KiB on the RISC-V 32
+core: over the 128 KiB target of EMBEDDED_ROUTER in the table above and
+under its 256 KiB hard threshold (a different measure from that table's
+kernel-only archive, which is a sum of objects, and from its linked
+quickstart). Its bss grows with the class from about 130 KiB (R1) to 2 MiB
+(R3). Nothing here was measured on a device, and the interpreter is not a
+router workload: the run shows that the kernel gives the same digests on a
+32-bit Cortex-M4 and a RISC-V 32 core as on x86-64, and what that part of
+it costs there.
 
 The perf workflow (`.github/workflows/perf.yml`, pushes to `main`) uses separate
 `build/perf-core` and `build/perf-hft` directories. A CORE SLO failure no
@@ -2560,7 +2595,7 @@ verification, and risk documents, among them:
 
 ## CI Pipeline Architecture
 
-The primary CI workflow (`.github/workflows/ci.yml`) runs <!-- fact:ci_jobs -->18<!-- /fact --> top-level jobs on
+The primary CI workflow (`.github/workflows/ci.yml`) runs <!-- fact:ci_jobs -->19<!-- /fact --> top-level jobs on
 pushes and PRs:
 
 | Job | Runs |
@@ -2578,13 +2613,14 @@ pushes and PRs:
 | `cross-qemu` | the unit suite and the Rust fixture replay, cross-compiled for mipsel, big-endian mips, armv7, aarch64 and riscv64 (Debian glibc, static) and run under QEMU user mode |
 | `m32` | the unit suite and the Rust fixture replay on 32-bit x86 |
 | `wasm32` | `make build-wasm32` (four freestanding wasm32 modules linked with wasm-ld) and `make test-wasm32-replay` (every v2 fixture under node on CORE, FREESTANDING and BROWSER, digest lines compared with the native runner's) |
+| `baremetal-qemu` | `make test-baremetal-qemu`: the 331 fixtures of at most 16 KiB cross-built for FREESTANDING on Cortex-M4 (qemu mps2-an386) and EMBEDDED_ROUTER on RISC-V 32 (qemu virt) at resource classes 1 to 3, compiled in as arrays, replayed, and their semantic and projection digests compared with the host runner's (class 1 must differ exactly on the 18 listed fixtures its arenas are too small for); a planted one-byte corruption must be caught |
 | `msvc` | the library and the unit suite built by MSVC (x64, `/W4 /WX /wd4100`, via CMake) and run with CTest, for CORE and WIN32 (deterministic builds) |
 | `embedded-matrix` | router-class cross builds with size and layout rows (built, not run) |
 | `size-report` | the release library and the kernel-only archive built for CORE and EMBEDDED_ROUTER, resource classes default and 1, each quickstart linked and the kernel archive's link closure checked; a build, link or closure failure fails the lane, the sizes are reported and not gated |
 | `gcc-analyzer` | GCC 15.2 `-fanalyzer` over `src/` in CORE and POSIX live; every diagnostic is fixed or carries a reasoned waiver (`docs/STATIC_ANALYSIS_TRIAGE.md`) |
 | `gate-scripts` | the integration tests and smoke lanes no other job runs: the fuzz gates' integration tests (counterexample replay, controls, minimizer pipeline, the harnesses under ASan+UBSan), the foundational contract evidence script, the combinator and actor-supervision harnesses, the POSIX adapter smoke, strict schema validation, the embedded portability proof, and the installer smoke |
 
-None of the <!-- fact:ci_jobs -->18<!-- /fact --> jobs is marked `continue-on-error`, so a failure in any of
+None of the <!-- fact:ci_jobs -->19<!-- /fact --> jobs is marked `continue-on-error`, so a failure in any of
 them fails the workflow. A nightly workflow (`nightly.yml`) runs the C fuzzer
 for 100K iterations, Rust-vs-C differential fuzzing on a new seed each day,
 the metamorphic relations over 250000 generated cases each (five shards of
