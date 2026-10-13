@@ -109,6 +109,20 @@ ASX_API ASX_MUST_USE asx_status asx_blocking_get_result(const asx_blocking_handl
 ASX_API uint32_t asx_blocking_active_count(void);
 
 /* -------------------------------------------------------------------
+ * Replay support (journal_replay.h)
+ * ------------------------------------------------------------------- */
+
+/* Run the pending job in `slot` now, on the calling thread, as the pool
+ * would have: it completes, its result is stored and its waker is woken. A
+ * replay calls this where the recording's pool completed the job; the
+ * recorded slot names it (a slot holds at most one pending job, and the
+ * generation a handle carries is this process's history, not the
+ * program's). Returns ASX_OK with *out_result, ASX_E_INVALID_ARGUMENT for
+ * a NULL out_result, ASX_E_INVALID_STATE when the pool is not initialized,
+ * or ASX_E_NOT_FOUND when no job is pending in that slot. */
+ASX_API ASX_MUST_USE asx_status asx_blocking_replay_complete(uint32_t slot, uint64_t *out_result);
+
+/* -------------------------------------------------------------------
  * Reset (test support)
  * ------------------------------------------------------------------- */
 

@@ -35,6 +35,12 @@ typedef struct {
 /* Reset: close every native socket (test/runtime teardown). */
 void asx_native_net_reset(void);
 
+/* How many times a native entry point ran its real implementation (a
+ * socket, bind, accept, connect, read, write, close or name lookup). A
+ * replay (journal_replay.h) serves every call from the journal and opens
+ * no socket, so this does not move while one runs. */
+uint32_t asx_native_net_real_calls(void);
+
 /* TCP */
 asx_status asx_native_tcp_listen(const asx_socket_addr *addr, asx_native_handle *out);
 asx_status asx_native_tcp_accept(asx_native_handle listener, asx_native_handle *out,
@@ -60,6 +66,11 @@ asx_status asx_native_udp_recv(asx_native_handle sock, uint8_t *dst, uint32_t ca
  * each carrying opts->port, filtered by opts->allow_ipv4/allow_ipv6. */
 asx_status asx_native_resolve(const char *host, const asx_resolve_options *opts,
                               asx_resolve_result *out);
+
+/* The same lookup, made by a blocking job: the journal records it as made
+ * off the runtime thread, so a replay can run the job again. */
+asx_status asx_native_resolve_job(const char *host, const asx_resolve_options *opts,
+                                  asx_resolve_result *out);
 
 /* Shared */
 asx_status asx_native_close(asx_native_handle h);

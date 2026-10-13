@@ -1498,7 +1498,7 @@ static dns_job g_dns_jobs[ASX_RESOLVE_MAX_INFLIGHT];
 static uint64_t dns_job_run(void *user_data) {
     dns_job *job = (dns_job *)user_data;
     uint32_t expected = DNS_JOB_RUNNING;
-    job->status = asx_native_resolve(job->host, &job->options, &job->result);
+    job->status = asx_native_resolve_job(job->host, &job->options, &job->result);
     if (!asx_atomic_u32_compare_exchange(&job->state, &expected, DNS_JOB_DONE)) {
         /* Orphaned by asx_resolve_request_cancel: nobody will collect. */
         asx_atomic_u32_store(&job->state, DNS_JOB_FREE);

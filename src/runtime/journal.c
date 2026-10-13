@@ -511,25 +511,62 @@ static uint32_t data_len_for(int32_t status, uint32_t n) {
     return status == (int32_t)ASX_OK ? n : 0u;
 }
 
+void asx_journal_note_net_listen(const asx_journal_addr *want, int32_t status, uint64_t listener,
+                                 const asx_journal_addr *local) {
+    uint8_t b[JADDR_BYTES + 4 + 8 + JADDR_BYTES];
+    uint8_t *p = b;
+    if (g_active == NULL) return;
+    p = put_addr(p, want);
+    p = put_u32(p, (uint32_t)status);
+    p = put_u64(p, listener);
+    p = put_addr(p, local);
+    j_emit((uint8_t)ASX_JOURNAL_KIND_NET_LISTEN, 0u, 1, b, (uint32_t)(p - b), NULL, 0u);
+}
+
+void asx_journal_note_udp_bind(const asx_journal_addr *want, int32_t status, uint64_t socket,
+                               const asx_journal_addr *local) {
+    uint8_t b[JADDR_BYTES + 4 + 8 + JADDR_BYTES];
+    uint8_t *p = b;
+    if (g_active == NULL) return;
+    p = put_addr(p, want);
+    p = put_u32(p, (uint32_t)status);
+    p = put_u64(p, socket);
+    p = put_addr(p, local);
+    j_emit((uint8_t)ASX_JOURNAL_KIND_UDP_BIND, 0u, 1, b, (uint32_t)(p - b), NULL, 0u);
+}
+
+void asx_journal_note_net_ctl(uint8_t op, uint64_t handle, int32_t status) {
+    uint8_t b[1 + 8 + 4];
+    uint8_t *p = b;
+    if (g_active == NULL) return;
+    p = put_u8(p, op);
+    p = put_u64(p, handle);
+    p = put_u32(p, (uint32_t)status);
+    j_emit((uint8_t)ASX_JOURNAL_KIND_NET_CTL, 0u, 1, b, (uint32_t)(p - b), NULL, 0u);
+}
+
 void asx_journal_note_net_accept(uint64_t listener, int32_t status, uint64_t stream,
-                                 const asx_journal_addr *peer) {
-    uint8_t b[8 + 4 + 8 + JADDR_BYTES];
+                                 const asx_journal_addr *peer, const asx_journal_addr *local) {
+    uint8_t b[8 + 4 + 8 + JADDR_BYTES + JADDR_BYTES];
     uint8_t *p = b;
     if (g_active == NULL) return;
     p = put_u64(p, listener);
     p = put_u32(p, (uint32_t)status);
     p = put_u64(p, stream);
     p = put_addr(p, peer);
+    p = put_addr(p, local);
     j_emit((uint8_t)ASX_JOURNAL_KIND_NET_ACCEPT, 0u, 1, b, (uint32_t)(p - b), NULL, 0u);
 }
 
-void asx_journal_note_net_connect(const asx_journal_addr *to, int32_t status, uint64_t stream) {
-    uint8_t b[JADDR_BYTES + 4 + 8];
+void asx_journal_note_net_connect(const asx_journal_addr *to, int32_t status, uint64_t stream,
+                                  const asx_journal_addr *local) {
+    uint8_t b[JADDR_BYTES + 4 + 8 + JADDR_BYTES];
     uint8_t *p = b;
     if (g_active == NULL) return;
     p = put_addr(p, to);
     p = put_u32(p, (uint32_t)status);
     p = put_u64(p, stream);
+    p = put_addr(p, local);
     j_emit((uint8_t)ASX_JOURNAL_KIND_NET_CONNECT, 0u, 1, b, (uint32_t)(p - b), NULL, 0u);
 }
 
@@ -592,8 +629,8 @@ void asx_journal_note_udp_send(uint64_t socket, uint32_t len, int32_t status, ui
     j_emit((uint8_t)ASX_JOURNAL_KIND_UDP_SEND, 0u, 1, b, (uint32_t)(p - b), NULL, 0u);
 }
 
-void asx_journal_note_resolve(uint64_t name_hash, int32_t status, const asx_journal_addr *addrs,
-                              uint32_t count) {
+static void resolve_emit(uint8_t flags, int sample_trace, uint64_t name_hash, int32_t status,
+                         const asx_journal_addr *addrs, uint32_t count) {
     uint8_t b[8 + 4 + 4];
     uint8_t body[16u * JADDR_BYTES];
     uint8_t *p = b;
@@ -608,18 +645,64 @@ void asx_journal_note_resolve(uint64_t name_hash, int32_t status, const asx_jour
         ASX_CHECKPOINT_WAIVER("bounded: at most 16 resolved addresses");
         q = put_addr(q, &addrs[i]);
     }
-    j_emit((uint8_t)ASX_JOURNAL_KIND_RESOLVE, 0u, 1, b, (uint32_t)(p - b), body,
+    j_emit((uint8_t)ASX_JOURNAL_KIND_RESOLVE, flags, sample_trace, b, (uint32_t)(p - b), body,
            (uint32_t)(q - body));
 }
 
-void asx_journal_note_process_spawn(int32_t status, uint64_t handle, uint32_t pid) {
-    uint8_t b[4 + 8 + 4];
+void asx_journal_note_resolve(uint64_t name_hash, int32_t status, const asx_journal_addr *addrs,
+                              uint32_t count) {
+    resolve_emit(0u, 1, name_hash, status, addrs, count);
+}
+
+void asx_journal_note_resolve_job(uint64_t name_hash, int32_t status, const asx_journal_addr *addrs,
+                                  uint32_t count) {
+    /* Called by a blocking job: the trace counter belongs to the runtime
+     * thread, so the record carries no trace position. */
+    resolve_emit(ASX_JOURNAL_REC_OFFTHREAD, 0, name_hash, status, addrs, count);
+}
+
+void asx_journal_note_process_spawn(int32_t status, uint64_t handle, uint32_t pid,
+                                    uint64_t command_hash, uint8_t flags) {
+    uint8_t b[4 + 8 + 4 + 8 + 1];
     uint8_t *p = b;
     if (g_active == NULL) return;
     p = put_u32(p, (uint32_t)status);
     p = put_u64(p, handle);
     p = put_u32(p, pid);
+    p = put_u64(p, command_hash);
+    p = put_u8(p, flags);
     j_emit((uint8_t)ASX_JOURNAL_KIND_PROCESS_SPAWN, 0u, 1, b, (uint32_t)(p - b), NULL, 0u);
+}
+
+void asx_journal_note_process_write(uint64_t handle, uint32_t len, int32_t status,
+                                    uint32_t written) {
+    uint8_t b[8 + 4 + 4 + 4];
+    uint8_t *p = b;
+    if (g_active == NULL) return;
+    p = put_u64(p, handle);
+    p = put_u32(p, len);
+    p = put_u32(p, (uint32_t)status);
+    p = put_u32(p, data_len_for(status, written));
+    j_emit((uint8_t)ASX_JOURNAL_KIND_PROCESS_WRITE, 0u, 1, b, (uint32_t)(p - b), NULL, 0u);
+}
+
+void asx_journal_note_process_read(uint64_t handle, uint8_t which, uint32_t cap, int32_t status,
+                                   const uint8_t *data, uint32_t n) {
+    uint8_t b[8 + 1 + 4 + 4 + 4];
+    uint8_t shape[8];
+    uint8_t flags = 0u;
+    uint8_t *p = b;
+    uint32_t tail_len = 0u;
+    const uint8_t *tail;
+    if (g_active == NULL) return;
+    n = data_len_for(status, n);
+    p = put_u64(p, handle);
+    p = put_u8(p, which);
+    p = put_u32(p, cap);
+    p = put_u32(p, (uint32_t)status);
+    p = put_u32(p, n);
+    tail = data_part(data, n, (uint32_t)(p - b), &flags, shape, &tail_len);
+    j_emit((uint8_t)ASX_JOURNAL_KIND_PROCESS_READ, flags, 1, b, (uint32_t)(p - b), tail, tail_len);
 }
 
 void asx_journal_note_process_exit(uint64_t handle, uint32_t state, int32_t code, int32_t signal) {

@@ -36,6 +36,12 @@ static inline int asx_process_slot_is_native(uint32_t slot) {
 /* Reset: release every native child (kill_on_drop ones are killed). */
 void asx_native_process_reset(void);
 
+/* How many times a native entry point ran its real implementation (fork,
+ * waitpid, read, write, kill or close). A replay (journal_replay.h)
+ * serves every call from the journal and starts no process, so this does
+ * not move while one runs. */
+uint32_t asx_native_process_real_calls(void);
+
 /* Spawn (command pre-validated: program non-empty and short enough). */
 asx_status asx_native_process_spawn(const asx_process_command *cmd, asx_process_handle *out);
 

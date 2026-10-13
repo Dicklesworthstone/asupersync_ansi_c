@@ -200,14 +200,22 @@ TEST(every_native_boundary_kind_round_trips) {
     ASSERT_EQ(open_journal(&j, 4096u, 0u, 0u), ASX_OK);
     ASSERT_EQ(asx_journal_install(&j), ASX_OK);
     ASSERT_TRUE(asx_journal_active());
-    asx_journal_note_net_accept(7u, (int32_t)ASX_OK, stream, &peer);
-    asx_journal_note_net_connect(&peer, (int32_t)ASX_E_PENDING, 0u);
+    asx_journal_note_net_listen(&peer, (int32_t)ASX_OK, 7u, &addrs[1]);
+    asx_journal_note_udp_bind(&peer, (int32_t)ASX_E_ALREADY_EXISTS, 0u, &peer);
+    asx_journal_note_net_ctl((uint8_t)ASX_JOURNAL_NET_CTL_NODELAY, stream, (int32_t)ASX_OK);
+    asx_journal_note_net_accept(7u, (int32_t)ASX_OK, stream, &peer, &addrs[1]);
+    asx_journal_note_net_connect(&peer, (int32_t)ASX_E_PENDING, 0u, &addrs[1]);
     asx_journal_note_net_read(stream, 64u, (int32_t)ASX_OK, (const uint8_t *)"hello", 5u);
     asx_journal_note_net_write(stream, 10u, (int32_t)ASX_OK, 7u);
     asx_journal_note_udp_recv(stream, 128u, (int32_t)ASX_OK, (const uint8_t *)"dgram", 5u, &peer);
     asx_journal_note_udp_send(stream, 5u, (int32_t)ASX_OK, 5u);
     asx_journal_note_resolve(asx_journal_text_hash("example.test"), (int32_t)ASX_OK, addrs, 2u);
-    asx_journal_note_process_spawn((int32_t)ASX_OK, stream, 4242u);
+    asx_journal_note_resolve_job(asx_journal_text_hash("job.test"), (int32_t)ASX_E_NOT_FOUND, NULL,
+                                 0u);
+    asx_journal_note_process_spawn((int32_t)ASX_OK, stream, 4242u, UINT64_C(0xC0FFEE),
+                                   (uint8_t)ASX_JOURNAL_SPAWN_PIDFD);
+    asx_journal_note_process_write(stream, 6u, (int32_t)ASX_OK, 6u);
+    asx_journal_note_process_read(stream, 1u, 32u, (int32_t)ASX_OK, (const uint8_t *)"out", 3u);
     asx_journal_note_process_exit(stream, 1u, 7, 0);
     asx_journal_note_signal(counts, 4u);
     asx_journal_note_blocking_done(3u, 9u, UINT64_C(0xABCDEF));
@@ -225,19 +233,38 @@ TEST(every_native_boundary_kind_round_trips) {
         kinds_seen++;
     }
     ASSERT_EQ((int)rr, (int)ASX_JOURNAL_READ_END);
-    ASSERT_EQ(kinds_seen, 11u);
+    ASSERT_EQ(kinds_seen, 17u);
+
+    ASSERT_TRUE(find_record(g_out, g_out_len, ASX_JOURNAL_KIND_NET_LISTEN, 0u, &rec));
+    ASSERT_EQ(rec.payload_len, 19u + 4u + 8u + 19u);
+    ASSERT_EQ(asx_journal_get_u16(rec.payload + 17), 8080u); /* what was asked */
+    ASSERT_EQ(asx_journal_get_u32(rec.payload + 19), (uint32_t)ASX_OK);
+    ASSERT_EQ(asx_journal_get_u64(rec.payload + 23), (uint64_t)7u);
+    ASSERT_EQ(asx_journal_get_u16(rec.payload + 31 + 17), 9090u); /* what it got */
+
+    ASSERT_TRUE(find_record(g_out, g_out_len, ASX_JOURNAL_KIND_UDP_BIND, 0u, &rec));
+    ASSERT_EQ(asx_journal_get_u32(rec.payload + 19), (uint32_t)ASX_E_ALREADY_EXISTS);
+
+    ASSERT_TRUE(find_record(g_out, g_out_len, ASX_JOURNAL_KIND_NET_CTL, 0u, &rec));
+    ASSERT_EQ(rec.payload_len, 13u);
+    ASSERT_EQ(rec.payload[0], (uint8_t)ASX_JOURNAL_NET_CTL_NODELAY);
+    ASSERT_EQ(asx_journal_get_u64(rec.payload + 1), stream);
+    ASSERT_EQ(asx_journal_get_u32(rec.payload + 9), (uint32_t)ASX_OK);
 
     ASSERT_TRUE(find_record(g_out, g_out_len, ASX_JOURNAL_KIND_NET_ACCEPT, 0u, &rec));
-    ASSERT_EQ(rec.payload_len, 39u);
+    ASSERT_EQ(rec.payload_len, 58u);
     ASSERT_EQ(asx_journal_get_u64(rec.payload), (uint64_t)7u);
     ASSERT_EQ(asx_journal_get_u32(rec.payload + 8), (uint32_t)ASX_OK);
     ASSERT_EQ(asx_journal_get_u64(rec.payload + 12), stream);
     ASSERT_EQ(rec.payload[20], 0u);
     ASSERT_EQ(rec.payload[21], 127u);
     ASSERT_EQ(asx_journal_get_u16(rec.payload + 37), 8080u);
+    ASSERT_EQ(asx_journal_get_u16(rec.payload + 39 + 17), 9090u); /* the local address */
 
     ASSERT_TRUE(find_record(g_out, g_out_len, ASX_JOURNAL_KIND_NET_CONNECT, 0u, &rec));
+    ASSERT_EQ(rec.payload_len, 19u + 4u + 8u + 19u);
     ASSERT_EQ(asx_journal_get_u32(rec.payload + 19), (uint32_t)ASX_E_PENDING);
+    ASSERT_EQ(asx_journal_get_u16(rec.payload + 31 + 17), 9090u);
 
     ASSERT_TRUE(find_record(g_out, g_out_len, ASX_JOURNAL_KIND_NET_READ, 0u, &rec));
     ASSERT_EQ(rec.flags & ASX_JOURNAL_REC_SHAPE, 0u);
@@ -264,9 +291,34 @@ TEST(every_native_boundary_kind_round_trips) {
     ASSERT_EQ(asx_journal_get_u16(rec.payload + 16 + 17), 8080u);
     ASSERT_EQ(asx_journal_get_u16(rec.payload + 16 + JADDR_LEN_FOR_TEST + 17), 9090u);
 
+    /* A resolution made by a pool job carries the off-thread flag and no
+     * trace position. */
+    ASSERT_TRUE(find_record(g_out, g_out_len, ASX_JOURNAL_KIND_RESOLVE, 1u, &rec));
+    ASSERT_TRUE((rec.flags & ASX_JOURNAL_REC_OFFTHREAD) != 0u);
+    ASSERT_EQ(rec.trace_seq, (uint64_t)0u);
+    ASSERT_EQ(asx_journal_get_u64(rec.payload), asx_journal_text_hash("job.test"));
+    ASSERT_EQ(asx_journal_get_u32(rec.payload + 8), (uint32_t)ASX_E_NOT_FOUND);
+    ASSERT_EQ(asx_journal_get_u32(rec.payload + 12), 0u);
+
     ASSERT_TRUE(find_record(g_out, g_out_len, ASX_JOURNAL_KIND_PROCESS_SPAWN, 0u, &rec));
+    ASSERT_EQ(rec.payload_len, 4u + 8u + 4u + 8u + 1u);
     ASSERT_EQ(asx_journal_get_u64(rec.payload + 4), stream);
     ASSERT_EQ(asx_journal_get_u32(rec.payload + 12), 4242u);
+    ASSERT_EQ(asx_journal_get_u64(rec.payload + 16), UINT64_C(0xC0FFEE));
+    ASSERT_EQ(rec.payload[24], (uint8_t)ASX_JOURNAL_SPAWN_PIDFD);
+
+    ASSERT_TRUE(find_record(g_out, g_out_len, ASX_JOURNAL_KIND_PROCESS_WRITE, 0u, &rec));
+    ASSERT_EQ(asx_journal_get_u64(rec.payload), stream);
+    ASSERT_EQ(asx_journal_get_u32(rec.payload + 8), 6u);
+    ASSERT_EQ(asx_journal_get_u32(rec.payload + 16), 6u);
+
+    ASSERT_TRUE(find_record(g_out, g_out_len, ASX_JOURNAL_KIND_PROCESS_READ, 0u, &rec));
+    ASSERT_EQ(rec.flags & ASX_JOURNAL_REC_SHAPE, 0u);
+    ASSERT_EQ(asx_journal_get_u64(rec.payload), stream);
+    ASSERT_EQ(rec.payload[8], 1u);
+    ASSERT_EQ(asx_journal_get_u32(rec.payload + 9), 32u);
+    ASSERT_EQ(asx_journal_get_u32(rec.payload + 17), 3u);
+    ASSERT_EQ(memcmp(rec.payload + 21, "out", 3u), 0);
 
     ASSERT_TRUE(find_record(g_out, g_out_len, ASX_JOURNAL_KIND_PROCESS_EXIT, 0u, &rec));
     ASSERT_EQ(asx_journal_get_u32(rec.payload + 12), 7u);
@@ -951,7 +1003,8 @@ TEST(a_small_live_run_is_recorded_and_read_back) {
     ASSERT_TRUE(count_kind(ASX_JOURNAL_KIND_NET_WRITE) >= 2u);
     ASSERT_TRUE(count_kind(ASX_JOURNAL_KIND_SIGNAL) >= 1u); /* every drain, empty ones too */
     ASSERT_EQ(count_kind(ASX_JOURNAL_KIND_PROCESS_SPAWN), 1u);
-    ASSERT_EQ(count_kind(ASX_JOURNAL_KIND_PROCESS_EXIT), 1u);
+    ASSERT_TRUE(count_kind(ASX_JOURNAL_KIND_PROCESS_EXIT) >= 1u); /* every reap attempt */
+    ASSERT_TRUE(count_kind(ASX_JOURNAL_KIND_NET_LISTEN) >= 1u);
     ASSERT_EQ(count_kind(ASX_JOURNAL_KIND_BLOCKING_DONE), 1u);
 
     /* The bytes the server read are in the stream (FULL mode). */

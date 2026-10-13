@@ -48,21 +48,38 @@
  *                logical step | i32 status | u32 ready_count
  *   REACTOR_POLL u32 timeout_ms | i32 status | u32 count | count x
  *                (u64 token, u32 ready)
- *   NET_ACCEPT   u64 listener | i32 status | u64 stream | addr peer
- *   NET_CONNECT  addr to | i32 status | u64 stream
+ *   NET_LISTEN   addr want | i32 status | u64 listener | addr local
+ *   UDP_BIND     addr want | i32 status | u64 socket | addr local
+ *   NET_CTL      u8 op (ASX_JOURNAL_NET_CTL_*) | u64 handle | i32 status
+ *   NET_ACCEPT   u64 listener | i32 status | u64 stream | addr peer | addr local
+ *   NET_CONNECT  addr to | i32 status | u64 stream | addr local
  *   NET_READ     u64 stream | u32 cap | i32 status | u32 n | data
  *   NET_WRITE    u64 stream | u32 len | i32 status | u32 written
  *   UDP_RECV     u64 socket | u32 cap | i32 status | u32 n | addr from | data
  *   UDP_SEND     u64 socket | u32 len | i32 status | u32 written
  *   RESOLVE      u64 name_hash (asx_journal_text_hash of the host) | i32
  *                status | u32 count | count x addr
- *   PROCESS_SPAWN i32 status | u64 handle | u32 pid
- *   PROCESS_EXIT u64 handle | u32 state | i32 code | i32 signal
+ *   PROCESS_SPAWN i32 status | u64 handle | u32 pid | u64 command_hash | u8
+ *                flags (ASX_JOURNAL_SPAWN_*). command_hash covers the
+ *                program, its arguments and the stdio modes, so a replay can
+ *                tell a different command from the recorded one.
+ *   PROCESS_EXIT u64 handle | u32 state | i32 code | i32 signal. One per
+ *                reap attempt on a child not yet reaped: state 0 (running)
+ *                when it had not exited, else the exit state, code and
+ *                signal. A replay answers each attempt from its record, so
+ *                the program polls as many times as it did.
+ *   PROCESS_WRITE u64 handle | u32 len | i32 status | u32 written
+ *   PROCESS_READ u64 handle | u8 which (1 stdout, 2 stderr) | u32 cap | i32
+ *                status | u32 n | data
  *   SIGNAL       u8 n | n x (u8 kind, u32 count). One per drain, n == 0
  *                for a drain that found nothing: a replay serves drains in
  *                order, so the empty ones are part of the stream.
  *   BLOCKING_DONE u32 slot | u16 generation | u64 result
  *   addr         u8 family | 16 bytes | u16 port        (19 bytes)
+ *   A boundary call made by a blocking job (a name resolution on the pool)
+ *   carries record flag ASX_JOURNAL_REC_OFFTHREAD and no trace position: a
+ *   replay holds such records until it runs the job again, in the order the
+ *   job's DONE record is reached.
  *   data         FULL mode: n bytes, record flag 0.
  *                SHAPE mode, or n above the record limit: u64 FNV-1a-64 of
  *                the n bytes, record flag ASX_JOURNAL_REC_SHAPE.
@@ -114,6 +131,14 @@ extern "C" {
 /* Header flags. */
 #define ASX_JOURNAL_FLAG_SHAPE 0x1u /* reads and receives stored as length + hash */
 
+/* NET_CTL operations. */
+#define ASX_JOURNAL_NET_CTL_SHUTDOWN_WRITE 0u /* TCP shutdown(SHUT_WR) */
+#define ASX_JOURNAL_NET_CTL_NODELAY 1u        /* TCP_NODELAY */
+#define ASX_JOURNAL_NET_CTL_UDP_CONNECT 2u    /* UDP connect */
+
+/* PROCESS_SPAWN flags. */
+#define ASX_JOURNAL_SPAWN_PIDFD 0x1u /* the exit is awaited on a pidfd, not a timer */
+
 /* Record flags. */
 #define ASX_JOURNAL_REC_SHAPE 0x1u     /* data replaced by its FNV-1a-64 */
 #define ASX_JOURNAL_REC_OFFTHREAD 0x2u /* taken off the runtime thread: trace_seq 0 */
@@ -135,6 +160,11 @@ typedef enum {
     ASX_JOURNAL_KIND_PROCESS_EXIT = 13,
     ASX_JOURNAL_KIND_SIGNAL = 14,
     ASX_JOURNAL_KIND_BLOCKING_DONE = 15,
+    ASX_JOURNAL_KIND_NET_LISTEN = 16,
+    ASX_JOURNAL_KIND_UDP_BIND = 17,
+    ASX_JOURNAL_KIND_NET_CTL = 18,
+    ASX_JOURNAL_KIND_PROCESS_WRITE = 19,
+    ASX_JOURNAL_KIND_PROCESS_READ = 20,
     ASX_JOURNAL_KIND_CHAIN = 0xF0,
     ASX_JOURNAL_KIND_END = 0xFF
 } asx_journal_kind;
@@ -323,13 +353,30 @@ typedef struct {
     uint16_t port;
 } asx_journal_addr;
 
-/* A TCP accept returned `status` (and `stream` and the `peer` address). */
-ASX_API void asx_journal_note_net_accept(uint64_t listener, int32_t status, uint64_t stream,
-                                         const asx_journal_addr *peer);
+/* A TCP listen on `want` returned `status` (and the `listener` it created,
+ * bound to `local`: the port an ephemeral bind got). */
+ASX_API void asx_journal_note_net_listen(const asx_journal_addr *want, int32_t status,
+                                         uint64_t listener, const asx_journal_addr *local);
 
-/* A TCP connect to `to` returned `status` (and the `stream` it created). */
+/* A UDP bind to `want` returned `status` (and the `socket` it created,
+ * bound to `local`). */
+ASX_API void asx_journal_note_udp_bind(const asx_journal_addr *want, int32_t status,
+                                       uint64_t socket, const asx_journal_addr *local);
+
+/* A socket control call (`op` is an ASX_JOURNAL_NET_CTL_*) on `handle`
+ * returned `status`. */
+ASX_API void asx_journal_note_net_ctl(uint8_t op, uint64_t handle, int32_t status);
+
+/* A TCP accept returned `status` (and `stream`, its `peer` and `local`
+ * address). */
+ASX_API void asx_journal_note_net_accept(uint64_t listener, int32_t status, uint64_t stream,
+                                         const asx_journal_addr *peer,
+                                         const asx_journal_addr *local);
+
+/* A TCP connect to `to` returned `status` (and the `stream` it created,
+ * bound to `local`). */
 ASX_API void asx_journal_note_net_connect(const asx_journal_addr *to, int32_t status,
-                                          uint64_t stream);
+                                          uint64_t stream, const asx_journal_addr *local);
 
 /* A TCP read into a buffer of `cap` bytes returned `status` and `n` bytes
  * at `data`: stored as FULL bytes or as their length and hash (SHAPE). */
@@ -355,11 +402,30 @@ ASX_API void asx_journal_note_udp_send(uint64_t socket, uint32_t len, int32_t st
 ASX_API void asx_journal_note_resolve(uint64_t name_hash, int32_t status,
                                       const asx_journal_addr *addrs, uint32_t count);
 
-/* A child spawn returned `status`, the process `handle` and its `pid`. */
-ASX_API void asx_journal_note_process_spawn(int32_t status, uint64_t handle, uint32_t pid);
+/* A resolution made by a blocking job (on the pool, or inline where there
+ * is none): as asx_journal_note_resolve, flagged ASX_JOURNAL_REC_OFFTHREAD
+ * and carrying no trace position. */
+ASX_API void asx_journal_note_resolve_job(uint64_t name_hash, int32_t status,
+                                          const asx_journal_addr *addrs, uint32_t count);
 
-/* A child was reaped: its `handle`, state, exit `code` and terminating
- * `signal`. */
+/* A child spawn of the command whose hash is `command_hash` returned
+ * `status`, the process `handle` and its `pid`; `flags` are
+ * ASX_JOURNAL_SPAWN_*. */
+ASX_API void asx_journal_note_process_spawn(int32_t status, uint64_t handle, uint32_t pid,
+                                            uint64_t command_hash, uint8_t flags);
+
+/* A write of `len` bytes to a child's stdin returned `status` and `written`
+ * bytes. */
+ASX_API void asx_journal_note_process_write(uint64_t handle, uint32_t len, int32_t status,
+                                            uint32_t written);
+
+/* A read of up to `cap` bytes from a child's stdout (`which` 1) or stderr
+ * (2) returned `status` and `n` bytes at `data`: stored as for a TCP read. */
+ASX_API void asx_journal_note_process_read(uint64_t handle, uint8_t which, uint32_t cap,
+                                           int32_t status, const uint8_t *data, uint32_t n);
+
+/* A reap attempt on the child `handle`: its `state` (0, running, when it
+ * had not exited yet), exit `code` and terminating `signal`. */
 ASX_API void asx_journal_note_process_exit(uint64_t handle, uint32_t state, int32_t code,
                                            int32_t signal);
 

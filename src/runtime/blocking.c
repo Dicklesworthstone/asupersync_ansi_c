@@ -331,4 +331,33 @@ asx_status asx_blocking_get_result(const asx_blocking_handle *handle, uint64_t *
 }
 
 uint32_t asx_blocking_active_count(void) { return asx_atomic_u32_load(&g_active_count); }
+
+/* ------------------------------------------------------------------ */
+/* Replay support                                                      */
+/* ------------------------------------------------------------------ */
+
+asx_status asx_blocking_replay_complete(uint32_t slot, uint64_t *out_result) {
+    asx_blocking_handle handle;
+    int pending;
+    uint16_t generation = 0u;
+
+    if (out_result == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (!g_initialized) return ASX_E_INVALID_STATE;
+
+    /* A slot holds at most one pending job; its generation is this run's
+     * (the recorded one is the recording process's history). */
+    pool_lock();
+    pending = slot < g_slot_count && slot_state_load(&g_slots[slot]) == ASX_BLOCKING_PENDING;
+    if (pending) generation = g_slots[slot].generation;
+    pool_unlock();
+    if (!pending) return ASX_E_NOT_FOUND;
+
+    /* The job runs here, not on a pool thread: blocking_job_run takes the
+     * slot, runs fn, notes the completion and wakes the waker. */
+    blocking_job_run(&g_job_ctx[slot]);
+
+    handle.slot = slot;
+    handle.generation = generation;
+    return asx_blocking_get_result(&handle, out_result);
+}
 #endif

@@ -39,6 +39,7 @@
 #include "../../process/process_native.h"
 #include <asx/runtime/io_driver.h>
 #include <asx/runtime/journal.h>
+#include <asx/runtime/journal_replay.h>
 #include <asx/runtime/runtime.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -100,6 +101,10 @@ typedef struct {
     proc_fd exitfd; /* pidfd, or fd == -1 */
     uint32_t backoff_ms;
     char program[ASX_PROCESS_PROGRAM_MAX];
+    /* A replay's child: the handle the recording named it by. A handle's
+     * generation is process history, so this run's need not equal it;
+     * requests are held to this one. */
+    uint64_t jid;
 } native_proc;
 
 /* Spawn plan: built in the parent, read by the child after fork. Static
@@ -120,9 +125,18 @@ static pid_t g_detached[ASX_NATIVE_MAX_DETACHED];
 static uint32_t g_detached_count;
 static proc_plan g_plan;
 
+/* Native calls that ran their real implementation (fork, waitpid, read,
+ * write, kill, close). A replay serves them from the journal and leaves
+ * this where it was. */
+static uint32_t g_real_calls;
+
+uint32_t asx_native_process_real_calls(void) { return g_real_calls; }
+
 /* The journal's name for a process (RP1): the handle spawn returned, as one
- * u64 (native slot bit set, then generation). */
+ * u64 (native slot bit set, then generation); a replay's child answers to
+ * the name the recording gave it. */
 static uint64_t proc_journal_id(const native_proc *p) {
+    if (p->jid != 0u) return p->jid;
     return ((uint64_t)((uint32_t)(p - g_procs) | ASX_PROCESS_NATIVE_SLOT_BIT) << 32) |
            (uint64_t)p->generation;
 }
@@ -194,9 +208,14 @@ static int proc_pipe(int fds[2]) {
 #endif
 }
 
+/* A replay's descriptors are virtual numbers for the IO driver: nothing to
+ * close. */
 static void proc_close_quiet(int *fd) {
     if (*fd >= 0) {
-        (void)close(*fd);
+        if (!asx_replay_fd_is_virtual(*fd)) {
+            g_real_calls++;
+            (void)close(*fd);
+        }
         *fd = -1;
     }
 }
@@ -259,11 +278,32 @@ static void proc_record_status(native_proc *p, int status) {
     proc_fd_close(&p->exitfd);
 }
 
+/* The child's exit as the recording saw it (a replay). */
+static void proc_replay_reaped(native_proc *p, uint32_t state, int32_t code, int32_t sig) {
+    p->reaped = 1;
+    p->state = (asx_process_state)state;
+    p->code = code;
+    p->term_signal = sig;
+    proc_fd_close(&p->exitfd);
+}
+
 /* Non-blocking reap. Returns 1 once the child's status is known. */
 static int proc_try_reap(native_proc *p) {
     int status = 0;
     pid_t r;
     if (p->reaped) return 1;
+    if (asx_replay_active()) {
+        /* Every attempt left a record: the child's exit, or that it was
+         * still running. */
+        uint32_t state = 0u;
+        int32_t code = 0;
+        int32_t sig = 0;
+        int exited = 0;
+        (void)asx_replay_serve_process_exit(proc_journal_id(p), &state, &code, &sig, &exited);
+        if (exited) proc_replay_reaped(p, state, code, sig);
+        return exited;
+    }
+    g_real_calls++;
     do { r = waitpid(p->pid, &status, WNOHANG); } while (r < 0 && errno == EINTR);
     if (r == p->pid) {
         proc_record_status(p, status);
@@ -281,6 +321,9 @@ static int proc_try_reap(native_proc *p) {
         proc_fd_close(&p->exitfd);
         return 1;
     }
+    /* Still running: the attempt is an input too, so a replay polls as
+     * many times as this run did. */
+    asx_journal_note_process_exit(proc_journal_id(p), (uint32_t)ASX_PROCESS_RUNNING, 0, 0);
     return 0;
 }
 
@@ -288,6 +331,14 @@ static void proc_reap_blocking(native_proc *p) {
     int status = 0;
     pid_t r;
     if (p->reaped) return;
+    if (asx_replay_active()) {
+        if (!proc_try_reap(p)) {
+            (void)asx_replay_check_handle(1u, 0u,
+                                          "child was not reaped where the recording reaped it");
+        }
+        return;
+    }
+    g_real_calls++;
     do { r = waitpid(p->pid, &status, 0); } while (r < 0 && errno == EINTR);
     if (r == p->pid) {
         proc_record_status(p, status);
@@ -301,6 +352,7 @@ static void proc_reap_blocking(native_proc *p) {
 
 static void proc_reap_detached(void) {
     uint32_t i = 0u;
+    if (asx_replay_active()) return; /* a replay detaches nothing */
     while (i < g_detached_count) {
         int status;
         pid_t r = waitpid(g_detached[i], &status, WNOHANG);
@@ -313,6 +365,7 @@ static void proc_reap_detached(void) {
 }
 
 static void proc_detach(pid_t pid) {
+    if (asx_replay_active()) return;
     proc_reap_detached();
     /* Beyond the bound the child is left for init to reap at our exit. */
     if (g_detached_count < ASX_NATIVE_MAX_DETACHED) g_detached[g_detached_count++] = pid;
@@ -669,16 +722,111 @@ fail:
     return st;
 }
 
+/* FNV-1a over the bytes of `s` up to its NUL or `cap`, folded into `h`. */
+static uint64_t proc_hash_text(uint64_t h, const char *s, size_t cap) {
+    size_t i;
+    for (i = 0u; i < cap && s[i] != '\0'; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: at most cap bytes");
+        h = (h ^ (uint64_t)(unsigned char)s[i]) * UINT64_C(0x100000001b3);
+    }
+    return (h ^ 0xFFu) * UINT64_C(0x100000001b3); /* a separator */
+}
+
+/* What a replay holds a spawn to: the program, its arguments and stdio
+ * modes. The environment and working directory are not part of it. */
+static uint64_t proc_command_hash(const asx_process_command *cmd) {
+    uint64_t h = UINT64_C(0xcbf29ce484222325);
+    uint32_t i;
+    h = proc_hash_text(h, cmd->program, ASX_PROCESS_PROGRAM_MAX);
+    for (i = 0u; i < cmd->arg_count && i < ASX_PROCESS_MAX_ARGS; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: at most ASX_PROCESS_MAX_ARGS arguments");
+        h = proc_hash_text(h, cmd->args[i], ASX_PROCESS_ARG_MAX);
+    }
+    h = (h ^ (uint64_t)cmd->stdin_mode) * UINT64_C(0x100000001b3);
+    h = (h ^ (uint64_t)cmd->stdout_mode) * UINT64_C(0x100000001b3);
+    h = (h ^ (uint64_t)cmd->stderr_mode) * UINT64_C(0x100000001b3);
+    return h;
+}
+
+/* A spawn served from the journal: the handle and pid the recording got, a
+ * table entry that owns no process and virtual descriptors for the piped
+ * ends. */
+static asx_status native_replay_spawn(const asx_process_command *cmd, uint64_t hash,
+                                      asx_process_handle *out) {
+    int32_t status = 0;
+    uint64_t handle = 0u;
+    uint32_t pid = 0u;
+    uint8_t flags = 0u;
+    native_proc *p;
+    uint32_t idx;
+    size_t len;
+    int i;
+
+    (void)asx_replay_serve_process_spawn(hash, &status, &handle, &pid, &flags);
+    if (status != (int32_t)ASX_OK) return (asx_status)status;
+    for (idx = 0; idx < ASX_NATIVE_MAX_PROCESSES; idx++) {
+        ASX_CHECKPOINT_WAIVER("bounded: ASX_NATIVE_MAX_PROCESSES slots");
+        if (!g_procs[idx].in_use) break;
+    }
+    if (idx >= ASX_NATIVE_MAX_PROCESSES) {
+        (void)asx_replay_check_handle(handle, 0u,
+                                      "process table full where the recording had room");
+        return ASX_E_REPLAY_MISMATCH;
+    }
+    p = &g_procs[idx];
+    {
+        uint32_t gen = proc_next_gen(p->generation);
+        memset(p, 0, sizeof(*p));
+        p->generation = gen;
+    }
+    len = strlen(cmd->program);
+    if (len >= sizeof(p->program)) len = sizeof(p->program) - 1u;
+    memcpy(p->program, cmd->program, len);
+    p->program[len] = '\0';
+    p->in_use = 1;
+    p->pid = (pid_t)pid;
+    p->state = ASX_PROCESS_RUNNING;
+    p->kill_on_drop = cmd->kill_on_drop != 0u;
+    p->backoff_ms = PROC_BACKOFF_MIN_MS;
+    p->modes[PROC_STDIN] = cmd->stdin_mode;
+    p->modes[PROC_STDOUT] = cmd->stdout_mode;
+    p->modes[PROC_STDERR] = cmd->stderr_mode;
+    for (i = 0; i < 3; i++) {
+        proc_fd_init(&p->io[i]);
+        if (p->modes[i] == ASX_PROCESS_STDIO_PIPED) {
+            p->io[i].fd = ASX_REPLAY_VIRTUAL_FD_BASE + 0x1000 + (int)(idx * 4u) + i;
+        }
+    }
+    proc_fd_init(&p->exitfd);
+    if ((flags & ASX_JOURNAL_SPAWN_PIDFD) != 0u) {
+        p->exitfd.fd = ASX_REPLAY_VIRTUAL_FD_BASE + 0x1000 + (int)(idx * 4u) + 3;
+    }
+    p->jid = handle;
+    out->slot = idx | ASX_PROCESS_NATIVE_SLOT_BIT;
+    out->generation = p->generation;
+    return ASX_OK;
+}
+
 asx_status asx_native_process_spawn(const asx_process_command *cmd, asx_process_handle *out) {
-    asx_status st = native_process_spawn_impl(cmd, out);
+    asx_status st;
+    uint64_t hash = 0u;
+    if (cmd != NULL && out != NULL) {
+        hash = proc_command_hash(cmd);
+        if (asx_replay_active()) return native_replay_spawn(cmd, hash, out);
+    }
+    g_real_calls++;
+    st = native_process_spawn_impl(cmd, out);
     if (out != NULL) {
         uint64_t id = 0u;
         uint32_t pid = 0u;
+        uint8_t flags = 0u;
         if (st == ASX_OK) {
+            const native_proc *p = proc_lookup(*out);
             id = ((uint64_t)out->slot << 32) | (uint64_t)out->generation;
             pid = asx_native_process_id(*out);
+            if (p != NULL && p->exitfd.fd >= 0) flags = (uint8_t)ASX_JOURNAL_SPAWN_PIDFD;
         }
-        asx_journal_note_process_spawn((int32_t)st, id, pid);
+        asx_journal_note_process_spawn((int32_t)st, id, pid, hash, flags);
     }
     return st;
 }
@@ -714,6 +862,8 @@ static asx_status proc_send(asx_process_handle h, int sig) {
     /* Until we reap it the pid cannot be recycled, so this never hits a
      * stranger; after reaping there is nothing left to signal. */
     if (p->reaped) return ASX_OK;
+    if (asx_replay_active()) return ASX_OK; /* no process to signal */
+    g_real_calls++;
     if (kill(p->pid, sig) != 0 && errno != ESRCH) return proc_errno_status(errno);
     return ASX_OK;
 }
@@ -757,6 +907,22 @@ asx_status asx_native_process_stdin_write(asx_process_handle h, const uint8_t *s
     if (len == 0u) return ASX_OK;
     if (len > PROC_IO_MAX) len = PROC_IO_MAX;
 
+    if (asx_replay_active()) {
+        /* The write's result, as the recording got it. */
+        int32_t status = 0;
+        uint32_t written = 0u;
+        asx_status st;
+        (void)asx_replay_serve_process_write(proc_journal_id(p), len, &status, &written);
+        st = (asx_status)status;
+        if (st == ASX_OK) {
+            *out_written = written;
+        } else if (st == ASX_E_PENDING) {
+            st = proc_fd_wait(&p->io[PROC_STDIN], ASX_IO_WRITABLE);
+        }
+        return st;
+    }
+    g_real_calls++;
+
     /* Keep a broken pipe from raising SIGPIPE: block it, and consume the
      * one this write generated (a SIGPIPE already pending is left alone). */
     (void)sigemptyset(&pipe_set);
@@ -774,12 +940,18 @@ asx_status asx_native_process_stdin_write(asx_process_handle h, const uint8_t *s
 
     if (n >= 0) {
         *out_written = (uint32_t)n;
+        asx_journal_note_process_write(proc_journal_id(p), len, (int32_t)ASX_OK, (uint32_t)n);
         return ASX_OK;
     }
     if (err == EAGAIN || err == EWOULDBLOCK) {
+        asx_journal_note_process_write(proc_journal_id(p), len, (int32_t)ASX_E_PENDING, 0u);
         return proc_fd_wait(&p->io[PROC_STDIN], ASX_IO_WRITABLE);
     }
-    return proc_errno_status(err);
+    {
+        asx_status st = proc_errno_status(err);
+        asx_journal_note_process_write(proc_journal_id(p), len, (int32_t)st, 0u);
+        return st;
+    }
 }
 
 asx_status asx_native_process_stdin_close(asx_process_handle h) {
@@ -799,19 +971,48 @@ static asx_status proc_read(native_proc *p, int which, uint8_t *dst, uint32_t ca
     if (p->modes[which] != ASX_PROCESS_STDIO_PIPED) return ASX_E_INVALID_STATE;
     if (f->fd < 0) return ASX_OK; /* already at EOF */
     if (cap > PROC_IO_MAX) cap = PROC_IO_MAX;
+    if (asx_replay_active()) {
+        /* The read's result, as the recording got it; EOF closes the
+         * (virtual) descriptor as it did. */
+        int32_t status = 0;
+        uint32_t got = 0u;
+        asx_status st;
+        (void)asx_replay_serve_process_read(proc_journal_id(p), (uint8_t)which, cap, &status, dst,
+                                            &got);
+        st = (asx_status)status;
+        if (st == ASX_OK) {
+            *out_read = got;
+            if (got == 0u) proc_fd_close(f);
+        } else if (st == ASX_E_PENDING) {
+            st = park ? proc_fd_wait(f, ASX_IO_READABLE) : ASX_E_PENDING;
+        }
+        return st;
+    }
+    g_real_calls++;
     do { n = read(f->fd, dst, (size_t)cap); } while (n < 0 && errno == EINTR);
     if (n > 0) {
         *out_read = (uint32_t)n;
+        asx_journal_note_process_read(proc_journal_id(p), (uint8_t)which, cap, (int32_t)ASX_OK, dst,
+                                      (uint32_t)n);
         return ASX_OK;
     }
     if (n == 0) {
+        asx_journal_note_process_read(proc_journal_id(p), (uint8_t)which, cap, (int32_t)ASX_OK, dst,
+                                      0u);
         proc_fd_close(f); /* EOF is sticky */
         return ASX_OK;
     }
     if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        asx_journal_note_process_read(proc_journal_id(p), (uint8_t)which, cap,
+                                      (int32_t)ASX_E_PENDING, dst, 0u);
         return park ? proc_fd_wait(f, ASX_IO_READABLE) : ASX_E_PENDING;
     }
-    return proc_errno_status(errno);
+    {
+        asx_status st = proc_errno_status(errno);
+        asx_journal_note_process_read(proc_journal_id(p), (uint8_t)which, cap, (int32_t)st, dst,
+                                      0u);
+        return st;
+    }
 }
 
 asx_status asx_native_process_read(asx_process_handle h, int which, uint8_t *dst, uint32_t cap,
@@ -887,6 +1088,13 @@ asx_status asx_native_process_wait_with_output(asx_process_handle h, asx_process
 
         p = proc_lookup(h);
         if (p == NULL) return ASX_E_NOT_FOUND;
+        if (asx_replay_active()) {
+            /* Nothing to wait on: the next pass reads the next recorded
+             * result (each pass consumed a record: a read or a reap
+             * attempt). A failed replay answers nothing, so stop. */
+            if (asx_replay_failed()) return ASX_E_REPLAY_MISMATCH;
+            continue;
+        }
         for (i = PROC_STDOUT; i <= PROC_STDERR; i++) {
             if (p->io[i].fd < 0) continue;
             pfds[n].fd = p->io[i].fd;
@@ -922,7 +1130,10 @@ static void proc_release(native_proc *p) {
     for (i = 0; i < 3; i++) proc_fd_close(&p->io[i]);
     if (!proc_try_reap(p)) {
         if (p->kill_on_drop) {
-            (void)kill(p->pid, SIGKILL);
+            if (!asx_replay_active()) {
+                g_real_calls++;
+                (void)kill(p->pid, SIGKILL);
+            }
             proc_reap_blocking(p);
         } else {
             proc_detach(p->pid);
