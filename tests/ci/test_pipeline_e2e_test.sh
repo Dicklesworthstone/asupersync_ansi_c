@@ -19,6 +19,17 @@ TMPDIR_BASE=""
 setup() {
     TMPDIR_BASE=$(mktemp -d)
     trap 'rm -rf "$TMPDIR_BASE"' EXIT
+
+    # The script under test checks for a nightly rustc and cargo and for the
+    # capture binary before it looks at any fixture. This test needs no Rust
+    # toolchain (see the header), so those three are stand-ins in front of PATH.
+    mkdir -p "$TMPDIR_BASE/bin"
+    printf '#!/bin/sh\necho "rustc 1.99.0-nightly (stand-in 2026-01-01)"\n' >"$TMPDIR_BASE/bin/rustc"
+    printf '#!/bin/sh\necho "cargo 1.99.0-nightly (stand-in)"\n' >"$TMPDIR_BASE/bin/cargo"
+    printf '#!/bin/sh\nexit 0\n' >"$TMPDIR_BASE/bin/fixture_capture"
+    chmod +x "$TMPDIR_BASE/bin/rustc" "$TMPDIR_BASE/bin/cargo" "$TMPDIR_BASE/bin/fixture_capture"
+    export PATH="$TMPDIR_BASE/bin:$PATH"
+    export CAPTURE_BIN="$TMPDIR_BASE/bin/fixture_capture"
 }
 
 assert_eq() {
@@ -121,9 +132,8 @@ test_skip_build_and_capture_with_good_fixtures() {
     local mock_dir="$TMPDIR_BASE/good_fixtures"
     create_mock_fixtures "$mock_dir" 66
 
-    local output
-    output=$("$E2E_SCRIPT" --skip-build --skip-capture --skip-conformance --fixtures-dir "$mock_dir" 2>&1)
-    local rc=$?
+    local output rc=0
+    output=$("$E2E_SCRIPT" --skip-build --skip-capture --skip-conformance --fixtures-dir "$mock_dir" 2>&1) || rc=$?
 
     assert_eq "exit code 0" "0" "$rc"
     assert_jsonl_valid "output is valid JSONL" "$output"

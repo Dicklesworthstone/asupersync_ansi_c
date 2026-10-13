@@ -22,7 +22,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 FIXTURE_DIR="${PROJECT_ROOT}/fixtures/rust_reference"
-CAPTURE_BIN="${PROJECT_ROOT}/tools/fixture_capture/target/release/fixture_capture"
+# CAPTURE_BIN may be set by the caller (tests/ci/test_pipeline_e2e_test.sh
+# supplies a stand-in so the script can be tested without a Rust build).
+CAPTURE_BIN="${CAPTURE_BIN:-${PROJECT_ROOT}/tools/fixture_capture/target/release/fixture_capture}"
 CAPTURE_DIR="${PROJECT_ROOT}/tools/fixture_capture"
 SCHEMA_FILE="${PROJECT_ROOT}/schemas/canonical_fixture.schema.json"
 

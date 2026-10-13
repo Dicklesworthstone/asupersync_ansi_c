@@ -560,8 +560,8 @@ E2E_ALL_SCRIPTS := \
 	$(E2E_SCRIPT_DIR)/continuity_restart.sh \
 	$(E2E_SCRIPT_DIR)/native_host.sh \
 	$(E2E_SCRIPT_DIR)/server_shutdown.sh \
+	$(E2E_SCRIPT_DIR)/http_robustness.sh \
 	$(E2E_SCRIPT_DIR)/parallel_swarm.sh \
-	$(E2E_SCRIPT_DIR)/wave_c_acceptance_demo.sh \
 	$(E2E_SCRIPT_DIR)/router_storm.sh \
 	$(E2E_SCRIPT_DIR)/market_open_burst.sh \
 	$(E2E_SCRIPT_DIR)/automotive_fault_burst.sh \
@@ -570,7 +570,13 @@ E2E_ALL_SCRIPTS := \
 	$(E2E_SCRIPT_DIR)/examples_smoke.sh \
 	$(E2E_SCRIPT_DIR)/native_record_replay.sh \
 	$(E2E_SCRIPT_DIR)/native_crash_continuity.sh \
+	$(E2E_SCRIPT_DIR)/raptorq_erasure.sh \
+	$(E2E_SCRIPT_DIR)/cli_smoke.sh \
 	$(E2E_SCRIPT_DIR)/browser_smoke.sh
+# This list is the families tests/e2e/run_all.sh runs (E2E_FAMILIES);
+# tests/ci/test_e2e_suite_registry.sh holds the two together. Not a family:
+# wave_c_acceptance_demo.sh, an aggregator that reruns other gates under its
+# own target (wave-c-acceptance-demo); its chmod is in that target.
 
 E2E_VERTICAL_SCRIPTS := \
 	$(E2E_SCRIPT_DIR)/hft_microburst.sh \
@@ -2457,7 +2463,7 @@ FUZZ_CFLAGS := -std=c99 -Wall -Wextra -Wpedantic -Werror \
                -Wno-conversion -Wno-sign-conversion \
                -O2 -DNDEBUG \
                $(INC_FLAGS) $(PROFILE_DEF) $(CODEC_DEF) $(DET_DEF) \
-               -I$(CURDIR)/tests -I$(CURDIR)/src
+               -I$(CURDIR)/tests -I$(CURDIR)/src $(CFLAGS)
 
 .PHONY: fuzz-build fuzz-smoke fuzz-nightly fuzz-run fuzz-counterexample-replay
 

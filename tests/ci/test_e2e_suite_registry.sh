@@ -112,6 +112,11 @@ assert_eq "suite script count matches Makefile" \
     "$(echo "$make_scripts" | wc -l | tr -d ' ')" \
     "$(echo "$suite_scripts" | wc -l | tr -d ' ')"
 
+# comm needs its inputs sorted in its own collation: LC_ALL=C for both sides
+# (a locale where sort and comm disagree prints "not in sorted order" and
+# makes the comparison unreliable).
+export LC_ALL=C
+
 missing_from_suite="$(comm -23 <(printf '%s\n' "$make_scripts" | sort) <(printf '%s\n' "$suite_scripts" | sort) || true)"
 assert_eq "no Makefile e2e scripts are missing from canonical suite" "" "$missing_from_suite"
 
