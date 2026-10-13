@@ -8,6 +8,7 @@
  */
 
 #include "../test_harness.h"
+#include "../test_runtime.h"
 #include "../test_task.h"
 #include <asx/asx.h>
 #include <asx/core/ghost.h>
@@ -32,7 +33,7 @@ static asx_status poll_pending(void *data, asx_task_id self) {
 }
 
 static void reset_all(void) {
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_ghost_reset();
     asx_scheduler_event_reset();
     asx_event_log_reset();
@@ -106,10 +107,10 @@ TEST(stale_region_handles_fail_without_events) {
     asx_budget budget;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&stale_region), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &stale_region), ASX_OK);
     budget = asx_budget_infinite();
     ASSERT_EQ(asx_region_drain(stale_region, &budget), ASX_OK);
-    ASSERT_EQ(asx_region_open(&fresh_region), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &fresh_region), ASX_OK);
     ASSERT_NE(stale_region, fresh_region);
 
     budget = asx_budget_infinite();
@@ -130,14 +131,14 @@ TEST(double_close_and_finalize_fail_without_events) {
     asx_checkpoint_result checkpoint;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &region), ASX_OK);
     ASSERT_EQ(asx_region_close(region), ASX_OK);
     guard_capture(&guard);
     ASSERT_EQ(asx_region_close(region), ASX_E_INVALID_TRANSITION);
     guard_assert_no_semantic_mutation(&guard);
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &region), ASX_OK);
     ASSERT_EQ(asx_task_spawn(region, poll_pending, NULL, &task), ASX_OK);
     ASSERT_EQ(asx_task_cancel(task, ASX_CANCEL_USER), ASX_OK);
     ASSERT_EQ(asx_checkpoint(task, &checkpoint), ASX_OK);
@@ -185,21 +186,21 @@ TEST(obligation_illegal_transitions_fail_without_events) {
     asx_obligation_id obligation;
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &region), ASX_OK);
     resolve_in_task(region, 1, &obligation);
     guard_capture(&guard);
     ASSERT_EQ(asx_obligation_commit(obligation), ASX_E_OBLIGATION_ALREADY_RESOLVED);
     guard_assert_no_semantic_mutation(&guard);
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &region), ASX_OK);
     resolve_in_task(region, 1, &obligation);
     guard_capture(&guard);
     ASSERT_EQ(asx_obligation_abort(obligation), ASX_E_OBLIGATION_ALREADY_RESOLVED);
     guard_assert_no_semantic_mutation(&guard);
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &region), ASX_OK);
     resolve_in_task(region, 0, &obligation);
     guard_capture(&guard);
     ASSERT_EQ(asx_obligation_commit(obligation), ASX_E_OBLIGATION_ALREADY_RESOLVED);
@@ -216,7 +217,7 @@ TEST(obligation_without_holder_authority_fails_without_events) {
     /* The host holds no task, so a reserve outside a poll creates nothing,
      * and a holder must be named. */
     reset_all();
-    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &region), ASX_OK);
     guard_capture(&guard);
     ASSERT_EQ(asx_obligation_reserve(region, &obligation), ASX_E_PERMISSION_DENIED);
     ASSERT_EQ(asx_obligation_reserve_ex(region, ASX_OBLIGATION_KIND_GENERIC, ASX_INVALID_ID,
@@ -228,7 +229,7 @@ TEST(obligation_without_holder_authority_fails_without_events) {
      * outside any poll, is refused (the holder is never polled here, so it
      * neither settles nor leaks it). */
     reset_all();
-    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &region), ASX_OK);
     ASSERT_EQ(asx_task_spawn(region, poll_pending, NULL, &holder), ASX_OK);
     ASSERT_EQ(asx_obligation_reserve_ex(region, ASX_OBLIGATION_KIND_GENERIC, holder, &obligation),
               ASX_OK);
@@ -255,7 +256,7 @@ TEST(channel_misuse_failures_are_exact_and_non_emitting) {
     guard_assert_no_semantic_mutation(&guard);
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &region), ASX_OK);
     ASSERT_EQ(asx_channel_create(region, 1u, &channel), ASX_OK);
     ASSERT_EQ(asx_channel_close_sender(channel), ASX_OK);
     guard_capture(&guard);
@@ -263,7 +264,7 @@ TEST(channel_misuse_failures_are_exact_and_non_emitting) {
     guard_assert_no_semantic_mutation(&guard);
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &region), ASX_OK);
     ASSERT_EQ(asx_channel_create(region, 1u, &channel), ASX_OK);
     ASSERT_EQ(asx_channel_close_receiver(channel), ASX_OK);
     guard_capture(&guard);
@@ -271,7 +272,7 @@ TEST(channel_misuse_failures_are_exact_and_non_emitting) {
     guard_assert_no_semantic_mutation(&guard);
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &region), ASX_OK);
     ASSERT_EQ(asx_channel_create(region, 1u, &channel), ASX_OK);
     ASSERT_EQ(asx_channel_try_reserve(channel, &permit), ASX_OK);
     ASSERT_EQ(asx_send_permit_send(&permit, 42u), ASX_OK);
@@ -313,7 +314,7 @@ TEST(deadline_and_cancellation_misuse_are_exact_and_non_emitting) {
     guard_assert_no_semantic_mutation(&guard);
 
     reset_all();
-    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    ASSERT_EQ(asx_region_open(test_runtime(), &region), ASX_OK);
     ASSERT_EQ(asx_task_spawn(region, poll_pending, NULL, &task), ASX_OK);
     guard_capture(&guard);
     ASSERT_EQ(asx_checkpoint(task, NULL), ASX_E_INVALID_ARGUMENT);

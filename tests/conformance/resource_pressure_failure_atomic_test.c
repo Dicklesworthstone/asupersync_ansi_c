@@ -9,6 +9,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../test_runtime.h"
 #include <asx/asx.h>
 #include <asx/core/channel.h>
 #include <asx/core/resource.h>
@@ -77,7 +78,7 @@ static asx_status poll_checkpoint_forever(void *data, asx_task_id self) {
 }
 
 static void reset_all(void) {
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_channel_reset();
     asx_trace_reset();
     asx_timer_wheel_reset(asx_timer_wheel_global());
@@ -321,7 +322,7 @@ static void scenario_region_create_exhaustion(pressure_case_result *result) {
     reset_all();
 
     for (index = 0u; index < (uint32_t)ASX_MAX_REGIONS; index++) {
-        if (asx_region_open(&regions[index]) != ASX_OK) {
+        if (asx_region_open(test_runtime(), &regions[index]) != ASX_OK) {
             result->diagnostic = "failed to fill region arena";
             goto finish;
         }
@@ -332,7 +333,7 @@ static void scenario_region_create_exhaustion(pressure_case_result *result) {
         goto finish;
     }
 
-    result->actual_status = asx_region_open(&overflow);
+    result->actual_status = asx_region_open(test_runtime(), &overflow);
 
     metrics_capture(&result->after);
     if (asx_runtime_snapshot_capture(&after_snapshot) != ASX_OK) {
@@ -369,7 +370,7 @@ static void scenario_task_spawn_exhaustion(pressure_case_result *result) {
     result->failure_atomic_expected = 1u;
     reset_all();
 
-    if (asx_region_open(&region) != ASX_OK) {
+    if (asx_region_open(test_runtime(), &region) != ASX_OK) {
         result->diagnostic = "failed to open region";
         goto finish;
     }
@@ -424,7 +425,7 @@ static void scenario_obligation_reserve_exhaustion(pressure_case_result *result)
     result->failure_atomic_expected = 1u;
     reset_all();
 
-    if (asx_region_open(&region) != ASX_OK) {
+    if (asx_region_open(test_runtime(), &region) != ASX_OK) {
         result->diagnostic = "failed to open region";
         goto finish;
     }
@@ -488,7 +489,8 @@ static void scenario_channel_enqueue_exhaustion(pressure_case_result *result) {
     result->failure_atomic_expected = 1u;
     reset_all();
 
-    if (asx_region_open(&region) != ASX_OK || asx_channel_create(region, 4u, &channel) != ASX_OK) {
+    if (asx_region_open(test_runtime(), &region) != ASX_OK ||
+        asx_channel_create(region, 4u, &channel) != ASX_OK) {
         result->diagnostic = "failed to create bounded channel";
         goto finish;
     }
@@ -598,7 +600,7 @@ static asx_status run_budget_once(uint32_t *event_count_out) {
     asx_status status;
 
     reset_all();
-    if (asx_region_open(&region) != ASX_OK) return ASX_E_INVALID_STATE;
+    if (asx_region_open(test_runtime(), &region) != ASX_OK) return ASX_E_INVALID_STATE;
     if (asx_task_spawn(region, poll_pending, NULL, &task) != ASX_OK) { return ASX_E_INVALID_STATE; }
     budget = asx_budget_from_polls(1u);
     status = asx_scheduler_run(region, &budget);
@@ -658,7 +660,7 @@ static void scenario_cancel_cleanup_budget_exhaustion(pressure_case_result *resu
         goto finish;
     }
 
-    if (asx_region_open(&region) != ASX_OK ||
+    if (asx_region_open(test_runtime(), &region) != ASX_OK ||
         asx_task_spawn(region, poll_checkpoint_forever, NULL, &task) != ASX_OK) {
         result->diagnostic = "failed to create cancellation scenario";
         goto finish;

@@ -9,6 +9,7 @@
  */
 
 #include "../test_harness.h"
+#include "../test_runtime.h"
 #include <asx/asx.h>
 #include <inttypes.h>
 #include <stdint.h>
@@ -137,7 +138,7 @@ static void record_order(uint32_t value) {
 }
 
 static void reset_all(void) {
-    asx_runtime_reset();
+    asx_runtime_reset(test_runtime());
     asx_channel_reset();
     asx_ghost_reset();
     asx_parallel_reset();
@@ -376,7 +377,7 @@ static asx_status run_lifecycle(uint32_t worker_count, parity_result *out) {
 
     st = asx_parallel_init(&cfg);
     if (st != ASX_OK) { return st; }
-    st = asx_region_open(&rid);
+    st = asx_region_open(test_runtime(), &rid);
     if (st != ASX_OK) { return st; }
     st = asx_task_spawn(rid, poll_yield_n, &c1, &t1);
     if (st != ASX_OK) { return st; }
@@ -404,7 +405,7 @@ static asx_status run_cancel(uint32_t worker_count, parity_result *out) {
 
     st = asx_parallel_init(&cfg);
     if (st != ASX_OK) { return st; }
-    st = asx_region_open(&rid);
+    st = asx_region_open(test_runtime(), &rid);
     if (st != ASX_OK) { return st; }
     st = asx_task_spawn(rid, poll_checkpoint_then_complete, NULL, &tid);
     if (st != ASX_OK) { return st; }
@@ -444,7 +445,7 @@ static asx_status run_timer_waker(uint32_t worker_count, parity_result *out) {
 
     st = asx_parallel_init(&cfg);
     if (st != ASX_OK) { return st; }
-    st = asx_region_open(&rid);
+    st = asx_region_open(test_runtime(), &rid);
     if (st != ASX_OK) { return st; }
     st = asx_task_spawn(rid, poll_record_order, &s1, &t1);
     if (st != ASX_OK) { return st; }
@@ -492,7 +493,7 @@ static asx_status run_mpsc(uint32_t worker_count, parity_result *out) {
 
     st = asx_parallel_init(&cfg);
     if (st != ASX_OK) { return st; }
-    st = asx_region_open(&rid);
+    st = asx_region_open(test_runtime(), &rid);
     if (st != ASX_OK) { return st; }
     st = asx_channel_create(rid, 5u, &channel);
     if (st != ASX_OK) { return st; }
@@ -549,7 +550,7 @@ static asx_status run_blocking(uint32_t worker_count, parity_result *out) {
 
     st = asx_parallel_init(&cfg);
     if (st != ASX_OK) { return st; }
-    st = asx_region_open(&rid);
+    st = asx_region_open(test_runtime(), &rid);
     if (st != ASX_OK) { return st; }
     st = asx_task_spawn(rid, poll_record_order, &order_value, &tid);
     if (st != ASX_OK) { return st; }
@@ -600,7 +601,7 @@ static asx_status run_reactor(uint32_t worker_count, parity_result *out) {
     if (st != ASX_OK) { return st; }
     st = asx_parallel_init(&cfg);
     if (st != ASX_OK) { return st; }
-    st = asx_region_open(&rid);
+    st = asx_region_open(test_runtime(), &rid);
     if (st != ASX_OK) { return st; }
     st = asx_task_spawn(rid, poll_record_order, &order_value, &tid);
     if (st != ASX_OK) { return st; }
@@ -652,7 +653,7 @@ static asx_status run_mixed_liveness(uint32_t worker_count, parity_result *out) 
 
     st = asx_parallel_init(&cfg);
     if (st != ASX_OK) { return st; }
-    st = asx_region_open(&rid);
+    st = asx_region_open(test_runtime(), &rid);
     if (st != ASX_OK) { return st; }
     st = asx_channel_create(rid, 4u, &channel);
     if (st != ASX_OK) { return st; }
