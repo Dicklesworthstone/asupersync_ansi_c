@@ -331,7 +331,7 @@ TEST(race_loser_abort_uses_default_attribution) {
     ASSERT_EQ(status, ASX_E_CANCELLED);
     ASSERT_EQ(asx_task_join(owner, &outcome), ASX_OK);
     ASSERT_EQ(outcome.severity, ASX_OUTCOME_OK);
-    ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)0u);
+    ASSERT_EQ(asx_obligation_leak_count(&g_rt), (uint64_t)0u);
     run = asx_budget_from_polls(20u);
     ASSERT_EQ(asx_region_drain(root, &run), ASX_OK);
     ASSERT_EQ(asx_quiescence_check(root), ASX_OK);
@@ -387,7 +387,7 @@ TEST(race_loser_abort_preserves_equal_severity_fail_fast) {
     ASSERT_EQ(status, ASX_E_CANCELLED);
     ASSERT_EQ(asx_task_join(owner, &outcome), ASX_OK);
     ASSERT_EQ(outcome.severity, ASX_OUTCOME_OK);
-    ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)0u);
+    ASSERT_EQ(asx_obligation_leak_count(&g_rt), (uint64_t)0u);
     run = asx_budget_from_polls(20u);
     ASSERT_EQ(asx_region_drain(root, &run), ASX_OK);
     ASSERT_EQ(asx_quiescence_check(root), ASX_OK);
@@ -429,7 +429,7 @@ TEST(race_loser_obligations_are_leaked_before_resolve) {
      * group resolves (Rust drops the loser's token, which posts a Leak). */
     ASSERT_EQ(asx_obligation_get_info(g_m[1].ob, &info), ASX_OK);
     ASSERT_EQ(info.state, ASX_OBLIGATION_LEAKED);
-    ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)1u);
+    ASSERT_EQ(asx_obligation_leak_count(&g_rt), (uint64_t)1u);
     run = asx_budget_from_polls(10);
     ASSERT_EQ(asx_region_drain(r, &run), ASX_OK);
 }

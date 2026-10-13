@@ -969,7 +969,7 @@ TEST(scheduler_stamps_an_exhausted_poll_quota_with_the_poll_quota_defaults) {
 
     ASSERT_EQ(p.polls, 3u);
     ASSERT_TRUE(p.saw_cancel);
-    expect = asx_cancel_reason_default(ASX_CANCEL_POLL_QUOTA, NULL);
+    expect = asx_cancel_reason_default(test_runtime(), ASX_CANCEL_POLL_QUOTA, NULL);
     ASSERT_EQ((int)p.reason.kind, (int)ASX_CANCEL_POLL_QUOTA);
     ASSERT_EQ(p.reason.origin_region, expect.origin_region);
     ASSERT_EQ(p.reason.origin_task, expect.origin_task);

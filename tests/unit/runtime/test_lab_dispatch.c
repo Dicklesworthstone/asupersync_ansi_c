@@ -1733,7 +1733,7 @@ static void check_quota_channel(int kind) {
         }
         ASSERT_EQ(asx_obligation_get_state(p.lease, &state), ASX_OK);
         ASSERT_EQ(state, ASX_OBLIGATION_COMMITTED);
-        ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)0u);
+        ASSERT_EQ(asx_obligation_leak_count(&g_rt), (uint64_t)0u);
         run = asx_budget_from_polls(10u);
         ASSERT_EQ(asx_region_drain(p.region, &run), ASX_OK);
         ASSERT_EQ(asx_quiescence_check(p.region), ASX_OK);

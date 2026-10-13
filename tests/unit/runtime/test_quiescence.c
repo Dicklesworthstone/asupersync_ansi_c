@@ -800,7 +800,7 @@ TEST(close_outcome_of_a_cancelled_empty_region_is_cancelled) {
 
     asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_region_open(test_runtime(), &cancelled), ASX_OK);
-    reason = asx_cancel_reason_default(ASX_CANCEL_USER, "test");
+    reason = asx_cancel_reason_default(test_runtime(), ASX_CANCEL_USER, "test");
     ASSERT_EQ(asx_region_cancel(cancelled, &reason, NULL), ASX_OK);
     ASSERT_EQ(asx_region_get_state(cancelled, &rs), ASX_OK);
     ASSERT_EQ(rs, ASX_REGION_CLOSED); /* no live work: it finalizes at once */
@@ -830,7 +830,7 @@ TEST(close_outcome_of_a_cancelled_region_keeps_its_task_outcomes) {
     ASSERT_EQ(asx_task_spawn(rid, poll_completes, NULL, &t), ASX_OK);
     budget = asx_budget_from_polls(4);
     ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
-    reason = asx_cancel_reason_default(ASX_CANCEL_USER, "test");
+    reason = asx_cancel_reason_default(test_runtime(), ASX_CANCEL_USER, "test");
     ASSERT_EQ(asx_region_cancel(rid, &reason, NULL), ASX_OK);
     ASSERT_EQ(asx_region_get_close_outcome(rid, &o), ASX_OK);
     ASSERT_EQ(o.severity, ASX_OUTCOME_OK);
@@ -857,7 +857,7 @@ TEST(drain_after_region_cancel_closes_with_the_requested_reason) {
     ASSERT_EQ(asx_region_open_child(rid, &child), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_checkpoint_then_complete, NULL, &root_task), ASX_OK);
     ASSERT_EQ(asx_task_spawn(child, poll_checkpoint_then_complete, NULL, &child_task), ASX_OK);
-    reason = asx_cancel_reason_default(ASX_CANCEL_SHUTDOWN, NULL);
+    reason = asx_cancel_reason_default(test_runtime(), ASX_CANCEL_SHUTDOWN, NULL);
     ASSERT_EQ(asx_region_cancel(rid, &reason, NULL), ASX_OK);
     budget = asx_budget_infinite();
     ASSERT_EQ(asx_region_drain(rid, &budget), ASX_OK);
@@ -2061,7 +2061,7 @@ TEST(public_finalizer_runs_after_holder_resolves_and_handles_reentrancy) {
     ASSERT_EQ(ctx.other_drain, ASX_OK);
     ASSERT_EQ(ctx.calls, 1);
     ASSERT_EQ(remaining_calls, 1);
-    ASSERT_EQ(asx_obligation_leak_count(), 0u);
+    ASSERT_EQ(asx_obligation_leak_count(test_runtime()), 0u);
     ASSERT_EQ(asx_region_get_state(parent, &state), ASX_OK);
     ASSERT_EQ(state, ASX_REGION_CLOSED);
     ASSERT_EQ(asx_quiescence_check(ctx.region), ASX_OK);
@@ -2113,7 +2113,7 @@ TEST(region_leak_audit_waits_for_holder_and_cleanup_task) {
     ASSERT_EQ(holder.reserve_status, ASX_OK);
     ASSERT_EQ(asx_obligation_get_state(holder.obligation, &state), ASX_OK);
     ASSERT_EQ(state, ASX_OBLIGATION_RESERVED);
-    ASSERT_EQ(asx_obligation_leak_count(), 0u);
+    ASSERT_EQ(asx_obligation_leak_count(test_runtime()), 0u);
     holder.release = 1;
     ASSERT_EQ(asx_task_wake(holder_task), ASX_OK);
     budget = asx_budget_from_polls(8u);
@@ -2125,14 +2125,14 @@ TEST(region_leak_audit_waits_for_holder_and_cleanup_task) {
     budget = asx_budget_from_polls(8u);
     ASSERT_EQ(asx_region_drain(ctx.region, &budget), ASX_E_QUIESCENCE_TASKS_LIVE);
     ASSERT_EQ(ctx.spawn_status, ASX_OK);
-    ASSERT_EQ(asx_obligation_leak_count(), 0u);
+    ASSERT_EQ(asx_obligation_leak_count(test_runtime()), 0u);
     ASSERT_EQ(ctx.polls, 0);
     ASSERT_EQ(asx_region_drain(ctx.region, &budget), ASX_OK);
     ASSERT_EQ(ctx.polls, 1);
     ASSERT_EQ(ctx.finalizer_calls, 1);
     ASSERT_EQ(asx_obligation_get_state(holder.obligation, &state), ASX_OK);
     ASSERT_EQ(state, ASX_OBLIGATION_COMMITTED);
-    ASSERT_EQ(asx_obligation_leak_count(), 0u);
+    ASSERT_EQ(asx_obligation_leak_count(test_runtime()), 0u);
     ASSERT_EQ(asx_region_get_close_outcome(ctx.region, &outcome), ASX_OK);
     ASSERT_EQ(outcome.severity, ASX_OUTCOME_OK);
     ASSERT_EQ(asx_quiescence_check(ctx.region), ASX_OK);
@@ -2162,14 +2162,14 @@ TEST(holder_completing_with_obligation_reserved_leaks_it_before_region_close) {
     ASSERT_EQ(holder.reserve_status, ASX_OK);
     ASSERT_EQ(asx_obligation_get_state(holder.obligation, &state), ASX_OK);
     ASSERT_EQ(state, ASX_OBLIGATION_RESERVED);
-    ASSERT_EQ(asx_obligation_leak_count(), 0u);
+    ASSERT_EQ(asx_obligation_leak_count(test_runtime()), 0u);
     holder.release = 1;
     ASSERT_EQ(asx_task_wake(holder_task), ASX_OK);
     budget = asx_budget_from_polls(8u);
     ASSERT_EQ(asx_scheduler_run(ctx.region, &budget), ASX_OK);
     ASSERT_EQ(asx_obligation_get_state(holder.obligation, &state), ASX_OK);
     ASSERT_EQ(state, ASX_OBLIGATION_LEAKED);
-    ASSERT_EQ(asx_obligation_leak_count(), 1u);
+    ASSERT_EQ(asx_obligation_leak_count(test_runtime()), 1u);
     ASSERT_EQ(ctx.finalizer_calls, 0);
     budget = asx_budget_from_polls(8u);
     ASSERT_EQ(asx_region_drain(ctx.region, &budget), ASX_E_QUIESCENCE_TASKS_LIVE);
@@ -2180,7 +2180,7 @@ TEST(holder_completing_with_obligation_reserved_leaks_it_before_region_close) {
     ASSERT_EQ(ctx.finalizer_calls, 1);
     ASSERT_EQ(asx_obligation_get_state(holder.obligation, &state), ASX_OK);
     ASSERT_EQ(state, ASX_OBLIGATION_LEAKED);
-    ASSERT_EQ(asx_obligation_leak_count(), 1u);
+    ASSERT_EQ(asx_obligation_leak_count(test_runtime()), 1u);
     ASSERT_EQ(asx_quiescence_check(ctx.region), ASX_OK);
 }
 
@@ -2618,7 +2618,8 @@ TEST(body_close_cancelled_preserves_requested_reason_and_cause_chain) {
     asx_region_id regions[3];
     asx_task_id tasks[3];
     asx_outcome body = asx_outcome_make(ASX_OUTCOME_CANCELLED);
-    asx_cancel_reason requested = asx_cancel_reason_default(ASX_CANCEL_SHUTDOWN, "body stopped");
+    asx_cancel_reason requested =
+        asx_cancel_reason_default(test_runtime(), ASX_CANCEL_SHUTDOWN, "body stopped");
     asx_cancel_reason seen;
     asx_budget budget = asx_budget_from_polls(16u);
     uint32_t i;
@@ -2690,14 +2691,14 @@ TEST(body_close_wait_runs_lifo_then_cleanup_before_leak_audit) {
     ASSERT_EQ(g_finalizer_log.order[2], 1);
     ASSERT_EQ(asx_obligation_get_state(holder.obligation, &state), ASX_OK);
     ASSERT_EQ(state, ASX_OBLIGATION_COMMITTED);
-    ASSERT_EQ(asx_obligation_leak_count(), 0u);
+    ASSERT_EQ(asx_obligation_leak_count(test_runtime()), 0u);
     budget = asx_budget_from_polls(8u);
     ASSERT_EQ(asx_region_wait_closed(ctx.region, &budget), ASX_OK);
     ASSERT_EQ(ctx.polls, 1);
     ASSERT_EQ(ctx.finalizer_calls, 1);
     ASSERT_EQ(asx_obligation_get_state(holder.obligation, &state), ASX_OK);
     ASSERT_EQ(state, ASX_OBLIGATION_COMMITTED);
-    ASSERT_EQ(asx_obligation_leak_count(), 0u);
+    ASSERT_EQ(asx_obligation_leak_count(test_runtime()), 0u);
     ASSERT_EQ(body_close_trace_count(ASX_TRACE_CANCEL_REQUEST), 0u);
     ASSERT_EQ(asx_region_wait_closed(ctx.region, &budget), ASX_OK);
     ASSERT_EQ(g_finalizer_log.n, 3);
@@ -2711,7 +2712,7 @@ TEST(body_close_invalid_arguments_refuse_without_state_or_trace_mutation) {
     asx_outcome ok = asx_outcome_make(ASX_OUTCOME_OK);
     asx_outcome cancelled = asx_outcome_make(ASX_OUTCOME_CANCELLED);
     asx_outcome invalid = asx_outcome_make((asx_outcome_severity)99);
-    asx_cancel_reason reason = asx_cancel_reason_default(ASX_CANCEL_USER, NULL);
+    asx_cancel_reason reason = asx_cancel_reason_default(test_runtime(), ASX_CANCEL_USER, NULL);
     uint32_t events;
     asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_region_open(test_runtime(), &region), ASX_OK);
@@ -2806,14 +2807,14 @@ TEST(body_close_wait_applies_real_leak_policy_when_the_holder_completes) {
         ASSERT_EQ(holder.reserve_status, ASX_OK);
         ASSERT_EQ(asx_obligation_get_state(holder.obligation, &state), ASX_OK);
         ASSERT_EQ(state, ASX_OBLIGATION_RESERVED);
-        ASSERT_EQ(asx_obligation_leak_count(), 0u);
+        ASSERT_EQ(asx_obligation_leak_count(&runtime), 0u);
         ASSERT_EQ(asx_region_close_with_outcome(region, &body, NULL), ASX_OK);
         holder.release = 1;
         ASSERT_EQ(asx_task_wake(holder_task), ASX_OK);
         budget = asx_budget_from_polls(8u);
         ASSERT_EQ(asx_region_wait_closed(region, &budget),
                   panics && !poisons ? ASX_E_UNRESOLVED_OBLIGATIONS : ASX_OK);
-        ASSERT_EQ(asx_obligation_leak_count(), 1u);
+        ASSERT_EQ(asx_obligation_leak_count(&runtime), 1u);
         ASSERT_EQ(asx_obligation_get_state(holder.obligation, &state), ASX_OK);
         ASSERT_EQ(state,
                   policies[i] == ASX_LEAK_RECOVER ? ASX_OBLIGATION_ABORTED : ASX_OBLIGATION_LEAKED);
@@ -2891,7 +2892,8 @@ TEST(body_close_closed_exception_emits_receipts_without_reopening_or_rerunning) 
         asx_task_id task = ASX_INVALID_ID;
         body_close_task_ctx ctx;
         asx_outcome ok = asx_outcome_make(ASX_OUTCOME_OK), outcome;
-        asx_cancel_reason requested = asx_cancel_reason_default(ASX_CANCEL_SHUTDOWN, "after close");
+        asx_cancel_reason requested =
+            asx_cancel_reason_default(test_runtime(), ASX_CANCEL_SHUTDOWN, "after close");
         asx_cancel_reason observed;
         asx_region_state state;
         asx_budget budget = asx_budget_from_polls(8u);

@@ -2367,7 +2367,7 @@ static asx_status poll_cancel_region_child(void *data, asx_task_id self) {
 
 static asx_status poll_cancel_region_parent(void *data, asx_task_id self) {
     cancel_region_state *s = (cancel_region_state *)data;
-    asx_cancel_reason reason = asx_cancel_reason_default(ASX_CANCEL_USER, NULL);
+    asx_cancel_reason reason = asx_cancel_reason_default(test_runtime(), ASX_CANCEL_USER, NULL);
     asx_checkpoint_result cr;
     asx_status st;
 

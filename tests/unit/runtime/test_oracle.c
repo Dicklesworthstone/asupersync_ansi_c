@@ -43,7 +43,9 @@ static void fresh(void) {
     asx_ghost_reset();
 }
 
-static asx_oracle_result check(const char *name) { return asx_oracle_check_named(name); }
+static asx_oracle_result check(const char *name) {
+    return asx_oracle_check_named(test_runtime(), name);
+}
 
 /* Every kernel-state oracle, the passing run: every verdict PASS. */
 static int all_pass(void) {
@@ -80,7 +82,7 @@ TEST(kernel_oracles_carry_rusts_registry_names_and_unknown_names_fail) {
     r = check("no_such_oracle");
     ASSERT_EQ((int)r.verdict, (int)ASX_ORACLE_FAIL);
     ASSERT_STR_EQ(r.oracle_name, "unknown");
-    r = asx_oracle_check_named(NULL);
+    r = asx_oracle_check_named(test_runtime(), NULL);
     ASSERT_EQ((int)r.verdict, (int)ASX_ORACLE_FAIL);
 }
 

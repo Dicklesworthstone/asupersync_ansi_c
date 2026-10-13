@@ -895,13 +895,13 @@ TEST(region_open_names_its_runtime) {
     ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     asx_runtime_reset(&absent);
     asx_runtime_reset(NULL);
-    ASSERT_EQ(asx_resource_used(ASX_RESOURCE_REGION), 1u);
+    ASSERT_EQ(asx_resource_used(test_runtime(), ASX_RESOURCE_REGION), 1u);
 
     /* The zeroed object is the static kernel: its region carries tag 0, and
      * the reset through the same object ends it. */
     ASSERT_EQ(asx_handle_runtime_tag(rid), (uint16_t)0u);
     asx_runtime_reset(test_runtime());
-    ASSERT_EQ(asx_resource_used(ASX_RESOURCE_REGION), 0u);
+    ASSERT_EQ(asx_resource_used(test_runtime(), ASX_RESOURCE_REGION), 0u);
 }
 
 TEST(runtime_storage_refusals_bind_nothing_and_change_no_byte) {

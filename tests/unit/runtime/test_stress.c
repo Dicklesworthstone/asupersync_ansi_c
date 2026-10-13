@@ -549,7 +549,8 @@ TEST(obligation_rapid_reserve_commit_cycle) {
     ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     ASSERT_EQ(test_run_in_task(rid, reserve_commit_cycle_body, &rid), ASX_OK);
-    ASSERT_TRUE(asx_resource_used(ASX_RESOURCE_OBLIGATION) <= (uint32_t)ASX_MAX_OBLIGATIONS);
+    ASSERT_TRUE(asx_resource_used(test_runtime(), ASX_RESOURCE_OBLIGATION) <=
+                (uint32_t)ASX_MAX_OBLIGATIONS);
 }
 
 TEST(task_spawn_join_cycle_exceeds_arena) {
@@ -571,7 +572,7 @@ TEST(task_spawn_join_cycle_exceeds_arena) {
         /* The joined handle is now stale; the slot is free again. */
         ASSERT_EQ(asx_task_join(tid, &out), ASX_E_NOT_FOUND);
     }
-    ASSERT_EQ(asx_resource_used(ASX_RESOURCE_TASK), 0u);
+    ASSERT_EQ(asx_resource_used(test_runtime(), ASX_RESOURCE_TASK), 0u);
 }
 
 TEST(task_detach_releases_on_completion) {
@@ -591,7 +592,7 @@ TEST(task_detach_releases_on_completion) {
         ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
         ASSERT_EQ(asx_task_get_state(tid, &st), ASX_E_NOT_FOUND);
     }
-    ASSERT_EQ(asx_resource_used(ASX_RESOURCE_TASK), 0u);
+    ASSERT_EQ(asx_resource_used(test_runtime(), ASX_RESOURCE_TASK), 0u);
 }
 
 TEST(closed_region_tasks_reclaimed_under_pressure) {

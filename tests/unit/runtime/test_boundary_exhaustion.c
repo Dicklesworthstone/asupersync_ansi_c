@@ -76,20 +76,21 @@ TEST(cross_arena_task_and_obligation_both_exhausted) {
         ASSERT_EQ(asx_task_spawn(rid, poll_ok, NULL, &tid), ASX_OK);
         if (i == 0u) holder = tid;
     }
-    ASSERT_EQ(asx_resource_remaining(ASX_RESOURCE_TASK), (uint32_t)0);
+    ASSERT_EQ(asx_resource_remaining(test_runtime(), ASX_RESOURCE_TASK), (uint32_t)0);
 
     /* Fill all obligation slots; the task arena is full, so the first
      * (never polled, hence live) task holds them all. */
     for (i = 0; i < ASX_MAX_OBLIGATIONS; i++) { ASSERT_EQ(reserve_for(rid, holder, &oid), ASX_OK); }
-    ASSERT_EQ(asx_resource_remaining(ASX_RESOURCE_OBLIGATION), (uint32_t)0);
+    ASSERT_EQ(asx_resource_remaining(test_runtime(), ASX_RESOURCE_OBLIGATION), (uint32_t)0);
 
     /* Both should fail independently with correct errors */
     ASSERT_EQ(asx_task_spawn(rid, poll_ok, NULL, &tid), ASX_E_RESOURCE_EXHAUSTED);
     ASSERT_EQ(reserve_for(rid, holder, &oid), ASX_E_RESOURCE_EXHAUSTED);
 
     /* State should be consistent */
-    ASSERT_EQ(asx_resource_used(ASX_RESOURCE_TASK), (uint32_t)ASX_MAX_TASKS);
-    ASSERT_EQ(asx_resource_used(ASX_RESOURCE_OBLIGATION), (uint32_t)ASX_MAX_OBLIGATIONS);
+    ASSERT_EQ(asx_resource_used(test_runtime(), ASX_RESOURCE_TASK), (uint32_t)ASX_MAX_TASKS);
+    ASSERT_EQ(asx_resource_used(test_runtime(), ASX_RESOURCE_OBLIGATION),
+              (uint32_t)ASX_MAX_OBLIGATIONS);
 }
 
 TEST(cross_arena_region_full_but_tasks_available) {
@@ -109,7 +110,7 @@ TEST(cross_arena_region_full_but_tasks_available) {
     ASSERT_EQ(asx_region_open(test_runtime(), &overflow), ASX_E_RESOURCE_EXHAUSTED);
 
     /* But tasks are still available within existing regions */
-    ASSERT_EQ(asx_resource_remaining(ASX_RESOURCE_TASK), (uint32_t)ASX_MAX_TASKS);
+    ASSERT_EQ(asx_resource_remaining(test_runtime(), ASX_RESOURCE_TASK), (uint32_t)ASX_MAX_TASKS);
     ASSERT_EQ(asx_task_spawn(rids[0], poll_ok, NULL, &tid), ASX_OK);
 }
 
@@ -162,7 +163,8 @@ TEST(multi_region_obligation_competition) {
     /* Both regions now fail on new reservations */
     ASSERT_EQ(reserve_for(r1, h1, &oid), ASX_E_RESOURCE_EXHAUSTED);
     ASSERT_EQ(reserve_for(r2, h2, &oid), ASX_E_RESOURCE_EXHAUSTED);
-    ASSERT_EQ(asx_resource_used(ASX_RESOURCE_OBLIGATION), (uint32_t)ASX_MAX_OBLIGATIONS);
+    ASSERT_EQ(asx_resource_used(test_runtime(), ASX_RESOURCE_OBLIGATION),
+              (uint32_t)ASX_MAX_OBLIGATIONS);
 }
 
 TEST(multi_region_task_competition) {
@@ -975,10 +977,10 @@ TEST(reset_after_heavy_then_light_use_leaves_no_slot_behind) {
      * slots the light epoch used; every other slot must still be as the
      * first reset left it. */
     reset_all();
-    ASSERT_EQ(asx_resource_remaining(ASX_RESOURCE_TASK), (uint32_t)ASX_MAX_TASKS);
+    ASSERT_EQ(asx_resource_remaining(test_runtime(), ASX_RESOURCE_TASK), (uint32_t)ASX_MAX_TASKS);
     ASSERT_EQ(reset_light_epoch(&light), 0);
     reset_all();
-    ASSERT_EQ(asx_resource_remaining(ASX_RESOURCE_TASK), (uint32_t)ASX_MAX_TASKS);
+    ASSERT_EQ(asx_resource_remaining(test_runtime(), ASX_RESOURCE_TASK), (uint32_t)ASX_MAX_TASKS);
 
     /* The same heavy epoch again issues the same handles: the same indexes
      * and generations, as from a process that never ran anything. */
@@ -987,7 +989,7 @@ TEST(reset_after_heavy_then_light_use_leaves_no_slot_behind) {
     for (i = 0; i < first.n; i++) { ASSERT_EQ(third.ids[i], first.ids[i]); }
 
     reset_all();
-    ASSERT_EQ(asx_resource_remaining(ASX_RESOURCE_TASK), (uint32_t)ASX_MAX_TASKS);
+    ASSERT_EQ(asx_resource_remaining(test_runtime(), ASX_RESOURCE_TASK), (uint32_t)ASX_MAX_TASKS);
 }
 
 /* ====================================================================

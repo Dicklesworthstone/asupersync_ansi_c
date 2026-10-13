@@ -163,7 +163,7 @@ TEST(non_holder_cannot_resolve_an_obligation_but_its_owner_can) {
     ASSERT_EQ(p.before.region, p.after.region);
     ASSERT_EQ(p.trace_before, p.trace_after);
     ASSERT_EQ(p.owner_status, ASX_OK);
-    ASSERT_EQ(asx_obligation_leak_count(), UINT64_C(0));
+    ASSERT_EQ(asx_obligation_leak_count(&g_rt), UINT64_C(0));
 }
 
 typedef struct {
@@ -370,7 +370,7 @@ static void check_handoff(int different_region, int full_destination, int lab) {
         ASSERT_EQ(g_handoff_trace.order[3], ASX_TRACE_OBLIGATION_COMMIT);
     }
     ASSERT_EQ(p.count_before, p.count_after);
-    ASSERT_EQ(asx_obligation_leak_count(), UINT64_C(0));
+    ASSERT_EQ(asx_obligation_leak_count(&g_rt), UINT64_C(0));
     run = asx_budget_from_polls(20u);
     ASSERT_EQ(asx_region_drain(root, &run), ASX_OK);
 }
@@ -638,7 +638,7 @@ static void run_handoff_refusal(handoff_refusal_kind kind, asx_status expected) 
         ASSERT_EQ(asx_scheduler_run(p.destination_region, &run), ASX_OK);
         ASSERT_EQ(p.blocker_status, ASX_OK);
     }
-    ASSERT_EQ(asx_obligation_leak_count(), UINT64_C(0));
+    ASSERT_EQ(asx_obligation_leak_count(&g_rt), UINT64_C(0));
     /* The deliberately invalid/poisoned destination fixture is torn down;
      * the source credit was settled by its actual owner's poll. */
     asx_runtime_shutdown(&g_rt);
@@ -729,7 +729,7 @@ TEST(host_raw_resolution_of_a_held_credit_is_failure_atomic) {
     run = asx_budget_from_polls(8u);
     ASSERT_EQ(asx_scheduler_run(p.region, &run), ASX_OK);
     ASSERT_EQ(p.owner_status, ASX_OK);
-    ASSERT_EQ(asx_obligation_leak_count(), UINT64_C(0));
+    ASSERT_EQ(asx_obligation_leak_count(&g_rt), UINT64_C(0));
 }
 
 typedef struct {
@@ -784,7 +784,7 @@ TEST(task_raw_resolution_of_another_regions_credit_is_failure_atomic) {
     ASSERT_EQ(p.holder_status, ASX_OK);
     ASSERT_EQ(asx_obligation_get_info(p.obligation, &info), ASX_OK);
     ASSERT_EQ(info.state, ASX_OBLIGATION_COMMITTED);
-    ASSERT_EQ(asx_obligation_leak_count(), UINT64_C(0));
+    ASSERT_EQ(asx_obligation_leak_count(&g_rt), UINT64_C(0));
 }
 
 /* Holds all but one slot of the obligation arena from one poll, parks, and
@@ -856,7 +856,7 @@ TEST(handoff_uses_no_extra_slot_when_the_obligation_arena_is_full) {
     run = asx_budget_from_polls(8u);
     ASSERT_EQ(asx_scheduler_run(root, &run), ASX_OK);
     ASSERT_EQ(holder.status, ASX_OK);
-    ASSERT_EQ(asx_obligation_leak_count(), UINT64_C(0));
+    ASSERT_EQ(asx_obligation_leak_count(&g_rt), UINT64_C(0));
     run = asx_budget_from_polls(8u);
     ASSERT_EQ(asx_region_drain(root, &run), ASX_OK);
 }
@@ -1907,7 +1907,7 @@ TEST(reserve_ex_records_kind_and_holder) {
     ASSERT_EQ(asx_scheduler_run(r, &run), ASX_OK);
     ASSERT_EQ(asx_obligation_get_info(o, &info), ASX_OK);
     ASSERT_EQ(info.state, ASX_OBLIGATION_COMMITTED);
-    ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)0u);
+    ASSERT_EQ(asx_obligation_leak_count(&g_rt), (uint64_t)0u);
 }
 
 TEST(reserve_ex_validates_arguments) {
@@ -1985,7 +1985,7 @@ TEST(reserve_holder_must_belong_to_the_region) {
     ASSERT_EQ(asx_scheduler_run(a, &run), ASX_OK);
     ASSERT_EQ(asx_obligation_get_info(o, &info), ASX_OK);
     ASSERT_EQ(info.state, ASX_OBLIGATION_COMMITTED);
-    ASSERT_EQ(asx_obligation_leak_count(), UINT64_C(0));
+    ASSERT_EQ(asx_obligation_leak_count(&g_rt), UINT64_C(0));
     ASSERT_EQ(g_other_reserve, ASX_E_INVALID_STATE);
 }
 
@@ -2012,7 +2012,7 @@ TEST(reserve_outside_a_poll_is_refused_and_creates_nothing) {
     ASSERT_EQ(asx_runtime_obligation_count(&g_rt), count_before);
     ASSERT_EQ(asx_trace_emitted_total(&g_rt), emitted_before);
     ASSERT_EQ(asx_trace_digest(&g_rt), digest_before);
-    ASSERT_EQ(asx_obligation_leak_count(), UINT64_C(0));
+    ASSERT_EQ(asx_obligation_leak_count(&g_rt), UINT64_C(0));
 
     /* Argument and region errors keep their own codes ahead of it. */
     ASSERT_EQ(asx_obligation_reserve(r, NULL), ASX_E_INVALID_ARGUMENT);
@@ -2042,7 +2042,7 @@ TEST(reserve_in_poll_binds_current_task_and_leaks_under_log) {
     ASSERT_EQ(asx_obligation_get_info(s.ob, &info), ASX_OK);
     ASSERT_EQ(info.holder, t);
     ASSERT_EQ(info.state, ASX_OBLIGATION_LEAKED);
-    ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)1u);
+    ASSERT_EQ(asx_obligation_leak_count(&g_rt), (uint64_t)1u);
 
     /* A leaked obligation is terminal: the region can still close. */
     run = asx_budget_from_polls(10);
@@ -2085,7 +2085,7 @@ TEST(drop_leaks_the_obligation_at_once_not_at_completion) {
     /* Leaked inside the poll, before the holder completed. */
     ASSERT_EQ((int)s.after_drop, (int)ASX_OBLIGATION_LEAKED);
     /* Unlinked from its holder: its completion leaks nothing more. */
-    ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)1u);
+    ASSERT_EQ(asx_obligation_leak_count(&g_rt), (uint64_t)1u);
 }
 
 TEST(drop_under_recover_aborts_with_error) {
@@ -2108,7 +2108,7 @@ TEST(drop_under_recover_aborts_with_error) {
     ASSERT_EQ(asx_obligation_get_info(s.ob, &info), ASX_OK);
     ASSERT_EQ((int)info.state, (int)ASX_OBLIGATION_ABORTED);
     ASSERT_EQ((int)info.abort_reason, (int)ASX_OBLIGATION_ABORT_ERROR);
-    ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)1u);
+    ASSERT_EQ(asx_obligation_leak_count(&g_rt), (uint64_t)1u);
 }
 
 static void drop_resolved_or_unknown(void *ctx) {
@@ -2127,7 +2127,7 @@ TEST(drop_rejects_a_resolved_or_unknown_obligation) {
     setup();
     ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(test_run_in_task(r, drop_resolved_or_unknown, &r), ASX_OK);
-    ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)0u);
+    ASSERT_EQ(asx_obligation_leak_count(&g_rt), (uint64_t)0u);
 }
 
 TEST(cancelled_holder_leaks_its_unresolved_obligation) {
@@ -2157,7 +2157,7 @@ TEST(cancelled_holder_leaks_its_unresolved_obligation) {
     ASSERT_EQ(asx_region_drain(r, &run), ASX_OK);
     ASSERT_EQ(asx_obligation_get_info(s.ob, &info), ASX_OK);
     ASSERT_EQ(info.state, ASX_OBLIGATION_LEAKED);
-    ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)1u);
+    ASSERT_EQ(asx_obligation_leak_count(&g_rt), (uint64_t)1u);
 }
 
 TEST(recover_policy_aborts_leaked_obligation) {
@@ -2178,7 +2178,7 @@ TEST(recover_policy_aborts_leaked_obligation) {
     ASSERT_EQ(asx_obligation_get_info(s.ob, &info), ASX_OK);
     ASSERT_EQ(info.state, ASX_OBLIGATION_ABORTED);
     ASSERT_EQ(info.abort_reason, ASX_OBLIGATION_ABORT_ERROR);
-    ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)1u);
+    ASSERT_EQ(asx_obligation_leak_count(&g_rt), (uint64_t)1u);
 }
 
 TEST(panic_policy_routes_leak_through_containment) {
@@ -2200,7 +2200,7 @@ TEST(panic_policy_routes_leak_through_containment) {
     st = asx_scheduler_run(r, &run);
     ASSERT_EQ(asx_obligation_get_info(s.ob, &info), ASX_OK);
     ASSERT_EQ(info.state, ASX_OBLIGATION_LEAKED);
-    ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)1u);
+    ASSERT_EQ(asx_obligation_leak_count(&g_rt), (uint64_t)1u);
 
     /* Same routing as a failing poll: POISON_REGION poisons and keeps
      * draining; FAIL_FAST / ERROR_ONLY surface the fault to the caller. */
@@ -2247,7 +2247,7 @@ TEST(leak_escalation_switches_policy_at_threshold) {
     ASSERT_EQ(asx_obligation_get_info(s[2].ob, &info), ASX_OK);
     ASSERT_EQ(info.state, ASX_OBLIGATION_ABORTED);
     ASSERT_EQ(info.abort_reason, ASX_OBLIGATION_ABORT_ERROR);
-    ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)3u);
+    ASSERT_EQ(asx_obligation_leak_count(&g_rt), (uint64_t)3u);
 }
 
 TEST(leak_escalation_threshold_zero_escalates_the_first_leak) {
@@ -2292,9 +2292,9 @@ TEST(runtime_reset_clears_leak_count) {
     ASSERT_EQ(asx_task_spawn(r, poll_reserver, &s, &t), ASX_OK);
     run = asx_budget_from_polls(10);
     ASSERT_EQ(asx_scheduler_run(r, &run), ASX_OK);
-    ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)1u);
+    ASSERT_EQ(asx_obligation_leak_count(&g_rt), (uint64_t)1u);
     asx_runtime_reset(&g_rt);
-    ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)0u);
+    ASSERT_EQ(asx_obligation_leak_count(&g_rt), (uint64_t)0u);
 }
 
 /* -------------------------------------------------------------------
@@ -2342,13 +2342,13 @@ TEST(region_close_audit_leaks_obligations_still_reserved) {
     ASSERT_EQ(info.state, ASX_OBLIGATION_LEAKED);
     ASSERT_EQ(asx_obligation_get_info(ob[1], &info), ASX_OK);
     ASSERT_EQ(info.state, ASX_OBLIGATION_LEAKED);
-    ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)2u);
+    ASSERT_EQ(asx_obligation_leak_count(&g_rt), (uint64_t)2u);
 
     run = asx_budget_infinite();
     ASSERT_EQ(asx_region_drain(r, &run), ASX_OK);
     ASSERT_EQ(asx_region_get_state(r, &rs), ASX_OK);
     ASSERT_EQ(rs, ASX_REGION_CLOSED);
-    ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)2u);
+    ASSERT_EQ(asx_obligation_leak_count(&g_rt), (uint64_t)2u);
 }
 
 TEST(region_close_leak_audit_is_one_batch) {
@@ -2373,7 +2373,7 @@ TEST(region_close_leak_audit_is_one_batch) {
     ASSERT_EQ(info.abort_reason, ASX_OBLIGATION_ABORT_ERROR);
     ASSERT_EQ(asx_obligation_get_info(ob[1], &info), ASX_OK);
     ASSERT_EQ(info.state, ASX_OBLIGATION_ABORTED);
-    ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)2u);
+    ASSERT_EQ(asx_obligation_leak_count(&g_rt), (uint64_t)2u);
 }
 
 TEST(leak_policy_matrix_follows_rusts_count_then_pick_rule) {
@@ -2424,7 +2424,7 @@ TEST(leak_policy_matrix_follows_rusts_count_then_pick_rule) {
                         ASSERT_EQ(asx_region_audit_leaks_internal(prior_region), ASX_OK);
                         run = asx_budget_infinite();
                         ASSERT_EQ(asx_region_drain(prior_region, &run), ASX_OK);
-                        ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)priors[c]);
+                        ASSERT_EQ(asx_obligation_leak_count(&g_rt), (uint64_t)priors[c]);
                     }
 
                     ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
@@ -2445,7 +2445,7 @@ TEST(leak_policy_matrix_follows_rusts_count_then_pick_rule) {
                         }
                     }
                     /* Counted either way, the recovered ones included. */
-                    ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)(priors[c] + batches[b]));
+                    ASSERT_EQ(asx_obligation_leak_count(&g_rt), (uint64_t)(priors[c] + batches[b]));
                 }
             }
         }
@@ -2469,7 +2469,7 @@ TEST(region_close_leak_audit_under_panic_fails_before_closing) {
     ASSERT_EQ(asx_region_audit_leaks_internal(r), ASX_E_UNRESOLVED_OBLIGATIONS);
     ASSERT_EQ(asx_obligation_get_info(a, &info), ASX_OK);
     ASSERT_EQ(info.state, ASX_OBLIGATION_LEAKED);
-    ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)1u);
+    ASSERT_EQ(asx_obligation_leak_count(&g_rt), (uint64_t)1u);
     if (asx_containment_policy_active() != ASX_CONTAIN_POISON_REGION) {
         /* The fault the audit raised is the scheduler's to report once. */
         ASSERT_EQ(asx_runtime_take_pending_fault_internal(g_kernels[0]),

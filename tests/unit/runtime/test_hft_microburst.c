@@ -102,7 +102,7 @@ TEST(hft_burst_admission_fills_capacity) {
     ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     /* Pre-check: capacity should be available */
-    remaining = asx_resource_remaining(ASX_RESOURCE_TASK);
+    remaining = asx_resource_remaining(test_runtime(), ASX_RESOURCE_TASK);
     ASSERT_EQ(remaining, (uint32_t)ASX_MAX_TASKS);
 
     /* Burst: spawn all slots */
@@ -111,8 +111,8 @@ TEST(hft_burst_admission_fills_capacity) {
     }
 
     /* All slots consumed */
-    ASSERT_EQ(asx_resource_remaining(ASX_RESOURCE_TASK), 0u);
-    ASSERT_EQ(asx_resource_used(ASX_RESOURCE_TASK), (uint32_t)ASX_MAX_TASKS);
+    ASSERT_EQ(asx_resource_remaining(test_runtime(), ASX_RESOURCE_TASK), 0u);
+    ASSERT_EQ(asx_resource_used(test_runtime(), ASX_RESOURCE_TASK), (uint32_t)ASX_MAX_TASKS);
 }
 
 /* -------------------------------------------------------------------
@@ -154,7 +154,7 @@ TEST(hft_burst_admission_gate_precheck) {
     ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
 
     /* Pre-check: can we admit half the task arena? */
-    ASSERT_EQ(asx_resource_admit(ASX_RESOURCE_TASK, ASX_MAX_TASKS / 2u), ASX_OK);
+    ASSERT_EQ(asx_resource_admit(test_runtime(), ASX_RESOURCE_TASK, ASX_MAX_TASKS / 2u), ASX_OK);
 
     /* Spawn half */
     for (i = 0; i < ASX_MAX_TASKS / 2u; i++) {
@@ -162,11 +162,14 @@ TEST(hft_burst_admission_gate_precheck) {
     }
 
     /* Pre-check: one more than the remaining half does not fit */
-    ASSERT_EQ(asx_resource_admit(ASX_RESOURCE_TASK, ASX_MAX_TASKS - ASX_MAX_TASKS / 2u + 1u),
+    ASSERT_EQ(asx_resource_admit(test_runtime(), ASX_RESOURCE_TASK,
+                                 ASX_MAX_TASKS - ASX_MAX_TASKS / 2u + 1u),
               ASX_E_RESOURCE_EXHAUSTED);
 
     /* But exactly the remaining half is OK */
-    ASSERT_EQ(asx_resource_admit(ASX_RESOURCE_TASK, ASX_MAX_TASKS - ASX_MAX_TASKS / 2u), ASX_OK);
+    ASSERT_EQ(asx_resource_admit(test_runtime(), ASX_RESOURCE_TASK,
+                                 ASX_MAX_TASKS - ASX_MAX_TASKS / 2u),
+              ASX_OK);
 }
 
 /* -------------------------------------------------------------------
@@ -655,7 +658,7 @@ TEST(hft_burst_resource_snapshot_consistent) {
     /* Spawn 16 tasks and check snapshot at each step */
     for (i = 0; i < 16; i++) {
         ASSERT_EQ(asx_task_spawn(rid, poll_immediate, NULL, &tid), ASX_OK);
-        ASSERT_EQ(asx_resource_snapshot_get(ASX_RESOURCE_TASK, &snap), ASX_OK);
+        ASSERT_EQ(asx_resource_snapshot_get(test_runtime(), ASX_RESOURCE_TASK, &snap), ASX_OK);
         ASSERT_EQ(snap.used, i + 1);
         ASSERT_EQ(snap.remaining, (uint32_t)ASX_MAX_TASKS - (i + 1));
         ASSERT_EQ(snap.capacity, (uint32_t)ASX_MAX_TASKS);
