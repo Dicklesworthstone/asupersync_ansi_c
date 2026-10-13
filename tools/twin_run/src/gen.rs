@@ -1127,10 +1127,10 @@ mod tests {
                         .flatten()
                     {
                         let program = child.get("program").and_then(Value::as_array);
-                        if let Some(last) = program.and_then(|p| p.last()) {
-                            if is_cancelled_return(last) {
-                                own += 1;
-                            }
+                        if let Some(last) = program.and_then(|p| p.last())
+                            && is_cancelled_return(last)
+                        {
+                            own += 1;
                         }
                     }
                 }
