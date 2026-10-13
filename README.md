@@ -431,8 +431,22 @@ single-worker dispatch. Networking, files, processes, HTTP and live
 (non-deterministic) builds are outside it. That document's §7 lists the
 C-side gaps found and closed.
 
+Two more lanes run the executed corpus past what a parity compare can see,
+because they judge the runtime's own protocol and memory rather than the Rust
+capture. `make conformance-ghost` builds the runner against a library with the
+ghost monitors on and fails any scenario whose run recorded a protocol or
+linearity violation, printing the first. `make conformance-asan` runs it
+under ASan+UBSan. `make fuzz-ghost` and `make fuzz-asan` apply the same two
+lanes to the scenarios the last `make fuzz-differential` captured (CI: seed
+9, 200 scenarios). `tests/gates/test_conformance_monitors.sh` plants a bug in
+each lane and expects that lane to catch it while the plain compare passes.
+Neither result implies the other: legal transitions are not memory safety,
+and a clean sanitizer run covers only the paths these scenarios reach.
+
 ```bash
 make conformance        # executed C-vs-Rust comparison of every v2 fixture
+make conformance-ghost  # the same corpus; any ghost-monitor violation fails the scenario
+make conformance-asan   # the same corpus under ASan+UBSan
 make fuzz-differential FUZZ_V2_SEED=7 FUZZ_V2_COUNT=200
 make fixtures-fresh        # every fixture reproduced by the pinned asupersync + current twin_run (cargo)
 make check-rust-constants  # C kernel constants vs schemas/rust_kernel_constants.json
@@ -922,6 +936,8 @@ make test-e2e           # Every e2e family (tests/e2e/run_all.sh)
 make fixture-integrity  # Fixture schema, provenance, digest recompute, codec round trip
 make test-gates         # Gate negative controls (bad fixtures rejected, planted bugs caught)
 make conformance        # Rust parity: every v2 fixture executed in C and compared
+make conformance-ghost  # The same corpus under the ghost monitors (zero violations)
+make conformance-asan   # The same corpus under ASan+UBSan
 make fuzz-differential  # Seeded Rust-vs-C fuzzing (needs Rust + pinned schema validator)
 make test-fuzz-differential # Live Rust oracle, planted C mutation and minimizer controls
 make codec-equivalence  # Rust fixtures executed in JSON/BIN builds, plus recorded legacy digests
