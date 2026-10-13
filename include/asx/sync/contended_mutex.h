@@ -50,7 +50,8 @@ typedef struct {
  * ------------------------------------------------------------------- */
 
 /* Create an instrumented mutex. */
-ASX_API ASX_MUST_USE asx_status asx_contended_mutex_create(asx_contended_mutex_handle *out);
+ASX_API ASX_MUST_USE asx_status asx_contended_mutex_create(const asx_runtime *rt,
+                                                           asx_contended_mutex_handle *out);
 
 /* Close an instrumented mutex. */
 ASX_API asx_status asx_contended_mutex_close(asx_contended_mutex_handle handle);
@@ -105,7 +106,7 @@ ASX_API int asx_contended_mutex_is_locked(asx_contended_mutex_handle handle);
  * ------------------------------------------------------------------- */
 
 /* Reset all contended mutex arena state. For tests only. */
-ASX_API void asx_contended_mutex_reset(void);
+ASX_API void asx_contended_mutex_reset(const asx_runtime *rt);
 
 #ifdef __cplusplus
 }

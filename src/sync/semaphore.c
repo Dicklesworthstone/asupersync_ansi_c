@@ -738,6 +738,9 @@ uint32_t asx_semaphore_available(asx_semaphore_handle handle) {
 void asx_semaphore_reset_internal(asx_kernel *k) {
     asx_sem_state *st = &k->sems;
     uint32_t i;
+    /* A contended mutex's inner lock is a slot of this arena: close those
+     * first, while the handles are current. */
+    asx_contended_mutex_reset_internal(k);
     for (i = 0; i < st->slot_count; i++) {
         st->slots[i].generation = next_gen(st->slots[i].generation);
         st->slots[i].alive = 0;

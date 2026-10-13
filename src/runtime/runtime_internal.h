@@ -488,6 +488,8 @@ typedef struct asx_kernel {
     asx_barrier_state barriers;
     asx_once_state onces;
     asx_notify_state notifies;
+    asx_pool_state pools;
+    asx_cm_state cmutexes;
     /* The runtime's trace: ring, digest, counters, observer. */
     asx_trace_state trace;
     uint32_t rt_generation; /* nonzero while an initialized runtime holds it */
@@ -655,6 +657,8 @@ void asx_rwlock_reset_internal(asx_kernel *k);
 void asx_barrier_reset_internal(asx_kernel *k);
 void asx_once_reset_internal(asx_kernel *k);
 void asx_notify_reset_internal(asx_kernel *k);
+void asx_pool_reset_internal(asx_kernel *k);
+void asx_contended_mutex_reset_internal(asx_kernel *k);
 
 /* Initialize the scheduling fields of a freshly allocated task slot. */
 void asx_task_sched_init_internal(asx_task_slot *task);

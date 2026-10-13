@@ -261,10 +261,6 @@ static int runtime_p_process(void) {
 static int runtime_p_signal(void) {
     return asx_runtime_reset_hook_registered_internal(ASX_RESET_SLOT_SIGNAL);
 }
-static int runtime_p_pools(void) {
-    return asx_runtime_reset_hook_registered_internal(ASX_RESET_SLOT_POOL) ||
-           asx_runtime_reset_hook_registered_internal(ASX_RESET_SLOT_CONTENDED_MUTEX);
-}
 
 typedef struct {
     const char *name;
@@ -274,7 +270,6 @@ typedef struct {
 /* The still process-wide subsystems, as a second initialization names
  * them. Each moves out of the table as it becomes per runtime. */
 static const runtime_shared_subsystem g_shared_subsystems[] = {
-    {"pools", runtime_p_pools},
     {"channels", asx_channel_in_use_internal},
     {"oneshots", asx_oneshot_in_use_internal},
     {"watches", asx_watch_in_use_internal},

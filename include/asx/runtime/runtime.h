@@ -1454,11 +1454,9 @@ typedef enum {
     ASX_RESET_SLOT_SIGNAL = 7,
     ASX_RESET_SLOT_EPOCH = 8,
     ASX_RESET_SLOT_AFFINITY = 9,
-    ASX_RESET_SLOT_POOL = 10,
-    ASX_RESET_SLOT_CONTENDED_MUTEX = 11,
-    ASX_RESET_SLOT_GEN_SERVER = 12,
-    ASX_RESET_SLOT_DEADLINE_MONITOR = 13,
-    ASX_RESET_SLOT_COUNT = 14
+    ASX_RESET_SLOT_GEN_SERVER = 10,
+    ASX_RESET_SLOT_DEADLINE_MONITOR = 11,
+    ASX_RESET_SLOT_COUNT = 12
 } asx_reset_slot;
 
 /* Runtime-internal: `hook` becomes the reset of `slot`. Idempotent; a slot
@@ -1482,8 +1480,8 @@ void asx_runtime_reset_hooks_run_internal(void);
  * ASX_MAX_RUNTIMES runtimes may be live at once (default 1). A runtime
  * beyond the first brings its own storage block (asx_runtime_config.storage)
  * and is accepted only while every subsystem that is still process-wide has
- * nothing live (channels, pools, actors, supervisors,
- * links, monitors, lab dispatch, parallel lanes, the network,
+ * nothing live (channels, oneshots, watches, broadcasts, sessions, actors,
+ * supervisors, links, monitors, lab dispatch, parallel lanes, the network,
  * file-system, process and signal adapters, the io driver and blocking
  * pool), and asks for the process-wide settings the first one has (hooks,
  * io backend, cancel chain limits). While two runtimes are live, those

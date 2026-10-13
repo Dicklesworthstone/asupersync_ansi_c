@@ -13,18 +13,9 @@
 /* Arena                                                               */
 /* ------------------------------------------------------------------ */
 
-typedef struct {
-    uint16_t generation;
-    int alive;
-    asx_mutex_handle inner;
-    uint64_t acquisitions;
-    uint64_t contentions;
-    uint64_t current_run; /* current consecutive contention streak */
-    uint64_t max_contention_run;
-} cm_slot;
-
-static cm_slot g_slots[ASX_CONTENDED_MUTEX_MAX];
-static uint32_t g_slot_count;
+/* The arenas are the kernels' (asx_kernel.cmutexes, sync_state.h): the
+ * slot field of a handle holds the index in its low half and the tag of
+ * the runtime that issued it above; the inner mutex is that runtime's too. */
 
 static uint16_t next_gen(uint16_t g) {
     g++;
@@ -32,10 +23,14 @@ static uint16_t next_gen(uint16_t g) {
     return g;
 }
 
-static cm_slot *slot_lookup(uint32_t idx, uint16_t gen) {
-    cm_slot *s;
-    if (idx >= ASX_CONTENDED_MUTEX_MAX) return NULL;
-    s = &g_slots[idx];
+/* The live slot a slot field and generation name, NULL when no runtime
+ * holds the tag, the index is out of range or the handle is stale. */
+static asx_cm_slot *slot_lookup(uint32_t field, uint16_t gen) {
+    asx_kernel *k = asx_kernel_for_tag((uint16_t)(field >> ASX_SYNC_SLOT_TAG_SHIFT));
+    uint32_t idx = field & ASX_SYNC_SLOT_INDEX_MASK;
+    asx_cm_slot *s;
+    if (k == NULL || idx >= ASX_CONTENDED_MUTEX_MAX) return NULL;
+    s = &k->cmutexes.slots[idx];
     if (!s->alive || s->generation != gen) return NULL;
     return s;
 }
@@ -44,30 +39,28 @@ static cm_slot *slot_lookup(uint32_t idx, uint16_t gen) {
 /* Lifecycle                                                           */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_contended_mutex_create(asx_contended_mutex_handle *out) {
+asx_status asx_contended_mutex_create(const asx_runtime *rt, asx_contended_mutex_handle *out) {
+    asx_kernel *k = asx_kernel_of_runtime(rt);
     uint32_t i;
     asx_status st;
-    if (out == NULL) return ASX_E_INVALID_ARGUMENT;
-    if (asx_runtime_shared_state_refused_internal("pools")) return ASX_E_INVALID_STATE;
+    if (out == NULL || rt == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (k == NULL) return ASX_E_INVALID_STATE;
 
-    /* Registers the reset with the runtime the first time a mutex is made
-     * (bd-u4o2), so a runtime reset reaches the table. */
-    asx_runtime_reset_hook_register_internal(ASX_RESET_SLOT_CONTENDED_MUTEX,
-                                             asx_contended_mutex_reset);
     for (i = 0; i < ASX_CONTENDED_MUTEX_MAX; i++) {
-        if (!g_slots[i].alive) {
-            st = asx_semaphore_create_untracked(g_kernels[0], 1u, &g_slots[i].inner.sem);
+        asx_cm_slot *s = &k->cmutexes.slots[i];
+        if (!s->alive) {
+            st = asx_semaphore_create_untracked(k, 1u, &s->inner.sem);
             if (st != ASX_OK) return st;
 
-            g_slots[i].alive = 1;
-            g_slots[i].generation = next_gen(g_slots[i].generation);
-            g_slots[i].acquisitions = 0;
-            g_slots[i].contentions = 0;
-            g_slots[i].current_run = 0;
-            g_slots[i].max_contention_run = 0;
-            out->slot = i;
-            out->generation = g_slots[i].generation;
-            if (i >= g_slot_count) g_slot_count = i + 1;
+            s->alive = 1;
+            s->generation = next_gen(s->generation);
+            s->acquisitions = 0;
+            s->contentions = 0;
+            s->current_run = 0;
+            s->max_contention_run = 0;
+            out->slot = ((uint32_t)k->tag << ASX_SYNC_SLOT_TAG_SHIFT) | i;
+            out->generation = s->generation;
+            if (i >= k->cmutexes.slot_count) k->cmutexes.slot_count = i + 1;
             return ASX_OK;
         }
     }
@@ -75,7 +68,7 @@ asx_status asx_contended_mutex_create(asx_contended_mutex_handle *out) {
 }
 
 asx_status asx_contended_mutex_close(asx_contended_mutex_handle handle) {
-    cm_slot *s = slot_lookup(handle.slot, handle.generation);
+    asx_cm_slot *s = slot_lookup(handle.slot, handle.generation);
     if (s == NULL) return ASX_E_STALE_HANDLE;
     asx_mutex_close(s->inner);
     s->alive = 0;
@@ -87,7 +80,7 @@ asx_status asx_contended_mutex_close(asx_contended_mutex_handle handle) {
 /* ------------------------------------------------------------------ */
 
 asx_status asx_contended_mutex_try_lock(asx_contended_mutex_handle handle, asx_mutex_guard *out) {
-    cm_slot *s = slot_lookup(handle.slot, handle.generation);
+    asx_cm_slot *s = slot_lookup(handle.slot, handle.generation);
     asx_status st;
     if (s == NULL) return ASX_E_STALE_HANDLE;
     if (out == NULL) return ASX_E_INVALID_ARGUMENT;
@@ -116,7 +109,7 @@ asx_status asx_contended_mutex_unlock(asx_mutex_guard guard) { return asx_mutex_
 
 asx_status asx_contended_mutex_lock_begin(asx_contended_mutex_handle handle,
                                           asx_mutex_lock_waiter *out) {
-    cm_slot *s = slot_lookup(handle.slot, handle.generation);
+    asx_cm_slot *s = slot_lookup(handle.slot, handle.generation);
     if (s == NULL) return ASX_E_STALE_HANDLE;
     return asx_mutex_lock_begin(s->inner, out);
 }
@@ -124,7 +117,7 @@ asx_status asx_contended_mutex_lock_begin(asx_contended_mutex_handle handle,
 asx_status asx_contended_mutex_poll_lock(asx_contended_mutex_handle handle,
                                          asx_mutex_lock_waiter *waiter, asx_mutex_guard *out,
                                          asx_cx *cx) {
-    cm_slot *s = slot_lookup(handle.slot, handle.generation);
+    asx_cm_slot *s = slot_lookup(handle.slot, handle.generation);
     asx_status st;
     if (s == NULL) return ASX_E_STALE_HANDLE;
 
@@ -150,7 +143,7 @@ asx_status asx_contended_mutex_lock_cancel(asx_mutex_lock_waiter *waiter) {
 
 asx_status asx_contended_mutex_metrics(asx_contended_mutex_handle handle,
                                        asx_lock_metrics_snapshot *out) {
-    cm_slot *s = slot_lookup(handle.slot, handle.generation);
+    asx_cm_slot *s = slot_lookup(handle.slot, handle.generation);
     if (s == NULL) return ASX_E_STALE_HANDLE;
     if (out == NULL) return ASX_E_INVALID_ARGUMENT;
 
@@ -161,7 +154,7 @@ asx_status asx_contended_mutex_metrics(asx_contended_mutex_handle handle,
 }
 
 asx_status asx_contended_mutex_reset_metrics(asx_contended_mutex_handle handle) {
-    cm_slot *s = slot_lookup(handle.slot, handle.generation);
+    asx_cm_slot *s = slot_lookup(handle.slot, handle.generation);
     if (s == NULL) return ASX_E_STALE_HANDLE;
 
     s->acquisitions = 0;
@@ -176,7 +169,7 @@ asx_status asx_contended_mutex_reset_metrics(asx_contended_mutex_handle handle) 
 /* ------------------------------------------------------------------ */
 
 int asx_contended_mutex_is_locked(asx_contended_mutex_handle handle) {
-    cm_slot *s = slot_lookup(handle.slot, handle.generation);
+    asx_cm_slot *s = slot_lookup(handle.slot, handle.generation);
     if (s == NULL) return 0;
     return asx_mutex_is_locked(s->inner);
 }
@@ -185,16 +178,23 @@ int asx_contended_mutex_is_locked(asx_contended_mutex_handle handle) {
 /* Arena management                                                    */
 /* ------------------------------------------------------------------ */
 
-void asx_contended_mutex_reset(void) {
+void asx_contended_mutex_reset_internal(asx_kernel *k) {
+    asx_cm_state *st = &k->cmutexes;
     uint32_t i;
-    for (i = 0; i < g_slot_count; i++) {
-        if (g_slots[i].alive) { asx_mutex_close(g_slots[i].inner); }
-        g_slots[i].generation = next_gen(g_slots[i].generation);
-        g_slots[i].alive = 0;
-        g_slots[i].acquisitions = 0;
-        g_slots[i].contentions = 0;
-        g_slots[i].current_run = 0;
-        g_slots[i].max_contention_run = 0;
+    for (i = 0; i < st->slot_count; i++) {
+        asx_cm_slot *s = &st->slots[i];
+        if (s->alive) { asx_mutex_close(s->inner); }
+        s->generation = next_gen(s->generation);
+        s->alive = 0;
+        s->acquisitions = 0;
+        s->contentions = 0;
+        s->current_run = 0;
+        s->max_contention_run = 0;
     }
-    g_slot_count = 0;
+    st->slot_count = 0;
+}
+
+void asx_contended_mutex_reset(const asx_runtime *rt) {
+    asx_kernel *k = asx_kernel_of_runtime(rt);
+    if (k != NULL) asx_contended_mutex_reset_internal(k);
 }

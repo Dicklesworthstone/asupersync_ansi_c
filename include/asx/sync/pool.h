@@ -90,8 +90,11 @@ typedef struct {
  * Lifecycle
  * ------------------------------------------------------------------- */
 
-/* Create a pool with the given configuration. */
-ASX_API ASX_MUST_USE asx_status asx_pool_create(const asx_pool_config *config,
+/* Create a pool with the given configuration in a runtime's arena: its
+ * handles name that runtime by the tag in their slot. ASX_E_INVALID_STATE
+ * for a tag no runtime holds. */
+ASX_API ASX_MUST_USE asx_status asx_pool_create(const asx_runtime *rt,
+                                                const asx_pool_config *config,
                                                 asx_pool_handle *out);
 
 /* Close a pool. All idle resources are destroyed.
@@ -139,8 +142,9 @@ ASX_API int asx_pool_is_closed(asx_pool_handle handle);
  * Arena management
  * ------------------------------------------------------------------- */
 
-/* Reset all pool arena state. Destroys all resources. For tests only. */
-ASX_API void asx_pool_reset(void);
+/* Reset one runtime's pool arena state. Destroys all resources. For tests
+ * only. */
+ASX_API void asx_pool_reset(const asx_runtime *rt);
 
 #ifdef __cplusplus
 }

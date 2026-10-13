@@ -16,6 +16,8 @@
 
 #include "wait_queue.h"
 #include <asx/asx_config.h>
+#include <asx/sync/mutex.h>
+#include <asx/sync/pool.h>
 #include <asx/sync/semaphore.h>
 #include <stdint.h>
 
@@ -130,5 +132,57 @@ typedef struct {
     asx_notify_slot slots[ASX_NOTIFY_MAX];
     uint32_t slot_count;
 } asx_notify_state;
+
+/* ------------------------------------------------------------------ */
+/* Resource pools                                                      */
+/* ------------------------------------------------------------------ */
+
+typedef enum {
+    ASX_POOL_RESOURCE_IDLE = 0,
+    ASX_POOL_RESOURCE_ACTIVE = 1,
+    ASX_POOL_RESOURCE_EMPTY = 2
+} asx_pool_resource_state;
+
+typedef struct {
+    void *resource;
+    asx_pool_resource_state state;
+} asx_pool_resource;
+
+typedef struct {
+    uint16_t generation;
+    int alive;
+    int closed;
+    asx_pool_config config;
+    asx_pool_resource resources[ASX_POOL_MAX_RESOURCES];
+    uint32_t resource_count; /* total slots used (active + idle) */
+    uint64_t total_acquisitions;
+    uint64_t total_creates;
+    uint64_t health_failures;
+    asx_wait_queue waiters; /* tasks parked in try_acquire */
+} asx_pool_slot;
+
+typedef struct {
+    asx_pool_slot slots[ASX_POOL_MAX];
+    uint32_t slot_count;
+} asx_pool_state;
+
+/* ------------------------------------------------------------------ */
+/* Contended mutexes                                                   */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    uint16_t generation;
+    int alive;
+    asx_mutex_handle inner;
+    uint64_t acquisitions;
+    uint64_t contentions;
+    uint64_t current_run; /* current consecutive contention streak */
+    uint64_t max_contention_run;
+} asx_cm_slot;
+
+typedef struct {
+    asx_cm_slot slots[ASX_CONTENDED_MUTEX_MAX];
+    uint32_t slot_count;
+} asx_cm_state;
 
 #endif /* ASX_SYNC_SYNC_STATE_H */
