@@ -1115,6 +1115,49 @@ jobs:
       - name: Every Rust fixture reproduced by the pinned asupersync and current twin_run
         run: make fixtures-fresh
 
+      # Differential parser fuzzing (bd-9kll.16.2): the same bytes go to
+      # asupersync's HTTP/1.1 request parser (twin_run parse-diff, the
+      # release binary built above) and to the C parser, and the outcomes
+      # are compared: accepted or rejected, then method, target, version,
+      # headers, trailers, body length and digest, bytes used. The run is
+      # fixed-seed and bounded. It OBSERVES for now: a divergence is a
+      # finding recorded as a bead with its minimized input and listed in
+      # tools/ci/parser_differential_known.txt, and the step becomes
+      # PARSER_DIFF_MODE=gate once the first run is triaged. The report is
+      # uploaded either way. The selftest checks the comparison and the
+      # minimizer without either binary.
+      - name: Parser differential comparison selftest
+        run: make parser-differential-selftest
+
+      - name: Parser differential, HTTP request (seed 1, 2000 inputs, observes)
+        run: |
+          make parser-differential PARSER_DIFF_MODE=observe \
+            ASX_TWIN_BIN=tools/twin_run/target/release/twin_run
+
+      # The same corpus with the C parser's Host requirement off: that policy
+      # (the Rust codec never checks Host) otherwise masks every other
+      # difference on the inputs it rejects. A larger fixed-seed campaign.
+      - name: Parser differential, HTTP request (seed 7, 20000 inputs, Host not required, observes)
+        run: |
+          make parser-differential PARSER_DIFF_MODE=observe PARSER_DIFF_SEED=7 \
+            PARSER_DIFF_COUNT=20000 PARSER_DIFF_REQUIRE_HOST=0 \
+            PARSER_DIFF_OUT=build/parser-differential/out-nohost \
+            ASX_TWIN_BIN=tools/twin_run/target/release/twin_run
+
+      - name: Upload parser differential report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: parser-differential-${{ github.run_id }}
+          path: |
+            build/parser-differential/out/report.txt
+            build/parser-differential/out/report.json
+            build/parser-differential/out/beads.sh
+            build/parser-differential/out-nohost/report.txt
+            build/parser-differential/out-nohost/report.json
+            build/parser-differential/out-nohost/beads.sh
+          if-no-files-found: ignore
+
       - name: Upload divergent scenarios
         if: failure()
         uses: actions/upload-artifact@v4

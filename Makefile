@@ -2503,6 +2503,41 @@ fuzz-parsers-replay: $(LIB_A)
 	done
 	@echo "[asx] fuzz-parsers-replay: $(words $(FUZZ_PARSER_TARGETS)) harnesses ran their seeds"
 
+# parser-differential — the same bytes to asupersync's parser and to ours
+# (bd-9kll.16.2). twin_run parse-fuzz writes a seeded corpus and the Rust
+# outcomes (tools/twin_run/src/parsediff.rs), the ASX_DIFF_HTTP_REQUEST mode
+# of tests/fuzz/fuzz_parsers.c prints the C outcomes, and
+# tools/ci/parser_differential.py compares them, groups the differences by
+# signature and request shape, and reduces the diverging inputs to classes of
+# minimized input (report in $(PARSER_DIFF_OUT)). PARSER_DIFF_MODE=observe
+# prints and passes; =gate fails on a divergence family not listed in
+# tools/ci/parser_differential_known.txt. PARSER_DIFF_REQUIRE_HOST=0 runs the C
+# parser without its Host requirement, so that policy does not mask other
+# differences (CI runs both). TWIN_RUN is the twin_run command (ASX_TWIN_BIN,
+# or cargo run); a prebuilt binary is faster per batch.
+PARSER_DIFF_DIR := $(BUILD_DIR)/parser-differential
+PARSER_DIFF_SEED ?= 1
+PARSER_DIFF_COUNT ?= 2000
+PARSER_DIFF_MODE ?= observe
+PARSER_DIFF_REQUIRE_HOST ?=
+PARSER_DIFF_OUT ?= $(PARSER_DIFF_DIR)/out
+
+.PHONY: parser-diff-build parser-differential parser-differential-selftest
+parser-diff-build: $(LIB_A)
+	@mkdir -p $(PARSER_DIFF_DIR)
+	@$(CC) $(ALL_CFLAGS) -DASX_FUZZ_STANDALONE -DASX_DIFF_HTTP_REQUEST \
+		-o $(PARSER_DIFF_DIR)/http_request tests/fuzz/fuzz_parsers.c $(LIB_A) $(ALL_LDFLAGS)
+
+parser-differential: parser-diff-build
+	@python3 tools/ci/parser_differential.py run --twin-run "$(TWIN_RUN)" \
+		--c-driver $(PARSER_DIFF_DIR)/http_request --out $(PARSER_DIFF_OUT) \
+		--seed $(PARSER_DIFF_SEED) --count $(PARSER_DIFF_COUNT) --mode $(PARSER_DIFF_MODE) \
+		$(if $(PARSER_DIFF_REQUIRE_HOST),--c-require-host $(PARSER_DIFF_REQUIRE_HOST)) \
+		--known tools/ci/parser_differential_known.txt
+
+parser-differential-selftest:
+	@python3 tools/ci/parser_differential.py --selftest
+
 # ---------------------------------------------------------------------------
 # minimize — deterministic counterexample minimizer (bd-1md.4)
 #

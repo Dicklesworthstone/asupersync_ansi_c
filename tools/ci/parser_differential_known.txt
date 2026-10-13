@@ -1,0 +1,30 @@
+# Recorded parser divergences (bd-9kll.16.2), one family per line:
+#
+#   <signature> [<request shape>] | <bead> | <note>
+#
+# `make parser-differential PARSER_DIFF_MODE=gate` (and the CI step, once it
+# gates) fails on a family whose key is not listed here, and prints a listed
+# one that no longer appears as stale, so an entry goes when its bead is
+# fixed. A key is the signature of tools/ci/parser_differential.py (see its
+# header: rust-panic, rust-crash, c-crash, rust-accepts/c-rejects:<c reason>,
+# c-accepts/rust-rejects:<rust reason>, both-accept:<field>[:<detail>]) plus,
+# in brackets, the request feature that stays after reduction when that
+# splits one coarse reject reason into root causes (leading-empty-line,
+# target=double-slash, target=absolute-empty-authority,
+# target=authority-empty-port).
+#
+# First recorded from seed 1 / 2000 inputs (C defaults) and seed 7 / 20000
+# inputs (--c-require-host 0), asupersync 5e60b1c4c against the C parser at
+# 3846ec4. No both-accept:* family was found: on the ~4000 requests both
+# parsers accept, method, target, version, headers, trailers, body and
+# bytes used agree.
+
+c-accepts/rust-rejects:BadRequestLine [leading-empty-line] | bd-9kll.16.2.1 | RFC 9112 2.2 SHOULD ignore a leading empty line: Rust deviates, C follows
+c-accepts/rust-rejects:BadRequestLine [leading-empty-line,target=authority-empty-port] | bd-9kll.16.2.1 | the leading empty line hides bd-9kll.16.2.4
+c-accepts/rust-rejects:BadRequestLine [target=double-slash] | bd-9kll.16.2.2 | origin-form // : Rust hardening, C accepts
+c-accepts/rust-rejects:BadRequestLine [target=absolute-empty-authority] | bd-9kll.16.2.3 | http:///p : C bug, RFC 9110 4.2.1
+c-accepts/rust-rejects:BadRequestLine [target=authority-empty-port] | bd-9kll.16.2.4 | CONNECT a: : C lenient
+rust-accepts/c-rejects:duplicate-host | bd-9kll.16.2.5 | RFC 9112 3.2 MUST 400: Rust never checks Host, C correct
+rust-accepts/c-rejects:missing-host | bd-9kll.16.2.6 | RFC 9112 3.2 MUST 400: C default policy, Rust never checks Host
+rust-accepts/c-rejects:unknown-method | bd-9kll.16.2.7 | extension methods: Rust accepts, C has a closed set (501)
+rust-accepts/c-rejects:bad-chunk-extension | bd-9kll.16.2.8 | chunk-ext 5; : Rust accepts an invalid chunk-ext, C correct
