@@ -46,7 +46,7 @@ task outcomes, and finalization audits unresolved obligations under the leak
 policy after callbacks and cleanup tasks finish.
 
 The bounded outcome-aware close increment adds
-`asx_region_close_with_outcome` (`src/runtime/lifecycle.c:1170`),
+`asx_region_close_with_outcome` (`src/runtime/lifecycle.c:1183`),
 `asx_region_wait_closed` (`src/runtime/quiescence.c:371`) and
 `asx_scope_finish` (`src/cx/scope.c:203`).
 The body's `OK` severity requests close without cancellation; `CANCELLED`
@@ -104,7 +104,7 @@ and the region shutdown ceiling Rust's `BudgetedFinalizer` enforces has no C
 counterpart.
 
 The synchronous cancellation guard
-`asx_task_masked` (`src/runtime/cancellation.c:755`) calls its body once within one admitted mask
+`asx_task_masked` (`src/runtime/cancellation.c:757`) calls its body once within one admitted mask
 level and releases that level on every normal C return, including an error or
 `ASX_E_PENDING`. It returns the body's status unless release fails. Nested
 guards preserve outer levels when additional raw masks are balanced; a pending

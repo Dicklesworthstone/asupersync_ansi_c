@@ -37,7 +37,7 @@ asx_time asx_cancel_now_internal(void) {
 asx_cancel_reason asx_cancel_reason_default(asx_cancel_kind kind, const char *message) {
     asx_cancel_reason r;
     r.kind = kind;
-    r.origin_region = asx_region_handle_for_slot(0u);
+    r.origin_region = asx_region_handle_for_slot(g_kernels[0], 0u);
     r.origin_task = ASX_INVALID_ID;
     r.timestamp = (asx_time)1000000000u;
     r.message = message;
@@ -121,7 +121,7 @@ void asx_task_complete_cx_reason_internal(asx_task_slot *t) {
 }
 
 asx_status asx_task_materialize_cancel_internal(asx_task_slot *t) {
-    asx_task_id id = asx_task_handle_for_slot((uint32_t)(t - g_tasks));
+    asx_task_id id = asx_task_handle_for_slot(g_kernels[0], (uint32_t)(t - g_tasks));
     asx_task_reconcile_cx_reason_internal(t);
     if (!t->cancel_unmaterialized) return ASX_OK;
     /* Created or Running → CancelRequested in one step
@@ -436,7 +436,8 @@ static uint32_t cancel_subtree_tasks(uint32_t n) {
     uint32_t count = 0;
     asx_lab_cancel_batch_begin();
     for (r = 0; r < n; r++) {
-        uint32_t key = asx_handle_index(asx_region_handle_for_slot(g_propagate_slots[r]));
+        uint32_t key =
+            asx_handle_index(asx_region_handle_for_slot(g_kernels[0], g_propagate_slots[r]));
         uint32_t m = 0;
         uint32_t k;
         /* Rust visits a region's tasks in its Membership's insertion order
@@ -459,7 +460,8 @@ static uint32_t cancel_subtree_tasks(uint32_t n) {
         }
         for (k = 0; k < m; k++) {
             ASX_CHECKPOINT_WAIVER("bounded: m <= ASX_MAX_TASKS");
-            if (asx_task_cancel_reason_internal(asx_task_handle_for_slot(g_member_order[k]),
+            if (asx_task_cancel_reason_internal(asx_task_handle_for_slot(g_kernels[0],
+                                                                         g_member_order[k]),
                                                 &g_propagate_reasons[r],
                                                 ASX_CANCEL_SRC_REGION) == ASX_OK) {
                 count++;
@@ -536,7 +538,7 @@ asx_status asx_region_cancel(asx_region_id region, const asx_cancel_reason *reas
         ASX_CHECKPOINT_WAIVER("bounded: n <= ASX_MAX_REGIONS");
         uint32_t slot = g_propagate_slots[r];
         asx_region_slot *rs = &g_regions[slot];
-        asx_region_id rid = asx_region_handle_for_slot(slot);
+        asx_region_id rid = asx_region_handle_for_slot(g_kernels[0], slot);
         asx_trace_payload payload = {0};
 
         settle_regions[r] = rid;

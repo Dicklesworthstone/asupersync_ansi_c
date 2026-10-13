@@ -441,8 +441,8 @@ void asx_lab_record_dispatch_internal(uint32_t slot, uint16_t task_gen, int canc
     if (g_lab_rec_n < g_lab_rec_cap) {
         asx_dispatch_record *d = &g_lab_rec[g_lab_rec_n];
         d->task = g_tasks[slot].generation == task_gen
-                      ? asx_task_handle_for_slot(slot)
-                      : asx_handle_mint(ASX_TYPE_TASK, 0u,
+                      ? asx_task_handle_for_slot(g_kernels[0], slot)
+                      : asx_handle_mint(g_kernels[0], ASX_TYPE_TASK, 0u,
                                         asx_handle_pack_index(task_gen, (uint16_t)slot));
         d->step = step;
         d->at = at;
@@ -788,8 +788,8 @@ static void lab_apply_handle_cancel(const lab_handle_cancel *h) {
         }
         return;
     }
-    st = asx_task_cancel_reason_internal(asx_task_handle_for_slot(h->slot), &h->reason,
-                                         ASX_CANCEL_SRC_HANDLE);
+    st = asx_task_cancel_reason_internal(asx_task_handle_for_slot(g_kernels[0], h->slot),
+                                         &h->reason, ASX_CANCEL_SRC_HANDLE);
     (void)st;
 }
 
@@ -892,7 +892,8 @@ asx_status asx_lab_admit_pending(void) {
          * Spawn event (state.rs:1119). */
         t->member_seq = asx_task_next_member_seq_internal();
         asx_lab_arm_budget_deadline_internal(t);
-        asx_trace_emit(ASX_TRACE_TASK_SPAWN, (uint64_t)asx_task_handle_for_slot(g_lab_admit[i]),
+        asx_trace_emit(ASX_TRACE_TASK_SPAWN,
+                       (uint64_t)asx_task_handle_for_slot(g_kernels[0], g_lab_admit[i]),
                        (uint64_t)t->region);
         {
             /* Aborted before admission: admission hands the first lane
@@ -1033,13 +1034,13 @@ static void lab_apply_watch(const lab_region_cmd *c, uint32_t *woken, uint32_t *
         return;
     }
     if (c->cancel >= LAB_CMD_LINK_TASK) {
-        st = asx_link_apply_internal(asx_task_handle_for_slot(c->opener), c->region,
+        st = asx_link_apply_internal(asx_task_handle_for_slot(g_kernels[0], c->opener), c->region,
                                      c->cancel == LAB_CMD_LINK_SERVER, c->principal_id,
                                      c->budget.poll_quota, c->budget.priority, &ref);
     } else {
-        st = asx_monitor_apply_internal(asx_task_handle_for_slot(c->opener), c->region,
-                                        c->cancel == LAB_CMD_MONITOR_SERVER, c->principal_id,
-                                        c->budget.poll_quota, &ref);
+        st = asx_monitor_apply_internal(asx_task_handle_for_slot(g_kernels[0], c->opener),
+                                        c->region, c->cancel == LAB_CMD_MONITOR_SERVER,
+                                        c->principal_id, c->budget.poll_quota, &ref);
     }
     t->region_wait = ASX_REGION_WAIT_WATCHED;
     t->region_wait_status = st;
@@ -1737,7 +1738,7 @@ static void lab_wait_of(const asx_task_slot *t, uint32_t idx, asx_stuck_task *e)
     if (t->waiting_on != ASX_SLOT_NONE && t->waiting_on < g_task_count &&
         g_tasks[t->waiting_on].alive) {
         e->wait = ASX_STUCK_JOIN;
-        e->wait_task = asx_task_handle_for_slot(t->waiting_on);
+        e->wait_task = asx_task_handle_for_slot(g_kernels[0], t->waiting_on);
         return;
     }
     if (t->region_wait == ASX_REGION_WAIT_CLOSE) {
@@ -1751,7 +1752,7 @@ static void lab_wait_of(const asx_task_slot *t, uint32_t idx, asx_stuck_task *e)
         if (m->alive && !asx_task_is_terminal(m->state) && m->watcher == idx &&
             m->watcher_gen == t->generation) {
             e->wait = ASX_STUCK_WATCH;
-            e->wait_task = asx_task_handle_for_slot(i);
+            e->wait_task = asx_task_handle_for_slot(g_kernels[0], i);
             return;
         }
     }
@@ -1784,7 +1785,7 @@ uint32_t asx_scheduler_stuck_tasks(asx_region_id region, asx_stuck_task *out, ui
         }
         if (out != NULL && total < cap) {
             asx_stuck_task *e = &out[total];
-            e->task = asx_task_handle_for_slot(i);
+            e->task = asx_task_handle_for_slot(g_kernels[0], i);
             e->region = t->region;
             e->state = t->state;
             e->held = lab_held_pending(t);
@@ -1823,7 +1824,7 @@ uint32_t asx_lab_futurelocks(uint64_t max_idle_steps, asx_futurelock *out, uint3
                 continue;
             }
             if (held < ASX_FUTURELOCK_HELD_MAX) {
-                f.held[held] = asx_handle_mint(ASX_TYPE_OBLIGATION,
+                f.held[held] = asx_handle_mint(g_kernels[0], ASX_TYPE_OBLIGATION,
                                                (uint16_t)(1u << (unsigned)ASX_OBLIGATION_RESERVED),
                                                asx_handle_pack_index(ob->generation, (uint16_t)o));
                 f.held_kind[held] = ob->kind;
@@ -1832,7 +1833,7 @@ uint32_t asx_lab_futurelocks(uint64_t max_idle_steps, asx_futurelock *out, uint3
         }
         if (held == 0u) continue;
         if (out != NULL && total < cap) {
-            f.task = asx_task_handle_for_slot(i);
+            f.task = asx_task_handle_for_slot(g_kernels[0], i);
             f.region = t->region;
             f.idle_steps = lab_idle_steps(t);
             f.held_count = held;

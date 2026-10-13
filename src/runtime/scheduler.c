@@ -161,7 +161,7 @@ void asx_task_timer_disarm_internal(asx_task_slot *task) {
      * Sleep future is dropped, TimerCancelled). */
     if (task->traced_deadline != 0u) {
         asx_trace_emit(ASX_TRACE_TIMER_CANCEL,
-                       (uint64_t)asx_task_handle_for_slot((uint32_t)(task - g_tasks)),
+                       (uint64_t)asx_task_handle_for_slot(g_kernels[0], (uint32_t)(task - g_tasks)),
                        task->traced_deadline);
         task->traced_deadline = 0u;
     }
@@ -227,7 +227,8 @@ static void lab_deadline_fire(uint32_t slot) {
         return;
     }
     if (t->budget.deadline == ASX_TIME_INFINITE || t->budget.deadline > at) return;
-    st = asx_task_cancel_budget_internal(asx_task_handle_for_slot(slot), ASX_CANCEL_DEADLINE, at);
+    st = asx_task_cancel_budget_internal(asx_task_handle_for_slot(g_kernels[0], slot),
+                                         ASX_CANCEL_DEADLINE, at);
     (void)st;
     t->cancel_wakers_pending = 0u;
     asx_lab_cancel_wake(t);
@@ -1033,7 +1034,7 @@ static void sched_fire_due_cancel_waker(asx_task_slot *t) {
 static asx_status sched_poll_slot(uint32_t i, asx_region_slot *rslot, uint32_t round,
                                   int *out_done) {
     asx_task_slot *t = &g_tasks[i];
-    asx_task_id tid = asx_task_handle_for_slot(i);
+    asx_task_id tid = asx_task_handle_for_slot(g_kernels[0], i);
     asx_region_id task_region = t->region;
     int lab = asx_lab_dispatch_active();
     uint16_t task_gen = t->generation;
@@ -1087,7 +1088,7 @@ static asx_status sched_poll_slot(uint32_t i, asx_region_slot *rslot, uint32_t r
     t->in_poll = 0;
     /* Obligation posts made during this poll are applied while the task
      * record still exists (lab/runtime.rs:4797-4808; bd-2fga). */
-    if (lab) asx_obligation_drain_posts_internal();
+    if (lab) asx_obligation_drain_posts_internal(g_kernels[0]);
     /* Acknowledged during this poll and still running: the cleanup
      * budget becomes the task's budget now (Rust applies the
      * acknowledgement after the poll, lab/runtime.rs:4809). A task
@@ -1253,7 +1254,7 @@ static asx_status sched_lab_step(uint32_t step, int *out_dispatched) {
     /* A retired task a cancel waker scheduled: a dispatch that polls
      * nothing (LR:4772-4790). */
     if (!t->alive || t->generation != task_gen || asx_task_is_terminal(t->state)) return ASX_OK;
-    tid = asx_task_handle_for_slot(slot);
+    tid = asx_task_handle_for_slot(g_kernels[0], slot);
     st = asx_region_slot_lookup(t->region, &rslot);
     if (st != ASX_OK) return st;
     if (t->state == ASX_TASK_FINALIZING) {
@@ -1581,7 +1582,7 @@ static asx_status sched_run(asx_region_id region, asx_budget *budget, int advanc
             if (rslot == NULL) continue;
 
             active++;
-            tid = asx_task_handle_for_slot(i);
+            tid = asx_task_handle_for_slot(g_kernels[0], i);
 
             /* FINALIZING: asx_task_finalize() was called, so cleanup is done: complete. */
             if (t->state == ASX_TASK_FINALIZING) {
@@ -1686,8 +1687,8 @@ static void sched_fire_budget_deadlines(asx_time now) {
 #ifdef ASX_MUTANT_SWEEP_PARKED_DEADLINE_NO_WAKE
         if (t->parked) continue; /* oracle mutant: the deadline waits for the task's wake */
 #endif
-        if (asx_task_cancel_budget_internal(asx_task_handle_for_slot(i), ASX_CANCEL_DEADLINE,
-                                            t->budget.deadline) == ASX_OK) {
+        if (asx_task_cancel_budget_internal(asx_task_handle_for_slot(g_kernels[0], i),
+                                            ASX_CANCEL_DEADLINE, t->budget.deadline) == ASX_OK) {
             asx_task_wake_slot_internal(t);
         }
     }

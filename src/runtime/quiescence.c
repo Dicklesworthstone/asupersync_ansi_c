@@ -388,7 +388,7 @@ asx_status asx_region_wait_closed(asx_region_id id, asx_budget *budget) {
     n = asx_region_subtree_internal(id, slots, ASX_MAX_REGIONS);
     for (i = 0; i < n; i++) {
         ASX_CHECKPOINT_WAIVER("bounded: n <= ASX_MAX_REGIONS");
-        regions[i] = asx_region_handle_for_slot(slots[i]);
+        regions[i] = asx_region_handle_for_slot(g_kernels[0], slots[i]);
     }
     st = asx_region_run_to_closed(id, budget, regions, n);
     if (st != ASX_OK) return st;
@@ -416,7 +416,7 @@ asx_status asx_region_drain(asx_region_id id, asx_budget *budget) {
     for (i = 0; i < n; i++) {
         ASX_CHECKPOINT_WAIVER("bounded: n <= ASX_MAX_REGIONS");
         asx_region_slot *rs = &g_regions[drain_slots[i]];
-        drain_regions[i] = asx_region_handle_for_slot(drain_slots[i]);
+        drain_regions[i] = asx_region_handle_for_slot(g_kernels[0], drain_slots[i]);
         if (rs->state == ASX_REGION_OPEN) {
             st = asx_region_set_state(drain_regions[i], rs, ASX_REGION_CLOSING);
             if (st != ASX_OK) return st;
@@ -639,7 +639,8 @@ uint32_t asx_region_admit_finalizers_internal(void) {
         r->finalizer.poll_budget = g_finalizer_poll_budget;
         r->finalizer.deadline = budget.deadline;
         r->finalizer.exhausted = 0;
-        st = asx_task_spawn_finalizer_internal(asx_region_handle_for_slot(g_finalizing[i]),
+        st = asx_task_spawn_finalizer_internal(asx_region_handle_for_slot(g_kernels[0],
+                                                                          g_finalizing[i]),
                                                asx_finalizer_task_poll, r, &budget, &tid);
         if (st != ASX_OK) {
             /* Rust keeps the barrier and re-queues the finalizer when its

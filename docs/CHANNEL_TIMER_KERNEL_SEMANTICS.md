@@ -108,7 +108,7 @@ asx_status asx_send_permit_send(asx_send_permit *permit, uint64_t value);
 
 **C status:** implemented; messages are `uint64_t` tokens. An already consumed permit returns `ASX_E_INVALID_STATE` (`src/channel/mpsc.c:894`); a mismatched tracked credit is refused before capacity or ledger mutation (`:895-900`), and a forged or stale physical token is refused (`:908-912`). Receiver closed -> obligation aborted with `ASX_OBLIGATION_ABORT_ERROR`, `ASX_E_DISCONNECTED` (`:916-922`). Otherwise the value is enqueued (`:924-941`), the obligation committed (`:943`) and the wait lines settled (`:944`). C also has `asx_channel_send(id, cx, value)` (`include/asx/core/channel.h:326`, `src/channel/mpsc.c:1288-1298`), Rust's `Sender::send(&cx, v)` (`src/channel/mpsc.rs:715`): a reserve with no obligation, then a commit.
 
-Tracked permit settlement validates physical channel/token ownership through `asx_obligation_check_token_internal` (`src/runtime/lifecycle.c:2008-2028`) and resolves through `asx_obligation_resolve_token_internal` (`src/runtime/lifecycle.c:2030-2049`), called by `channel_permit_resolve` (`src/channel/mpsc.c:872-884`). A genuine permit may move to another task without transferring its original ledger holder or region. Raw owned-obligation IDs still require the actual holder's poll (`asx_obligation_check_access_internal`, `src/runtime/lifecycle.c:1924-1960`); an ID alone cannot authenticate a physical permit. These C guards do not supply Rust type-level consumption or new handoff fixture evidence.
+Tracked permit settlement validates physical channel/token ownership through `asx_obligation_check_token_internal` (`src/runtime/lifecycle.c:2035-2055`) and resolves through `asx_obligation_resolve_token_internal` (`src/runtime/lifecycle.c:2057-2076`), called by `channel_permit_resolve` (`src/channel/mpsc.c:872-884`). A genuine permit may move to another task without transferring its original ledger holder or region. Raw owned-obligation IDs still require the actual holder's poll (`asx_obligation_check_access_internal`, `src/runtime/lifecycle.c:1924-1960`); an ID alone cannot authenticate a physical permit. These C guards do not supply Rust type-level consumption or new handoff fixture evidence.
 
 #### Phase 3: Abort
 
@@ -229,7 +229,7 @@ Rust `Drop for Sender` (`src/channel/mpsc.rs:1241-1256`):
 
 The cancellation check itself is v4 §3.2 CANCEL-ACKNOWLEDGE at a checkpoint (`rule.cancel.acknowledge` #2; C status: C_REFINEMENT_MAP.md row `rule.cancel.acknowledge`). C cancellation observation needs no capability flag: `asx_cx_checkpoint` checks the identified task's cancellation before budget consumption (`src/cx/cx.c:416-435`); masking defers checkpoint delivery but does not hide a recorded request from `asx_cx_is_cancel_requested` (`src/cx/cx.c:402-413`). Rust parity: `mpsc-recv-cancel-first-001` (a pending recv cancelled by the driver returns `ASX_E_CANCELLED` and the task ends Cancelled). Reserve cancellation has no v2 fixture; C unit tests: `tests/unit/channel/test_channel_wake.c` `cancelled_waiter_does_not_absorb_wake`, `cancel_storm_on_full_channel_keeps_fifo_progress`, `masked_producer_is_not_cancelled_until_unmask`; `tests/unit/channel/test_mpsc.c` `cancelled_cx_wins_over_ready_channel_and_traces`.
 
-The synchronous callback guard `asx_task_masked` (`src/runtime/cancellation.c:755`)
+The synchronous callback guard `asx_task_masked` (`src/runtime/cancellation.c:757`)
 releases one admitted mask level on every returning body, including an error or
 `ASX_E_PENDING`, and returns the body's status unless release fails. A channel
 wait does not keep that guard across polls. Nested guards preserve outer levels
@@ -388,7 +388,7 @@ The project plan's key `(lane_priority, logical_deadline, task_id, insertion_seq
 The field list this section used to require (`event_seq`, `logical_time`, `task_id`, `timer_id`, `channel_id`) matches neither engine:
 
 - Rust `TraceEvent` (`src/trace/event.rs:1779-1796`): `version`, `seq` (monotonic), `time`, optional `logical_time`, `kind`, `data`.
-- C `asx_trace_event` (`include/asx/runtime/trace.h:84-89`): `sequence` (monotonic per trace), `kind`, `entity_id` (the handle of the task, region, obligation, channel or timer), `aux` (kind-dependent payload). There is no time field.
+- C `asx_trace_event` (`include/asx/runtime/trace.h:87-92`): `sequence` (monotonic per trace), `kind`, `entity_id` (the handle of the task, region, obligation, channel or timer), `aux` (kind-dependent payload). There is no time field.
 
 Neither raw sequence is the parity key. The conformance runner compares the Foata-canonical form of the vocabulary-v2 trace, the end snapshot, the observations and the lab dispatch order with the Rust capture, canonical byte for byte (`tools/conformance/runner.c:1-20`; layering in `src/conformance/canon.c`), so events that commute may appear in either order.
 

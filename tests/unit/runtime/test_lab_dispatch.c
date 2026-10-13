@@ -419,7 +419,7 @@ static int cap_picks_b(uint32_t n, uint64_t r) {
     asx_lab_schedule_cancel(sb, 0u);
     if (asx_lab_dispatch_overflowed()) return -1;
     if (asx_lab_pick(r, &slot, &gen, &cancel) != 1 || !cancel) return -1;
-    return asx_task_handle_for_slot(slot) == tb ? 1 : 0;
+    return asx_task_handle_for_slot(g_kernels[0], slot) == tb ? 1 : 0;
 }
 
 /* Run only where the lane (LAB_LANE_CAP, 8 * ASX_MAX_TASKS) can hold the

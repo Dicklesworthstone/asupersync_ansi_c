@@ -393,14 +393,11 @@ static inline void asx_kernel_hold(asx_runtime *rt) {
     g_kernels[rt->tag]->rt_generation = rt->generation;
 }
 
-/* Runtime tag stamped by asx_handle_mint: the bound kernel's (0 until the
- * mint sites take their kernel explicitly). */
-extern uint16_t g_kernel_tag;
-
-/* asx_handle_pack for a handle this kernel issues (same length, so a call
- * site changes by its name only). */
-static inline uint64_t asx_handle_mint(uint16_t type_tag, uint16_t state_mask, uint32_t index) {
-    return asx_handle_with_runtime_tag(asx_handle_pack(type_tag, state_mask, index), g_kernel_tag);
+/* asx_handle_pack for a handle kernel `k` issues: its runtime tag rides in
+ * the handle, so no other runtime's lookup resolves it. */
+static inline uint64_t asx_handle_mint(const asx_kernel *k, uint16_t type_tag, uint16_t state_mask,
+                                       uint32_t index) {
+    return asx_handle_with_runtime_tag(asx_handle_pack(type_tag, state_mask, index), k->tag);
 }
 
 extern asx_region_slot *g_regions;
@@ -424,7 +421,7 @@ void asx_kernel_bind_internal(void *storage);
 
 /* The reset of asx_runtime_reset without the rebind to the static block:
  * what init runs after it bound the runtime's storage (lifecycle.c). */
-void asx_runtime_clear_internal(void);
+void asx_runtime_clear_internal(asx_kernel *k);
 
 /* Whether `storage` (NULL: the library's block) can be asx_runtime_config.storage
  * of size `size`: ASX_OK, or ASX_E_INVALID_ARGUMENT for a size without a
@@ -444,7 +441,7 @@ ASX_MUST_USE asx_status asx_obligation_slot_lookup(asx_obligation_id id, asx_obl
 void asx_task_release_capture_internal(asx_task_slot *task);
 
 /* Build the public handle for an occupied task slot. */
-asx_task_id asx_task_handle_for_slot(uint32_t slot_idx);
+asx_task_id asx_task_handle_for_slot(const asx_kernel *k, uint32_t slot_idx);
 
 /* The checked task-state write (bd-9kll.3.22): every transition the
  * runtime makes goes through it. It checks the task transition table
@@ -469,7 +466,7 @@ void asx_task_on_complete_internal(asx_task_slot *task, asx_region_slot *region)
 
 /* Apply the obligation posts the poll that just returned made (Rust's
  * obligation-mailbox drain at the end of a lab poll, bd-2fga). */
-void asx_obligation_drain_posts_internal(void);
+void asx_obligation_drain_posts_internal(asx_kernel *k);
 
 /* Reset wake-driven scheduler state (timer heap, sequence counters).
  * Called from asx_runtime_reset(). Defined in scheduler.c. */
@@ -610,7 +607,7 @@ ASX_MUST_USE asx_status asx_task_cancel_budget_internal(asx_task_id id, asx_canc
 uint32_t asx_region_subtree_internal(asx_region_id root, uint32_t *out_slots, uint32_t max);
 
 /* Build the public handle for an occupied region slot. */
-asx_region_id asx_region_handle_for_slot(uint32_t slot_idx);
+asx_region_id asx_region_handle_for_slot(const asx_kernel *k, uint32_t slot_idx);
 
 /* Active obligation-leak policy (set by asx_runtime_init / reload; PANIC
  * after a bare asx_runtime_reset). */

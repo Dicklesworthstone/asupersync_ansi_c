@@ -197,7 +197,7 @@ asx_status asx_runtime_init_checked(asx_runtime *rt, const asx_runtime_config *c
      * or the library's) and reset all internal state (deterministic clean
      * slate). Nothing above wrote any state, so a refusal left it intact. */
     asx_kernel_bind_internal(config->storage);
-    asx_runtime_clear_internal();
+    asx_runtime_clear_internal(g_kernels[0]);
 
     /* Step 4: install hooks */
     st = asx_runtime_set_hooks(hooks);

@@ -60,7 +60,8 @@ asx_status asx_runtime_snapshot_capture(asx_runtime_snapshot *snap) {
     for (i = 0; i < ASX_MAX_REGIONS && ri < ASX_SNAPSHOT_MAX_REGIONS; i++) {
         if (!g_regions[i].alive) continue;
         snap->regions[ri].id =
-            asx_handle_mint(ASX_TYPE_REGION, (uint16_t)(1u << (unsigned)ASX_REGION_OPEN),
+            asx_handle_mint(g_kernels[0], ASX_TYPE_REGION,
+                            (uint16_t)(1u << (unsigned)ASX_REGION_OPEN),
                             asx_handle_pack_index(g_regions[i].generation, (uint16_t)i));
         snap->regions[ri].state = g_regions[i].state;
         snap->regions[ri].task_count = g_regions[i].task_count;
@@ -74,7 +75,8 @@ asx_status asx_runtime_snapshot_capture(asx_runtime_snapshot *snap) {
     for (i = 0; i < ASX_MAX_TASKS && ti < ASX_SNAPSHOT_MAX_TASKS; i++) {
         if (!g_tasks[i].alive) continue;
         snap->tasks[ti].id =
-            asx_handle_mint(ASX_TYPE_TASK, (uint16_t)(1u << (unsigned)ASX_TASK_CREATED),
+            asx_handle_mint(g_kernels[0], ASX_TYPE_TASK,
+                            (uint16_t)(1u << (unsigned)ASX_TASK_CREATED),
                             asx_handle_pack_index(g_tasks[i].generation, (uint16_t)i));
         snap->tasks[ti].state = g_tasks[i].state;
         snap->tasks[ti].region = g_tasks[i].region;
@@ -87,7 +89,7 @@ asx_status asx_runtime_snapshot_capture(asx_runtime_snapshot *snap) {
     for (i = 0; i < ASX_MAX_OBLIGATIONS && oi < ASX_SNAPSHOT_MAX_OBLIGATIONS; i++) {
         if (!g_obligations[i].alive) continue;
         snap->obligations[oi].id =
-            asx_handle_mint(ASX_TYPE_OBLIGATION,
+            asx_handle_mint(g_kernels[0], ASX_TYPE_OBLIGATION,
                             (uint16_t)(1u << (unsigned)ASX_OBLIGATION_RESERVED),
                             asx_handle_pack_index(g_obligations[i].generation, (uint16_t)i));
         snap->obligations[oi].state = g_obligations[i].state;
