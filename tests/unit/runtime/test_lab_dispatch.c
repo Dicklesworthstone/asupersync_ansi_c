@@ -778,6 +778,73 @@ TEST(child_region_commands_apply_at_once_without_lab_dispatch) {
     ASSERT_EQ((int)out.severity, (int)ASX_OUTCOME_CANCELLED);
 }
 
+/* The poll quota a task spawned from a poll inherits is what its spawner
+ * has left when it spawns (Cx::inherited_budget, cx.rs:2504). The lab's
+ * region-open command costs the owner a dispatch, so an owner with a quota
+ * of 4 that opens a region and then spawns has used 2 polls under lab
+ * dispatch and 1 without it: its members inherit 2 and 3. That is the one
+ * difference between the lab's run of task-groups-join-all-region-cancel-001
+ * and the sweep's (bd-9kll.4.16). With a members' quota of 2 the sweep's
+ * observations equal Rust's (measured with the quota forced on a scratch
+ * build: the fixture then matches under compare-sweep, and fails under lab
+ * dispatch with the quota forced to 3); Rust's own dispatch log shows the
+ * owner's two dispatches at 0 before the members' first. */
+typedef struct {
+    asx_region_id region;
+    asx_region_id child;
+    uint32_t polls;
+    asx_task_id member;
+    uint32_t member_quota;
+} quota_owner;
+
+static asx_status poll_quota_member(void *ud, asx_task_id self) {
+    (void)ud;
+    (void)self;
+    return ASX_OK;
+}
+
+static asx_status poll_quota_owner(void *ud, asx_task_id self) {
+    quota_owner *o = (quota_owner *)ud;
+    asx_status st;
+    asx_budget b;
+    o->polls++;
+    st = asx_region_open_child_poll(self, o->region, NULL, &o->child);
+    if (st != ASX_OK) return st;
+    st = asx_task_spawn(o->region, poll_quota_member, NULL, &o->member);
+    if (st != ASX_OK) return st;
+    if (asx_task_get_budget(o->member, &b) != ASX_OK) return ASX_E_INVALID_STATE;
+    o->member_quota = b.poll_quota;
+    return ASX_OK;
+}
+
+static asx_status run_quota_owner(int lab, quota_owner *o) {
+    asx_task_id t;
+    asx_budget owner_budget = asx_budget_from_polls(4);
+    asx_budget run = asx_budget_from_polls(50);
+    asx_status st = setup();
+    if (st == ASX_OK && lab) st = asx_scheduler_use_lab_dispatch(42u);
+    memset(o, 0, sizeof(*o));
+    o->child = ASX_INVALID_ID;
+    if (st == ASX_OK) st = asx_region_open(&o->region);
+    if (st == ASX_OK) {
+        st = asx_task_spawn_with_budget(o->region, poll_quota_owner, o, &owner_budget, &t);
+    }
+    if (st == ASX_OK) st = asx_scheduler_run(o->region, &run);
+    return st;
+}
+
+TEST(spawned_members_inherit_what_the_owner_has_left_after_its_region_command) {
+    quota_owner o;
+
+    ASSERT_EQ(run_quota_owner(1, &o), ASX_OK);
+    ASSERT_EQ(o.polls, 2u); /* parked at the open, woken with the region */
+    ASSERT_EQ(o.member_quota, 2u);
+
+    ASSERT_EQ(run_quota_owner(0, &o), ASX_OK);
+    ASSERT_EQ(o.polls, 1u); /* the open applies at once */
+    ASSERT_EQ(o.member_quota, 3u);
+}
+
 /* A region cancel request from a task (Rust ChildRegion::cancel) leaves
  * the region open until the next step applies it. */
 typedef struct {
@@ -3122,6 +3189,7 @@ int main(void) {
     RUN_TEST(child_region_open_and_close_are_next_step_commands);
     RUN_TEST(closing_an_empty_child_region_wakes_the_closer);
     RUN_TEST(child_region_commands_apply_at_once_without_lab_dispatch);
+    RUN_TEST(spawned_members_inherit_what_the_owner_has_left_after_its_region_command);
     RUN_TEST(region_cancel_request_applies_at_the_next_step);
     RUN_TEST(region_command_queue_full_is_failure_atomic);
     RUN_TEST(handle_abort_applies_at_the_next_step);
