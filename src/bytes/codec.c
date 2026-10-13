@@ -145,7 +145,14 @@ asx_decode_result asx_lines_decode(void *codec_state, asx_buf_mut *src, asx_fram
             frame_len = line_end;
 
             /* Strip trailing \r */
+#ifdef ASX_MUTANT_FRAME_CODECS
+            /* Planted off-by-one (bd-9kll.16.7), compiled only by
+             * tests/gates/test_fuzz_parser_mutants.sh: the empty-line guard is
+             * gone, so an empty first line reads the byte before the buffer. */
+            if (*(src->data + src->rd_pos + frame_len - 1u) == '\r') frame_len--;
+#else
             if (frame_len > 0 && src->data[src->rd_pos + frame_len - 1] == '\r') frame_len--;
+#endif
 
             /* Check max line length */
             if (c != NULL && c->max_line_len > 0 && frame_len > c->max_line_len)

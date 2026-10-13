@@ -232,7 +232,15 @@ asx_status asx_web_query_parse(asx_web_query *out, const char *uri) {
             out->count++;
         }
 
+#ifdef ASX_MUTANT_WEB_QUERY
+        /* Planted off-by-one (bd-9kll.16.7), compiled only by
+         * tests/gates/test_fuzz_parser_mutants.sh: the separator is skipped
+         * without being checked, so a query that ends in a key or a value
+         * steps over its NUL and the loop condition reads past it. */
+        p++;
+#else
         if (*p == '&') p++;
+#endif
     }
     return ASX_OK;
 }

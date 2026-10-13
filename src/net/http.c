@@ -1922,7 +1922,19 @@ asx_status asx_http_parser_feed(asx_http_parser *p, const void *data, uint32_t l
             break;
 
         case HTTP_PS_START_LINE:
+#if defined(ASX_MUTANT_HTTP_REQUEST)
+            /* Planted off-by-one (bd-9kll.16.7), compiled only by
+             * tests/gates/test_fuzz_parser_mutants.sh: `>=` became `>` for
+             * requests, so a request line that a chunk ends in the middle of
+             * takes the first byte of the next chunk and reports it consumed. */
+            if (p->kind == ASX_HTTP_PARSE_REQUEST ? pos > len : pos >= len) goto need_more;
+#elif defined(ASX_MUTANT_HTTP_RESPONSE)
+            /* Planted off-by-one (bd-9kll.16.7), as above, for the status
+             * line of a response. */
+            if (p->kind == ASX_HTTP_PARSE_RESPONSE ? pos > len : pos >= len) goto need_more;
+#else
             if (pos >= len) goto need_more;
+#endif
             b = in[pos++];
             if (!p->cr_seen && b != '\r' && b != '\n' && p->line_len >= p->limits.max_start_line) {
                 return http_parser_fail(p, ASX_HTTP_PERR_START_LINE_TOO_LONG);

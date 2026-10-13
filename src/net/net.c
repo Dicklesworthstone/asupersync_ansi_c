@@ -145,9 +145,20 @@ static int parse_ipv6_host(const char *host, uint8_t out[16]) {
             char quad[16];
             uint8_t v4[4];
             size_t qlen = (size_t)(end - p);
+#ifdef ASX_MUTANT_RESOLVE_HOST
+            /* Planted off-by-one (bd-9kll.16.7), compiled only by
+             * tests/gates/test_fuzz_parser_mutants.sh: `>=` became `>`, so a
+             * tail of exactly sizeof(quad) bytes is copied and its NUL is
+             * written one past the array. */
+            if (qlen > sizeof(quad) || n > 6u) return 0;
+            memcpy(quad, p, qlen);
+            /* ASX_ANALYZER_WAIVER("planted mutant: built only by test_fuzz_parser_mutants.sh") */
+            quad[qlen] = '\0';
+#else
             if (qlen >= sizeof(quad) || n > 6u) return 0;
             memcpy(quad, p, qlen);
             quad[qlen] = '\0';
+#endif
             if (!parse_ipv4_host(quad, v4)) return 0;
             groups[n++] = (uint16_t)(((uint32_t)v4[0] << 8) | v4[1]);
             groups[n++] = (uint16_t)(((uint32_t)v4[2] << 8) | v4[3]);

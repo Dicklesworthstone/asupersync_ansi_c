@@ -678,7 +678,15 @@ asx_status asx_base64_decode(asx_base64_variant variant, const char *in, size_t 
     }
 
     o = 0u;
+#ifdef ASX_MUTANT_BASE64
+    /* Planted off-by-one (bd-9kll.16.7), compiled only by
+     * tests/gates/test_fuzz_parser_mutants.sh: the quantum loop runs while any
+     * input remains instead of while a whole quantum does, so a final partial
+     * quantum reads up to three bytes past the input. */
+    for (i = 0u; i < data_len; i += 4u) {
+#else
     for (i = 0u; i + 4u <= data_len; i += 4u) {
+#endif
         uint8_t a = b64_value(in[i], variant);
         uint8_t b = b64_value(in[i + 1u], variant);
         uint8_t c = b64_value(in[i + 2u], variant);

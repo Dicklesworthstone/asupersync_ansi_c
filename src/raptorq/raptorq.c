@@ -1729,7 +1729,15 @@ asx_status asx_raptorq_decoder_decode(asx_raptorq_decoder *dec, uint8_t *out, si
     if (dec->source_count == p->k) {
         for (i = 0u; i < dec->count; i++) {
             uint32_t esi = dec->esi[i];
+#ifdef ASX_MUTANT_RAPTORQ_DECODE
+            /* Planted off-by-one (bd-9kll.16.7), compiled only by
+             * tests/gates/test_fuzz_parser_mutants.sh: each source symbol is
+             * copied one byte short, so the systematic decode returns a block
+             * whose last byte of every symbol is not the source's. */
+            if (esi < p->k) memcpy(out + (size_t)esi * t, dec->symbols + (size_t)i * t, t - 1u);
+#else
             if (esi < p->k) memcpy(out + (size_t)esi * t, dec->symbols + (size_t)i * t, t);
+#endif
         }
         return ASX_OK;
     }
@@ -1859,7 +1867,18 @@ asx_status asx_raptorq_oti_deserialize(const uint8_t in[ASX_RAPTORQ_OTI_SIZE],
     o.symbol_size = (uint16_t)(((uint32_t)in[6] << 8) | (uint32_t)in[7]);
     o.source_blocks = in[8];
     o.sub_blocks = (uint16_t)(((uint32_t)in[9] << 8) | (uint32_t)in[10]);
+#ifdef ASX_MUTANT_RAPTORQ_OTI
+    {
+        /* Planted off-by-one (bd-9kll.16.7), compiled only by
+         * tests/gates/test_fuzz_parser_mutants.sh: the alignment is read one
+         * byte past the 12-byte OTI. Read through a pointer so the sanitizer
+         * lane, not a compile-time bounds check, reports it. */
+        const volatile uint8_t *oti_bytes = in;
+        o.alignment = oti_bytes[ASX_RAPTORQ_OTI_SIZE];
+    }
+#else
     o.alignment = in[11];
+#endif
     if (asx_raptorq_oti_validate(&o) != ASX_OK) return ASX_E_INVALID_ARGUMENT;
     *out = o;
     return ASX_OK;

@@ -98,7 +98,15 @@ asx_status asx_ws_header_decode(const uint8_t *in, uint32_t len, asx_ws_frame_he
     if (len < 2u) return ASX_E_PENDING;
 
     len7 = (uint32_t)in[1] & 0x7Fu;
+#ifdef ASX_MUTANT_WEBSOCKET
+    /* Planted off-by-one (bd-9kll.16.7), compiled only by
+     * tests/gates/test_fuzz_parser_mutants.sh: the masking key is counted as
+     * three bytes, so a masked header one byte short of complete decodes and
+     * its key is read from past the input. */
+    need = 2u + (len7 == 126u ? 2u : (len7 == 127u ? 8u : 0u)) + ((in[1] & 0x80u) ? 3u : 0u);
+#else
     need = 2u + (len7 == 126u ? 2u : (len7 == 127u ? 8u : 0u)) + ((in[1] & 0x80u) ? 4u : 0u);
+#endif
     if (len < need) return ASX_E_PENDING;
 
     memset(h, 0, sizeof(*h));

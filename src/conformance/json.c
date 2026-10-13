@@ -85,7 +85,14 @@ static asx_status parse_exhausted(json_parser *p) {
 }
 
 static void skip_ws(json_parser *p) {
+#ifdef ASX_MUTANT_JSON_READER
+    /* Planted off-by-one (bd-9kll.16.7), compiled only by
+     * tests/gates/test_fuzz_parser_mutants.sh: `<` became `<=`, so the scan
+     * reads the byte after the document. */
+    while (p->pos <= p->len) {
+#else
     while (p->pos < p->len) {
+#endif
         char c = p->src[p->pos];
         if (c != ' ' && c != '\t' && c != '\n' && c != '\r') break;
         p->pos++;

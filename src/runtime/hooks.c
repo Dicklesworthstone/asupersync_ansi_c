@@ -1082,6 +1082,12 @@ static asx_status asx_codec_json_decode_string(const char *cursor, const char **
     if (asx_codec_json_scan_string(cursor, &scan) != ASX_OK) { return ASX_E_INVALID_ARGUMENT; }
 
     max_len = (size_t)(scan - cursor);
+#ifdef ASX_MUTANT_CODEC_JSON
+    /* Planted off-by-one (bd-9kll.16.7), compiled only by
+     * tests/gates/test_fuzz_parser_mutants.sh: the buffer is sized for the
+     * text between the quotes and has no room for the NUL written below. */
+    max_len -= 2u;
+#endif
     decoded = (char *)malloc(max_len);
     if (decoded == NULL) { return ASX_E_RESOURCE_EXHAUSTED; }
 
@@ -2073,7 +2079,14 @@ static asx_status asx_codec_bin_parse_frame(const void *frame_payload, size_t fr
     uint32_t payload_len32;
     size_t expected_len;
 
+#ifdef ASX_MUTANT_CODEC_BIN
+    /* Planted off-by-one (bd-9kll.16.7), compiled only by
+     * tests/gates/test_fuzz_parser_mutants.sh: a frame one byte short of the
+     * header is accepted, and the payload length is loaded from past it. */
+    if (frame_payload == NULL || frame_len + 1u < ASX_CODEC_BIN_HEADER_SIZE || out_frame == NULL) {
+#else
     if (frame_payload == NULL || frame_len < ASX_CODEC_BIN_HEADER_SIZE || out_frame == NULL) {
+#endif
         return ASX_E_INVALID_ARGUMENT;
     }
 
