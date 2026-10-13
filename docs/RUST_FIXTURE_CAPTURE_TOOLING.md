@@ -44,10 +44,28 @@ script jumps the clock (a poll with nothing due is a harness error), nothing
 follows a monitor or link open where the holder can be cancelled (a refused
 open binds no name), `close_region` only names a region no task lives in (its
 drain does not move the clock), and the interpreter's tables (4 delay queues, 8
-intervals) are not exceeded. `the_generator_draws_every_op_of_the_dsl` reads
-the op names of `schemas/scenario_dsl_v2.json` and requires 1200 default-shape
-scenarios to contain each, so an op added to the schema without a draw fails
-the unit tests.
+intervals) are not exceeded. A second pass (`ext_declarations`) sets the
+options of declarations and steps the main stream never does: async finalizers
+on regions (not on one a driver `close_region` closes, nor below it), a mask
+`depth`, the obligation kinds `IoOp`, `SemaphorePermit` and `Transaction`, the
+server behaviors `latest`, `budgets` and `budgets_stop`, and a supervisor's
+`storm_threshold_milli`, explicit `stop`, `depends_on`, `required` and
+`registration`. `the_generator_draws_every_op_of_the_dsl` and
+`the_generator_sets_every_property_of_the_dsl` read the op and property names
+of `schemas/scenario_dsl_v2.json` and require 1200 default-shape scenarios to
+contain each (an exemption list gives the reason of each one that cannot), so
+an op or an option added to the schema without a draw fails the unit tests.
+
+`make fuzz-coverage` measures what the corpus still leaves out of the C
+runtime: the conformance runner is built with `gcc --coverage` into its own
+directory, run over the committed fixtures and over the captured fixtures of
+the `make fuzz-differential` runs under `build/fuzz_v2/seed-*/fixtures`, and
+`tools/ci/fuzz_coverage.py` lists, per file, the lines the fixtures execute and
+the generated corpus does not, and the files with the most lines neither does.
+With seeds 1 to 8 and 10 to 13 at 400 scenarios the generated corpus executes
+55.7% of the library's lines against the fixtures' 55.8%, and 260 lines are
+the fixtures' alone (778 before the declaration pass). It is a report, not a
+gate.
 
 Fixture contents (`tools/twin_run/src/run.rs:2072-2089`): `schema`
 (`asx.fixture.v2`), `scenario_id`, the embedded `scenario`, `vocabulary`,

@@ -1594,6 +1594,7 @@ pub fn scenario(seed: u64, index: u64) -> Value {
             &mut task_values,
             &mut script,
         );
+        ext_declarations(&mut ext, &mut regions, &mut task_values, &script);
     }
 
     json!({
@@ -1987,6 +1988,159 @@ fn ext_server_watch(ext: &mut Rng, me: &str, peer: &str, safe: bool) -> (Vec<Val
         Vec::new()
     };
     (head, tail)
+}
+
+/// Every JSON object and array under `node` and `node` itself, children
+/// first, so a step is changed after the programs it holds.
+fn ext_visit(node: &mut Value, f: &mut dyn FnMut(&mut Value)) {
+    match node {
+        Value::Object(fields) => {
+            for field in fields.values_mut() {
+                ext_visit(field, f);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                ext_visit(item, f);
+            }
+        }
+        _ => {}
+    }
+    f(node);
+}
+
+/// The options of declarations and steps the main stream never sets, from
+/// the extension stream after `extend`: async finalizers on regions, a mask
+/// `depth`, the obligation kinds `IoOp`, `SemaphorePermit` and `Transaction`,
+/// the counter variants `latest`, `budgets` and `budgets_stop`, and a
+/// supervisor's storm threshold, explicit `stop`, dependencies between
+/// children (earlier siblings only: a cycle is a compile error), `required`
+/// and registered names (a name shared by two children draws the `fail` and
+/// `replace` collisions). Names are unique over the scenario. No finalizer
+/// goes on a region a driver `close_region` closes, nor below one: a
+/// finalizer is spawned by a lab step, and the drain takes none.
+fn ext_declarations(
+    ext: &mut Rng,
+    regions: &mut [Value],
+    task_values: &mut [Value],
+    script: &[Value],
+) {
+    let q = ext.quantum;
+    let mut closed: Vec<String> = script
+        .iter()
+        .filter(|e| e["op"]["op"] == "close_region")
+        .filter_map(|e| e["op"]["region"].as_str().map(str::to_string))
+        .collect();
+    loop {
+        let below: Vec<String> = regions
+            .iter()
+            .filter(|r| {
+                r["parent"]
+                    .as_str()
+                    .is_some_and(|p| closed.iter().any(|c| c == p))
+            })
+            .filter_map(|r| r["name"].as_str().map(str::to_string))
+            .filter(|n| !closed.contains(n))
+            .collect();
+        if below.is_empty() {
+            break;
+        }
+        closed.extend(below);
+    }
+    for region in regions.iter_mut() {
+        if !ext.chance(25) {
+            continue;
+        }
+        if region["name"]
+            .as_str()
+            .is_some_and(|n| closed.iter().any(|c| c == n))
+        {
+            continue;
+        }
+        let name = region["name"].as_str().unwrap_or("r").to_string();
+        let mut finalizers = Vec::new();
+        for i in 1..=1 + ext.below(2) {
+            let mut program = Vec::new();
+            for _ in 0..ext.below(4) {
+                program.push(match ext.below(4) {
+                    0 => json!({"op": "yield"}),
+                    1 => json!({"op": "sleep", "ns": q * (1 + ext.below(3))}),
+                    2 => json!({"op": "trace", "message": format!("{name}.f{i}")}),
+                    _ => json!({"op": "checkpoint", "on_cancel": "continue"}),
+                });
+            }
+            if ext.chance(15) {
+                program.push(json!({"op": "return",
+                                    "outcome": {"tag": "err", "status": *ext.pick(&ERR_STATUSES)}}));
+            }
+            finalizers.push(json!({"name": format!("f.{name}.{i}"), "program": program}));
+        }
+        region["finalizers"] = Value::Array(finalizers);
+    }
+    let mut registered = 0u32;
+    for task in task_values.iter_mut() {
+        ext_visit(task, &mut |node: &mut Value| {
+            let Some(op) = node.get("op").and_then(Value::as_str).map(str::to_string) else {
+                return;
+            };
+            match op.as_str() {
+                "masked" if ext.chance(30) => {
+                    // Past 64 the task panics before the section runs.
+                    let depth = if ext.chance(5) {
+                        65 + ext.below(16)
+                    } else {
+                        1 + ext.below(64)
+                    };
+                    node["depth"] = json!(depth);
+                }
+                "reserve" if ext.chance(40) => {
+                    node["kind"] = json!(*ext.pick(&["IoOp", "SemaphorePermit", "Transaction"]));
+                }
+                "server_spawn" if node["behavior"] == "counter" && ext.chance(40) => {
+                    node["behavior"] = json!(*ext.pick(&["latest", "budgets", "budgets_stop"]));
+                }
+                "supervise" => {
+                    if ext.chance(25) {
+                        node["storm_threshold_milli"] = json!(1 + ext.below(5000));
+                    }
+                    if node.get("escalation").is_none() && ext.chance(30) {
+                        node["escalation"] = json!("stop");
+                    }
+                    let Some(children) = node["children"].as_array_mut() else {
+                        return;
+                    };
+                    for i in 1..children.len() {
+                        if ext.chance(25) {
+                            let earlier = usize::try_from(ext.below(i as u64)).unwrap_or(0);
+                            let dependency = children[earlier]["name"].clone();
+                            children[i]["depends_on"] = json!([dependency]);
+                            if ext.chance(50) {
+                                children[i]["required"] = json!(false);
+                            }
+                        }
+                    }
+                    if children.len() >= 2 && ext.chance(25) {
+                        registered += 1;
+                        let name = format!("ext.reg{registered}");
+                        for child in children.iter_mut().take(2) {
+                            child["registration"] = json!({"name": name,
+                                "collision": *ext.pick(&["fail", "replace"])});
+                        }
+                    } else {
+                        for child in children.iter_mut() {
+                            if ext.chance(15) {
+                                registered += 1;
+                                child["registration"] = json!({
+                                    "name": format!("ext.reg{registered}"),
+                                    "collision": *ext.pick(&["fail", "replace"])});
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        });
+    }
 }
 
 /// Add the families of ops the main stream never draws, from the extension
@@ -2519,6 +2673,109 @@ mod tests {
             unknown.is_empty(),
             "ops the schema does not know: {unknown:?}"
         );
+    }
+
+    /// Every property name the schema declares, anywhere.
+    fn schema_properties() -> BTreeSet<String> {
+        fn walk(node: &Value, into: &mut BTreeSet<String>) {
+            match node {
+                Value::Object(fields) => {
+                    if let Some(props) = fields.get("properties").and_then(Value::as_object) {
+                        into.extend(props.keys().cloned());
+                    }
+                    for field in fields.values() {
+                        walk(field, into);
+                    }
+                }
+                Value::Array(items) => {
+                    for item in items {
+                        walk(item, into);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let schema: Value =
+            serde_json::from_str(include_str!("../../../schemas/scenario_dsl_v2.json"))
+                .expect("the DSL schema parses");
+        let mut names = BTreeSet::new();
+        walk(&schema, &mut names);
+        names
+    }
+
+    fn object_keys(v: &Value, into: &mut BTreeSet<String>) {
+        match v {
+            Value::Object(fields) => {
+                for (key, field) in fields {
+                    into.insert(key.clone());
+                    object_keys(field, into);
+                }
+            }
+            Value::Array(items) => {
+                for item in items {
+                    object_keys(item, into);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// bd-9kll.2.10: as `the_generator_draws_every_op_of_the_dsl`, for the
+    /// options of declarations and steps: every property name the schema
+    /// declares occurs in 1200 default-shape scenarios, or is exempt with its
+    /// reason. (Enum values are not enumerated here.)
+    #[test]
+    fn the_generator_sets_every_property_of_the_dsl() {
+        // (property, why a generated scenario does not set it)
+        const EXEMPT: &[(&str, &str)] = &[
+            (
+                "unbounded",
+                "an unbounded channel needs requires [unbounded_queue], which a C profile may forbid: the runner skips it (DSL section 1, DEC-008)",
+            ),
+            ("requires", "only for an unbounded channel (see unbounded)"),
+            (
+                "oracles",
+                "selects the Rust lab oracles that check a run: a check, not a behavior; its own gate",
+            ),
+            (
+                "panic_on_leak",
+                "makes an obligation leak panic the lab for the whole run: covered by its own fixtures",
+            ),
+            (
+                "futurelock_max_idle_steps",
+                "a reporting mode (expect futurelock): covered by its own fixtures",
+            ),
+            (
+                "error",
+                "the expected failure of expect must_fail: not a generated outcome",
+            ),
+            (
+                "step",
+                "the failing step of expect must_fail: not a generated outcome",
+            ),
+        ];
+        let declared = schema_properties();
+        assert!(declared.len() > 100, "the schema walk found too little");
+        let mut seen = BTreeSet::new();
+        for seed in 1..=3 {
+            for index in 0..400 {
+                object_keys(&scenario(seed, index), &mut seen);
+            }
+        }
+        let never: Vec<&String> = declared
+            .iter()
+            .filter(|p| !seen.contains(*p) && !EXEMPT.iter().any(|(name, _)| name == p))
+            .collect();
+        assert!(
+            never.is_empty(),
+            "schema properties no generated scenario sets: {never:?}"
+        );
+        for (property, why) in EXEMPT {
+            assert!(
+                !seen.contains(*property),
+                "{property} is set now: drop it from EXEMPT ({why})"
+            );
+        }
     }
 
     /// The rules the extension pass keeps, which the interpreters turn into

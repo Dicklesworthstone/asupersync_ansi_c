@@ -2051,6 +2051,22 @@ fuzz-timers:
 		FUZZ_V2_SEED=$(FUZZ_TIMERS_SEED) FUZZ_V2_COUNT=$(FUZZ_TIMERS_COUNT)
 
 # ---------------------------------------------------------------------------
+# fuzz-coverage — what the generated corpus leaves of the C runtime
+# unexecuted (bd-9kll.2.10, G4). The conformance runner is built with gcc
+# --coverage into $(FUZZ_COV_DIR) (build/ is not touched) and run over the
+# committed fixtures and over the captured fixtures of every earlier
+# `make fuzz-differential` run (build/fuzz_v2/seed-*/fixtures); the report
+# lists, per file, the lines the fixtures execute and the generated corpus does
+# not: the parts of the DSL the generator does not draw, or draws in the wrong
+# shape. Data, not a gate. Needs gcov and at least one fuzz-differential run.
+# ---------------------------------------------------------------------------
+FUZZ_COV_DIR ?= $(BUILD_DIR)/fuzz_coverage
+
+.PHONY: fuzz-coverage
+fuzz-coverage:
+	@FUZZ_COV_DIR="$(FUZZ_COV_DIR)" bash tools/ci/fuzz_coverage.sh
+
+# ---------------------------------------------------------------------------
 # scheduler-certificate-parity — Rust's and C's scheduler agree on every
 # dispatch and on the schedule certificate, and each replays the other's
 # recorded schedule (bd-9kll.4.8, bd-9kll.9.3). tests/e2e/
