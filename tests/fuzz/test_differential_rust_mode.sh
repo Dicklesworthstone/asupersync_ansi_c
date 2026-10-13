@@ -95,7 +95,10 @@ import sys
 mode, count, status, path = sys.argv[1:]
 count, status = int(count), int(status)
 text = Path(path).read_text()
-summaries = re.findall(r'^asx-conformance: compared=(\d+) pass=(\d+) fail=(\d+) error=(\d+)$', text, re.M)
+# The four leading counts are the contract. The runner appends fields
+# (forced_replayed, forced_unavailable, skipped_forbidden, ...): any number of
+# further key=N fields may follow, and nothing else may.
+summaries = re.findall(r'^asx-conformance: compared=(\d+) pass=(\d+) fail=(\d+) error=(\d+)(?: [a-z_]+=\d+)*$', text, re.M)
 assert len(summaries) == 1, 'missing or duplicate actual comparison summary'
 compared, passed, failed, errors = map(int, summaries[0])
 assert compared == count and passed + failed + errors == count and errors == 0
@@ -110,6 +113,35 @@ else:
 print(f'[live-diff] {mode}: compared={compared} pass={passed} fail={failed} error={errors} exit={status}')
 PY
 }
+
+# Parser-only controls for check_compare, on synthetic logs (never live
+# evidence): the summary line the runner prints today, with its appended
+# fields, is accepted; a line with anything but key=N fields after the four
+# counts, or with a count that does not match its rows, is not.
+mkdir -p "$RUN_DIR/summary-controls"
+printf 'PASS gen-1-1-001 sha256:aa\nPASS gen-1-2-001 sha256:bb\n%s\n' \
+    'asx-conformance: compared=2 pass=2 fail=0 error=0 forced_replayed=2 forced_unavailable=0 skipped_forbidden=0' \
+    >"$RUN_DIR/summary-controls/extra-fields.log"
+printf 'PASS gen-1-1-001 sha256:aa\nPASS gen-1-2-001 sha256:bb\n%s\n' \
+    'asx-conformance: compared=2 pass=2 fail=0 error=0' \
+    >"$RUN_DIR/summary-controls/four-fields.log"
+printf 'PASS gen-1-1-001 sha256:aa\nPASS gen-1-2-001 sha256:bb\n%s\n' \
+    'asx-conformance: compared=2 pass=2 fail=0 error=0 forced_replayed=2 trailing junk' \
+    >"$RUN_DIR/summary-controls/trailing-junk.log"
+printf 'PASS gen-1-1-001 sha256:aa\nPASS gen-1-2-001 sha256:bb\n%s\n' \
+    'asx-conformance: compared=3 pass=3 fail=0 error=0 forced_replayed=3' \
+    >"$RUN_DIR/summary-controls/wrong-count.log"
+check_compare clean 2 0 "$RUN_DIR/summary-controls/extra-fields.log" >/dev/null \
+    || fail "summary with appended fields was rejected"
+check_compare clean 2 0 "$RUN_DIR/summary-controls/four-fields.log" >/dev/null \
+    || fail "summary with only the four counts was rejected"
+if check_compare clean 2 0 "$RUN_DIR/summary-controls/trailing-junk.log" >/dev/null 2>&1; then
+    fail "summary with trailing junk was accepted"
+fi
+if check_compare clean 2 0 "$RUN_DIR/summary-controls/wrong-count.log" >/dev/null 2>&1; then
+    fail "summary whose count does not match the expected count was accepted"
+fi
+printf '[live-diff] summary parser controls: extra fields accepted, junk and wrong counts rejected\n'
 
 clean_status=0
 run_logged "$RUN_DIR/clean.compare.log" "$ASX_C_RUNNER" compare "${fixtures[@]}" || clean_status=$?
