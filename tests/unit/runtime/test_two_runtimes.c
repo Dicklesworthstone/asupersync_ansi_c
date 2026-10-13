@@ -13,7 +13,9 @@
  * It needs ASX_MAX_RUNTIMES >= 2 and the deterministic build (a live build
  * switches the network, file-system, process and signal adapters to their
  * native backends, which one runtime owns): the capacity lane's x4 build
- * runs it. Elsewhere it is reported as SKIP, not as passed.
+ * runs it. Elsewhere it is reported as SKIP, not as passed. The hook-table
+ * comparison a second runtime is admitted by needs no second runtime, and
+ * runs in every build.
  *
  * SPDX-License-Identifier: MIT
  */
@@ -29,6 +31,46 @@
 #else
 #define TWO_RUNTIMES_RUN 0
 #endif
+
+/* The members of a table, leaving its padding bytes as they were. */
+static void hooks_copy_members(asx_runtime_hooks *dst, const asx_runtime_hooks *src) {
+    dst->allocator = src->allocator;
+    dst->clock = src->clock;
+    dst->entropy = src->entropy;
+    dst->reactor = src->reactor;
+    dst->blocking = src->blocking;
+    dst->log = src->log;
+    dst->deterministic_seeded_prng = src->deterministic_seeded_prng;
+    dst->allocator_sealed = src->allocator_sealed;
+}
+
+TEST(hook_tables_with_equal_members_match_whatever_their_padding_bytes) {
+    asx_runtime_hooks base;
+    asx_runtime_hooks first;
+    asx_runtime_hooks second;
+
+    asx_runtime_hooks_init(&base);
+    memset(&first, 0xA5, sizeof(first));
+    memset(&second, 0, sizeof(second));
+    hooks_copy_members(&first, &base);
+    hooks_copy_members(&second, &base);
+    ASSERT_EQ(asx_runtime_set_hooks(&first), ASX_OK);
+
+    /* Same members, different padding: the same table. */
+    ASSERT_TRUE(asx_runtime_hooks_match_installed_internal(&second));
+
+    /* The allocator seal is state of the installed copy, not what is asked. */
+    second.allocator_sealed = (uint8_t)(base.allocator_sealed ? 0u : 1u);
+    ASSERT_TRUE(asx_runtime_hooks_match_installed_internal(&second));
+
+    /* One member that differs, in the middle or at the end, is another table. */
+    second.log.ctx = &second;
+    ASSERT_FALSE(asx_runtime_hooks_match_installed_internal(&second));
+    second.log.ctx = base.log.ctx;
+    ASSERT_TRUE(asx_runtime_hooks_match_installed_internal(&second));
+    second.deterministic_seeded_prng = (uint8_t)(base.deterministic_seeded_prng ? 0u : 1u);
+    ASSERT_FALSE(asx_runtime_hooks_match_installed_internal(&second));
+}
 
 #if TWO_RUNTIMES_RUN
 
@@ -413,6 +455,7 @@ int main(void) {
                 "needs ASX_MAX_RUNTIMES >= 2 and a deterministic build");
     RUN_TEST_IF(TWO_RUNTIMES_RUN, an_interleaved_run_of_two_runtimes_is_each_runtime_run_alone,
                 "needs ASX_MAX_RUNTIMES >= 2 and a deterministic build");
+    RUN_TEST(hook_tables_with_equal_members_match_whatever_their_padding_bytes);
     TEST_REPORT();
     return test_failures;
 }

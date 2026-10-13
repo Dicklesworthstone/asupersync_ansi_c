@@ -591,18 +591,18 @@ const asx_runtime_hooks *asx_runtime_get_hooks(void) {
 }
 
 /* The table is process-wide: a second runtime is accepted only with the
- * table the live ones installed, byte for byte. The allocator seal is state
- * of the installed copy, not part of what a runtime asks for. */
-int asx_runtime_hooks_match_installed_internal(const asx_runtime_hooks *hooks) {
-    asx_runtime_hooks installed;
-    asx_runtime_hooks asked;
+ * table the live ones installed, member for member. Members, not bytes: the
+ * struct ends in two flags after the pointers, so a copy carries tail padding
+ * whose bytes are indeterminate, and a byte comparison would refuse equal
+ * tables at random (it also reads padding, which clang-tidy's
+ * bugprone-suspicious-memory-comparison rejects). The allocator seal is state
+ * of the installed copy, not part of what a runtime asks for, so it is left
+ * out of the comparison (hooks_members_equal, below). */
+static int hooks_members_equal(const asx_runtime_hooks *a, const asx_runtime_hooks *b);
 
+int asx_runtime_hooks_match_installed_internal(const asx_runtime_hooks *hooks) {
     if (!g_hooks_installed) return 1;
-    installed = g_hooks;
-    asked = *hooks;
-    installed.allocator_sealed = 0;
-    asked.allocator_sealed = 0;
-    return memcmp(&installed, &asked, sizeof(installed)) == 0;
+    return hooks_members_equal(&g_hooks, hooks);
 }
 
 /* ------------------------------------------------------------------ */
@@ -960,6 +960,31 @@ asx_status asx_runtime_config_set_io_backend(asx_runtime_config *cfg, asx_io_bac
     case ASX_IO_BACKEND_IO_URING: return ASX_E_PERMISSION_DENIED;
     default: return ASX_E_INVALID_ARGUMENT;
     }
+}
+
+/* Every member of the table but the allocator seal: each function pointer,
+ * each context pointer and the seeded-PRNG flag. */
+static int hooks_members_equal(const asx_runtime_hooks *a, const asx_runtime_hooks *b) {
+    return a->allocator.ctx == b->allocator.ctx &&
+           a->allocator.malloc_fn == b->allocator.malloc_fn &&
+           a->allocator.realloc_fn == b->allocator.realloc_fn &&
+           a->allocator.free_fn == b->allocator.free_fn && a->clock.ctx == b->clock.ctx &&
+           a->clock.now_ns_fn == b->clock.now_ns_fn &&
+           a->clock.logical_now_ns_fn == b->clock.logical_now_ns_fn &&
+           a->entropy.ctx == b->entropy.ctx &&
+           a->entropy.random_u64_fn == b->entropy.random_u64_fn &&
+           a->entropy.try_u64_fn == b->entropy.try_u64_fn && a->reactor.ctx == b->reactor.ctx &&
+           a->reactor.wait_fn == b->reactor.wait_fn &&
+           a->reactor.ghost_wait_fn == b->reactor.ghost_wait_fn &&
+           a->reactor.register_fn == b->reactor.register_fn &&
+           a->reactor.deregister_fn == b->reactor.deregister_fn &&
+           a->reactor.poll_fn == b->reactor.poll_fn &&
+           a->reactor.notify_fn == b->reactor.notify_fn && a->blocking.ctx == b->blocking.ctx &&
+           a->blocking.submit_fn == b->blocking.submit_fn &&
+           a->blocking.shutdown_fn == b->blocking.shutdown_fn &&
+           a->blocking.capacity_fn == b->blocking.capacity_fn && a->log.ctx == b->log.ctx &&
+           a->log.write_fn == b->log.write_fn &&
+           a->deterministic_seeded_prng == b->deterministic_seeded_prng;
 }
 
 /* ------------------------------------------------------------------ */
