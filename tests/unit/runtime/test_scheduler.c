@@ -878,6 +878,50 @@ TEST(scheduler_budget_deadlines_fire_before_any_task_polls_in_the_round) {
     asx_runtime_shutdown(&g_rt);
 }
 
+/* Parks until a cancel arrives, then returns, the cancel dominating. */
+static asx_status poll_park_until_cancelled(void *data, asx_task_id self) {
+    asx_checkpoint_result cr;
+    asx_status st;
+    (void)data;
+    st = asx_checkpoint(self, &cr);
+    if (st != ASX_OK) return st;
+    if (cr.cancelled) return ASX_OK;
+    return asx_task_park(self) == ASX_OK ? ASX_E_PENDING : ASX_E_INVALID_STATE;
+}
+
+/* A task with a budget deadline parks with nothing else pending: no timer,
+ * no other task. Rust's lab advances time to the budget-deadline timer and
+ * cancels the task there. The sweep arms its own wake at the deadline when
+ * the task parks (the round-start pass cannot help: nothing moves the clock
+ * to the deadline, and the idle step finds no timer). Without the wake the run
+ * ends ASX_E_WOULD_BLOCK with the task parked and uncancelled. No
+ * Rust-captured fixture has this shape yet (scenario
+ * budget-deadline-parked-barrier-001 asks for one), so the oracle's sweep
+ * mutant drops the wake and the pass together; this test sees the wake
+ * alone. */
+TEST(scheduler_a_lone_parked_task_is_cancelled_at_its_budget_deadline) {
+    asx_region_id rid;
+    asx_task_id t;
+    asx_budget budget;
+    asx_budget tb;
+    asx_cancel_reason reason;
+
+    ASSERT_EQ(setup_with_clock(), ASX_OK);
+    asx_ghost_reset();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    tb = asx_budget_infinite();
+    tb.deadline = 100u;
+    ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_park_until_cancelled, NULL, &tb, &t), ASX_OK);
+
+    budget = asx_budget_from_polls(1000);
+    ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
+    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)100u);
+    ASSERT_EQ(asx_task_get_cancel_reason(t, &reason), ASX_OK);
+    ASSERT_EQ((int)reason.kind, (int)ASX_CANCEL_DEADLINE);
+    ASSERT_EQ(reason.timestamp, (asx_time)100u);
+    asx_runtime_shutdown(&g_rt);
+}
+
 /* ---- Poll quota enforced before a poll (bd-9kll.4.13) ---- */
 
 typedef struct {
@@ -986,6 +1030,7 @@ int main(void) {
     RUN_TEST(scheduler_does_not_cancel_a_cleanup_task_at_its_budget_deadline_before_it_polls);
     RUN_TEST(scheduler_a_passed_deadline_strengthens_a_user_cancel_that_arrived_first);
     RUN_TEST(scheduler_budget_deadlines_fire_before_any_task_polls_in_the_round);
+    RUN_TEST(scheduler_a_lone_parked_task_is_cancelled_at_its_budget_deadline);
 
     /* Budget enforcement before a poll */
     RUN_TEST(scheduler_stamps_an_exhausted_poll_quota_with_the_poll_quota_defaults);
