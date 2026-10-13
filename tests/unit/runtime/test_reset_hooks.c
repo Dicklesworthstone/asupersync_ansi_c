@@ -486,10 +486,8 @@ TEST(pool_is_cleared_by_a_runtime_reset) {
     cfg.max_size = 2u;
     cfg.create_fn = pool_make;
     cfg.destroy_fn = pool_drop;
-    asx_pool_reset();
-    forget();
-    ASSERT_EQ(asx_pool_create(&cfg, &h), ASX_OK);
-    ASSERT_TRUE(registered(ASX_RESET_SLOT_POOL));
+    asx_pool_reset(test_runtime());
+    ASSERT_EQ(asx_pool_create(test_runtime(), &cfg, &h), ASX_OK);
     ASSERT_EQ(asx_pool_get_stats(h, &stats), ASX_OK);
     asx_runtime_reset(test_runtime());
     ASSERT_TRUE(asx_pool_get_stats(h, &stats) != ASX_OK);
@@ -499,10 +497,8 @@ TEST(contended_mutex_is_cleared_by_a_runtime_reset) {
     asx_contended_mutex_handle h;
     asx_mutex_guard guard;
 
-    asx_contended_mutex_reset();
-    forget();
-    ASSERT_EQ(asx_contended_mutex_create(&h), ASX_OK);
-    ASSERT_TRUE(registered(ASX_RESET_SLOT_CONTENDED_MUTEX));
+    asx_contended_mutex_reset(test_runtime());
+    ASSERT_EQ(asx_contended_mutex_create(test_runtime(), &h), ASX_OK);
     ASSERT_EQ(asx_contended_mutex_try_lock(h, &guard), ASX_OK);
     ASSERT_TRUE(asx_contended_mutex_is_locked(h));
     asx_runtime_reset(test_runtime());

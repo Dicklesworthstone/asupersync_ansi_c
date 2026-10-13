@@ -1004,7 +1004,7 @@ TEST(contended_mutex_counts_one_contention_per_park) {
 
     ASSERT_TRUE(setup());
     memset(&task, 0, sizeof(task));
-    ASSERT_EQ(asx_contended_mutex_create(&task.mutex), ASX_OK);
+    ASSERT_EQ(asx_contended_mutex_create(&g_rt, &task.mutex), ASX_OK);
     ASSERT_EQ(asx_contended_mutex_try_lock(task.mutex, &held), ASX_OK);
     ASSERT_EQ(asx_task_spawn(g_region, poll_cm_task, &task, &t), ASX_OK);
     budget = asx_budget_from_polls(100);
@@ -1798,7 +1798,7 @@ TEST(pool_return_wakes_oldest_waiter) {
     g_order_len = 0;
     cfg.max_size = 1;
     cfg.create_fn = pool_create_dummy;
-    ASSERT_EQ(asx_pool_create(&cfg, &h), ASX_OK);
+    ASSERT_EQ(asx_pool_create(&g_rt, &cfg, &h), ASX_OK);
     for (i = 0; i < 3u; i++) {
         p[i].id = i;
         p[i].h = h;
@@ -1837,7 +1837,7 @@ TEST(pool_newcomer_cannot_jump_parked_waiter) {
     g_order_len = 0;
     cfg.max_size = 1;
     cfg.create_fn = pool_create_dummy;
-    ASSERT_EQ(asx_pool_create(&cfg, &h), ASX_OK);
+    ASSERT_EQ(asx_pool_create(&g_rt, &cfg, &h), ASX_OK);
     ASSERT_EQ(asx_pool_try_acquire(h, &held), ASX_OK);
     p.h = h;
     ASSERT_EQ(asx_task_spawn(g_region, poll_pool_task, &p, &t), ASX_OK);
@@ -1869,7 +1869,7 @@ TEST(pool_close_wakes_waiters) {
     memset(&cfg, 0, sizeof(cfg));
     cfg.max_size = 1;
     cfg.create_fn = pool_create_dummy;
-    ASSERT_EQ(asx_pool_create(&cfg, &h), ASX_OK);
+    ASSERT_EQ(asx_pool_create(&g_rt, &cfg, &h), ASX_OK);
     ASSERT_EQ(asx_pool_try_acquire(h, &held), ASX_OK);
     for (i = 0; i < 2u; i++) {
         p[i].h = h;

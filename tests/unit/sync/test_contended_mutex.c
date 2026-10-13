@@ -10,7 +10,7 @@
 
 static void setup(void) {
     asx_semaphore_reset(test_runtime());
-    asx_contended_mutex_reset();
+    asx_contended_mutex_reset(test_runtime());
 }
 
 /* ------------------------------------------------------------------ */
@@ -20,14 +20,16 @@ static void setup(void) {
 TEST(create_and_close) {
     asx_contended_mutex_handle h;
     setup();
-    ASSERT_EQ(asx_contended_mutex_create(&h), ASX_OK);
+    ASSERT_EQ(asx_contended_mutex_create(test_runtime(), &h), ASX_OK);
     ASSERT_FALSE(asx_contended_mutex_is_locked(h));
     ASSERT_EQ(asx_contended_mutex_close(h), ASX_OK);
 }
 
 TEST(create_null_fails) {
+    asx_contended_mutex_handle h;
     setup();
-    ASSERT_EQ(asx_contended_mutex_create(NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_contended_mutex_create(test_runtime(), NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_contended_mutex_create(NULL, &h), ASX_E_INVALID_ARGUMENT);
 }
 
 /* ------------------------------------------------------------------ */
@@ -38,7 +40,7 @@ TEST(try_lock_and_unlock) {
     asx_contended_mutex_handle h;
     asx_mutex_guard g;
     setup();
-    ASSERT_EQ(asx_contended_mutex_create(&h), ASX_OK);
+    ASSERT_EQ(asx_contended_mutex_create(test_runtime(), &h), ASX_OK);
     ASSERT_EQ(asx_contended_mutex_try_lock(h, &g), ASX_OK);
     ASSERT_TRUE(asx_contended_mutex_is_locked(h));
     ASSERT_EQ(asx_contended_mutex_unlock(g), ASX_OK);
@@ -50,7 +52,7 @@ TEST(try_lock_contention) {
     asx_contended_mutex_handle h;
     asx_mutex_guard g1, g2;
     setup();
-    ASSERT_EQ(asx_contended_mutex_create(&h), ASX_OK);
+    ASSERT_EQ(asx_contended_mutex_create(test_runtime(), &h), ASX_OK);
     ASSERT_EQ(asx_contended_mutex_try_lock(h, &g1), ASX_OK);
     ASSERT_EQ(asx_contended_mutex_try_lock(h, &g2), ASX_E_WOULD_BLOCK);
     asx_contended_mutex_unlock(g1);
@@ -66,7 +68,7 @@ TEST(metrics_track_acquisitions) {
     asx_mutex_guard g;
     asx_lock_metrics_snapshot snap;
     setup();
-    ASSERT_EQ(asx_contended_mutex_create(&h), ASX_OK);
+    ASSERT_EQ(asx_contended_mutex_create(test_runtime(), &h), ASX_OK);
 
     ASSERT_EQ(asx_contended_mutex_try_lock(h, &g), ASX_OK);
     asx_contended_mutex_unlock(g);
@@ -84,7 +86,7 @@ TEST(metrics_track_contentions) {
     asx_mutex_guard g, g2;
     asx_lock_metrics_snapshot snap;
     setup();
-    ASSERT_EQ(asx_contended_mutex_create(&h), ASX_OK);
+    ASSERT_EQ(asx_contended_mutex_create(test_runtime(), &h), ASX_OK);
 
     ASSERT_EQ(asx_contended_mutex_try_lock(h, &g), ASX_OK);
     /* Three contended attempts */
@@ -106,7 +108,7 @@ TEST(metrics_contention_run_resets_on_acquire) {
     asx_mutex_guard g, g2;
     asx_lock_metrics_snapshot snap;
     setup();
-    ASSERT_EQ(asx_contended_mutex_create(&h), ASX_OK);
+    ASSERT_EQ(asx_contended_mutex_create(test_runtime(), &h), ASX_OK);
 
     /* Lock, contend twice, unlock, acquire (resets run) */
     ASSERT_EQ(asx_contended_mutex_try_lock(h, &g), ASX_OK);
@@ -131,7 +133,7 @@ TEST(metrics_reset) {
     asx_mutex_guard g;
     asx_lock_metrics_snapshot snap;
     setup();
-    ASSERT_EQ(asx_contended_mutex_create(&h), ASX_OK);
+    ASSERT_EQ(asx_contended_mutex_create(test_runtime(), &h), ASX_OK);
     ASSERT_EQ(asx_contended_mutex_try_lock(h, &g), ASX_OK);
     asx_contended_mutex_unlock(g);
 

@@ -80,6 +80,13 @@ static asx_status done_poll(void *user_data, asx_task_id self) {
     return ASX_OK;
 }
 
+static asx_status pool_make_one(void *factory_data, void **out) {
+    static int resource;
+    (void)factory_data;
+    *out = &resource;
+    return ASX_OK;
+}
+
 /* An aligned block of asx_runtime_storage_size() bytes. */
 typedef struct {
     unsigned char *raw;
@@ -141,6 +148,10 @@ TEST(two_runtimes_have_independent_regions_tasks_and_quiescence) {
     asx_notify_handle nb;
     asx_barrier_handle bb;
     asx_once_handle once_b;
+    asx_pool_config pcfg;
+    asx_pool_handle poa;
+    asx_pool_handle pob;
+    asx_contended_mutex_handle cmb;
 
     memset(&a, 0, sizeof(a));
     memset(&b, 0, sizeof(b));
@@ -277,6 +288,25 @@ TEST(two_runtimes_have_independent_regions_tasks_and_quiescence) {
     ASSERT_EQ(asx_once_close(once_b), ASX_OK);
     ASSERT_EQ(asx_rwlock_create(NULL, &rwa), ASX_E_INVALID_ARGUMENT);
 
+    /* Pools and contended mutexes: the same index, told apart by the tag; the
+     * contended mutex's inner lock is its runtime's. */
+    memset(&pcfg, 0, sizeof(pcfg));
+    pcfg.max_size = 1u;
+    pcfg.create_fn = pool_make_one;
+    ASSERT_EQ(asx_pool_create(&a, &pcfg, &poa), ASX_OK);
+    ASSERT_EQ(asx_pool_create(&b, &pcfg, &pob), ASX_OK);
+    ASSERT_EQ(poa.slot, 0u);
+    ASSERT_EQ(pob.slot, 1u << 16);
+    ASSERT_EQ(asx_pool_close(pob), ASX_OK);
+    ASSERT_FALSE(asx_pool_is_closed(poa));
+    ASSERT_EQ(asx_pool_close(poa), ASX_OK);
+    ASSERT_EQ(asx_contended_mutex_create(&b, &cmb), ASX_OK);
+    ASSERT_EQ(cmb.slot, 1u << 16);
+    ASSERT_EQ(asx_contended_mutex_try_lock(cmb, &gb), ASX_OK);
+    ASSERT_TRUE(asx_contended_mutex_is_locked(cmb));
+    ASSERT_EQ(asx_contended_mutex_unlock(gb), ASX_OK);
+    ASSERT_EQ(asx_contended_mutex_close(cmb), ASX_OK);
+
     /* A handle of the other runtime is no member of this one's world. */
     ASSERT_EQ(asx_task_watch(ta, tb), ASX_E_NOT_FOUND);
     ASSERT_EQ(asx_obligation_reserve_ex(ra, ASX_OBLIGATION_KIND_GENERIC, tb, &ob), ASX_E_NOT_FOUND);
@@ -326,6 +356,8 @@ TEST(a_second_runtime_is_refused_by_name_while_a_shared_subsystem_is_in_use) {
     asx_semaphore_handle sem;
     asx_rwlock_handle rw;
     asx_contended_mutex_handle cm;
+    asx_watch_sender wtx;
+    asx_watch_receiver wrx;
     asx_task_id tid;
 
     memset(&a, 0, sizeof(a));
@@ -366,8 +398,10 @@ TEST(a_second_runtime_is_refused_by_name_while_a_shared_subsystem_is_in_use) {
     ASSERT_EQ(asx_region_open(&a, &ra), ASX_OK);
     ASSERT_EQ(asx_channel_create(ra, 4u, &ch), ASX_E_INVALID_STATE);
     ASSERT_TRUE(reason_names("channels"));
-    ASSERT_EQ(asx_contended_mutex_create(&cm), ASX_E_INVALID_STATE);
-    ASSERT_TRUE(reason_names("pools"));
+    ASSERT_EQ(asx_watch_create(0u, &wtx, &wrx), ASX_E_INVALID_STATE);
+    ASSERT_TRUE(reason_names("watches"));
+    ASSERT_EQ(asx_contended_mutex_create(&a, &cm), ASX_OK);
+    ASSERT_EQ(asx_contended_mutex_close(cm), ASX_OK);
     ASSERT_EQ(asx_semaphore_create(&a, 1u, &sem), ASX_OK);
     ASSERT_EQ(asx_semaphore_close(sem), ASX_OK);
     ASSERT_EQ(asx_rwlock_create(&a, &rw), ASX_OK);

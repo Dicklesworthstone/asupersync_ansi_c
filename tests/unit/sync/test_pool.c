@@ -5,6 +5,7 @@
  */
 
 #include "../../test_harness.h"
+#include "../../test_runtime.h"
 #include <asx/sync/pool.h>
 
 /* ------------------------------------------------------------------ */
@@ -40,7 +41,7 @@ static int mock_health(void *resource, void *factory_data) {
 }
 
 static void setup(void) {
-    asx_pool_reset();
+    asx_pool_reset(test_runtime());
     create_count = 0;
     destroy_count = 0;
     health_count = 0;
@@ -66,7 +67,7 @@ TEST(create_and_close) {
     asx_pool_handle h;
     asx_pool_config cfg = basic_config(4);
     setup();
-    ASSERT_EQ(asx_pool_create(&cfg, &h), ASX_OK);
+    ASSERT_EQ(asx_pool_create(test_runtime(), &cfg, &h), ASX_OK);
     ASSERT_FALSE(asx_pool_is_closed(h));
     ASSERT_EQ(asx_pool_close(h), ASX_OK);
     ASSERT_TRUE(asx_pool_is_closed(h));
@@ -76,15 +77,16 @@ TEST(create_null_fails) {
     asx_pool_handle h;
     asx_pool_config cfg = basic_config(4);
     setup();
-    ASSERT_EQ(asx_pool_create(NULL, &h), ASX_E_INVALID_ARGUMENT);
-    ASSERT_EQ(asx_pool_create(&cfg, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_pool_create(test_runtime(), NULL, &h), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_pool_create(test_runtime(), &cfg, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_pool_create(NULL, &cfg, &h), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(create_zero_size_fails) {
     asx_pool_handle h;
     asx_pool_config cfg = basic_config(0);
     setup();
-    ASSERT_EQ(asx_pool_create(&cfg, &h), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_pool_create(test_runtime(), &cfg, &h), ASX_E_INVALID_ARGUMENT);
 }
 
 /* ------------------------------------------------------------------ */
@@ -96,7 +98,7 @@ TEST(acquire_creates_resource) {
     asx_pool_config cfg = basic_config(4);
     asx_pooled_resource pr;
     setup();
-    ASSERT_EQ(asx_pool_create(&cfg, &h), ASX_OK);
+    ASSERT_EQ(asx_pool_create(test_runtime(), &cfg, &h), ASX_OK);
     ASSERT_EQ(asx_pool_try_acquire(h, &pr), ASX_OK);
     ASSERT_TRUE(pr.resource != NULL);
     ASSERT_EQ(create_count, 1);
@@ -111,7 +113,7 @@ TEST(acquire_reuses_returned_resource) {
     asx_pooled_resource pr1, pr2;
     void *first_resource;
     setup();
-    ASSERT_EQ(asx_pool_create(&cfg, &h), ASX_OK);
+    ASSERT_EQ(asx_pool_create(test_runtime(), &cfg, &h), ASX_OK);
 
     ASSERT_EQ(asx_pool_try_acquire(h, &pr1), ASX_OK);
     first_resource = pr1.resource;
@@ -130,7 +132,7 @@ TEST(acquire_blocked_when_at_max) {
     asx_pool_config cfg = basic_config(2);
     asx_pooled_resource pr1, pr2, pr3;
     setup();
-    ASSERT_EQ(asx_pool_create(&cfg, &h), ASX_OK);
+    ASSERT_EQ(asx_pool_create(test_runtime(), &cfg, &h), ASX_OK);
 
     ASSERT_EQ(asx_pool_try_acquire(h, &pr1), ASX_OK);
     ASSERT_EQ(asx_pool_try_acquire(h, &pr2), ASX_OK);
@@ -149,7 +151,7 @@ TEST(acquire_after_close_fails) {
     asx_pool_config cfg = basic_config(4);
     asx_pooled_resource pr;
     setup();
-    ASSERT_EQ(asx_pool_create(&cfg, &h), ASX_OK);
+    ASSERT_EQ(asx_pool_create(test_runtime(), &cfg, &h), ASX_OK);
     ASSERT_EQ(asx_pool_close(h), ASX_OK);
     ASSERT_EQ(asx_pool_try_acquire(h, &pr), ASX_E_DISCONNECTED);
 }
@@ -165,7 +167,7 @@ TEST(health_check_rejects_unhealthy) {
     asx_pool_stats stats;
     setup();
     cfg.health_fn = mock_health;
-    ASSERT_EQ(asx_pool_create(&cfg, &h), ASX_OK);
+    ASSERT_EQ(asx_pool_create(test_runtime(), &cfg, &h), ASX_OK);
 
     /* Acquire, return, then make unhealthy */
     ASSERT_EQ(asx_pool_try_acquire(h, &pr1), ASX_OK);
@@ -195,7 +197,7 @@ TEST(stats_track_usage) {
     asx_pooled_resource pr1, pr2;
     asx_pool_stats stats;
     setup();
-    ASSERT_EQ(asx_pool_create(&cfg, &h), ASX_OK);
+    ASSERT_EQ(asx_pool_create(test_runtime(), &cfg, &h), ASX_OK);
 
     ASSERT_EQ(asx_pool_try_acquire(h, &pr1), ASX_OK);
     ASSERT_EQ(asx_pool_try_acquire(h, &pr2), ASX_OK);
@@ -226,7 +228,7 @@ TEST(close_destroys_idle) {
     asx_pool_config cfg = basic_config(4);
     asx_pooled_resource pr;
     setup();
-    ASSERT_EQ(asx_pool_create(&cfg, &h), ASX_OK);
+    ASSERT_EQ(asx_pool_create(test_runtime(), &cfg, &h), ASX_OK);
 
     ASSERT_EQ(asx_pool_try_acquire(h, &pr), ASX_OK);
     asx_pool_return(&pr);
@@ -241,7 +243,7 @@ TEST(return_to_closed_pool_destroys) {
     asx_pool_config cfg = basic_config(4);
     asx_pooled_resource pr;
     setup();
-    ASSERT_EQ(asx_pool_create(&cfg, &h), ASX_OK);
+    ASSERT_EQ(asx_pool_create(test_runtime(), &cfg, &h), ASX_OK);
 
     ASSERT_EQ(asx_pool_try_acquire(h, &pr), ASX_OK);
     ASSERT_EQ(asx_pool_close(h), ASX_OK);
@@ -261,8 +263,10 @@ TEST(pool_arena_exhaustion) {
     asx_pool_config cfg = basic_config(1);
     uint32_t i;
     setup();
-    for (i = 0; i < ASX_POOL_MAX; i++) { ASSERT_EQ(asx_pool_create(&cfg, &handles[i]), ASX_OK); }
-    ASSERT_EQ(asx_pool_create(&cfg, &overflow), ASX_E_RESOURCE_EXHAUSTED);
+    for (i = 0; i < ASX_POOL_MAX; i++) {
+        ASSERT_EQ(asx_pool_create(test_runtime(), &cfg, &handles[i]), ASX_OK);
+    }
+    ASSERT_EQ(asx_pool_create(test_runtime(), &cfg, &overflow), ASX_E_RESOURCE_EXHAUSTED);
     for (i = 0; i < ASX_POOL_MAX; i++) { asx_pool_close(handles[i]); }
 }
 
