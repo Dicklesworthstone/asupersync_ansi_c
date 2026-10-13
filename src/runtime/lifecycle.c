@@ -356,17 +356,17 @@ static int asx_region_records_reclaimable(asx_region_id region) {
     return r->state == ASX_REGION_CLOSED;
 }
 
-/* Allocation-pressure reclamation: free every completed task whose
- * region is CLOSED (or gone), in ascending slot order. */
+/* Allocation-pressure reclamation: free every completed task whose region
+ * is CLOSED (or gone) and every completed finalizer task, whose outcome
+ * joined its region's at completion, in ascending slot order. */
 static uint32_t asx_task_reclaim_closed(asx_kernel *k) {
     uint32_t i;
     uint32_t freed = 0;
-
     for (i = k->task_count; i > 0u; i--) {
         ASX_CHECKPOINT_WAIVER("bounded: k->task_count <= ASX_MAX_TASKS");
         asx_task_slot *t = &k->tasks[i - 1u];
         if (!t->alive || !asx_task_is_terminal(t->state)) continue;
-        if (!asx_region_records_reclaimable(t->region)) continue;
+        if (!t->finalizer && !asx_region_records_reclaimable(t->region)) continue;
         /* Released in descending order so the LIFO free list hands the
          * lowest slot index out first. */
         asx_task_slot_release(k, i - 1u);
