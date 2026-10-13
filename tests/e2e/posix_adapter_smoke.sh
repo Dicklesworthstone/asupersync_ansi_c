@@ -28,8 +28,13 @@ e2e_init "posix-adapter-smoke" "E2E-POSIX-ADAPTER"
 # -------------------------------------------------------------------
 
 E2E_BIN="${E2E_ARTIFACT_DIR}/e2e_posix_adapter_smoke"
+E2E_BUILD_DIR="${E2E_BUILD_DIR}/posix-adapter-smoke"
 
+# Build into this family's own directory: the POSIX/DETERMINISTIC=0 library
+# must not replace the shared build/lib/libasx.a that other families (and the
+# run_all.sh rewrite guard) expect to find in its default profile and mode.
 if ! "${MAKE:-make}" -C "$E2E_PROJECT_ROOT" build PROFILE=POSIX DETERMINISTIC=0 \
+    BUILD_DIR="$E2E_BUILD_DIR" \
     CFLAGS="-DASX_LOCKFREE_SINGLE_THREAD=0" LDFLAGS="-lpthread -lrt"; then
     e2e_scenario "posix_adapter_smoke.lib_build" "POSIX lib build failed" "fail"
     e2e_finish
