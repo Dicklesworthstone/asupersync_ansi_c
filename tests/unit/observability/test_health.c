@@ -1,11 +1,11 @@
 /*
- * test_monitor.c — unit tests for monitor and observability families
+ * test_health.c — unit tests for the health evaluator and observability capture
  *
  * SPDX-License-Identifier: MIT
  */
 
 #include "test_io_fd.h"
-#include <asx/monitor/monitor.h>
+#include <asx/observability/health.h>
 #include <asx/observability/observability.h>
 #include <asx/runtime/browser_boundary.h>
 #include <asx/runtime/io_driver.h>
@@ -39,15 +39,15 @@ static asx_status st_sink_;
         g_pass++;                                                                                  \
     } while (0)
 
-static void test_monitor_healthy(void) {
+static void test_health_healthy(void) {
     asx_runtime rt;
-    asx_monitor_policy policy;
-    asx_monitor_report report;
+    asx_health_policy policy;
+    asx_health_report report;
     asx_evidence_sink sink;
 
     MUST_OK(asx_runtime_init_default(&rt));
-    asx_monitor_policy_init_default(&policy);
-    MUST_OK(asx_monitor_evaluate(&rt, &policy, &report, &sink));
+    asx_health_policy_init_default(&policy);
+    MUST_OK(asx_health_evaluate(&rt, &policy, &report, &sink));
 
     ASSERT(report.triggered_mask == 0u, "healthy mask");
     ASSERT(report.verdict == ASX_EVIDENCE_PASS, "healthy verdict");
@@ -55,10 +55,10 @@ static void test_monitor_healthy(void) {
     asx_runtime_shutdown(&rt);
 }
 
-static void test_monitor_watchdog_trigger(void) {
+static void test_health_watchdog_trigger(void) {
     asx_runtime rt;
-    asx_monitor_policy policy;
-    asx_monitor_report report;
+    asx_health_policy policy;
+    asx_health_report report;
     asx_evidence_sink sink;
     asx_auto_watchdog *wd;
 
@@ -68,18 +68,18 @@ static void test_monitor_watchdog_trigger(void) {
     asx_auto_watchdog_checkpoint(wd, 0u);
     asx_auto_watchdog_checkpoint(wd, 25u);
 
-    asx_monitor_policy_init_default(&policy);
-    MUST_OK(asx_monitor_evaluate(&rt, &policy, &report, &sink));
+    asx_health_policy_init_default(&policy);
+    MUST_OK(asx_health_evaluate(&rt, &policy, &report, &sink));
 
-    ASSERT((report.triggered_mask & ASX_MONITOR_WATCHDOG_VIOLATIONS) != 0u, "watchdog mask");
+    ASSERT((report.triggered_mask & ASX_HEALTH_WATCHDOG_VIOLATIONS) != 0u, "watchdog mask");
     ASSERT(report.verdict == ASX_EVIDENCE_FAIL, "watchdog fail verdict");
     asx_runtime_shutdown(&rt);
 }
 
-static void test_monitor_watchdog_threshold_equality_does_not_trigger(void) {
+static void test_health_watchdog_threshold_equality_does_not_trigger(void) {
     asx_runtime rt;
-    asx_monitor_policy policy;
-    asx_monitor_report report;
+    asx_health_policy policy;
+    asx_health_report report;
     asx_evidence_sink sink;
     asx_auto_watchdog *wd;
 
@@ -89,24 +89,24 @@ static void test_monitor_watchdog_threshold_equality_does_not_trigger(void) {
     asx_auto_watchdog_checkpoint(wd, 0u);
     asx_auto_watchdog_checkpoint(wd, 25u);
 
-    asx_monitor_policy_init_default(&policy);
+    asx_health_policy_init_default(&policy);
     policy.max_watchdog_violations = 1u;
-    MUST_OK(asx_monitor_evaluate(&rt, &policy, &report, &sink));
+    MUST_OK(asx_health_evaluate(&rt, &policy, &report, &sink));
 
-    ASSERT((report.triggered_mask & ASX_MONITOR_WATCHDOG_VIOLATIONS) == 0u,
+    ASSERT((report.triggered_mask & ASX_HEALTH_WATCHDOG_VIOLATIONS) == 0u,
            "watchdog threshold should not trigger at equality");
     ASSERT(report.verdict == ASX_EVIDENCE_PASS, "watchdog equality remains healthy");
     asx_runtime_shutdown(&rt);
 }
 
-static void test_monitor_io_threshold_trigger(void) {
+static void test_health_io_threshold_trigger(void) {
     asx_runtime rt;
-    asx_monitor_policy policy;
-    asx_monitor_report report;
+    asx_health_policy policy;
+    asx_health_report report;
     asx_evidence_sink sink;
 
     MUST_OK(asx_runtime_init_default(&rt));
-    asx_monitor_policy_init_default(&policy);
+    asx_health_policy_init_default(&policy);
     policy.max_io_utilization_pct = 0u;
 
     if (asx_surface_available_active(ASX_SURFACE_IO_DRIVER)) {
@@ -115,30 +115,30 @@ static void test_monitor_io_threshold_trigger(void) {
         asx_io_token tok;
         MUST_OK(asx_waker_register(88u, &w));
         MUST_OK(asx_io_register(test_io_fd(88), ASX_IO_READABLE, &w, &tok));
-        MUST_OK(asx_monitor_evaluate(&rt, &policy, &report, &sink));
-        ASSERT((report.triggered_mask & ASX_MONITOR_IO_HIGH) != 0u, "io mask");
+        MUST_OK(asx_health_evaluate(&rt, &policy, &report, &sink));
+        ASSERT((report.triggered_mask & ASX_HEALTH_IO_HIGH) != 0u, "io mask");
         ASSERT(report.verdict == ASX_EVIDENCE_WARN, "io threshold warns");
-        ASSERT(strcmp(sink.entries[0].source, "monitor:io_driver") == 0, "io evidence source");
+        ASSERT(strcmp(sink.entries[0].source, "health:io_driver") == 0, "io evidence source");
         asx_io_deregister(&tok);
 #else
         ASSERT(0, "io surface should not be active when io-driver types are compile-hidden");
 #endif
     } else {
-        MUST_OK(asx_monitor_evaluate(&rt, &policy, &report, &sink));
-        ASSERT((report.triggered_mask & ASX_MONITOR_IO_HIGH) == 0u, "no io mask when unsupported");
+        MUST_OK(asx_health_evaluate(&rt, &policy, &report, &sink));
+        ASSERT((report.triggered_mask & ASX_HEALTH_IO_HIGH) == 0u, "no io mask when unsupported");
     }
 
     asx_runtime_shutdown(&rt);
 }
 
-static void test_monitor_io_threshold_equality_does_not_trigger(void) {
+static void test_health_io_threshold_equality_does_not_trigger(void) {
     asx_runtime rt;
-    asx_monitor_policy policy;
-    asx_monitor_report report;
+    asx_health_policy policy;
+    asx_health_report report;
     asx_evidence_sink sink;
 
     MUST_OK(asx_runtime_init_default(&rt));
-    asx_monitor_policy_init_default(&policy);
+    asx_health_policy_init_default(&policy);
 
     if (asx_surface_available_active(ASX_SURFACE_IO_DRIVER)) {
 #if ASX_HAS_NATIVE_IO_DRIVER
@@ -158,16 +158,16 @@ static void test_monitor_io_threshold_equality_does_not_trigger(void) {
                       inspection.io_driver.capacity;
         policy.max_io_utilization_pct = pct;
 
-        MUST_OK(asx_monitor_evaluate(&rt, &policy, &report, &sink));
-        ASSERT((report.triggered_mask & ASX_MONITOR_IO_HIGH) == 0u,
+        MUST_OK(asx_health_evaluate(&rt, &policy, &report, &sink));
+        ASSERT((report.triggered_mask & ASX_HEALTH_IO_HIGH) == 0u,
                "io threshold at or above utilization should not trigger");
         asx_io_deregister(&tok);
 #else
         ASSERT(0, "io surface should not be active when io-driver types are compile-hidden");
 #endif
     } else {
-        MUST_OK(asx_monitor_evaluate(&rt, &policy, &report, &sink));
-        ASSERT((report.triggered_mask & ASX_MONITOR_IO_HIGH) == 0u, "no io mask when unsupported");
+        MUST_OK(asx_health_evaluate(&rt, &policy, &report, &sink));
+        ASSERT((report.triggered_mask & ASX_HEALTH_IO_HIGH) == 0u, "no io mask when unsupported");
     }
 
     asx_runtime_shutdown(&rt);
@@ -199,27 +199,27 @@ static void test_observability_capture(void) {
     asx_runtime_shutdown(&rt);
 }
 
-static void test_monitor_uninitialized_runtime_fails_closed(void) {
+static void test_health_uninitialized_runtime_fails_closed(void) {
     asx_runtime rt;
-    asx_monitor_policy policy;
-    asx_monitor_report report;
+    asx_health_policy policy;
+    asx_health_report report;
     asx_evidence_sink sink;
 
     memset(&rt, 0, sizeof(rt));
-    asx_monitor_policy_init_default(&policy);
-    MUST_OK(asx_monitor_evaluate(&rt, &policy, &report, &sink));
+    asx_health_policy_init_default(&policy);
+    MUST_OK(asx_health_evaluate(&rt, &policy, &report, &sink));
 
     ASSERT(report.verdict == ASX_EVIDENCE_FAIL, "uninitialized runtime verdict");
     ASSERT(report.triggered_mask == 0u, "no threshold mask for runtime state failure");
     ASSERT(sink.count == 1u, "runtime failure evidence");
-    ASSERT(strcmp(sink.entries[0].source, "monitor:runtime") == 0, "runtime evidence source");
+    ASSERT(strcmp(sink.entries[0].source, "health:runtime") == 0, "runtime evidence source");
 }
 
-static void test_monitor_stale_runtime_fails_closed(void) {
+static void test_health_stale_runtime_fails_closed(void) {
     asx_runtime a;
     asx_runtime b;
-    asx_monitor_policy policy;
-    asx_monitor_report report;
+    asx_health_policy policy;
+    asx_health_report report;
     asx_evidence_sink sink;
 
     ASSERT(asx_runtime_init_default(&a) == ASX_OK, "first runtime initialized");
@@ -227,21 +227,21 @@ static void test_monitor_stale_runtime_fails_closed(void) {
      * this test exercises stale-object diagnostics, not conflicting init. */
     asx_runtime_reset();
     ASSERT(asx_runtime_init_default(&b) == ASX_OK, "replacement runtime initialized");
-    asx_monitor_policy_init_default(&policy);
-    MUST_OK(asx_monitor_evaluate(&a, &policy, &report, &sink));
+    asx_health_policy_init_default(&policy);
+    MUST_OK(asx_health_evaluate(&a, &policy, &report, &sink));
 
     ASSERT(report.verdict == ASX_EVIDENCE_FAIL, "stale runtime verdict");
     ASSERT(report.triggered_mask == 0u, "no threshold mask for stale runtime");
     ASSERT(sink.count == 1u, "stale runtime evidence");
-    ASSERT(strcmp(sink.entries[0].source, "monitor:runtime") == 0, "stale evidence source");
+    ASSERT(strcmp(sink.entries[0].source, "health:runtime") == 0, "stale evidence source");
 
     asx_runtime_shutdown(&b);
 }
 
-static void test_monitor_copied_stale_runtime_fails_closed(void) {
+static void test_health_copied_stale_runtime_fails_closed(void) {
     asx_runtime a, b;
-    asx_monitor_policy policy;
-    asx_monitor_report report;
+    asx_health_policy policy;
+    asx_health_report report;
     asx_evidence_sink sink;
 
     /* Preserve the copied-object case as well as raw-reset invalidation. */
@@ -249,13 +249,13 @@ static void test_monitor_copied_stale_runtime_fails_closed(void) {
     a = b;
     asx_runtime_shutdown(&b);
     ASSERT(asx_runtime_init_default(&b) == ASX_OK, "replacement runtime initialized");
-    asx_monitor_policy_init_default(&policy);
-    ASSERT(asx_monitor_evaluate(&a, &policy, &report, &sink) == ASX_OK,
-           "stale monitoring succeeds");
+    asx_health_policy_init_default(&policy);
+    ASSERT(asx_health_evaluate(&a, &policy, &report, &sink) == ASX_OK,
+           "stale health evaluation succeeds");
     ASSERT(report.verdict == ASX_EVIDENCE_FAIL, "stale runtime verdict");
     ASSERT(report.triggered_mask == 0u, "no threshold mask for stale runtime");
     ASSERT(sink.count == 1u, "stale runtime evidence");
-    ASSERT(strcmp(sink.entries[0].source, "monitor:runtime") == 0, "stale evidence source");
+    ASSERT(strcmp(sink.entries[0].source, "health:runtime") == 0, "stale evidence source");
 
     asx_runtime_shutdown(&a);
     ASSERT(asx_runtime_is_initialized(&b), "stale shutdown preserves replacement runtime");
@@ -263,17 +263,17 @@ static void test_monitor_copied_stale_runtime_fails_closed(void) {
 }
 
 int main(void) {
-    printf("test_monitor:\n");
+    printf("test_health:\n");
 
-    RUN(test_monitor_healthy);
-    RUN(test_monitor_watchdog_trigger);
-    RUN(test_monitor_watchdog_threshold_equality_does_not_trigger);
-    RUN(test_monitor_io_threshold_trigger);
-    RUN(test_monitor_io_threshold_equality_does_not_trigger);
+    RUN(test_health_healthy);
+    RUN(test_health_watchdog_trigger);
+    RUN(test_health_watchdog_threshold_equality_does_not_trigger);
+    RUN(test_health_io_threshold_trigger);
+    RUN(test_health_io_threshold_equality_does_not_trigger);
     RUN(test_observability_capture);
-    RUN(test_monitor_uninitialized_runtime_fails_closed);
-    RUN(test_monitor_stale_runtime_fails_closed);
-    RUN(test_monitor_copied_stale_runtime_fails_closed);
+    RUN(test_health_uninitialized_runtime_fails_closed);
+    RUN(test_health_stale_runtime_fails_closed);
+    RUN(test_health_copied_stale_runtime_fails_closed);
 
     printf("\n  %d passed, %d failed\n", g_pass, g_fail);
     return g_fail > 0 ? 1 : 0;

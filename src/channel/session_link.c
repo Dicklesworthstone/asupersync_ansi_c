@@ -1,25 +1,26 @@
 /*
- * link.c — public coordination link built on top of session pairs
+ * session_link.c — public coordination link built on top of session pairs
  *
  * SPDX-License-Identifier: MIT
  */
 
-#include <asx/link/link.h>
+#include <asx/session/session_link.h>
 #include <string.h>
 
-asx_status asx_link_open(asx_region_id region, uint32_t capacity, asx_link *out_link) {
+asx_status asx_session_link_open(asx_region_id region, uint32_t capacity,
+                                 asx_session_link *out_link) {
     if (out_link == NULL) return ASX_E_INVALID_ARGUMENT;
     memset(out_link, 0, sizeof(*out_link));
     return asx_session_open(region, capacity, &out_link->session);
 }
 
-void asx_link_close(asx_link *link) {
+void asx_session_link_close(asx_session_link *link) {
     if (link == NULL) return;
     asx_session_close_initiator(&link->session);
     asx_session_close_responder(&link->session);
 }
 
-asx_status asx_link_send_request(asx_link *link, uint64_t value) {
+asx_status asx_session_link_send_request(asx_session_link *link, uint64_t value) {
     asx_status st;
 
     if (link == NULL) return ASX_E_INVALID_ARGUMENT;
@@ -28,7 +29,7 @@ asx_status asx_link_send_request(asx_link *link, uint64_t value) {
     return st;
 }
 
-asx_status asx_link_recv_request(asx_link *link, uint64_t *out_value) {
+asx_status asx_session_link_recv_request(asx_session_link *link, uint64_t *out_value) {
     asx_status st;
 
     if (link == NULL) return ASX_E_INVALID_ARGUMENT;
@@ -37,7 +38,7 @@ asx_status asx_link_recv_request(asx_link *link, uint64_t *out_value) {
     return st;
 }
 
-asx_status asx_link_send_response(asx_link *link, uint64_t value) {
+asx_status asx_session_link_send_response(asx_session_link *link, uint64_t value) {
     asx_status st;
 
     if (link == NULL) return ASX_E_INVALID_ARGUMENT;
@@ -46,7 +47,7 @@ asx_status asx_link_send_response(asx_link *link, uint64_t value) {
     return st;
 }
 
-asx_status asx_link_recv_response(asx_link *link, uint64_t *out_value) {
+asx_status asx_session_link_recv_response(asx_session_link *link, uint64_t *out_value) {
     asx_status st;
 
     if (link == NULL) return ASX_E_INVALID_ARGUMENT;
@@ -55,7 +56,8 @@ asx_status asx_link_recv_response(asx_link *link, uint64_t *out_value) {
     return st;
 }
 
-asx_status asx_link_capture_summary(const asx_link *link, asx_link_summary *out_summary) {
+asx_status asx_session_link_capture_summary(const asx_session_link *link,
+                                            asx_session_link_summary *out_summary) {
     if (link == NULL || out_summary == NULL) return ASX_E_INVALID_ARGUMENT;
 
     out_summary->state = asx_session_pair_state(&link->session);
@@ -67,4 +69,6 @@ asx_status asx_link_capture_summary(const asx_link *link, asx_link_summary *out_
     return ASX_OK;
 }
 
-const char *asx_link_state_name(asx_session_state state) { return asx_session_state_name(state); }
+const char *asx_session_link_state_name(asx_session_state state) {
+    return asx_session_state_name(state);
+}

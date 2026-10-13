@@ -80,7 +80,7 @@ Use `rch exec -- make <target>` to offload compilation to remote workers.
 | test_stress | runtime | 17 | Arena exhaustion, cancel storms, timer churn |
 | test_hft_instrument | runtime | 34 | HFT instrumentation |
 | test_mpsc | channel | 39 | MPSC bounded two-phase channel |
-| test_link | link | 3 | Public link request/response coordination |
+| test_session_link | session | 3 | Public session link request/response coordination |
 | test_record | record | 3 | Public record snapshot/event summary surface |
 | test_timer_wheel | time | 22 | Hierarchical timer wheel |
 
@@ -115,7 +115,7 @@ before API/ABI freeze (`make test-vignettes`):
 - `vignette_replay.c` — deterministic trace/replay and snapshot flows
 - `vignette_hooks.c` — freestanding runtime hook integration
 - `vignette_security.c` — authenticated symbol, derived-context rejection, and audit/evidence flows
-- `vignette_link.c` — public link/session round-trip with obligation and record capture
+- `vignette_session_link.c` — public session link round-trip with obligation and record capture
 
 ### Canonical Examples (`examples/`)
 
@@ -223,7 +223,7 @@ CLI/operator slice also adds:
 
 The observability/evidence slice adds:
 - `tests/unit/evidence/test_evidence.c`
-- `tests/unit/monitor/test_monitor.c`
+- `tests/unit/observability/test_health.c`
 - `tests/vignettes/vignette_observability.c`
 
 The platform adapter slice adds:

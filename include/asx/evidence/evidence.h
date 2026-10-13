@@ -35,7 +35,7 @@ ASX_API int asx_evidence_is_pass(const asx_evidence_entry *entry);
 ASX_API uint32_t asx_evidence_count_by_level(const asx_evidence_sink *sink,
                                              asx_evidence_level level);
 
-/* Count entries for a specific source prefix (e.g., "monitor:"). */
+/* Count entries for a specific source prefix (e.g., "health:"). */
 ASX_API uint32_t asx_evidence_count_for_source(const asx_evidence_sink *sink,
                                                const char *source_prefix);
 

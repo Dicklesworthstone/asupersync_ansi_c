@@ -6,15 +6,15 @@
 
 #include <asx/asx.h>
 #include <asx/evidence_sink/evidence_sink.h>
-#include <asx/monitor/monitor.h>
+#include <asx/observability/health.h>
 #include <asx/observability/observability.h>
 #include <stdio.h>
 #include <string.h>
 
 int main(void) {
     asx_runtime rt;
-    asx_monitor_policy policy;
-    asx_monitor_report report;
+    asx_health_policy policy;
+    asx_health_report report;
     asx_evidence_sink sink;
     asx_observability_snapshot snapshot;
     asx_report_buf ndjson;
@@ -32,9 +32,9 @@ int main(void) {
     asx_auto_watchdog_checkpoint(wd, 0u);
     asx_auto_watchdog_checkpoint(wd, 25u);
 
-    asx_monitor_policy_init_default(&policy);
-    if (asx_monitor_evaluate(&rt, &policy, &report, &sink) != ASX_OK) {
-        fprintf(stderr, "monitor evaluate failed\n");
+    asx_health_policy_init_default(&policy);
+    if (asx_health_evaluate(&rt, &policy, &report, &sink) != ASX_OK) {
+        fprintf(stderr, "health evaluate failed\n");
         asx_runtime_shutdown(&rt);
         return 1;
     }

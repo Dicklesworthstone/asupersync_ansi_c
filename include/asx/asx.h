@@ -139,16 +139,16 @@
 #include <asx/core/config_types.h>
 #include <asx/core/det_hash.h>
 
-/* Obligation, session, record, and link public families */
-#include <asx/link/link.h>
+/* Obligation, session, session link, and record public families */
 #include <asx/obligation/obligation.h>
 #include <asx/record/record.h>
 #include <asx/session/session.h>
+#include <asx/session/session_link.h>
 
-/* Observability, evidence, and monitor families */
+/* Observability, evidence, and health families */
 #include <asx/evidence/evidence.h>
 #include <asx/evidence_sink/evidence_sink.h>
-#include <asx/monitor/monitor.h>
+#include <asx/observability/health.h>
 #include <asx/observability/observability.h>
 
 /* Encoding and decoding pipeline families */

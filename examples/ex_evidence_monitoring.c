@@ -2,7 +2,7 @@
  * ex_evidence_monitoring.c — Evidence collection and runtime monitoring walkthrough
  *
  * Demonstrates:
- *   1. Configuring a monitor policy with custom thresholds
+ *   1. Configuring a health policy with custom thresholds
  *   2. Evaluating runtime state against the policy
  *   3. Evidence accumulation and verdict derivation
  *   4. Rendering evidence as NDJSON for log retention
@@ -49,8 +49,8 @@ static int g_fail = 0;
 
 static void scenario_healthy_runtime(void) {
     asx_runtime rt;
-    asx_monitor_policy policy;
-    asx_monitor_report report;
+    asx_health_policy policy;
+    asx_health_report report;
     asx_evidence_sink sink;
     asx_evidence_summary summary;
     asx_status st;
@@ -60,8 +60,8 @@ static void scenario_healthy_runtime(void) {
     st = asx_runtime_init_default(&rt);
     SCENARIO_CHECK(st == ASX_OK, "runtime init");
 
-    asx_monitor_policy_init_default(&policy);
-    st = asx_monitor_evaluate(&rt, &policy, &report, &sink);
+    asx_health_policy_init_default(&policy);
+    st = asx_health_evaluate(&rt, &policy, &report, &sink);
     SCENARIO_CHECK(st == ASX_OK, "monitor evaluate");
 
     IGNORE_RC(asx_evidence_sink_summarize(&sink, &summary));
@@ -83,8 +83,8 @@ static void scenario_healthy_runtime(void) {
 
 static void scenario_watchdog_violation(void) {
     asx_runtime rt;
-    asx_monitor_policy policy;
-    asx_monitor_report report;
+    asx_health_policy policy;
+    asx_health_report report;
     asx_evidence_sink sink;
     asx_auto_watchdog *wd;
     asx_report_buf ndjson;
@@ -100,11 +100,11 @@ static void scenario_watchdog_violation(void) {
     asx_auto_watchdog_checkpoint(wd, 0u);
     asx_auto_watchdog_checkpoint(wd, 25u); /* 25ns gap > 10ns period = violation */
 
-    asx_monitor_policy_init_default(&policy);
-    st = asx_monitor_evaluate(&rt, &policy, &report, &sink);
+    asx_health_policy_init_default(&policy);
+    st = asx_health_evaluate(&rt, &policy, &report, &sink);
     SCENARIO_CHECK(st == ASX_OK, "monitor evaluate with watchdog violation");
     SCENARIO_CHECK(report.verdict == ASX_EVIDENCE_FAIL, "verdict is FAIL due to watchdog");
-    SCENARIO_CHECK((report.triggered_mask & ASX_MONITOR_WATCHDOG_VIOLATIONS) != 0,
+    SCENARIO_CHECK((report.triggered_mask & ASX_HEALTH_WATCHDOG_VIOLATIONS) != 0,
                    "watchdog trigger bit set");
 
     /* Render evidence as NDJSON */
@@ -122,8 +122,8 @@ static void scenario_watchdog_violation(void) {
 
 static void scenario_observability_snapshot(void) {
     asx_runtime rt;
-    asx_monitor_policy policy;
-    asx_monitor_report report;
+    asx_health_policy policy;
+    asx_health_report report;
     asx_evidence_sink sink;
     asx_observability_snapshot snapshot;
     asx_status st;
@@ -132,8 +132,8 @@ static void scenario_observability_snapshot(void) {
 
     IGNORE_RC(asx_runtime_init_default(&rt));
 
-    asx_monitor_policy_init_default(&policy);
-    IGNORE_RC(asx_monitor_evaluate(&rt, &policy, &report, &sink));
+    asx_health_policy_init_default(&policy);
+    IGNORE_RC(asx_health_evaluate(&rt, &policy, &report, &sink));
 
     st = asx_observability_capture(&rt, &sink, &snapshot);
     SCENARIO_CHECK(st == ASX_OK, "observability capture");

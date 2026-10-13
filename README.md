@@ -315,11 +315,11 @@ The main subsystem families are below. Their public headers live under `include/
 | **signal** | Signal subscriptions with task wakeups; graceful shutdown on SIGTERM/SIGINT |
 | **obligation** | Structured obligation lifecycle (reserve/commit/abort/leak tracking) |
 | **session** | Bidirectional session endpoints |
-| **link** | Long-lived coordination links between tasks |
+| **session_link** | Long-lived request/response coordination over a session pair |
 | **record** | Event-log and snapshot grouping for audit/replay |
 | **evidence** | Evidence collection and severity-based classification |
 | **evidence_sink** | Evidence aggregation with pass/warn/fail verdict derivation |
-| **monitor** | Runtime monitoring with threshold-based policy evaluation |
+| **health** | Runtime health evaluation with threshold-based policy |
 | **observability** | Observability snapshots and instrumentation hooks |
 | **plan** | Planning and rewrite operations |
 | **app** | Application utilities: doctor diagnostics, reporting |
@@ -812,7 +812,7 @@ include/asx/                 Public C headers
   runtime/                   Scheduler, builder, blocking, I/O, deadline, HFT, automotive
   sync/                      Sync primitives (mutex, rwlock, semaphore, barrier, once, notify)
   codec/                     Codec abstraction + equivalence checking
-  ...                        + actor, cx, time, bytes, stream, security, net, fs, evidence, monitor, etc.
+  ...                        + actor, cx, time, bytes, stream, security, net, fs, evidence, health, etc.
 
 src/                         C sources, one directory per subsystem
   core/                      Status, cancel, combinators, symbols, epochs, circuit breakers
@@ -1697,9 +1697,9 @@ An evidence sink accumulates entries and derives a verdict using simple max-seve
 
 Evidence can be rendered as NDJSON for machine consumption or human-readable text. The `asx_inspect_to_evidence()` pipeline captures a full runtime inspection and automatically records one evidence entry per subsystem with appropriate severity based on utilization thresholds.
 
-## Runtime Monitor: Continuous Health Checks
+## Runtime Health: Continuous Health Checks
 
-The monitor module provides threshold-based health evaluation. It runs when the caller invokes `asx_monitor_evaluate()` (the scheduler does not call it):
+The health module (`include/asx/observability/health.h`) provides threshold-based health evaluation. It runs when the caller invokes `asx_health_evaluate()` (the scheduler does not call it). It is a C-only evaluator, not asupersync's `monitor` module (task monitors and DOWN notifications):
 
 | Metric | Default Threshold | Level If Exceeded |
 |---|---|---|
@@ -1712,7 +1712,7 @@ The monitor module provides threshold-based health evaluation. It runs when the 
 | Deadline miss rate | 1% | WARN |
 | Watchdog violations | 0 | FAIL |
 
-The monitor queries the runtime inspection report, computes utilization percentages, and sets a triggered bitmask for each threshold exceeded. Results are recorded as evidence entries, feeding into the verdict system for automated health reporting.
+The evaluator queries the runtime inspection report, computes utilization percentages, and sets a triggered bitmask for each threshold exceeded. Results are recorded as evidence entries, feeding into the verdict system for automated health reporting.
 
 ## Doctor: Runtime Health Diagnosis
 
@@ -1946,7 +1946,7 @@ The test and example suites serve as executable documentation:
 | `ex_cancel_drain.c` | Cancellation protocol and region drain semantics |
 | `ex_timeout_deadline.c` | Timer wheel register / collect-expired / cancel, poll-budget exhaustion, budget meet |
 | `ex_encoding_decoding.c` | Encoding/decoding pipelines, wire-format round-trips, progress tracking |
-| `ex_evidence_monitoring.c` | Evidence collection, monitor policies, NDJSON rendering, observability snapshots |
+| `ex_evidence_monitoring.c` | Evidence collection, health policies, NDJSON rendering, observability snapshots |
 | `ex_gen_server.c` | A counter GenServer: a client task's polled call, cast, stop and join |
 | `ex_join_set.c` | Dynamic JoinSet task collection and completion-order polling |
 | `ex_lab_replay.c` | Trace capture and digest, identical digests across repeated runs, ghost determinism monitor |
@@ -1968,7 +1968,7 @@ Vignettes are self-contained programs that demonstrate one API pattern each with
 | `vignette_network.c` | Network resolver and socket operations |
 | `vignette_budgets.c` | Task budget algebra and exhaustion |
 | `vignette_encoding_decoding.c` | Encode/decode pipeline walkthrough with artifact summaries |
-| `vignette_link.c` | Long-lived request/response coordination |
+| `vignette_session_link.c` | Long-lived request/response coordination over a session pair |
 | `vignette_observability.c` | Snapshot capture and inspection |
 | `vignette_security.c` | Authenticated symbols, derived-context rejection, security negative-test suite |
 | `vignette_console.c` | Doctor and inspection rendering |
@@ -2514,7 +2514,7 @@ A metric gate evaluates pass/fail against configurable p99, p99.9, p99.99, and j
 
 ### How does the automotive instrumentation work?
 
-The automotive instrumentation module (`include/asx/runtime/automotive_instrument.h`, compiled into every profile) provides four instruments. As with HFT, the application feeds them (`asx_auto_record_deadline`, `asx_auto_record_checkpoint`, `asx_auto_audit_record`); `asx_monitor_evaluate()` reads the global deadline tracker and watchdog:
+The automotive instrumentation module (`include/asx/runtime/automotive_instrument.h`, compiled into every profile) provides four instruments. As with HFT, the application feeds them (`asx_auto_record_deadline`, `asx_auto_record_checkpoint`, `asx_auto_audit_record`); `asx_health_evaluate()` reads the global deadline tracker and watchdog:
 - **Deadline tracker**: Records hit/miss per deadline evaluation. Computes miss rate as percentage * 100 (e.g., 250 = 2.5%). Tracks worst and best margins in nanoseconds (signed: negative = miss).
 - **Watchdog monitor**: Tracks intervals between checkpoint calls. Violations recorded when interval exceeds `watchdog_period_ns`. Clock reversals are clamped to zero interval to prevent fabricated violations.
 - **Degraded-mode audit ring**: Bounded 64-entry ring of safety-critical events (region poison, forced cancel, deadline miss, watchdog violation, degraded-mode enter/exit) with monotonic sequence numbers.

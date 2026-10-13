@@ -304,8 +304,8 @@ CX_SRC := \
 	src/cx/cx.c \
 	src/cx/scope.c
 
-LINK_SRC := \
-	src/link/link.c
+SESSION_LINK_SRC := \
+	src/channel/session_link.c
 
 EVIDENCE_SRC := \
 	src/evidence/evidence.c
@@ -313,8 +313,8 @@ EVIDENCE_SRC := \
 EVIDENCE_SINK_SRC := \
 	src/evidence_sink/evidence_sink.c
 
-MONITOR_SRC := \
-	src/monitor/monitor.c
+HEALTH_SRC := \
+	src/observability/health.c
 
 OBSERVABILITY_SRC := \
 	src/observability/observability.c
@@ -368,7 +368,7 @@ CLI_SRC := src/cli/cli.c
 
 ABI_SRC := src/abi/wasm_abi.c
 
-LIB_SRC := $(CORE_SRC) $(RUNTIME_SRC) $(CHANNEL_SRC) $(SYNC_SRC) $(ACTOR_SRC) $(NET_SRC) $(BYTES_SRC) $(ENCODING_SRC) $(DECODING_SRC) $(RAPTORQ_SRC) $(MIGRATION_SRC) $(TIME_SRC) $(SECURITY_SRC) $(STREAM_SRC) $(FS_SRC) $(PROCESS_SRC) $(SIGNAL_SRC) $(PLAN_SRC) $(CX_SRC) $(LINK_SRC) $(EVIDENCE_SRC) $(EVIDENCE_SINK_SRC) $(MONITOR_SRC) $(OBSERVABILITY_SRC) $(APP_SRC) $(CONSOLE_SRC) $(TRACING_COMPAT_SRC) $(SERVICE_SRC) $(TRANSPORT_SRC) $(REMOTE_SRC) $(SPORK_SRC) $(CONFORMANCE_SRC) $(ABI_SRC) $(CLI_SRC) $(PLATFORM_SRC)
+LIB_SRC := $(CORE_SRC) $(RUNTIME_SRC) $(CHANNEL_SRC) $(SYNC_SRC) $(ACTOR_SRC) $(NET_SRC) $(BYTES_SRC) $(ENCODING_SRC) $(DECODING_SRC) $(RAPTORQ_SRC) $(MIGRATION_SRC) $(TIME_SRC) $(SECURITY_SRC) $(STREAM_SRC) $(FS_SRC) $(PROCESS_SRC) $(SIGNAL_SRC) $(PLAN_SRC) $(CX_SRC) $(SESSION_LINK_SRC) $(EVIDENCE_SRC) $(EVIDENCE_SINK_SRC) $(HEALTH_SRC) $(OBSERVABILITY_SRC) $(APP_SRC) $(CONSOLE_SRC) $(TRACING_COMPAT_SRC) $(SERVICE_SRC) $(TRANSPORT_SRC) $(REMOTE_SRC) $(SPORK_SRC) $(CONFORMANCE_SRC) $(ABI_SRC) $(CLI_SRC) $(PLATFORM_SRC)
 
 # ---------------------------------------------------------------------------
 # Object files and output
@@ -395,8 +395,6 @@ UNIT_TEST_SRC := $(wildcard tests/unit/core/*_test.c) \
                  $(wildcard tests/unit/channel/test_*.c) \
                  $(wildcard tests/unit/session/*_test.c) \
                  $(wildcard tests/unit/session/test_*.c) \
-                 $(wildcard tests/unit/link/*_test.c) \
-                 $(wildcard tests/unit/link/test_*.c) \
                  $(wildcard tests/unit/record/*_test.c) \
                  $(wildcard tests/unit/record/test_*.c) \
                  $(wildcard tests/unit/time/*_test.c) \
@@ -425,8 +423,6 @@ UNIT_TEST_SRC := $(wildcard tests/unit/core/*_test.c) \
                  $(wildcard tests/unit/platform/test_*.c) \
                  $(wildcard tests/unit/evidence/*_test.c) \
                  $(wildcard tests/unit/evidence/test_*.c) \
-                 $(wildcard tests/unit/monitor/*_test.c) \
-                 $(wildcard tests/unit/monitor/test_*.c) \
                  $(wildcard tests/unit/tracing_compat/*_test.c) \
                  $(wildcard tests/unit/tracing_compat/test_*.c) \
                  $(wildcard tests/unit/bytes/*_test.c) \
@@ -935,14 +931,14 @@ BROWSER_FOCUSED_TEST_BIN := \
 	$(TEST_DIR)/unit/plan/test_plan \
 	$(TEST_DIR)/unit/cx/test_cx \
 	$(TEST_DIR)/unit/cx/test_scope \
-	$(TEST_DIR)/unit/link/test_link \
+	$(TEST_DIR)/unit/session/test_session_link \
 	$(TEST_DIR)/unit/app/test_app \
 	$(TEST_DIR)/unit/app/test_report \
 	$(TEST_DIR)/unit/cli/test_cli \
 	$(TEST_DIR)/unit/console/test_console \
 	$(TEST_DIR)/unit/evidence/test_evidence \
 	$(TEST_DIR)/unit/fs/test_fs \
-	$(TEST_DIR)/unit/monitor/test_monitor \
+	$(TEST_DIR)/unit/observability/test_health \
 	$(TEST_DIR)/unit/process/test_process \
 	$(TEST_DIR)/unit/record/test_record \
 	$(TEST_DIR)/unit/migration/test_migration \
@@ -1091,7 +1087,7 @@ $(TEST_DIR)/unit/security/test_security_audit: tests/unit/security/test_security
 $(TEST_DIR)/unit/channel/test_session: tests/unit/channel/test_session.c $(PUBLIC_FAMILY_TEST_EXTRA_SRC) $(LIB_A) | test-dirs
 	$(CC) $(TEST_CFLAGS) -o $@ $< $(PUBLIC_FAMILY_TEST_EXTRA_SRC) $(LIB_A) $(ALL_LDFLAGS)
 
-$(TEST_DIR)/unit/link/test_link: tests/unit/link/test_link.c $(PUBLIC_FAMILY_TEST_EXTRA_SRC) $(LIB_A) | test-dirs
+$(TEST_DIR)/unit/session/test_session_link: tests/unit/session/test_session_link.c $(PUBLIC_FAMILY_TEST_EXTRA_SRC) $(LIB_A) | test-dirs
 	$(CC) $(TEST_CFLAGS) -o $@ $< $(PUBLIC_FAMILY_TEST_EXTRA_SRC) $(LIB_A) $(ALL_LDFLAGS)
 
 $(TEST_DIR)/unit/record/test_record: tests/unit/record/test_record.c $(PUBLIC_FAMILY_TEST_EXTRA_SRC) $(LIB_A) | test-dirs
@@ -1112,7 +1108,7 @@ $(TEST_DIR)/unit/tracing_compat/test_tracing_compat: tests/unit/tracing_compat/t
 $(TEST_DIR)/unit/evidence/test_evidence: tests/unit/evidence/test_evidence.c $(OPERATOR_TEST_EXTRA_SRC) $(LIB_A) | test-dirs
 	$(CC) $(TEST_CFLAGS) -o $@ $< $(OPERATOR_TEST_EXTRA_SRC) $(LIB_A) $(ALL_LDFLAGS)
 
-$(TEST_DIR)/unit/monitor/test_monitor: tests/unit/monitor/test_monitor.c $(OPERATOR_TEST_EXTRA_SRC) $(LIB_A) | test-dirs
+$(TEST_DIR)/unit/observability/test_health: tests/unit/observability/test_health.c $(OPERATOR_TEST_EXTRA_SRC) $(LIB_A) | test-dirs
 	$(CC) $(TEST_CFLAGS) -o $@ $< $(OPERATOR_TEST_EXTRA_SRC) $(LIB_A) $(ALL_LDFLAGS)
 
 $(TEST_DIR)/unit/%: tests/unit/%.c $(LIB_A) | test-dirs
@@ -1543,7 +1539,7 @@ $(TEST_DIR)/vignettes/vignette_hooks: tests/vignettes/vignette_hooks.c $(CX_TEST
 $(TEST_DIR)/vignettes/vignette_security: tests/vignettes/vignette_security.c $(SECURITY_VIGNETTE_EXTRA_SRC) $(LIB_A) | test-dirs
 	$(CC) $(VIGNETTE_CFLAGS) -o $@ $< $(SECURITY_VIGNETTE_EXTRA_SRC) $(LIB_A) $(ALL_LDFLAGS)
 
-$(TEST_DIR)/vignettes/vignette_link: tests/vignettes/vignette_link.c $(PUBLIC_FAMILY_TEST_EXTRA_SRC) $(LIB_A) | test-dirs
+$(TEST_DIR)/vignettes/vignette_session_link: tests/vignettes/vignette_session_link.c $(PUBLIC_FAMILY_TEST_EXTRA_SRC) $(LIB_A) | test-dirs
 	$(CC) $(VIGNETTE_CFLAGS) -o $@ $< $(PUBLIC_FAMILY_TEST_EXTRA_SRC) $(LIB_A) $(ALL_LDFLAGS)
 
 $(TEST_DIR)/vignettes/vignette_console: tests/vignettes/vignette_console.c $(OPERATOR_TEST_EXTRA_SRC) $(LIB_A) | test-dirs
@@ -1554,14 +1550,14 @@ $(TEST_DIR)/vignettes/vignette_observability: tests/vignettes/vignette_observabi
 
 test-dirs:
 	@mkdir -p $(TEST_DIR)/unit/core $(TEST_DIR)/unit/runtime \
-	          $(TEST_DIR)/unit/channel $(TEST_DIR)/unit/link \
+	          $(TEST_DIR)/unit/channel $(TEST_DIR)/unit/session \
 	          $(TEST_DIR)/unit/record $(TEST_DIR)/unit/time \
 	          $(TEST_DIR)/unit/bytes $(TEST_DIR)/unit/encoding \
 	          $(TEST_DIR)/unit/decoding $(TEST_DIR)/unit/actor \
 	          $(TEST_DIR)/unit/raptorq $(TEST_DIR)/unit/migration \
 	          $(TEST_DIR)/unit/cx \
 	          $(TEST_DIR)/unit/app $(TEST_DIR)/unit/console \
-	          $(TEST_DIR)/unit/evidence $(TEST_DIR)/unit/monitor \
+	          $(TEST_DIR)/unit/evidence $(TEST_DIR)/unit/observability \
 	          $(TEST_DIR)/unit/tracing_compat \
 	          $(TEST_DIR)/unit/security $(TEST_DIR)/unit/fs \
 	          $(TEST_DIR)/unit/process $(TEST_DIR)/unit/signal \

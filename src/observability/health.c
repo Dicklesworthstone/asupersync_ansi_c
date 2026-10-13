@@ -1,12 +1,12 @@
 /*
- * monitor.c — public monitor and threshold evaluation family
+ * health.c — public runtime health and threshold evaluation
  *
  * SPDX-License-Identifier: MIT
  */
 
-#include <asx/monitor/monitor.h>
+#include <asx/observability/health.h>
 
-void asx_monitor_policy_init_default(asx_monitor_policy *policy) {
+void asx_health_policy_init_default(asx_health_policy *policy) {
     if (policy == NULL) return;
     policy->max_region_utilization_pct = 75u;
     policy->max_task_utilization_pct = 75u;
@@ -26,14 +26,14 @@ static int utilization_exceeds(uint32_t count, uint32_t capacity, uint32_t thres
     return (uint64_t)count * 100u > (uint64_t)threshold_pct * capacity;
 }
 
-asx_status asx_monitor_evaluate(const asx_runtime *rt, const asx_monitor_policy *policy,
-                                asx_monitor_report *out, asx_evidence_sink *sink) {
-    asx_monitor_policy defaults;
+asx_status asx_health_evaluate(const asx_runtime *rt, const asx_health_policy *policy,
+                               asx_health_report *out, asx_evidence_sink *sink) {
+    asx_health_policy defaults;
     asx_status st;
 
     if (rt == NULL || out == NULL || sink == NULL) return ASX_E_INVALID_ARGUMENT;
     if (policy == NULL) {
-        asx_monitor_policy_init_default(&defaults);
+        asx_health_policy_init_default(&defaults);
         policy = &defaults;
     }
 
@@ -45,22 +45,22 @@ asx_status asx_monitor_evaluate(const asx_runtime *rt, const asx_monitor_policy 
 
     if (!out->inspection.initialized) {
         out->verdict = ASX_EVIDENCE_FAIL;
-        return asx_evidence_record(sink, "monitor:runtime", ASX_EVIDENCE_FAIL,
+        return asx_evidence_record(sink, "health:runtime", ASX_EVIDENCE_FAIL,
                                    "runtime not initialized", 0);
     }
 
     if (utilization_exceeds(out->inspection.regions.active_count, out->inspection.regions.capacity,
                             policy->max_region_utilization_pct)) {
-        out->triggered_mask |= ASX_MONITOR_REGIONS_HIGH;
-        st = asx_evidence_record(sink, "monitor:regions", ASX_EVIDENCE_WARN,
+        out->triggered_mask |= ASX_HEALTH_REGIONS_HIGH;
+        st = asx_evidence_record(sink, "health:regions", ASX_EVIDENCE_WARN,
                                  "region utilization crossed threshold", 0);
         if (st != ASX_OK) return st;
     }
 
     if (utilization_exceeds(out->inspection.tasks.active_count, out->inspection.tasks.capacity,
                             policy->max_task_utilization_pct)) {
-        out->triggered_mask |= ASX_MONITOR_TASKS_HIGH;
-        st = asx_evidence_record(sink, "monitor:tasks", ASX_EVIDENCE_WARN,
+        out->triggered_mask |= ASX_HEALTH_TASKS_HIGH;
+        st = asx_evidence_record(sink, "health:tasks", ASX_EVIDENCE_WARN,
                                  "task utilization crossed threshold", 0);
         if (st != ASX_OK) return st;
     }
@@ -68,16 +68,16 @@ asx_status asx_monitor_evaluate(const asx_runtime *rt, const asx_monitor_policy 
     if (utilization_exceeds(out->inspection.obligations.active_count,
                             out->inspection.obligations.capacity,
                             policy->max_obligation_utilization_pct)) {
-        out->triggered_mask |= ASX_MONITOR_OBLIGATIONS_HIGH;
-        st = asx_evidence_record(sink, "monitor:obligations", ASX_EVIDENCE_WARN,
+        out->triggered_mask |= ASX_HEALTH_OBLIGATIONS_HIGH;
+        st = asx_evidence_record(sink, "health:obligations", ASX_EVIDENCE_WARN,
                                  "obligation utilization crossed threshold", 0);
         if (st != ASX_OK) return st;
     }
 
     if (utilization_exceeds(out->inspection.io_driver.active_count,
                             out->inspection.io_driver.capacity, policy->max_io_utilization_pct)) {
-        out->triggered_mask |= ASX_MONITOR_IO_HIGH;
-        st = asx_evidence_record(sink, "monitor:io_driver", ASX_EVIDENCE_WARN,
+        out->triggered_mask |= ASX_HEALTH_IO_HIGH;
+        st = asx_evidence_record(sink, "health:io_driver", ASX_EVIDENCE_WARN,
                                  "io registration utilization crossed threshold", 0);
         if (st != ASX_OK) return st;
     }
@@ -85,15 +85,15 @@ asx_status asx_monitor_evaluate(const asx_runtime *rt, const asx_monitor_policy 
     if (utilization_exceeds(out->inspection.blocking.active_count,
                             out->inspection.blocking.capacity,
                             policy->max_blocking_utilization_pct)) {
-        out->triggered_mask |= ASX_MONITOR_BLOCKING_HIGH;
-        st = asx_evidence_record(sink, "monitor:blocking", ASX_EVIDENCE_WARN,
+        out->triggered_mask |= ASX_HEALTH_BLOCKING_HIGH;
+        st = asx_evidence_record(sink, "health:blocking", ASX_EVIDENCE_WARN,
                                  "blocking utilization crossed threshold", 0);
         if (st != ASX_OK) return st;
     }
 
     if (out->inspection.ghosts.violation_count > policy->max_ghost_violations) {
-        out->triggered_mask |= ASX_MONITOR_GHOSTS_PRESENT;
-        st = asx_evidence_record(sink, "monitor:ghosts", ASX_EVIDENCE_FAIL,
+        out->triggered_mask |= ASX_HEALTH_GHOSTS_PRESENT;
+        st = asx_evidence_record(sink, "health:ghosts", ASX_EVIDENCE_FAIL,
                                  "ghost monitor violations present", 0);
         if (st != ASX_OK) return st;
     }
@@ -109,23 +109,23 @@ asx_status asx_monitor_evaluate(const asx_runtime *rt, const asx_monitor_policy 
         asx_auto_compliance_evaluate(&gate, dt, wd, &out->compliance);
 
         if (out->compliance.actual_miss_rate > gate.max_miss_rate_pct100) {
-            out->triggered_mask |= ASX_MONITOR_DEADLINE_MISS_RATE;
-            st = asx_evidence_record(sink, "monitor:deadline", ASX_EVIDENCE_WARN,
+            out->triggered_mask |= ASX_HEALTH_DEADLINE_MISS_RATE;
+            st = asx_evidence_record(sink, "health:deadline", ASX_EVIDENCE_WARN,
                                      "deadline miss rate crossed threshold", 0);
             if (st != ASX_OK) return st;
         }
 
         if (out->compliance.actual_violations > gate.max_watchdog_violations) {
-            out->triggered_mask |= ASX_MONITOR_WATCHDOG_VIOLATIONS;
-            st = asx_evidence_record(sink, "monitor:watchdog", ASX_EVIDENCE_FAIL,
+            out->triggered_mask |= ASX_HEALTH_WATCHDOG_VIOLATIONS;
+            st = asx_evidence_record(sink, "health:watchdog", ASX_EVIDENCE_FAIL,
                                      "watchdog violations crossed threshold", 0);
             if (st != ASX_OK) return st;
         }
     }
 
     if (sink->count == 0u) {
-        st = asx_evidence_record(sink, "monitor:healthy", ASX_EVIDENCE_PASS,
-                                 "all monitor thresholds within policy", 0);
+        st = asx_evidence_record(sink, "health:healthy", ASX_EVIDENCE_PASS,
+                                 "all health thresholds within policy", 0);
         if (st != ASX_OK) return st;
     }
 
