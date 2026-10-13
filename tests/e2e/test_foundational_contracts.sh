@@ -15,7 +15,7 @@ set -euo pipefail
 
 SRCROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BUILDDIR="$SRCROOT/build"
-GCC=/usr/bin/gcc
+GCC="${CC:-gcc}"
 PASS=0
 FAIL=0
 TOTAL=0
@@ -34,7 +34,10 @@ log() {
 # Build libasx.a if not present
 if [ ! -f "$BUILDDIR/lib/libasx.a" ]; then
     log "Building libasx.a..."
-    make -C "$SRCROOT" CC=$GCC lib >/dev/null 2>&1
+    if ! make -C "$SRCROOT" CC="$GCC" "build/lib/libasx.a" >/dev/null 2>&1; then
+        log "FAIL: libasx.a did not build"
+        exit 1
+    fi
 fi
 
 emit_jsonl "{\"kind\":\"session_start\",\"suite\":\"foundational_contracts\",\"bead\":\"bd-1eqo.15.1\"}"
@@ -72,11 +75,13 @@ for entry in "${SUITES[@]}"; do
         continue
     fi
 
-    OUTPUT=$("$BIN" 2>&1)
-    EXIT=$?
+    # A failing suite is a result to report, not a reason for set -e to end
+    # the script before the summary and its own exit status.
+    EXIT=0
+    OUTPUT=$("$BIN" 2>&1) || EXIT=$?
 
     # Extract pass/total counts from output
-    COUNTS=$(echo "$OUTPUT" | grep -oE '[0-9]+/[0-9]+ tests passed' | head -1 || echo "")
+    COUNTS=$(echo "$OUTPUT" | grep -oE '[0-9]+/[0-9]+ tests passed' | head -1 || true)
 
     if [ $EXIT -eq 0 ]; then
         PASS=$((PASS + 1))
@@ -87,7 +92,7 @@ for entry in "${SUITES[@]}"; do
         FAILURES=$(echo "$OUTPUT" | grep "FAIL:" | head -3 || echo "exit=$EXIT")
         emit_jsonl "{\"test\":\"$NAME\",\"result\":\"FAIL\",\"detail\":\"$FAILURES\"}"
         log "FAIL: $NAME"
-        echo "$OUTPUT" | grep "FAIL:" | head -5
+        echo "$OUTPUT" | grep "FAIL:" | head -5 || true
     fi
 done
 

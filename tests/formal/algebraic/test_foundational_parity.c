@@ -544,21 +544,35 @@ TEST(budget_meet_of_two_cleanup_budgets_tightens) {
 }
 
 TEST(cancel_severity_groups_have_monotone_budgets) {
-    /* Across severity groups, quota is non-increasing and priority non-decreasing */
-    int prev_sev = -1;
-    uint32_t prev_quota = UINT32_MAX;
-    uint8_t prev_priority = 0;
+    /* Every kind of one severity has that severity's cleanup budget, and
+     * across severities quota is non-increasing and priority non-decreasing.
+     * The kinds are grouped by severity, not by ordinal: the ordinals follow
+     * Rust's declaration order (LinkedExit, severity 3, comes after
+     * Shutdown, severity 5), so consecutive ordinals do not step through
+     * the severities in order. */
+    uint32_t quota[6];
+    uint8_t priority[6];
+    int seen[6];
     int k;
+    int sev;
+    for (sev = 0; sev < 6; sev++) seen[sev] = 0;
     for (k = 0; k <= 10; k++) {
-        int sev = asx_cancel_severity((asx_cancel_kind)k);
-        if (sev != prev_sev) {
-            asx_budget b = asx_cancel_cleanup_budget((asx_cancel_kind)k);
-            ASSERT_TRUE(b.poll_quota <= prev_quota);
-            ASSERT_TRUE(b.priority >= prev_priority);
-            prev_quota = b.poll_quota;
-            prev_priority = b.priority;
-            prev_sev = sev;
+        asx_budget b = asx_cancel_cleanup_budget((asx_cancel_kind)k);
+        sev = asx_cancel_severity((asx_cancel_kind)k);
+        ASSERT_TRUE(sev >= 0 && sev < 6);
+        if (!seen[sev]) {
+            seen[sev] = 1;
+            quota[sev] = b.poll_quota;
+            priority[sev] = b.priority;
+        } else {
+            ASSERT_TRUE(b.poll_quota == quota[sev]);
+            ASSERT_TRUE(b.priority == priority[sev]);
         }
+    }
+    for (sev = 0; sev < 6; sev++) ASSERT_TRUE(seen[sev]);
+    for (sev = 1; sev < 6; sev++) {
+        ASSERT_TRUE(quota[sev] <= quota[sev - 1]);
+        ASSERT_TRUE(priority[sev] >= priority[sev - 1]);
     }
 }
 
