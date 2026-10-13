@@ -27,6 +27,9 @@
 static int g_pass = 0;
 static int g_fail = 0;
 
+/* A zeroed runtime object names the library's static kernel (tag 0). */
+static asx_runtime g_rt;
+
 #define SCENARIO_BEGIN(id)                                                                         \
     do {                                                                                           \
         const char *_scenario_id = (id);                                                           \
@@ -68,12 +71,12 @@ static asx_status poll_complete(void *ud, asx_task_id self) {
 static void scenario_trace_events(void) {
     SCENARIO_BEGIN("lab_replay.trace_events_emitted");
 
-    asx_runtime_reset();
+    asx_runtime_reset(&g_rt);
     asx_trace_reset();
 
     asx_region_id rid;
     asx_task_id tid;
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(&g_rt, &rid) == ASX_OK, "region_open");
     SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "spawn");
 
     asx_budget budget = asx_budget_from_polls(64);
@@ -112,12 +115,12 @@ static void scenario_digest_deterministic(void) {
     SCENARIO_BEGIN("lab_replay.digest_deterministic");
 
     /* Run 1 */
-    asx_runtime_reset();
+    asx_runtime_reset(&g_rt);
     asx_trace_reset();
 
     asx_region_id rid;
     asx_task_id tid;
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "run1_region");
+    SCENARIO_CHECK(asx_region_open(&g_rt, &rid) == ASX_OK, "run1_region");
     SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "run1_spawn");
 
     asx_budget budget = asx_budget_from_polls(64);
@@ -126,10 +129,10 @@ static void scenario_digest_deterministic(void) {
     uint64_t d1 = asx_trace_digest();
 
     /* Run 2 (identical inputs) */
-    asx_runtime_reset();
+    asx_runtime_reset(&g_rt);
     asx_trace_reset();
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "run2_region");
+    SCENARIO_CHECK(asx_region_open(&g_rt, &rid) == ASX_OK, "run2_region");
     SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "run2_spawn");
 
     budget = asx_budget_from_polls(64);
@@ -161,9 +164,9 @@ static void scenario_ghost_violations(void) {
     SCENARIO_CHECK(asx_ghost_violation_count() == 0, "clean_after_reset");
 
     /* Run a valid lifecycle — should produce zero violations */
-    asx_runtime_reset();
+    asx_runtime_reset(&g_rt);
     asx_region_id rid;
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(&g_rt, &rid) == ASX_OK, "region_open");
 
     asx_budget budget = asx_budget_from_polls(64);
     SCENARIO_CHECK(asx_region_drain(rid, &budget) == ASX_OK, "drain");

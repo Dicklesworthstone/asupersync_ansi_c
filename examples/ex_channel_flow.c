@@ -27,6 +27,9 @@
 static int g_pass = 0;
 static int g_fail = 0;
 
+/* A zeroed runtime object names the library's static kernel (tag 0). */
+static asx_runtime g_rt;
+
 #define SCENARIO_BEGIN(id)                                                                         \
     do {                                                                                           \
         const char *_scenario_id = (id);                                                           \
@@ -62,11 +65,11 @@ static int g_fail = 0;
 static void scenario_reserve_send_recv(void) {
     SCENARIO_BEGIN("channel_flow.reserve_send_recv");
 
-    asx_runtime_reset();
+    asx_runtime_reset(&g_rt);
     asx_channel_reset();
 
     asx_region_id rid;
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(&g_rt, &rid) == ASX_OK, "region_open");
 
     asx_channel_id ch;
     SCENARIO_CHECK(asx_channel_create(rid, 8, &ch) == ASX_OK, "channel_create");
@@ -104,11 +107,11 @@ static void scenario_reserve_send_recv(void) {
 static void scenario_reserve_abort(void) {
     SCENARIO_BEGIN("channel_flow.reserve_abort");
 
-    asx_runtime_reset();
+    asx_runtime_reset(&g_rt);
     asx_channel_reset();
 
     asx_region_id rid;
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(&g_rt, &rid) == ASX_OK, "region_open");
 
     asx_channel_id ch;
     SCENARIO_CHECK(asx_channel_create(rid, 4, &ch) == ASX_OK, "channel_create");
@@ -140,11 +143,11 @@ static void scenario_reserve_abort(void) {
 static void scenario_close_sender(void) {
     SCENARIO_BEGIN("channel_flow.close_sender");
 
-    asx_runtime_reset();
+    asx_runtime_reset(&g_rt);
     asx_channel_reset();
 
     asx_region_id rid;
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(&g_rt, &rid) == ASX_OK, "region_open");
 
     asx_channel_id ch;
     SCENARIO_CHECK(asx_channel_create(rid, 4, &ch) == ASX_OK, "channel_create");

@@ -15,6 +15,9 @@
 #include <stdio.h>
 #include <string.h>
 
+/* A zeroed runtime object names the library's static kernel (tag 0). */
+static asx_runtime g_rt;
+
 /* --- Counter server behavior --- */
 
 typedef struct {
@@ -126,8 +129,8 @@ int main(void) {
 
     printf("SCENARIO gen_server_example\n");
 
-    asx_runtime_reset();
-    st = asx_region_open(&root);
+    asx_runtime_reset(&g_rt);
+    st = asx_region_open(&g_rt, &root);
     if (st == ASX_OK) st = asx_region_open_child(root, &region);
     if (st != ASX_OK) {
         printf("SCENARIO gen_server_start fail\n");

@@ -39,7 +39,7 @@ int main(void) {
         return 1;
     }
 
-    st = asx_region_open(&region);
+    st = asx_region_open(&rt, &region);
     if (st != ASX_OK) {
         printf("SCENARIO join_set_example fail region_open\n");
         return 1;

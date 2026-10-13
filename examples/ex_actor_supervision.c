@@ -26,6 +26,9 @@
 static int g_pass = 0;
 static int g_fail = 0;
 
+/* A zeroed runtime object names the library's static kernel (tag 0). */
+static asx_runtime g_rt;
+
 #define SCENARIO_BEGIN(id)                                                                         \
     do {                                                                                           \
         const char *_scenario_id = (id);                                                           \
@@ -177,12 +180,12 @@ static void scenario_actor_mailbox_roundtrip(void) {
 
     SCENARIO_BEGIN("actor.mailbox_roundtrip");
 
-    asx_runtime_reset();
+    asx_runtime_reset(&g_rt);
     memset(&state, 0, sizeof(state));
     memset(&caller, 0, sizeof(caller));
     behavior = echo_behavior();
 
-    SCENARIO_CHECK(asx_region_open(&region) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(&g_rt, &region) == ASX_OK, "region_open");
     SCENARIO_CHECK(asx_actor_spawn(&actor, region, &behavior, &state, 4u) == ASX_OK, "actor_spawn");
 
     pump_region(region, 1u);
@@ -224,7 +227,7 @@ static void scenario_supervisor_restart(void) {
 
     SCENARIO_BEGIN("actor.supervisor_restart");
 
-    asx_runtime_reset();
+    asx_runtime_reset(&g_rt);
     memset(&ctx, 0, sizeof(ctx));
     memset(&owner, 0, sizeof(owner));
 
@@ -234,7 +237,7 @@ static void scenario_supervisor_restart(void) {
     owner.cfg.backoff.kind = ASX_RESTART_BACKOFF_NONE;
     asx_child_spec_init(&owner.spec, "fragile", ASX_CHILD_TRANSIENT, fragile_child_start, &ctx);
 
-    SCENARIO_CHECK(asx_region_open(&root) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(&g_rt, &root) == ASX_OK, "region_open");
     SCENARIO_CHECK(asx_region_open_child(root, &owner.region) == ASX_OK, "owner_region");
     SCENARIO_CHECK(asx_task_spawn(owner.region, supervisor_owner_poll, &owner, &owner_id) == ASX_OK,
                    "owner_spawn");

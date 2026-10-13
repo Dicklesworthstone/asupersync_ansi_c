@@ -26,6 +26,9 @@
 static int g_pass = 0;
 static int g_fail = 0;
 
+/* A zeroed runtime object names the library's static kernel (tag 0). */
+static asx_runtime g_rt;
+
 #define SCENARIO_BEGIN(id)                                                                         \
     do {                                                                                           \
         const char *_scenario_id = (id);                                                           \
@@ -127,10 +130,10 @@ static asx_status poll_guarded_worker(void *ud, asx_task_id self) {
 static void scenario_cooperative_shutdown(void) {
     SCENARIO_BEGIN("cancel_drain.cooperative_shutdown");
 
-    asx_runtime_reset();
+    asx_runtime_reset(&g_rt);
 
     asx_region_id rid;
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(&g_rt, &rid) == ASX_OK, "region_open");
 
     /* Spawn a long-running cancel-aware task */
     asx_task_id tid;
@@ -169,10 +172,10 @@ static void scenario_cooperative_shutdown(void) {
 static void scenario_quiescence_evidence(void) {
     SCENARIO_BEGIN("cancel_drain.quiescence_evidence");
 
-    asx_runtime_reset();
+    asx_runtime_reset(&g_rt);
 
     asx_region_id rid;
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(&g_rt, &rid) == ASX_OK, "region_open");
 
     /* Spawn the worker task; its first poll reserves the obligation */
     asx_task_id tid;
@@ -226,10 +229,10 @@ static void scenario_quiescence_evidence(void) {
 static void scenario_drain_progress(void) {
     SCENARIO_BEGIN("cancel_drain.drain_progress_snapshot");
 
-    asx_runtime_reset();
+    asx_runtime_reset(&g_rt);
 
     asx_region_id rid;
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(&g_rt, &rid) == ASX_OK, "region_open");
 
     /* Spawn two tasks */
     asx_task_id t1, t2;

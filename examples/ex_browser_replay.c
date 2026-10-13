@@ -30,6 +30,9 @@
 static int g_pass = 0;
 static int g_fail = 0;
 
+/* A zeroed runtime object names the library's static kernel (tag 0). */
+static asx_runtime g_rt;
+
 #define SCENARIO_BEGIN(id)                                                                         \
     do {                                                                                           \
         const char *_scenario_id = (id);                                                           \
@@ -74,12 +77,12 @@ static void scenario_trace_in_sandbox(void) {
     /* Confirm trace surface is available */
     SCENARIO_CHECK(asx_surface_gate(ASX_SURFACE_TRACE) == ASX_OK, "trace_available");
 
-    asx_runtime_reset();
+    asx_runtime_reset(&g_rt);
     asx_trace_reset();
 
     asx_region_id rid;
     asx_task_id tid;
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(&g_rt, &rid) == ASX_OK, "region_open");
     SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "spawn");
 
     asx_budget budget = asx_budget_from_polls(64);
@@ -103,12 +106,12 @@ static void scenario_digest_deterministic(void) {
     SCENARIO_BEGIN("browser_replay.digest_deterministic");
 
     /* Run 1 */
-    asx_runtime_reset();
+    asx_runtime_reset(&g_rt);
     asx_trace_reset();
 
     asx_region_id rid;
     asx_task_id tid;
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "r1_region");
+    SCENARIO_CHECK(asx_region_open(&g_rt, &rid) == ASX_OK, "r1_region");
     SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "r1_spawn");
 
     asx_budget budget = asx_budget_from_polls(64);
@@ -117,10 +120,10 @@ static void scenario_digest_deterministic(void) {
     uint64_t d1 = asx_trace_digest();
 
     /* Run 2 (identical) */
-    asx_runtime_reset();
+    asx_runtime_reset(&g_rt);
     asx_trace_reset();
 
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "r2_region");
+    SCENARIO_CHECK(asx_region_open(&g_rt, &rid) == ASX_OK, "r2_region");
     SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "r2_spawn");
 
     budget = asx_budget_from_polls(64);

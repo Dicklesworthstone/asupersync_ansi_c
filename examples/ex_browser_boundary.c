@@ -22,6 +22,9 @@
 static int g_pass = 0;
 static int g_fail = 0;
 
+/* A zeroed runtime object names the library's static kernel (tag 0). */
+static asx_runtime g_rt;
+
 #define SCENARIO_BEGIN(id)                                                                         \
     do {                                                                                           \
         const char *_scenario_id = (id);                                                           \
@@ -146,11 +149,11 @@ static asx_status poll_complete(void *ud, asx_task_id self) {
 static void scenario_kernel_lifecycle(void) {
     SCENARIO_BEGIN("browser_boundary.kernel_lifecycle_works");
 
-    asx_runtime_reset();
+    asx_runtime_reset(&g_rt);
 
     /* Open region, spawn task, drain — standard kernel lifecycle */
     asx_region_id rid;
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(&g_rt, &rid) == ASX_OK, "region_open");
 
     asx_task_id tid;
     SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "task_spawn");

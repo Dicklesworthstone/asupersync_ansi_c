@@ -31,6 +31,9 @@
 static int g_pass = 0;
 static int g_fail = 0;
 
+/* A zeroed runtime object names the library's static kernel (tag 0). */
+static asx_runtime g_rt;
+
 #define SCENARIO_BEGIN(id)                                                                         \
     do {                                                                                           \
         const char *_scenario_id = (id);                                                           \
@@ -89,11 +92,11 @@ static asx_status poll_countdown(void *ud, asx_task_id self) {
 static void scenario_region_task_drain(void) {
     SCENARIO_BEGIN("quickstart.region_task_drain");
 
-    asx_runtime_reset();
+    asx_runtime_reset(&g_rt);
 
     /* Step 1: Open a region */
     asx_region_id rid;
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(&g_rt, &rid) == ASX_OK, "region_open");
 
     /* Step 2: Spawn two tasks with captured state */
     asx_task_id t1, t2;
@@ -201,10 +204,10 @@ static uint64_t blocking_add_one(void *user_data) {
 static void scenario_obligation_protocol(void) {
     SCENARIO_BEGIN("quickstart.obligation_protocol");
 
-    asx_runtime_reset();
+    asx_runtime_reset(&g_rt);
 
     asx_region_id rid;
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(&g_rt, &rid) == ASX_OK, "region_open");
 
     /* Spawn the holder task: it reserves an obligation in its own poll */
     asx_task_id tid;
@@ -277,7 +280,7 @@ static void scenario_runtime_builder_local_blocking_deadline(void) {
     SCENARIO_CHECK(asx_runtime_builder_set_finalizer_poll_budget(&builder, 48u) == ASX_OK,
                    "builder_budget");
     SCENARIO_CHECK(asx_runtime_builder_build(&builder, &runtime) == ASX_OK, "runtime_build");
-    SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open(&runtime, &rid) == ASX_OK, "region_open");
     SCENARIO_CHECK(asx_cx_init(&root_cx, rid, ASX_INVALID_ID, ASX_CAP_ALL) == ASX_OK, "root_cx");
     SCENARIO_CHECK(asx_local_scope_init(&scope, rid, &root_cx, asx_budget_from_polls(8u)) == ASX_OK,
                    "local_scope_init");

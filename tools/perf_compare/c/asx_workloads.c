@@ -63,6 +63,9 @@ uint32_t asx_perf_describe(char *buf, uint32_t cap);
  * (a closed region keeps its slot until the runtime is reset). */
 #define PERF_REGION_BATCH (ASX_MAX_REGIONS - 1)
 
+/* A zeroed runtime object names the library's static kernel (tag 0). */
+static asx_runtime g_rt;
+
 static uint64_t perf_now_ns(void) {
     struct timespec ts;
     (void)clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -94,8 +97,8 @@ int asx_perf_spawn_join(uint64_t n, uint64_t *out_ns, uint64_t *out_ops) {
     uint64_t t0;
     uint64_t t1;
 
-    asx_runtime_reset();
-    if (asx_region_open(&rid) != ASX_OK) return 1;
+    asx_runtime_reset(&g_rt);
+    if (asx_region_open(&g_rt, &rid) != ASX_OK) return 1;
     t0 = perf_now_ns();
     while (done < n) {
         uint32_t batch = (n - done) < (uint64_t)PERF_TASK_BATCH ? (uint32_t)(n - done)
@@ -144,8 +147,8 @@ int asx_perf_yield(uint64_t n, uint64_t *out_ns, uint64_t *out_ops) {
     uint64_t t0;
     uint64_t t1;
 
-    asx_runtime_reset();
-    if (asx_region_open(&rid) != ASX_OK) return 1;
+    asx_runtime_reset(&g_rt);
+    if (asx_region_open(&g_rt, &rid) != ASX_OK) return 1;
     st.remaining = n;
     if (asx_task_spawn(rid, poll_yield, &st, &tid) != ASX_OK) return 2;
     budget = perf_polls(n + 1u);
@@ -239,8 +242,8 @@ int asx_perf_mpsc_ping_pong(uint64_t n, uint64_t *out_ns, uint64_t *out_ops) {
     uint64_t t0;
     uint64_t t1;
 
-    asx_runtime_reset();
-    if (asx_region_open(&rid) != ASX_OK) return 1;
+    asx_runtime_reset(&g_rt);
+    if (asx_region_open(&g_rt, &rid) != ASX_OK) return 1;
     memset(&m, 0, sizeof(m));
     memset(&e, 0, sizeof(e));
     m.region = rid;
@@ -283,8 +286,8 @@ int asx_perf_cancel_latency(uint64_t n, uint64_t *out_ns, uint64_t *out_ops) {
     uint64_t total = 0u;
     uint64_t i;
 
-    asx_runtime_reset();
-    if (asx_region_open(&rid) != ASX_OK) return 1;
+    asx_runtime_reset(&g_rt);
+    if (asx_region_open(&g_rt, &rid) != ASX_OK) return 1;
     for (i = 0u; i < n; i++) {
         asx_task_id tid;
         asx_budget budget;
@@ -362,8 +365,8 @@ int asx_perf_region_open_close(uint64_t n, uint64_t *out_ns, uint64_t *out_ops) 
         uint32_t i;
         uint64_t t0;
         uint64_t t1;
-        asx_runtime_reset();
-        if (asx_region_open(&root) != ASX_OK) return 1;
+        asx_runtime_reset(&g_rt);
+        if (asx_region_open(&g_rt, &root) != ASX_OK) return 1;
         t0 = perf_now_ns();
         for (i = 0u; i < (uint32_t)PERF_REGION_BATCH; i++) {
             asx_region_id child;
