@@ -2407,7 +2407,7 @@ verification, and risk documents, among them:
 
 ## CI Pipeline Architecture
 
-The primary CI workflow (`.github/workflows/ci.yml`) runs <!-- fact:ci_jobs -->13<!-- /fact --> top-level jobs on
+The primary CI workflow (`.github/workflows/ci.yml`) runs <!-- fact:ci_jobs -->14<!-- /fact --> top-level jobs on
 pushes and PRs:
 
 | Job | Runs |
@@ -2425,8 +2425,9 @@ pushes and PRs:
 | `m32` | the unit suite and the Rust fixture replay on 32-bit x86 |
 | `msvc` | the library and the unit suite built by MSVC (x64, `/W4 /WX /wd4100`, via CMake) and run with CTest, for CORE and WIN32 (deterministic builds) |
 | `embedded-matrix` | router-class cross builds with size and layout rows (built, not run) |
+| `size-report` | the release library and the kernel-only archive built for CORE and EMBEDDED_ROUTER, resource classes default and 1, each quickstart linked and the kernel archive's link closure checked; a build, link or closure failure fails the lane, the sizes are reported and not gated |
 
-None of the <!-- fact:ci_jobs -->13<!-- /fact --> jobs is marked `continue-on-error`, so a failure in any of
+None of the <!-- fact:ci_jobs -->14<!-- /fact --> jobs is marked `continue-on-error`, so a failure in any of
 them fails the workflow. A nightly workflow (`nightly.yml`) runs the C fuzzer
 for 100K iterations, Rust-vs-C differential fuzzing on a new seed each day,
 the full e2e suite with the conformance and parity gates, and strict fixture

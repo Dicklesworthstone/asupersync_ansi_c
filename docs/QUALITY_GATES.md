@@ -528,6 +528,7 @@ From `.github/workflows/ci.yml`:
 | `msvc` | PR, push | `check` | Yes |
 | `m32` | PR, push | `check` | Yes |
 | `embedded-matrix` | PR, push | `check` | Yes |
+| `size-report` | PR, push | `check` | Yes (builds and link closure; the sizes are observed, not gated) |
 
 From `.github/workflows/perf.yml`:
 

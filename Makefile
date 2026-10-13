@@ -2519,7 +2519,11 @@ kernel-only-check: $(LIB_A) kernel-only
 # (bd-9kll.13.3): text/data/bss per object file, the archive totals and the
 # linked quickstart. It builds in SIZE_REPORT_DIR, edits no baseline, and is
 # observe-only unless SIZE_REPORT_STRICT=1 (then a build error or a figure
-# over the hard threshold fails it). Output: report.json and report.txt there.
+# over the hard threshold fails it). SIZE_REPORT_REQUIRE_BUILDS=1 gates the
+# builds alone: a library build that fails, a quickstart that does not link or
+# a kernel archive that fails its closure check exits nonzero, whatever the
+# sizes; the CI lane size-report runs it so. Output: report.json and
+# report.txt there.
 #   make size-report SIZE_REPORT_PROFILES="CORE" SIZE_REPORT_CLASSES="1"
 # ---------------------------------------------------------------------------
 SIZE_REPORT_DIR ?= $(BUILD_DIR)/size-report
@@ -2527,12 +2531,14 @@ SIZE_REPORT_PROFILES ?= CORE POSIX FREESTANDING EMBEDDED_ROUTER
 SIZE_REPORT_CLASSES ?= default 1 2 3
 SIZE_REPORT_TYPES ?= release
 SIZE_REPORT_STRICT ?= 0
+SIZE_REPORT_REQUIRE_BUILDS ?= 0
 
 .PHONY: size-report
 size-report:
 	@python3 tools/ci/size_report.py --out "$(SIZE_REPORT_DIR)" \
 		--profiles "$(SIZE_REPORT_PROFILES)" --classes "$(SIZE_REPORT_CLASSES)" \
 		--types "$(SIZE_REPORT_TYPES)" --cc "$(CC)" \
+		$(if $(filter 1,$(SIZE_REPORT_REQUIRE_BUILDS)),--require-builds,) \
 		$(if $(filter 1,$(SIZE_REPORT_STRICT)),--strict,)
 
 # ---------------------------------------------------------------------------

@@ -26,10 +26,18 @@ The numbers are those of the build host's compiler and target; a
 cross-compiled target differs. A link that fails is recorded as such with
 the first undefined symbols, not as a size.
 
+--require-builds is the build gate and nothing else: the exit status is
+nonzero when a library build failed, a quickstart did not link, or the
+kernel archive failed its closure check, whatever the sizes are. The sizes
+stay observe-only (only --strict gates them). It exists because no other CI
+lane builds BUILD_TYPE=release: the release library did not compile for
+hours (7150161 to 69671f1, -Werror=stringop-overflow at -O2) and nothing
+noticed until the report ran.
+
 Usage:
   tools/ci/size_report.py [--out DIR] [--profiles "CORE POSIX ..."]
       [--classes "default 1 2 3"] [--types "release debug"] [--cc gcc]
-      [--jobs N] [--strict]
+      [--jobs N] [--require-builds] [--strict]
 
 SPDX-License-Identifier: MIT
 """
@@ -219,6 +227,26 @@ def judge(row):
                       "full_quickstart": verdict(profile, flnk)}
 
 
+def build_defects(rows):
+    """What the build gate fails on whatever the sizes are: a build that
+    failed, a quickstart that did not link, a kernel archive that reaches
+    what the kernel-only build leaves out (check_kernel_only.sh)."""
+    defects = []
+    for row in rows:
+        if "error" in row:
+            defects.append("%s: %s" % (row["tag"], row["error"]))
+            continue
+        for name, key in (("kernel quickstart", "quickstart_kernel"),
+                          ("full quickstart", "quickstart_full")):
+            entry = row[key]
+            if entry["status"] != "linked":
+                defects.append("%s: %s did not link (undefined: %s)" % (
+                    row["tag"], name, ", ".join(entry.get("undefined") or ["see log"])))
+        if not row["closure_check"]["ok"]:
+            defects.append("%s: kernel-only closure check failed" % row["tag"])
+    return defects
+
+
 def kib(value):
     return "      -" if value is None else "%7.1f" % (value / KIB)
 
@@ -279,6 +307,8 @@ def main():
     ap.add_argument("--types", default="release")
     ap.add_argument("--cc", default="gcc")
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
+    ap.add_argument("--require-builds", action="store_true",
+                    help="exit nonzero on a build, link or closure failure; sizes stay observed")
     ap.add_argument("--strict", action="store_true")
     args = ap.parse_args()
 
@@ -318,6 +348,12 @@ def main():
     print("[asx] size-report: wrote %s and %s" % (os.path.join(args.out, "report.json"),
                                                   os.path.join(args.out, "report.txt")))
 
+    defects = build_defects(rows)
+    if args.require_builds and defects:
+        print("[asx] size-report: FAIL (builds): %d defect(s)" % len(defects))
+        for defect in defects:
+            print("  " + defect)
+        return 1
     broken = [r for r in rows if "error" in r]
     over_hard = [r for r in rows if "error" not in r and
                  r["verdict"]["kernel_archive"] == "over-hard"]
