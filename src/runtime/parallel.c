@@ -891,6 +891,9 @@ static int parallel_cancel_requested(const asx_kernel *k, uint16_t slot_idx) {
 static void parallel_promote_cancelled(const asx_kernel *k) {
     int lane_idx;
 
+#ifdef ASX_MUTANT_PARALLEL_NO_CANCEL_PROMOTE
+    if (k != NULL) { return; } /* planted bug: a queued task's cancel never moves it */
+#endif
     for (lane_idx = 0; lane_idx < (int)ASX_MAX_LANES; lane_idx++) {
         const lane_internal *lane = &g_lanes[lane_idx];
         uint32_t pos = 0u;
@@ -1175,6 +1178,9 @@ void asx_parallel_task_admitted_internal(asx_task_id tid) {
     asx_status st;
     uint32_t owner;
 
+#ifdef ASX_MUTANT_PARALLEL_NO_MIDRUN_ADMISSION
+    if (k != NULL) { return; } /* planted bug: a task spawned during a run joins no lane */
+#endif
     if (!g_run_active || k == NULL || slot_idx >= ASX_MAX_TASKS) { return; }
     t = &k->tasks[slot_idx];
     if (!t->alive || t->region != g_run_region || asx_task_is_terminal(t->state)) { return; }

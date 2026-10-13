@@ -186,6 +186,56 @@ else
     failures=$((failures + 1))
 fi
 
+# The parallel scheduler is not run by the conformance corpus (lab dispatch
+# and the sweep are), so its mutants are caught by its own unit test, and
+# each must fail the named cases (bd-9kll.4.11). run_unit_mutant builds one
+# unit test with the macro and requires a nonzero exit, a summary line, and a
+# `  FAIL: <case>` line for every case named: a compile failure or an empty
+# run cannot count as caught.
+run_unit_mutant() {
+    local macro="$1" test_rel="$2"
+    shift 2
+    local dir="$MUTANT_BUILD_ROOT/$macro"
+    local bin="$dir/tests/$test_rel"
+    local out rc name missing=""
+    mkdir -p "$dir"
+    if ! make -C "$REPO_ROOT" -j"$JOBS" --no-print-directory BUILD_DIR="$dir" \
+        CFLAGS="${CFLAGS:-} -DASX_MUTANT_$macro" "$bin" >"$dir/build.log" 2>&1; then
+        echo "  FAIL: $macro does not build (log $dir/build.log)"
+        log_case "$macro" "build" "build-failed" "fail" "$dir/build.log"
+        failures=$((failures + 1))
+        return
+    fi
+    out="$(cd "$REPO_ROOT" && "$bin" 2>&1)"
+    rc=$?
+    printf '%s\n' "$out" >"$dir/run.log"
+    for name in "$@"; do
+        grep -q "^  FAIL: $name\$" <<<"$out" || missing="$missing $name"
+    done
+    if [ "$rc" -ne 0 ] && [ -z "$missing" ] &&
+        grep -Eq '^[0-9]+/[0-9]+ tests passed' <<<"$out"; then
+        echo "  PASS: $macro caught by $test_rel ($# named case(s) fail)"
+        log_case "$macro" "nonzero:$*" "exit$rc" "pass" "$dir/run.log"
+    else
+        echo "  FAIL: $macro not caught (exit$rc; not failing:${missing:- none}; log $dir/run.log)"
+        log_case "$macro" "nonzero:$*" "exit$rc" "fail" "$dir/run.log"
+        failures=$((failures + 1))
+    fi
+}
+
+# A task a poll spawns joins a lane when it is created, so the run does not
+# say OK with it never polled; a queued task that takes a cancel moves to the
+# cancel lane at the next round; and a region that took a cancel refuses new
+# work, so nothing is admitted into it.
+run_unit_mutant PARALLEL_NO_MIDRUN_ADMISSION unit/runtime/test_parallel \
+    parallel_run_does_not_return_ok_while_a_spawned_child_is_live \
+    parallel_child_spawned_then_region_cancelled_is_dispatched_from_the_cancel_lane
+run_unit_mutant PARALLEL_NO_CANCEL_PROMOTE unit/runtime/test_parallel \
+    parallel_child_cancelled_after_admission_is_dispatched_from_the_cancel_lane \
+    parallel_child_spawned_then_region_cancelled_is_dispatched_from_the_cancel_lane
+run_unit_mutant SPAWN_INTO_CLOSING_REGION unit/runtime/test_parallel \
+    parallel_spawn_into_a_cancelled_region_is_refused_and_admits_nothing
+
 if [ "$failures" -eq 0 ]; then
     echo "test_oracle_mutants: every mutant caught"
     exit 0

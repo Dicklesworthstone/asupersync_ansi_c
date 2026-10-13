@@ -2318,6 +2318,156 @@ TEST(parallel_spawn_outside_a_run_is_not_admitted_until_the_next_run) {
     asx_parallel_reset();
 }
 
+/* A region the run cancels in a poll: a spawn into it is refused, as Rust's
+ * RegionState::can_accept_work refuses a closing region, so a spawn into a
+ * cancelled region puts nothing in any lane. Children spawned before the
+ * cancel, in the same poll, are queued ready and take the region's cancel;
+ * the lanes are classified again at the start of the next round, which
+ * moves them to the cancel lane. A child yields on its first poll and, on
+ * its second, reads the lanes: a poll leaves a pending task in its lane
+ * and removes a completed one, so the lanes hold the polled child and the
+ * one after it. */
+
+typedef struct {
+    int polls;
+    uint32_t cancel_lane; /* task counts at its second poll */
+    uint32_t ready_lane;
+} cancel_region_child;
+
+typedef struct {
+    asx_region_id region;
+    int polls;
+    int spawn_before_cancel; /* spawn, then cancel (else cancel, then spawn) */
+    asx_status spawn_status;
+    asx_status spawn_status2;
+    asx_task_id spawned[2];
+    uint32_t lanes_before_spawn;
+    uint32_t lanes_after_spawn;
+    cancel_region_child child[2];
+} cancel_region_state;
+
+static asx_status poll_cancel_region_child(void *data, asx_task_id self) {
+    cancel_region_child *c = (cancel_region_child *)data;
+    asx_lane_state ls;
+    asx_checkpoint_result cr;
+    c->polls++;
+    if (c->polls == 1) { return ASX_E_PENDING; }
+    if (asx_lane_get_state(ASX_LANE_CANCEL, &ls) == ASX_OK) { c->cancel_lane = ls.task_count; }
+    if (asx_lane_get_state(ASX_LANE_READY, &ls) == ASX_OK) { c->ready_lane = ls.task_count; }
+    if (asx_checkpoint(self, &cr) == ASX_OK && cr.cancelled) { return ASX_OK; }
+    return ASX_E_PENDING;
+}
+
+static asx_status poll_cancel_region_parent(void *data, asx_task_id self) {
+    cancel_region_state *s = (cancel_region_state *)data;
+    asx_cancel_reason reason = asx_cancel_reason_default(ASX_CANCEL_USER, NULL);
+    asx_checkpoint_result cr;
+    asx_status st;
+
+    s->polls++;
+    if (s->polls > 1) {
+        if (asx_checkpoint(self, &cr) == ASX_OK && cr.cancelled) { return ASX_OK; }
+        return ASX_E_PENDING;
+    }
+    s->spawned[0] = ASX_INVALID_ID;
+    s->spawned[1] = ASX_INVALID_ID;
+    s->lanes_before_spawn = asx_lane_total_tasks();
+    if (s->spawn_before_cancel) {
+        s->spawn_status =
+            asx_task_spawn(s->region, poll_cancel_region_child, &s->child[0], &s->spawned[0]);
+        s->spawn_status2 =
+            asx_task_spawn(s->region, poll_cancel_region_child, &s->child[1], &s->spawned[1]);
+        s->lanes_after_spawn = asx_lane_total_tasks();
+        st = asx_region_cancel(s->region, &reason, NULL);
+    } else {
+        st = asx_region_cancel(s->region, &reason, NULL);
+        s->spawn_status =
+            asx_task_spawn(s->region, poll_cancel_region_child, &s->child[0], &s->spawned[0]);
+        s->spawn_status2 =
+            asx_task_spawn(s->region, poll_cancel_region_child, &s->child[1], &s->spawned[1]);
+        s->lanes_after_spawn = asx_lane_total_tasks();
+    }
+    if (st != ASX_OK) { return st; }
+    return ASX_E_PENDING;
+}
+
+TEST(parallel_spawn_into_a_cancelled_region_is_refused_and_admits_nothing) {
+    asx_region_id rid;
+    asx_task_id parent_t;
+    asx_budget budget;
+    asx_parallel_config cfg = default_config();
+    cancel_region_state s;
+    asx_region_state rstate;
+
+    reset_all();
+    memset(&s, 0, sizeof(s));
+    s.spawn_before_cancel = 0;
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    s.region = rid;
+    ASSERT_EQ(asx_task_spawn(rid, poll_cancel_region_parent, &s, &parent_t), ASX_OK);
+
+    budget = asx_budget_from_polls(50);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
+
+    /* Refused, with the handle left as it was, and no lane took anything. */
+    ASSERT_EQ((int)s.spawn_status, (int)ASX_E_REGION_CLOSED);
+    ASSERT_EQ((int)s.spawn_status2, (int)ASX_E_REGION_CLOSED);
+    ASSERT_EQ(s.spawned[0], ASX_INVALID_ID);
+    ASSERT_EQ(s.spawned[1], ASX_INVALID_ID);
+    ASSERT_EQ(s.lanes_after_spawn, s.lanes_before_spawn);
+    ASSERT_EQ(s.child[0].polls, 0);
+    ASSERT_EQ(s.child[1].polls, 0);
+    ASSERT_EQ(asx_lane_total_tasks(), 0u);
+    ASSERT_EQ(asx_region_get_state(rid, &rstate), ASX_OK);
+    ASSERT_EQ((int)rstate, (int)ASX_REGION_CLOSED);
+
+    asx_parallel_reset();
+}
+
+TEST(parallel_child_spawned_then_region_cancelled_is_dispatched_from_the_cancel_lane) {
+    asx_region_id rid;
+    asx_task_id parent_t;
+    asx_budget budget;
+    asx_parallel_config cfg = default_config();
+    cancel_region_state s;
+    asx_task_state cstate;
+
+    reset_all();
+    memset(&s, 0, sizeof(s));
+    s.spawn_before_cancel = 1;
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    s.region = rid;
+    ASSERT_EQ(asx_task_spawn(rid, poll_cancel_region_parent, &s, &parent_t), ASX_OK);
+
+    budget = asx_budget_from_polls(50);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
+
+    /* Both admitted at their spawns (two more tasks in the lanes), then
+     * cancelled by the region's cancel in the same poll. */
+    ASSERT_EQ((int)s.spawn_status, (int)ASX_OK);
+    ASSERT_EQ((int)s.spawn_status2, (int)ASX_OK);
+    ASSERT_EQ(s.lanes_after_spawn, s.lanes_before_spawn + 2u);
+    /* Each child yielded once and was polled again: the first, with both
+     * children in the cancel lane and the ready lane empty (the parent had
+     * completed); the second, with itself alone. A queued task whose
+     * cancel never moved it would be in the ready lane instead. */
+    ASSERT_EQ(s.child[0].polls, 2);
+    ASSERT_EQ(s.child[1].polls, 2);
+    ASSERT_EQ(s.child[0].cancel_lane, 2u);
+    ASSERT_EQ(s.child[0].ready_lane, 0u);
+    ASSERT_EQ(s.child[1].cancel_lane, 1u);
+    ASSERT_EQ(s.child[1].ready_lane, 0u);
+    ASSERT_EQ(asx_task_get_state(s.spawned[0], &cstate), ASX_OK);
+    ASSERT_EQ((int)cstate, (int)ASX_TASK_COMPLETED);
+    ASSERT_EQ(asx_task_get_state(s.spawned[1], &cstate), ASX_OK);
+    ASSERT_EQ((int)cstate, (int)ASX_TASK_COMPLETED);
+    ASSERT_EQ(asx_lane_total_tasks(), 0u);
+
+    asx_parallel_reset();
+}
+
 /* ================================================================
  * main
  * ================================================================ */
@@ -2405,6 +2555,8 @@ int main(void) {
     RUN_TEST(parallel_run_does_not_return_ok_while_a_spawned_child_is_live);
     RUN_TEST(parallel_child_cancelled_after_admission_is_dispatched_from_the_cancel_lane);
     RUN_TEST(parallel_spawn_outside_a_run_is_not_admitted_until_the_next_run);
+    RUN_TEST(parallel_spawn_into_a_cancelled_region_is_refused_and_admits_nothing);
+    RUN_TEST(parallel_child_spawned_then_region_cancelled_is_dispatched_from_the_cancel_lane);
 
     /* Worker routing */
     RUN_TEST_IF(ASX_MAX_WORKERS >= 4u, parallel_multi_worker_steals_preserve_completion,

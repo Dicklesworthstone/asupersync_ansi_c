@@ -86,7 +86,12 @@ asx_status asx_obligation_transition_check(asx_obligation_state from, asx_obliga
 
 int asx_region_can_spawn(asx_region_state s) { return s == ASX_REGION_OPEN; }
 
-int asx_region_can_accept_work(asx_region_state s) { return s == ASX_REGION_OPEN; }
+int asx_region_can_accept_work(asx_region_state s) {
+#ifdef ASX_MUTANT_SPAWN_INTO_CLOSING_REGION
+    if (s == ASX_REGION_CLOSING) { return 1; } /* planted bug: a cancelled region takes work */
+#endif
+    return s == ASX_REGION_OPEN;
+}
 
 int asx_region_can_accept_cleanup_work(asx_region_state s) {
     return s == ASX_REGION_OPEN || s == ASX_REGION_FINALIZING;
