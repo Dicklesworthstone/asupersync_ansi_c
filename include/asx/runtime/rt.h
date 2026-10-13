@@ -59,9 +59,12 @@ extern "C" {
  *   ASX_E_DETERMINISM_VIOLATION for incompatible deterministic hooks,
  *   ASX_E_PERMISSION_DENIED for an unsupported I/O backend, or
  *   ASX_E_INVALID_STATE while a runtime already owns the singleton.
- * Failed initialization preserves the active runtime and destination bytes.
- * Shut down the active runtime before initializing another; independent
- * runtime-owned storage is not implemented yet.
+ * Failed initialization preserves the active runtime and destination bytes,
+ * and a refused config.storage binds nothing.
+ * The runtime's region, task and obligation arenas live in config->storage
+ * when it is set (see asx_runtime_storage_size), else in the library's
+ * static block. Shut down the active runtime before initializing another;
+ * only one runtime is live at a time.
  *
  * Thread-safety: not thread-safe. */
 ASX_API ASX_MUST_USE asx_status asx_runtime_init_checked(asx_runtime *rt,
@@ -118,6 +121,17 @@ ASX_API void asx_runtime_shutdown(asx_runtime *rt);
  * generation. Returns nonzero if initialized, 0 otherwise. Stale runtime
  * objects from an older init generation fail closed and report not initialized. */
 ASX_API int asx_runtime_is_initialized(const asx_runtime *rt);
+
+/* Bytes of runtime-owned state storage (asx_runtime_config.storage) this
+ * build needs: the region, task and obligation arenas, sized by
+ * ASX_MAX_REGIONS, ASX_MAX_TASKS and ASX_MAX_OBLIGATIONS. A static array
+ * for a freestanding build is sized from this value (see the layout budget
+ * report); init refuses a smaller block. Pure; no runtime is needed. */
+ASX_API ASX_MUST_USE size_t asx_runtime_storage_size(void);
+
+/* Required alignment, in bytes and a power of two, of the block given as
+ * asx_runtime_config.storage. Pure; no runtime is needed. */
+ASX_API ASX_MUST_USE size_t asx_runtime_storage_align(void);
 
 /* ------------------------------------------------------------------ */
 /* Configuration queries                                               */

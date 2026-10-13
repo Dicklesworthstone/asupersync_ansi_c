@@ -423,6 +423,265 @@ TEST(conflicting_init_preserves_live_runtime_and_destination) {
     asx_runtime_shutdown(&b);
 }
 
+/* ---- Runtime-owned state storage (K18, bd-9kll.3.20) ---- */
+
+/* An aligned block of asx_runtime_storage_size() bytes carved from `raw`,
+ * filled with `fill` so a runtime that bound it is told from one that did
+ * not. */
+typedef struct {
+    unsigned char *raw;
+    unsigned char *block;
+    size_t size;
+} storage_block;
+
+static int storage_block_make(storage_block *b, unsigned char fill) {
+    size_t size = asx_runtime_storage_size();
+    size_t align = asx_runtime_storage_align();
+    uintptr_t p;
+
+    memset(b, 0, sizeof(*b));
+    b->raw = (unsigned char *)malloc(size + align);
+    if (b->raw == NULL) return 0;
+    p = ((uintptr_t)b->raw + (align - 1u)) & ~((uintptr_t)align - 1u);
+    b->block = (unsigned char *)p;
+    b->size = size;
+    memset(b->block, fill, size);
+    return 1;
+}
+
+static void storage_block_free(storage_block *b) {
+    free(b->raw);
+    memset(b, 0, sizeof(*b));
+}
+
+static int pointer_in_block(const void *p, const storage_block *b) {
+    const unsigned char *c = (const unsigned char *)p;
+    return c >= b->block && c < b->block + b->size;
+}
+
+static int block_is_filled(const storage_block *b, unsigned char fill) {
+    size_t i;
+    for (i = 0; i < b->size; i++) {
+        if (b->block[i] != fill) return 0;
+    }
+    return 1;
+}
+
+TEST(runtime_storage_size_and_alignment_are_published) {
+    size_t size = asx_runtime_storage_size();
+    size_t align = asx_runtime_storage_align();
+
+    ASSERT_TRUE(size > 0u);
+    ASSERT_TRUE(align > 0u);
+    ASSERT_EQ(align & (align - 1u), (size_t)0u);
+    ASSERT_EQ(size % align, (size_t)0u);
+    ASSERT_TRUE(size >=
+                (size_t)ASX_MAX_REGIONS + (size_t)ASX_MAX_TASKS + (size_t)ASX_MAX_OBLIGATIONS);
+}
+
+TEST(runtime_arenas_live_in_the_callers_storage_and_return_to_the_static_block) {
+    asx_runtime rt;
+    asx_runtime_config cfg;
+    asx_runtime_config got;
+    asx_runtime_hooks hooks;
+    storage_block blk;
+    const void *static_regions;
+    const void *static_tasks;
+    const void *static_obligations;
+    asx_region_id region;
+    asx_task_id task;
+    asx_budget run;
+    asx_outcome outcome;
+
+    asx_runtime_reset();
+    static_regions = (const void *)g_regions;
+    static_tasks = (const void *)g_tasks;
+    static_obligations = (const void *)g_obligations;
+    ASSERT_TRUE(storage_block_make(&blk, 0xA5u));
+    make_valid_config(&cfg);
+    make_valid_hooks(&hooks);
+    cfg.storage = blk.block;
+    cfg.storage_size = blk.size;
+    MUST_OK(asx_runtime_init(&rt, &cfg, &hooks));
+    ASSERT_TRUE(asx_runtime_is_initialized(&rt));
+    ASSERT_TRUE(pointer_in_block(g_regions, &blk));
+    ASSERT_TRUE(pointer_in_block(g_tasks, &blk));
+    ASSERT_TRUE(pointer_in_block(g_obligations, &blk));
+    ASSERT_EQ(asx_runtime_get_config(&rt, &got), ASX_OK);
+    ASSERT_TRUE(got.storage == (void *)blk.block);
+    ASSERT_EQ(got.storage_size, blk.size);
+
+    /* The runtime works in it: init zeroed the block, a region opens in
+     * slot 0 and a task completes. */
+    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    ASSERT_TRUE(g_regions[0].alive);
+    ASSERT_EQ(asx_task_spawn(region, dummy_poll, NULL, &task), ASX_OK);
+    ASSERT_TRUE(g_tasks[0].alive);
+    run = asx_budget_from_polls(8u);
+    ASSERT_EQ(asx_scheduler_run(region, &run), ASX_OK);
+    ASSERT_EQ(asx_task_get_outcome(task, &outcome), ASX_OK);
+    ASSERT_EQ(asx_outcome_severity_of(&outcome), ASX_OUTCOME_OK);
+
+    /* Shutdown ends the binding. */
+    asx_runtime_shutdown(&rt);
+    ASSERT_TRUE((const void *)g_regions == static_regions);
+    ASSERT_TRUE((const void *)g_tasks == static_tasks);
+    ASSERT_TRUE((const void *)g_obligations == static_obligations);
+
+    /* A runtime given no storage uses the static block again. */
+    cfg.storage = NULL;
+    cfg.storage_size = 0u;
+    MUST_OK(asx_runtime_init(&rt, &cfg, &hooks));
+    ASSERT_TRUE((const void *)g_regions == static_regions);
+    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    asx_runtime_shutdown(&rt);
+    storage_block_free(&blk);
+}
+
+TEST(runtime_storage_refusals_bind_nothing_and_change_no_byte) {
+    asx_runtime rt;
+    asx_runtime before;
+    asx_runtime_config cfg;
+    asx_runtime_hooks hooks;
+    storage_block blk;
+    const void *static_regions;
+
+    asx_runtime_reset();
+    static_regions = (const void *)g_regions;
+    ASSERT_TRUE(storage_block_make(&blk, 0xA5u));
+    make_valid_config(&cfg);
+    make_valid_hooks(&hooks);
+    memset(&rt, 0x5A, sizeof(rt));
+    memcpy(&before, &rt, sizeof(rt));
+
+    /* Too small by one byte. */
+    cfg.storage = blk.block;
+    cfg.storage_size = blk.size - 1u;
+    ASSERT_EQ(asx_runtime_init(&rt, &cfg, &hooks), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_runtime_config_validate(&cfg), ASX_E_INVALID_ARGUMENT);
+
+    /* A size without a block. */
+    cfg.storage = NULL;
+    cfg.storage_size = blk.size;
+    ASSERT_EQ(asx_runtime_init(&rt, &cfg, &hooks), ASX_E_INVALID_ARGUMENT);
+
+    /* Misaligned, where the alignment says anything. */
+    if (asx_runtime_storage_align() > 1u) {
+        cfg.storage = blk.block + 1;
+        cfg.storage_size = blk.size;
+        ASSERT_EQ(asx_runtime_init(&rt, &cfg, &hooks), ASX_E_INVALID_ARGUMENT);
+    }
+
+    /* The library's own block. */
+    cfg.storage = (void *)g_regions;
+    cfg.storage_size = blk.size;
+    ASSERT_EQ(asx_runtime_init(&rt, &cfg, &hooks), ASX_E_INVALID_ARGUMENT);
+
+    /* Nothing was bound, reset or written. */
+    ASSERT_TRUE(!asx_runtime_is_initialized(&rt));
+    ASSERT_EQ(memcmp(&rt, &before, sizeof(rt)), 0);
+    ASSERT_TRUE((const void *)g_regions == static_regions);
+    ASSERT_TRUE(block_is_filled(&blk, 0xA5u));
+    storage_block_free(&blk);
+}
+
+TEST(refused_storage_init_preserves_the_live_runtime_and_the_block) {
+    asx_runtime a;
+    asx_runtime b;
+    asx_runtime before_a;
+    asx_runtime before_b;
+    asx_runtime_config cfg;
+    asx_runtime_hooks hooks;
+    storage_block blk;
+    const void *static_regions;
+    asx_region_id region;
+    asx_task_id task;
+    asx_budget run;
+    asx_outcome outcome;
+
+    asx_runtime_reset();
+    make_valid_config(&cfg);
+    make_valid_hooks(&hooks);
+    MUST_OK(asx_runtime_init(&a, &cfg, &hooks));
+    static_regions = (const void *)g_regions;
+    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(region, dummy_poll, NULL, &task), ASX_OK);
+
+    ASSERT_TRUE(storage_block_make(&blk, 0xA5u));
+    cfg.storage = blk.block;
+    cfg.storage_size = blk.size;
+    memset(&b, 0, sizeof(b));
+    memcpy(&before_a, &a, sizeof(a));
+    memcpy(&before_b, &b, sizeof(b));
+    ASSERT_EQ(asx_runtime_init(&b, &cfg, &hooks), ASX_E_INVALID_STATE);
+
+    /* The live runtime is untouched, still in its own block, and the
+     * refused block was neither bound nor zeroed. */
+    ASSERT_TRUE(asx_runtime_is_initialized(&a));
+    ASSERT_EQ(memcmp(&a, &before_a, sizeof(a)), 0);
+    ASSERT_EQ(memcmp(&b, &before_b, sizeof(b)), 0);
+    ASSERT_TRUE((const void *)g_regions == static_regions);
+    ASSERT_TRUE(block_is_filled(&blk, 0xA5u));
+    run = asx_budget_from_polls(8u);
+    ASSERT_EQ(asx_scheduler_run(region, &run), ASX_OK);
+    ASSERT_EQ(asx_task_get_outcome(task, &outcome), ASX_OK);
+    ASSERT_EQ(asx_outcome_severity_of(&outcome), ASX_OUTCOME_OK);
+    asx_runtime_shutdown(&a);
+    storage_block_free(&blk);
+}
+
+TEST(runtimes_in_turn_in_their_own_blocks_do_not_share_arenas) {
+    asx_runtime rt;
+    asx_runtime_config cfg;
+    asx_runtime_hooks hooks;
+    storage_block blk_a;
+    storage_block blk_b;
+    unsigned char *snapshot;
+    asx_region_id ra;
+    asx_region_id rb;
+    asx_task_id ta;
+    asx_task_id tb;
+    asx_budget run;
+
+    asx_runtime_reset();
+    make_valid_config(&cfg);
+    make_valid_hooks(&hooks);
+    ASSERT_TRUE(storage_block_make(&blk_a, 0xA5u));
+    ASSERT_TRUE(storage_block_make(&blk_b, 0xA5u));
+
+    cfg.storage = blk_a.block;
+    cfg.storage_size = blk_a.size;
+    MUST_OK(asx_runtime_init(&rt, &cfg, &hooks));
+    ASSERT_EQ(asx_region_open(&ra), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(ra, dummy_poll, NULL, &ta), ASX_OK);
+    run = asx_budget_from_polls(8u);
+    ASSERT_EQ(asx_scheduler_run(ra, &run), ASX_OK);
+    asx_runtime_shutdown(&rt);
+    snapshot = (unsigned char *)malloc(blk_a.size);
+    ASSERT_TRUE(snapshot != NULL);
+    memcpy(snapshot, blk_a.block, blk_a.size);
+
+    /* The second runtime starts from a fresh arena of its own: the same
+     * slots and generations come out, and nothing it does reaches the
+     * first block. */
+    cfg.storage = blk_b.block;
+    cfg.storage_size = blk_b.size;
+    MUST_OK(asx_runtime_init(&rt, &cfg, &hooks));
+    ASSERT_EQ(asx_region_open(&rb), ASX_OK);
+    ASSERT_EQ(rb, ra);
+    ASSERT_EQ(asx_task_spawn(rb, dummy_poll, NULL, &tb), ASX_OK);
+    ASSERT_EQ(tb, ta);
+    run = asx_budget_from_polls(8u);
+    ASSERT_EQ(asx_scheduler_run(rb, &run), ASX_OK);
+    asx_runtime_shutdown(&rt);
+
+    ASSERT_EQ(memcmp(snapshot, blk_a.block, blk_a.size), 0);
+    ASSERT_TRUE(!block_is_filled(&blk_b, 0xA5u));
+    free(snapshot);
+    storage_block_free(&blk_a);
+    storage_block_free(&blk_b);
+}
+
 TEST(stale_runtime_reports_uninitialized_after_new_init) {
     asx_runtime a, b;
     asx_runtime_config out;
@@ -1477,6 +1736,11 @@ TEST(full_roundtrip) {
 
 int main(void) {
     RUN_TEST(conflicting_init_preserves_live_runtime_and_destination);
+    RUN_TEST(runtime_storage_size_and_alignment_are_published);
+    RUN_TEST(runtime_arenas_live_in_the_callers_storage_and_return_to_the_static_block);
+    RUN_TEST(runtime_storage_refusals_bind_nothing_and_change_no_byte);
+    RUN_TEST(refused_storage_init_preserves_the_live_runtime_and_the_block);
+    RUN_TEST(runtimes_in_turn_in_their_own_blocks_do_not_share_arenas);
     fprintf(stderr, "=== test_rt ===\n");
 
     /* Config validation */

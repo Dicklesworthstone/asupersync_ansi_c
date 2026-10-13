@@ -37,6 +37,8 @@
  *   - max_cancel_chain_depth: existing chains may exceed new limit
  *   - max_cancel_chain_memory: existing allocations may exceed new cap
  *   - cleanup_hard_bound: changes whether cancelled tasks are force-completed
+ *   - storage, storage_size: where the runtime's arenas live; a live
+ *     runtime cannot move them
  */
 
 #define FIELD_DESC(name_str, cls, field)                                                           \
@@ -57,6 +59,10 @@ static const asx_config_field_desc g_field_table[] = {
     FIELD_DESC("max_cancel_chain_depth", ASX_CONFIG_RESTART_REQUIRED, max_cancel_chain_depth),
     FIELD_DESC("max_cancel_chain_memory", ASX_CONFIG_RESTART_REQUIRED, max_cancel_chain_memory),
     FIELD_DESC("cleanup_hard_bound", ASX_CONFIG_RESTART_REQUIRED, cleanup_hard_bound),
+    /* ASX_ANALYZER_WAIVER("pointer field: the byte diff compares the pointer, which is the point: a
+     * different block is a restart; the block's contents are never compared") */
+    FIELD_DESC("storage", ASX_CONFIG_RESTART_REQUIRED, storage),
+    FIELD_DESC("storage_size", ASX_CONFIG_RESTART_REQUIRED, storage_size),
 };
 
 #define FIELD_COUNT (sizeof(g_field_table) / sizeof(g_field_table[0]))

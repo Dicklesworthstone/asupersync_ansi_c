@@ -1251,6 +1251,15 @@ typedef struct {
      * stranded cancelled task is polled until it is. 1 is a semantic
      * deviation from Rust, excluded from parity. */
     uint32_t cleanup_hard_bound;
+    /* Runtime-owned state storage. NULL (with storage_size 0): the
+     * library's static block, as before. Otherwise the runtime's region,
+     * task and obligation arenas live in this caller-supplied block, which
+     * must be at least asx_runtime_storage_size() bytes (storage_size),
+     * aligned to asx_runtime_storage_align(), and must outlive the runtime
+     * and not be shared. Init zeroes it; shutdown leaves it as the runtime
+     * left it. Changing it is a restart (config reload rejects it). */
+    void *storage;
+    size_t storage_size;
 } asx_runtime_config;
 
 /* Runtime and builder layouts are available to configuration-only consumers
@@ -1777,6 +1786,8 @@ static inline uint64_t asx_header_config_fingerprint(void) {
         offsetof(asx_runtime_config, max_cancel_chain_depth),
         offsetof(asx_runtime_config, max_cancel_chain_memory),
         offsetof(asx_runtime_config, cleanup_hard_bound),
+        offsetof(asx_runtime_config, storage),
+        offsetof(asx_runtime_config, storage_size),
         sizeof(asx_runtime_hooks),
         offsetof(hooks_alignment, value),
         offsetof(asx_runtime_hooks, allocator),

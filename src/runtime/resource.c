@@ -13,8 +13,68 @@
 
 #include "runtime_internal.h"
 #include <asx/core/resource.h>
+#include <asx/runtime/rt.h>
 #include <asx/runtime/runtime.h>
 #include <stddef.h>
+#include <stdint.h>
+#include <string.h>
+
+/* ------------------------------------------------------------------ */
+/* Runtime-owned state storage (K18, bd-9kll.3.20)                     */
+/*                                                                     */
+/* The region, task and obligation arenas are one block. The library's */
+/* static block is bound until a runtime is initialized with its own   */
+/* (asx_runtime_config.storage); lifecycle.c's g_regions, g_tasks and  */
+/* g_obligations point into whichever is bound. Binding moves those    */
+/* three pointers and nothing else.                                    */
+/* ------------------------------------------------------------------ */
+
+asx_kernel_storage g_kernel_static;
+
+typedef struct {
+    char pad;
+    asx_kernel_storage value;
+} kernel_storage_alignment;
+
+size_t asx_runtime_storage_size(void) { return sizeof(asx_kernel_storage); }
+
+size_t asx_runtime_storage_align(void) { return offsetof(kernel_storage_alignment, value); }
+
+asx_status asx_kernel_storage_validate_internal(const void *storage, size_t size) {
+    uintptr_t lo;
+    uintptr_t static_lo;
+
+    if (storage == NULL) return size == 0u ? ASX_OK : ASX_E_INVALID_ARGUMENT;
+    if (size < asx_runtime_storage_size()) return ASX_E_INVALID_ARGUMENT;
+    lo = (uintptr_t)storage;
+    if (lo % (uintptr_t)asx_runtime_storage_align() != 0u) return ASX_E_INVALID_ARGUMENT;
+    static_lo = (uintptr_t)&g_kernel_static;
+    if (lo < static_lo + sizeof(g_kernel_static) && lo + asx_runtime_storage_size() > static_lo) {
+        return ASX_E_INVALID_ARGUMENT;
+    }
+    return ASX_OK;
+}
+
+void asx_kernel_bind_internal(void *storage) {
+    asx_kernel_storage *block = &g_kernel_static;
+
+    if (storage != NULL) {
+        block = (asx_kernel_storage *)storage;
+        memset(block, 0, sizeof(*block));
+    }
+    g_regions = block->regions;
+    g_tasks = block->tasks;
+    g_obligations = block->obligations;
+}
+
+/* A raw reset is an explicit teardown: it ends a binding to a caller's
+ * storage block (which stays as the runtime left it) and clears the
+ * library's. Init binds its own storage first and clears with
+ * asx_runtime_clear_internal, which does not rebind. */
+void asx_runtime_reset(void) {
+    asx_kernel_bind_internal(NULL);
+    asx_runtime_clear_internal();
+}
 
 /* ------------------------------------------------------------------ */
 /* Global resource queries                                             */

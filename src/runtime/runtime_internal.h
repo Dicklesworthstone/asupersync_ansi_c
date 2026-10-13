@@ -326,24 +326,56 @@ typedef struct {
 #define ASX_SLOT_NONE 0xFFFFFFFFu
 
 /* -------------------------------------------------------------------
- * Global arenas (defined in lifecycle.c)
+ * Kernel arenas (defined in lifecycle.c)
+ *
+ * The three arenas are one runtime-owned storage block (K18): the
+ * library's static block, or the caller's asx_runtime_config.storage while
+ * a runtime that was given one is live. g_regions, g_tasks and
+ * g_obligations point into the bound block; asx_kernel_bind_internal
+ * moves them, and nothing else does.
  *
  * g_*_count is the high-water mark: every slot index below it has been
  * used at least once, so arena scans iterate [0, g_*_count) and skip
  * !alive slots. g_*_live counts currently-allocated slots.
  * ------------------------------------------------------------------- */
 
-extern asx_region_slot g_regions[ASX_MAX_REGIONS];
+typedef struct asx_kernel_storage {
+    asx_region_slot regions[ASX_MAX_REGIONS];
+    asx_task_slot tasks[ASX_MAX_TASKS];
+    asx_obligation_slot obligations[ASX_MAX_OBLIGATIONS];
+} asx_kernel_storage;
+
+/* The library's static block, bound whenever no caller block is
+ * (resource.c). */
+extern asx_kernel_storage g_kernel_static;
+
+extern asx_region_slot *g_regions;
 extern uint32_t g_region_count;
 extern uint32_t g_region_live;
 
-extern asx_task_slot g_tasks[ASX_MAX_TASKS];
+extern asx_task_slot *g_tasks;
 extern uint32_t g_task_count;
 extern uint32_t g_task_live;
 
-extern asx_obligation_slot g_obligations[ASX_MAX_OBLIGATIONS];
+extern asx_obligation_slot *g_obligations;
 extern uint32_t g_obligation_count;
 extern uint32_t g_obligation_live;
+
+/* Bind the arenas to `storage` (an asx_runtime_storage_size() block aligned
+ * to asx_runtime_storage_align(), already validated), zeroing it; NULL binds
+ * the library's static block and leaves it as it is. Counters and the rest
+ * of the kernel state are cleared by asx_runtime_clear_internal. */
+void asx_kernel_bind_internal(void *storage);
+
+/* The reset of asx_runtime_reset without the rebind to the static block:
+ * what init runs after it bound the runtime's storage (lifecycle.c). */
+void asx_runtime_clear_internal(void);
+
+/* Whether `storage` (NULL: the library's block) can be asx_runtime_config.storage
+ * of size `size`: ASX_OK, or ASX_E_INVALID_ARGUMENT for a size without a
+ * block, a block smaller than asx_runtime_storage_size(), a misaligned one,
+ * or one overlapping the library's static block. Pure. */
+asx_status asx_kernel_storage_validate_internal(const void *storage, size_t size);
 
 /* -------------------------------------------------------------------
  * Shared lookup functions (generation-safe, used across TUs)

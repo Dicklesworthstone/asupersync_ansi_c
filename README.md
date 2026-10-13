@@ -154,8 +154,17 @@ The current runtime owns one process-wide kernel. Every init while it is active,
 including reinitializing the active object, returns `ASX_E_INVALID_STATE`,
 preserving the active work, hooks and destination object. Shut down the active
 runtime or explicitly reset the raw kernel before starting a replacement.
-Independent runtime-owned arenas and cross-runtime handle isolation
-remain architecture work in `bd-9kll.3.20`.
+
+The kernel's region, task and obligation arenas are one storage block. By
+default it is the library's static block, as before. A runtime can instead be
+given its own, with `asx_runtime_config.storage` and `storage_size`: a block of
+at least `asx_runtime_storage_size()` bytes aligned to
+`asx_runtime_storage_align()`, which init zeroes and the runtime keeps until
+shutdown. A block that is too small, misaligned, without its size or the
+library's own is refused before anything is bound or reset, and a refused init
+never rebinds a live runtime. The rest of the kernel state (scheduler, trace,
+hooks, channels, synchronization tables) is still process-wide, and
+cross-runtime handle isolation remains architecture work in `bd-9kll.3.20`.
 
 ## Design Philosophy
 
@@ -1521,7 +1530,7 @@ Today the leak fields and the `finalizer_*` fields (read when a finalizer is spa
 
 **Rejected** (require restart):
 - `max_cancel_chain_depth`, `max_cancel_chain_memory` — existing in-flight chains may exceed new limits
-- `io_backend`, `cleanup_hard_bound`, and the struct `size`
+- `io_backend`, `cleanup_hard_bound`, `storage`, `storage_size`, and the struct `size`
 
 Validation compares each field with the active config and rejects a change to a non-reloadable one, naming it; the old config then remains in effect. The copy itself takes no lock: call it from the scheduler thread (between scheduler calls or inside a task). Tasks run only on that thread and blocking-pool workers never read the config, so no task sees a half-applied config.
 

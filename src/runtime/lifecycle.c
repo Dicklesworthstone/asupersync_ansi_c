@@ -51,15 +51,15 @@
  * Global arenas (walking skeleton: fixed-size, no dynamic allocation)
  * ------------------------------------------------------------------- */
 
-asx_region_slot g_regions[ASX_MAX_REGIONS];
+asx_region_slot *g_regions = g_kernel_static.regions;
 uint32_t g_region_count;
 uint32_t g_region_live;
 
-asx_task_slot g_tasks[ASX_MAX_TASKS];
+asx_task_slot *g_tasks = g_kernel_static.tasks;
 uint32_t g_task_count;
 uint32_t g_task_live;
 
-asx_obligation_slot g_obligations[ASX_MAX_OBLIGATIONS];
+asx_obligation_slot *g_obligations = g_kernel_static.obligations;
 uint32_t g_obligation_count;
 uint32_t g_obligation_live;
 
@@ -108,7 +108,7 @@ uint64_t asx_task_next_member_seq_internal(void) { return ++g_member_seq; }
  * Reset (test support)
  * ------------------------------------------------------------------- */
 
-void asx_runtime_reset(void) {
+void asx_runtime_clear_internal(void) {
     uint32_t i, j;
     asx_runtime_object_reset_internal();
     for (i = 0; i < ASX_MAX_REGIONS; i++) {

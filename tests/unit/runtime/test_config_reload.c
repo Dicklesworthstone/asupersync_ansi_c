@@ -80,6 +80,11 @@ TEST(field_class_cleanup_hard_bound_is_restart_required) {
     ASSERT_EQ(asx_config_field_class("cleanup_hard_bound"), ASX_CONFIG_RESTART_REQUIRED);
 }
 
+TEST(field_class_storage_is_restart_required) {
+    ASSERT_EQ(asx_config_field_class("storage"), ASX_CONFIG_RESTART_REQUIRED);
+    ASSERT_EQ(asx_config_field_class("storage_size"), ASX_CONFIG_RESTART_REQUIRED);
+}
+
 TEST(field_class_unknown_is_frozen) {
     ASSERT_EQ(asx_config_field_class("nonexistent_field"), ASX_CONFIG_FROZEN_COMPILE);
 }
@@ -229,6 +234,25 @@ TEST(reload_cleanup_hard_bound_requires_restart) {
 
     ASSERT_EQ(asx_config_validate_reload(&g_state, &new_cfg, &rejected), ASX_E_CONFIG_RESTART_REQ);
     ASSERT_STR_EQ(rejected, "cleanup_hard_bound");
+}
+
+TEST(reload_storage_requires_restart) {
+    asx_runtime_config new_cfg;
+    static unsigned char block[8];
+    const char *rejected = NULL;
+
+    cr_setup();
+    ASSERT_EQ(asx_config_load(&g_state, &g_cfg), ASX_OK);
+
+    /* A block that is not a valid one is not even considered: the reload is
+     * rejected by field, as any restart-required change is, before its
+     * validity matters. */
+    memcpy(&new_cfg, &g_cfg, sizeof(new_cfg));
+    new_cfg.storage = block;
+    new_cfg.storage_size = sizeof(block);
+
+    ASSERT_EQ(asx_config_validate_reload(&g_state, &new_cfg, &rejected), ASX_E_CONFIG_RESTART_REQ);
+    ASSERT_STR_EQ(rejected, "storage");
 }
 
 TEST(reload_copies_leak_escalation_config) {
@@ -422,7 +446,7 @@ TEST(field_table_has_all_config_fields) {
     const asx_config_field_desc *table = asx_config_field_table(&count);
 
     ASSERT_TRUE(table != NULL);
-    ASSERT_EQ(count, (uint32_t)11); /* 11 fields in asx_runtime_config */
+    ASSERT_EQ(count, (uint32_t)13); /* 13 fields in asx_runtime_config */
 }
 
 TEST(field_table_covers_struct_range) {
@@ -510,6 +534,7 @@ int main(void) {
     RUN_TEST(field_class_cancel_chain_depth_is_restart_required);
     RUN_TEST(field_class_cancel_chain_memory_is_restart_required);
     RUN_TEST(field_class_cleanup_hard_bound_is_restart_required);
+    RUN_TEST(field_class_storage_is_restart_required);
     RUN_TEST(field_class_unknown_is_frozen);
 
     /* Load */
@@ -527,6 +552,7 @@ int main(void) {
     RUN_TEST(reload_finalizer_budget_succeeds);
     RUN_TEST(reload_io_backend_requires_restart);
     RUN_TEST(reload_cleanup_hard_bound_requires_restart);
+    RUN_TEST(reload_storage_requires_restart);
     RUN_TEST(reload_copies_leak_escalation_config);
 
     /* Reload rejection */

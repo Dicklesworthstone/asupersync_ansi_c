@@ -166,7 +166,8 @@ asx_status asx_runtime_config_validate(const asx_runtime_config *config) {
     if (config->max_cancel_chain_depth == 0u) return ASX_E_INVALID_ARGUMENT;
     if (config->finalizer_poll_budget == 0u) return ASX_E_INVALID_ARGUMENT;
     if (config->cleanup_hard_bound > 1u) return ASX_E_INVALID_ARGUMENT;
-    return ASX_OK;
+    /* A caller's block must fit, be aligned and not be the library's own. */
+    return asx_kernel_storage_validate_internal(config->storage, config->storage_size);
 }
 
 /* ------------------------------------------------------------------ */
@@ -192,12 +193,18 @@ asx_status asx_runtime_init_checked(asx_runtime *rt, const asx_runtime_config *c
     /* Initialization accepts an uninitialized destination: do not inspect
      * its bytes to authorize replacing the active process-wide runtime. */
     if (g_active_rt_generation != 0u) return ASX_E_INVALID_STATE;
-    /* Step 3: reset all internal state (deterministic clean slate) */
-    asx_runtime_reset();
+    /* Step 3: bind the runtime's state storage (the caller's block, zeroed,
+     * or the library's) and reset all internal state (deterministic clean
+     * slate). Nothing above wrote any state, so a refusal left it intact. */
+    asx_kernel_bind_internal(config->storage);
+    asx_runtime_clear_internal();
 
     /* Step 4: install hooks */
     st = asx_runtime_set_hooks(hooks);
-    if (st != ASX_OK) return st;
+    if (st != ASX_OK) {
+        asx_runtime_reset(); /* unbind: a failed init leaves no binding */
+        return st;
+    }
 
     g_active_io_backend = config->io_backend;
 
