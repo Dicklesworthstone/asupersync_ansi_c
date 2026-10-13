@@ -120,8 +120,8 @@ TEST(time_integrates_with_runtime) {
     MUST_OK(asx_lab_init(&lab, &cfg));
 
     asx_lab_advance_time(&lab, 5000000ULL);
-    MUST_OK(asx_runtime_now_ns(&now));
-    MUST_OK(asx_runtime_now_ns(&again));
+    MUST_OK(asx_runtime_now_ns(&lab.rt, &now));
+    MUST_OK(asx_runtime_now_ns(&lab.rt, &again));
     ASSERT_EQ(now, (asx_time)5000000ULL);
     ASSERT_EQ(again, now);
     ASSERT_EQ(asx_lab_now(&lab), now);
@@ -212,17 +212,17 @@ TEST(reset_restores_runtime_hooks) {
     MUST_OK(asx_lab_init(&lab, &cfg));
 
     asx_lab_advance_time(&lab, 7000000u);
-    MUST_OK(asx_runtime_now_ns(&now));
+    MUST_OK(asx_runtime_now_ns(&lab.rt, &now));
     ASSERT_TRUE(now > 0);
-    MUST_OK(asx_runtime_random_u64(&entropy));
+    MUST_OK(asx_runtime_random_u64(&lab.rt, &entropy));
     ASSERT_TRUE(entropy != 0u);
 
     asx_lab_reset(&lab);
 
     ASSERT_EQ(asx_lab_now(&lab), (asx_time)0);
-    ASSERT_EQ(asx_runtime_now_ns(&now), ASX_OK);
+    ASSERT_EQ(asx_runtime_now_ns(&lab.rt, &now), ASX_OK);
     ASSERT_EQ(now, (asx_time)0);
-    ASSERT_EQ(asx_runtime_random_u64(&entropy), ASX_OK);
+    ASSERT_EQ(asx_runtime_random_u64(&lab.rt, &entropy), ASX_OK);
 
     asx_lab_shutdown(&lab);
 }

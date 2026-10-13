@@ -731,7 +731,7 @@ TEST(scheduler_does_not_cancel_a_cleanup_task_at_its_budget_deadline_before_it_p
     ASSERT_EQ(asx_scheduler_run(rid, &run), ASX_OK);
     ASSERT_TRUE(s.probe.done);
     ASSERT_FALSE(s.probe.cancel_seen);
-    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)150u);
+    ASSERT_EQ(asx_runtime_virtual_now(&g_rt), (asx_time)150u);
     asx_runtime_shutdown(&g_rt);
 }
 
@@ -805,7 +805,7 @@ TEST(scheduler_a_passed_deadline_strengthens_a_user_cancel_that_arrived_first) {
 
     budget = asx_budget_from_polls(1000);
     ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
-    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)150u);
+    ASSERT_EQ(asx_runtime_virtual_now(&g_rt), (asx_time)150u);
     ASSERT_EQ(asx_task_get_cancel_reason(victim, &reason), ASX_OK);
     ASSERT_EQ((int)reason.kind, (int)ASX_CANCEL_DEADLINE);
     asx_runtime_shutdown(&g_rt);
@@ -872,7 +872,7 @@ TEST(scheduler_budget_deadlines_fire_before_any_task_polls_in_the_round) {
 
     budget = asx_budget_from_polls(1000);
     ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
-    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)150u);
+    ASSERT_EQ(asx_runtime_virtual_now(&g_rt), (asx_time)150u);
     ASSERT_EQ(asx_task_get_cancel_reason(victim, &reason), ASX_OK);
     ASSERT_EQ((int)reason.kind, (int)ASX_CANCEL_DEADLINE);
     ASSERT_TRUE(asx_handle_index(reason.origin_task) == asx_handle_index(victim));
@@ -916,7 +916,7 @@ TEST(scheduler_a_lone_parked_task_is_cancelled_at_its_budget_deadline) {
 
     budget = asx_budget_from_polls(1000);
     ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
-    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)100u);
+    ASSERT_EQ(asx_runtime_virtual_now(&g_rt), (asx_time)100u);
     ASSERT_EQ(asx_task_get_cancel_reason(t, &reason), ASX_OK);
     ASSERT_EQ((int)reason.kind, (int)ASX_CANCEL_DEADLINE);
     ASSERT_EQ(reason.timestamp, (asx_time)100u);

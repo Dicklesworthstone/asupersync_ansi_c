@@ -16,6 +16,7 @@
 /* ASX_CHECKPOINT_WAIVER_FILE() -- virtual-time spike test, no checkpoint coverage needed */
 
 #include "test_harness.h"
+#include "test_runtime.h"
 #include <asx/asx.h>
 #include <asx/runtime/virtual_time.h>
 
@@ -424,15 +425,15 @@ TEST(install_and_uninstall_swap_the_runtime_clock) {
     ASSERT_EQ(asx_vtime_install(NULL), ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_vtime_install(&vt), ASX_OK);
     ASSERT_EQ(asx_vtime_install(&vt), ASX_E_INVALID_STATE);
-    ASSERT_EQ(asx_runtime_now_ns(&now), ASX_OK);
+    ASSERT_EQ(asx_runtime_now_ns(test_runtime(), &now), ASX_OK);
     ASSERT_EQ(now, (asx_time)5000u);
-    ASSERT_EQ(asx_runtime_now_ns(&now), ASX_OK);
+    ASSERT_EQ(asx_runtime_now_ns(test_runtime(), &now), ASX_OK);
     ASSERT_EQ(now, (asx_time)5010u); /* a vtime ticks per query */
 
     asx_vtime_uninstall(&vt);
-    ASSERT_EQ(asx_runtime_now_ns(&now), ASX_OK);
-    ASSERT_EQ(now, asx_runtime_virtual_now()); /* the default clock again */
-    asx_vtime_uninstall(&vt);                  /* a second one is a no-op */
+    ASSERT_EQ(asx_runtime_now_ns(test_runtime(), &now), ASX_OK);
+    ASSERT_EQ(now, asx_runtime_virtual_now(test_runtime())); /* the default clock again */
+    asx_vtime_uninstall(&vt);                                /* a second one is a no-op */
     ASSERT_EQ(asx_vtime_install(&vt), ASX_OK);
     asx_vtime_uninstall(&vt);
 }

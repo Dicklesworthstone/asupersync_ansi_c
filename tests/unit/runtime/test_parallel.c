@@ -1701,7 +1701,7 @@ TEST(parallel_timed_lane_dispatches_earliest_deadline_first) {
 
     /* Every deadline is due. */
     ASSERT_TRUE(asx_runtime_clock_is_virtual());
-    asx_runtime_virtual_advance(30u);
+    asx_runtime_virtual_advance(test_runtime(), 30u);
 
     budget = asx_budget_from_polls(20);
     ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
@@ -1735,12 +1735,12 @@ TEST(parallel_timed_task_waits_for_its_deadline) {
     ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_E_POLL_BUDGET_EXHAUSTED);
     ASSERT_EQ(g_poll_order_count, 0u);
 
-    asx_runtime_virtual_advance(99u);
+    asx_runtime_virtual_advance(test_runtime(), 99u);
     budget = asx_budget_from_polls(5);
     ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_E_POLL_BUDGET_EXHAUSTED);
     ASSERT_EQ(g_poll_order_count, 0u);
 
-    asx_runtime_virtual_advance(100u);
+    asx_runtime_virtual_advance(test_runtime(), 100u);
     budget = asx_budget_from_polls(5);
     ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
     ASSERT_EQ(g_poll_order_count, 1u);
@@ -1771,7 +1771,7 @@ TEST(parallel_timed_task_with_armed_timer_runs_at_the_timer) {
     budget = asx_budget_from_polls(5);
     ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
     ASSERT_EQ(g_poll_order_count, 1u);
-    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)50u);
+    ASSERT_EQ(asx_runtime_virtual_now(test_runtime()), (asx_time)50u);
 
     asx_parallel_reset();
 }
@@ -1977,7 +1977,7 @@ TEST(parallel_sleeping_task_is_woken_by_its_timer) {
     budget = asx_budget_from_polls(100);
     ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
     ASSERT_EQ(s.polls, 2);
-    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)50u);
+    ASSERT_EQ(asx_runtime_virtual_now(test_runtime()), (asx_time)50u);
 
     asx_parallel_reset();
 }

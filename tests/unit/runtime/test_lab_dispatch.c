@@ -448,7 +448,7 @@ static asx_status poll_sleeper(void *ud, asx_task_id self) {
     asx_status st = asx_task_wait_until(self, 100u);
     s->armed = 1;
     if (st == ASX_OK) {
-        s->woke_at = asx_runtime_virtual_now();
+        s->woke_at = asx_runtime_virtual_now(&g_rt);
         return ASX_OK;
     }
     return st;
@@ -469,7 +469,7 @@ TEST(auto_advance_moves_the_clock_to_the_next_timer) {
     /* run_until_idle stops with the sleeper parked and the clock at 0. */
     ASSERT_EQ(asx_scheduler_run_until_idle(r, &budget), ASX_E_PENDING);
     ASSERT_TRUE(s.armed);
-    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)0);
+    ASSERT_EQ(asx_runtime_virtual_now(&g_rt), (asx_time)0);
     ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
     ASSERT_EQ(s.woke_at, (asx_time)100);
 }
@@ -671,7 +671,7 @@ TEST(budget_deadline_timer_cancels_on_the_cancel_lane) {
     memset(&d, 0, sizeof(d));
     ASSERT_EQ(run_deadline_probe(&d, rec, 4u, &t), ASX_OK);
     ASSERT_EQ(d.polls, 2u);
-    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)100);
+    ASSERT_EQ(asx_runtime_virtual_now(&g_rt), (asx_time)100);
     ASSERT_EQ(rec[1].lane, (uint8_t)ASX_DISPATCH_LANE_CANCEL);
 }
 
@@ -1258,7 +1258,7 @@ static asx_status poll_stale_sleeper(void *ud, asx_task_id self) {
     stale_sleeper *s = (stale_sleeper *)ud;
     asx_time now = 0;
     if (g_order_n + 1u < sizeof(g_order)) g_order[g_order_n++] = s->name;
-    if (asx_runtime_now_ns(&now) == ASX_OK && now >= 100u) return ASX_OK;
+    if (asx_runtime_now_ns(&g_rt, &now) == ASX_OK && now >= 100u) return ASX_OK;
     if (s->phase == 0) {
         s->phase = 1;
         return asx_task_wait_until(self, 100u);

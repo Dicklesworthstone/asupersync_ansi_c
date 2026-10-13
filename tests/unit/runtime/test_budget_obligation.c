@@ -878,7 +878,7 @@ TEST(deadline_cancels_parked_task_on_virtual_time) {
     p.park = 1;
     ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     tb = asx_budget_infinite();
-    tb.deadline = asx_runtime_virtual_now() + 5u * MS;
+    tb.deadline = asx_runtime_virtual_now(&g_rt) + 5u * MS;
     ASSERT_EQ(asx_task_spawn_with_budget(r, poll_probe, &p, &tb, &t), ASX_OK);
 
     /* Without the deadline the parked task would block forever; the
@@ -888,7 +888,7 @@ TEST(deadline_cancels_parked_task_on_virtual_time) {
     ASSERT_TRUE(p.saw_cancel);
     ASSERT_EQ(p.kind, ASX_CANCEL_DEADLINE);
     ASSERT_EQ(p.polls, 2u);
-    ASSERT_TRUE(asx_runtime_virtual_now() >= tb.deadline);
+    ASSERT_TRUE(asx_runtime_virtual_now(&g_rt) >= tb.deadline);
     ASSERT_EQ(asx_task_get_outcome(t, &out), ASX_OK);
     ASSERT_EQ(asx_outcome_severity_of(&out), ASX_OUTCOME_CANCELLED);
 }
@@ -902,7 +902,7 @@ TEST(expired_deadline_cancels_before_first_poll) {
 
     setup();
     memset(&p, 0, sizeof(p));
-    asx_runtime_virtual_advance(10u * MS);
+    asx_runtime_virtual_advance(&g_rt, 10u * MS);
     ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     tb = asx_budget_infinite();
     tb.deadline = 1u * MS;
@@ -1263,11 +1263,11 @@ TEST(spawn_budget_from_a_task_keeps_its_priority_and_clamps_the_rest) {
     ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     s.region = r;
     tb = asx_budget_new(); /* priority 128 */
-    tb.deadline = asx_runtime_virtual_now() + 10u * MS;
+    tb.deadline = asx_runtime_virtual_now(&g_rt) + 10u * MS;
     tb.poll_quota = 50u;
     s.lower = asx_budget_new();
-    s.lower.deadline = asx_runtime_virtual_now() + 20u * MS; /* looser */
-    s.lower.poll_quota = 7u;                                 /* tighter */
+    s.lower.deadline = asx_runtime_virtual_now(&g_rt) + 20u * MS; /* looser */
+    s.lower.poll_quota = 7u;                                      /* tighter */
     s.lower.priority = 50u;
     s.higher = asx_budget_new();
     s.higher.priority = 250u;
@@ -1367,7 +1367,7 @@ TEST(region_deadline_bounds_tasks_spawned_into_it_from_a_task) {
     inner_probe.park = 1;
     ASSERT_EQ(asx_region_open(&g_rt, &root), ASX_OK);
     b = asx_budget_new();
-    b.deadline = asx_runtime_virtual_now() + 3u * MS;
+    b.deadline = asx_runtime_virtual_now(&g_rt) + 3u * MS;
 
     /* A host-spawned task takes only its own budget, as Rust's
      * RuntimeState::create_task (state.rs:4461): the region's deadline does
@@ -1390,7 +1390,7 @@ TEST(region_deadline_bounds_tasks_spawned_into_it_from_a_task) {
     ASSERT_EQ(o.status, ASX_OK);
     ASSERT_TRUE(inner_probe.saw_cancel);
     ASSERT_EQ(inner_probe.kind, ASX_CANCEL_DEADLINE);
-    ASSERT_TRUE(asx_runtime_virtual_now() >= b.deadline);
+    ASSERT_TRUE(asx_runtime_virtual_now(&g_rt) >= b.deadline);
     ASSERT_FALSE(host_probe.saw_cancel);
 }
 

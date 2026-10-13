@@ -1102,14 +1102,14 @@ static asx_status run_program(program_obs *o, int reordered) {
     memset(o, 0, sizeof(*o));
     if (reordered) {
         /* Entropy where the recording read the clock first. */
-        (void)asx_runtime_random_u64(&o->e0);
+        (void)asx_runtime_random_u64(test_runtime(), &o->e0);
         return ASX_OK;
     }
-    st = asx_runtime_now_ns(&o->t0);
+    st = asx_runtime_now_ns(test_runtime(), &o->t0);
     if (st != ASX_OK) return st;
-    st = asx_runtime_random_u64(&o->e0);
+    st = asx_runtime_random_u64(test_runtime(), &o->e0);
     if (st != ASX_OK) return st;
-    st = asx_runtime_random_u64(&o->e1);
+    st = asx_runtime_random_u64(test_runtime(), &o->e1);
     if (st != ASX_OK) return st;
 
     if (pipe(fds) != 0) return ASX_E_INVALID_STATE;
@@ -1134,7 +1134,7 @@ static asx_status run_program(program_obs *o, int reordered) {
     if (st != ASX_OK) return st;
     budget = asx_budget_from_polls(1000u);
     o->run_st = asx_scheduler_run(region, &budget);
-    st = asx_runtime_now_ns(&o->t1);
+    st = asx_runtime_now_ns(test_runtime(), &o->t1);
     o->digest = asx_trace_digest();
     return st;
 }
@@ -2256,7 +2256,7 @@ TEST(a_blocking_job_is_run_again_where_its_completion_was_recorded) {
 static asx_status entropy_first_program(void *obs) {
     uint64_t v = 0u;
     (void)obs;
-    (void)asx_runtime_random_u64(&v);
+    (void)asx_runtime_random_u64(test_runtime(), &v);
     return ASX_OK;
 }
 
@@ -2307,8 +2307,8 @@ TEST(asx_journal_replay_runs_a_program_against_a_stream_in_one_call) {
 static asx_status clock_twice_program(void *obs) {
     asx_time t = 0u;
     (void)obs;
-    (void)asx_runtime_now_ns(&t);
-    (void)asx_runtime_now_ns(&t);
+    (void)asx_runtime_now_ns(test_runtime(), &t);
+    (void)asx_runtime_now_ns(test_runtime(), &t);
     return ASX_OK;
 }
 
@@ -2316,8 +2316,8 @@ static asx_status clock_then_entropy_program(void *obs) {
     asx_time t = 0u;
     uint64_t v = 0u;
     (void)obs;
-    (void)asx_runtime_now_ns(&t);
-    (void)asx_runtime_random_u64(&v);
+    (void)asx_runtime_now_ns(test_runtime(), &t);
+    (void)asx_runtime_random_u64(test_runtime(), &v);
     return ASX_OK;
 }
 
@@ -2457,7 +2457,7 @@ static asx_status spin_poll(void *ud, asx_task_id self) {
     (void)ud;
     (void)self;
     g_spin_polls++;
-    (void)asx_runtime_random_u64(&v);
+    (void)asx_runtime_random_u64(test_runtime(), &v);
     if (g_spin_limit != 0u && g_spin_polls >= g_spin_limit) return ASX_OK;
     return ASX_E_PENDING;
 }

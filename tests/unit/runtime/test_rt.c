@@ -686,18 +686,18 @@ TEST(kernel_clock_and_entropy_belong_to_the_kernel) {
     ASSERT_EQ(asx_kernel_virtual_now(g_kernels[0]), (asx_time)0);
     ASSERT_EQ(asx_kernel_random_u64(g_kernels[0], &draw), ASX_OK);
     ASSERT_EQ(draw, s1);
-    ASSERT_EQ(asx_runtime_random_u64(&draw), ASX_OK);
+    ASSERT_EQ(asx_runtime_random_u64(&rt, &draw), ASX_OK);
     ASSERT_EQ(draw, s2);
 
     /* Advance never goes back; set does. The public clock is kernel 0's. */
     asx_kernel_virtual_advance(g_kernels[0], 500u);
-    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)500);
+    ASSERT_EQ(asx_runtime_virtual_now(&rt), (asx_time)500);
     ASSERT_EQ(asx_kernel_now_ns(g_kernels[0], &now), ASX_OK);
     ASSERT_EQ(now, (asx_time)500);
     asx_kernel_virtual_advance(g_kernels[0], 100u);
     ASSERT_EQ(asx_kernel_virtual_now(g_kernels[0]), (asx_time)500);
     asx_kernel_virtual_set_internal(g_kernels[0], 100u);
-    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)100);
+    ASSERT_EQ(asx_runtime_virtual_now(&rt), (asx_time)100);
 
     /* A reset restarts both. */
     asx_kernel_clock_reset_internal(g_kernels[0]);

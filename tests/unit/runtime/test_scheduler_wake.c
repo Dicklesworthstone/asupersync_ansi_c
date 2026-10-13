@@ -216,7 +216,7 @@ TEST(sleep_parks_and_virtual_time_jumps_to_deadline) {
      * units of budget: idle time is free and virtual time jumps. */
     budget = asx_budget_from_polls(3);
     ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
-    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)(3600u * 1000u * MS));
+    ASSERT_EQ(asx_runtime_virtual_now(&g_rt), (asx_time)(3600u * 1000u * MS));
 }
 
 /* RB7 regression: the run budget's deadline bounds the run even while
@@ -239,15 +239,15 @@ TEST(run_deadline_bounds_idle_waiting) {
     ASSERT_EQ(asx_sleep_init(&s->sleep, 10000u * MS), ASX_OK); /* 10 s */
 
     budget = asx_budget_from_polls(100);
-    budget.deadline = asx_runtime_virtual_now() + 1000u * MS; /* 1 s */
+    budget.deadline = asx_runtime_virtual_now(&g_rt) + 1000u * MS; /* 1 s */
     ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_E_TIMED_OUT);
-    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)(1000u * MS));
+    ASSERT_EQ(asx_runtime_virtual_now(&g_rt), (asx_time)(1000u * MS));
     ASSERT_EQ(g_finish_count, 0u);
 
     /* A later run without a deadline finishes the sleep at 10 s */
     budget = asx_budget_from_polls(100);
     ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
-    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)(10000u * MS));
+    ASSERT_EQ(asx_runtime_virtual_now(&g_rt), (asx_time)(10000u * MS));
     ASSERT_EQ(g_finish_count, 1u);
 }
 
@@ -279,7 +279,7 @@ TEST(sleepers_finish_in_deadline_order) {
     ASSERT_EQ(g_finish_order[2], 2u);
     ASSERT_EQ(g_finish_order[3], 0u);
     for (i = 0; i < 4u; i++) ASSERT_EQ(s[i]->polls, 2u);
-    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)(40u * MS));
+    ASSERT_EQ(asx_runtime_virtual_now(&g_rt), (asx_time)(40u * MS));
 }
 
 typedef struct {
@@ -314,7 +314,7 @@ TEST(timeout_fires_for_parked_inner) {
      * work completing exactly at the deadline would win (Rust's
      * TimeoutFuture polls it before the deadline sleep). */
     ASSERT_EQ(f->inner.polls, 2u);
-    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)(25u * MS));
+    ASSERT_EQ(asx_runtime_virtual_now(&g_rt), (asx_time)(25u * MS));
 }
 
 typedef struct {
@@ -339,7 +339,7 @@ TEST(interval_ticks_on_virtual_time) {
     budget = asx_budget_from_polls(20);
     ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
     ASSERT_EQ(asx_interval_ticks(&f->interval), 4u);
-    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)(15u * MS));
+    ASSERT_EQ(asx_runtime_virtual_now(&g_rt), (asx_time)(15u * MS));
 }
 
 TEST(arm_timer_keeps_earliest_deadline) {
@@ -360,7 +360,7 @@ TEST(arm_timer_keeps_earliest_deadline) {
     budget = asx_budget_from_polls(100);
     ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_E_WOULD_BLOCK);
     ASSERT_EQ(ps.polls, 2u);
-    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)(20u * MS));
+    ASSERT_EQ(asx_runtime_virtual_now(&g_rt), (asx_time)(20u * MS));
 }
 
 /* -------------------------------------------------------------------
@@ -563,7 +563,7 @@ TEST(drain_cancels_sleepers_without_waiting_for_deadline) {
     ASSERT_EQ(asx_outcome_severity_of(&out), ASX_OUTCOME_CANCELLED);
     ASSERT_EQ(asx_region_is_quiescent(root), 1);
     /* Shutdown did not have to wait out the hour of virtual time. */
-    ASSERT_TRUE(asx_runtime_virtual_now() < (asx_time)(3600u * 1000u * MS));
+    ASSERT_TRUE(asx_runtime_virtual_now(&g_rt) < (asx_time)(3600u * 1000u * MS));
 }
 
 TEST(wake_driven_run_is_deterministic) {
@@ -614,18 +614,18 @@ TEST(run_until_idle_leaves_the_clock_to_the_caller) {
     /* Idle with a timer armed: PENDING, and the clock has not moved. */
     budget = asx_budget_from_polls(100);
     ASSERT_EQ(asx_scheduler_run_until_idle(r, &budget), ASX_E_PENDING);
-    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)0);
+    ASSERT_EQ(asx_runtime_virtual_now(&g_rt), (asx_time)0);
     ASSERT_EQ(s->polls, 1u);
 
     /* Short of the deadline nothing fires. */
-    asx_runtime_virtual_advance(5u * MS);
+    asx_runtime_virtual_advance(&g_rt, 5u * MS);
     ASSERT_EQ(asx_scheduler_run_until_idle(r, &budget), ASX_E_PENDING);
     ASSERT_EQ(s->polls, 1u);
 
     /* Past the deadline, still nothing runnable: an idle run fires no
      * timer (Rust's lab processes timers only within a step, and steps
      * only while a task is runnable; lab/runtime.rs:3428-3447). */
-    asx_runtime_virtual_advance(10u * MS);
+    asx_runtime_virtual_advance(&g_rt, 10u * MS);
     ASSERT_EQ(asx_scheduler_run_until_idle(r, &budget), ASX_E_PENDING);
     ASSERT_EQ(s->polls, 1u);
 
@@ -633,7 +633,7 @@ TEST(run_until_idle_leaves_the_clock_to_the_caller) {
      * moving the clock further. */
     ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
     ASSERT_EQ(s->polls, 2u);
-    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)(10u * MS));
+    ASSERT_EQ(asx_runtime_virtual_now(&g_rt), (asx_time)(10u * MS));
 }
 
 TEST(run_until_idle_fires_due_timers_when_a_task_is_runnable) {
@@ -654,7 +654,7 @@ TEST(run_until_idle_fires_due_timers_when_a_task_is_runnable) {
     ASSERT_EQ(asx_sleep_init(&s->sleep, 10u * MS), ASX_OK);
     budget = asx_budget_from_polls(100);
     ASSERT_EQ(asx_scheduler_run_until_idle(r, &budget), ASX_E_PENDING);
-    asx_runtime_virtual_advance(10u * MS);
+    asx_runtime_virtual_advance(&g_rt, 10u * MS);
     ASSERT_EQ(asx_task_spawn(r, poll_ok, NULL, &other), ASX_OK);
     ASSERT_EQ(asx_scheduler_run_until_idle(r, &budget), ASX_OK);
     ASSERT_EQ(s->polls, 2u);
@@ -697,7 +697,7 @@ TEST(sleep_ends_early_on_a_user_cancel_and_drops_its_timer) {
      * without waiting for its hour (Rust Sleep is a cancellation point). */
     ASSERT_EQ(asx_task_cancel(t, ASX_CANCEL_USER), ASX_OK);
     ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
-    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)0);
+    ASSERT_EQ(asx_runtime_virtual_now(&g_rt), (asx_time)0);
     ASSERT_EQ(asx_task_get_outcome(t, &out), ASX_OK);
     ASSERT_EQ((int)asx_outcome_severity_of(&out), (int)ASX_OUTCOME_CANCELLED);
     ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_TIMER_CANCEL), (uint64_t)1u);
@@ -723,7 +723,7 @@ TEST(sleep_records_how_it_ended_not_when_its_timer_woke_it) {
     ASSERT_EQ(asx_sleep_init(&s->sleep, 50u), ASX_OK);
     budget = asx_budget_from_polls(100);
     ASSERT_EQ(asx_scheduler_run_until_idle(r, &budget), ASX_E_PENDING);
-    asx_runtime_virtual_advance(50u); /* due, not yet fired */
+    asx_runtime_virtual_advance(&g_rt, 50u); /* due, not yet fired */
     ASSERT_EQ(asx_task_cancel(t, ASX_CANCEL_SHUTDOWN), ASX_OK);
     ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
     ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_TIMER_FIRE), (uint64_t)0u);
@@ -766,7 +766,7 @@ TEST(deadline_cancelled_sleeper_sleeps_to_its_own_deadline) {
      * Sleep does; the task then completes Cancelled. */
     budget = asx_budget_from_polls(1000);
     ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
-    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)200u);
+    ASSERT_EQ(asx_runtime_virtual_now(&g_rt), (asx_time)200u);
     ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_TIMER_FIRE), (uint64_t)1u);
     ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_TIMER_CANCEL), (uint64_t)0u);
     ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_CANCEL_REQUEST), (uint64_t)0u);

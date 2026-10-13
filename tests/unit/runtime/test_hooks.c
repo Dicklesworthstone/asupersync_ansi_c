@@ -330,12 +330,12 @@ TEST(default_entropy_restarts_with_the_runtime) {
     asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
     ASSERT_EQ(asx_runtime_set_hooks(&hooks), ASX_OK);
-    for (i = 0; i < 3u; i++) ASSERT_EQ(asx_runtime_random_u64(&first[i]), ASX_OK);
+    for (i = 0; i < 3u; i++) ASSERT_EQ(asx_runtime_random_u64(test_runtime(), &first[i]), ASX_OK);
     ASSERT_TRUE(first[0] != first[1] && first[1] != first[2]);
 
     asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_runtime_set_hooks(&hooks), ASX_OK);
-    for (i = 0; i < 3u; i++) ASSERT_EQ(asx_runtime_random_u64(&again[i]), ASX_OK);
+    for (i = 0; i < 3u; i++) ASSERT_EQ(asx_runtime_random_u64(test_runtime(), &again[i]), ASX_OK);
     for (i = 0; i < 3u; i++) ASSERT_EQ(again[i], first[i]);
     asx_runtime_reset(test_runtime());
 }
@@ -644,13 +644,13 @@ TEST(free_dispatches_to_hook) {
 TEST(now_ns_null_returns_error) {
     asx_runtime_reset(test_runtime());
     ASSERT_EQ(install_test_hooks(), ASX_OK);
-    ASSERT_EQ(asx_runtime_now_ns(NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_runtime_now_ns(test_runtime(), NULL), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(now_ns_no_hooks_returns_hook_missing) {
     asx_time t;
     asx_runtime_reset(test_runtime());
-    ASSERT_EQ(asx_runtime_now_ns(&t), ASX_E_HOOK_MISSING);
+    ASSERT_EQ(asx_runtime_now_ns(test_runtime(), &t), ASX_E_HOOK_MISSING);
 }
 
 TEST(now_ns_dispatches_by_build_mode) {
@@ -660,7 +660,7 @@ TEST(now_ns_dispatches_by_build_mode) {
     reset_counters();
     ASSERT_EQ(install_test_hooks(), ASX_OK);
 
-    ASSERT_EQ(asx_runtime_now_ns(&t), ASX_OK);
+    ASSERT_EQ(asx_runtime_now_ns(test_runtime(), &t), ASX_OK);
     /* Deterministic builds read the logical clock (42), live builds the
      * wall clock (1000000). */
 #if ASX_DETERMINISTIC
@@ -678,13 +678,13 @@ TEST(now_ns_dispatches_by_build_mode) {
 TEST(random_u64_null_returns_error) {
     asx_runtime_reset(test_runtime());
     ASSERT_EQ(install_test_hooks(), ASX_OK);
-    ASSERT_EQ(asx_runtime_random_u64(NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_runtime_random_u64(test_runtime(), NULL), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(random_u64_no_hooks_returns_hook_missing) {
     uint64_t v;
     asx_runtime_reset(test_runtime());
-    ASSERT_EQ(asx_runtime_random_u64(&v), ASX_E_HOOK_MISSING);
+    ASSERT_EQ(asx_runtime_random_u64(test_runtime(), &v), ASX_E_HOOK_MISSING);
 }
 
 TEST(random_u64_missing_entropy_stream_is_refused) {
@@ -699,9 +699,9 @@ TEST(random_u64_missing_entropy_stream_is_refused) {
     /* A configuration error in deterministic builds, a missing hook in
      * live ones. */
 #if ASX_DETERMINISTIC
-    ASSERT_EQ(asx_runtime_random_u64(&v), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_runtime_random_u64(test_runtime(), &v), ASX_E_INVALID_STATE);
 #else
-    ASSERT_EQ(asx_runtime_random_u64(&v), ASX_E_HOOK_MISSING);
+    ASSERT_EQ(asx_runtime_random_u64(test_runtime(), &v), ASX_E_HOOK_MISSING);
 #endif
 }
 
@@ -712,7 +712,7 @@ TEST(random_u64_dispatches_to_hook) {
     reset_counters();
     ASSERT_EQ(install_test_hooks(), ASX_OK);
 
-    ASSERT_EQ(asx_runtime_random_u64(&v), ASX_OK);
+    ASSERT_EQ(asx_runtime_random_u64(test_runtime(), &v), ASX_OK);
     ASSERT_EQ(v, (uint64_t)0xCAFEBABEu);
     ASSERT_TRUE(g_entropy_count > 0);
 }
@@ -755,7 +755,7 @@ TEST(random_u64_prefers_fallible_source) {
 
     asx_runtime_reset(test_runtime());
     ASSERT_EQ(install_fallible_hooks(ASX_OK), ASX_OK);
-    ASSERT_EQ(asx_runtime_random_u64(&v), ASX_OK);
+    ASSERT_EQ(asx_runtime_random_u64(test_runtime(), &v), ASX_OK);
     ASSERT_EQ(v, (uint64_t)TRY_VALUE);
     ASSERT_EQ(g_try_calls, 1);
     ASSERT_EQ(g_entropy_count, 0);
@@ -768,7 +768,7 @@ TEST(random_u64_reports_fallible_source_failure) {
     ASSERT_EQ(install_fallible_hooks(ASX_E_RESOURCE_EXHAUSTED), ASX_OK);
     /* The source's own status reaches the caller, no value is invented,
      * and the infallible hook is not consulted as a stand-in. */
-    ASSERT_EQ(asx_runtime_random_u64(&v), ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(asx_runtime_random_u64(test_runtime(), &v), ASX_E_RESOURCE_EXHAUSTED);
     ASSERT_EQ(v, (uint64_t)SECURE_SENTINEL);
     ASSERT_EQ(g_try_calls, 1);
     ASSERT_EQ(g_entropy_count, 0);
@@ -793,10 +793,10 @@ TEST(secure_draw_rejects_null_and_missing_hooks) {
     uint64_t v = SECURE_SENTINEL;
 
     asx_runtime_reset(test_runtime());
-    ASSERT_EQ(asx_runtime_random_secure_u64(&v), ASX_E_HOOK_MISSING);
+    ASSERT_EQ(asx_runtime_random_secure_u64(test_runtime(), &v), ASX_E_HOOK_MISSING);
     ASSERT_EQ(v, (uint64_t)SECURE_SENTINEL);
     ASSERT_EQ(install_test_hooks(), ASX_OK);
-    ASSERT_EQ(asx_runtime_random_secure_u64(NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_runtime_random_secure_u64(test_runtime(), NULL), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(secure_draw_serves_fallible_source) {
@@ -804,7 +804,7 @@ TEST(secure_draw_serves_fallible_source) {
 
     asx_runtime_reset(test_runtime());
     ASSERT_EQ(install_fallible_hooks(ASX_OK), ASX_OK);
-    ASSERT_EQ(asx_runtime_random_secure_u64(&v), ASX_OK);
+    ASSERT_EQ(asx_runtime_random_secure_u64(test_runtime(), &v), ASX_OK);
     ASSERT_EQ(v, (uint64_t)TRY_VALUE);
     ASSERT_EQ(g_entropy_count, 0);
 }
@@ -815,7 +815,7 @@ TEST(secure_draw_reports_fallible_source_failure) {
     asx_runtime_reset(test_runtime());
     ASSERT_EQ(install_fallible_hooks(ASX_E_HOOK_MISSING), ASX_OK);
     /* An OS source that failed is a status, never a guessable key. */
-    ASSERT_EQ(asx_runtime_random_secure_u64(&v), ASX_E_HOOK_MISSING);
+    ASSERT_EQ(asx_runtime_random_secure_u64(test_runtime(), &v), ASX_E_HOOK_MISSING);
     ASSERT_EQ(v, (uint64_t)SECURE_SENTINEL);
     ASSERT_EQ(g_entropy_count, 0);
 }
@@ -829,14 +829,14 @@ TEST(secure_draw_keeps_seeded_stream_in_deterministic_builds) {
     asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
     ASSERT_EQ(asx_runtime_set_hooks(&hooks), ASX_OK);
-    ASSERT_EQ(asx_runtime_random_u64(&general), ASX_OK);
+    ASSERT_EQ(asx_runtime_random_u64(test_runtime(), &general), ASX_OK);
 
     /* The same default table, restarted: the secure draw is the first
      * value of the same seeded stream, which replay depends on. */
     asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
     ASSERT_EQ(asx_runtime_set_hooks(&hooks), ASX_OK);
-    ASSERT_EQ(asx_runtime_random_secure_u64(&secure), ASX_OK);
+    ASSERT_EQ(asx_runtime_random_secure_u64(test_runtime(), &secure), ASX_OK);
     ASSERT_EQ(secure, general);
 }
 #else
@@ -851,11 +851,11 @@ TEST(secure_draw_refuses_builtin_seeded_prng_in_live_builds) {
     /* This is what a live FREESTANDING / EMBEDDED_ROUTER / HFT / AUTOMOTIVE
      * runtime holds: the fixed-seed PRNG. Its draws are refused with a
      * typed status and write nothing... */
-    ASSERT_EQ(asx_runtime_random_secure_u64(&v), ASX_E_HOOK_INVALID);
+    ASSERT_EQ(asx_runtime_random_secure_u64(test_runtime(), &v), ASX_E_HOOK_INVALID);
     ASSERT_EQ(v, (uint64_t)SECURE_SENTINEL);
     /* ...while the general draw still serves callers that do not protect
      * anything with it. */
-    ASSERT_EQ(asx_runtime_random_u64(&v), ASX_OK);
+    ASSERT_EQ(asx_runtime_random_u64(test_runtime(), &v), ASX_OK);
 }
 
 TEST(secure_draw_refuses_when_no_source_in_live_builds) {
@@ -866,7 +866,7 @@ TEST(secure_draw_refuses_when_no_source_in_live_builds) {
     ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
     hooks.entropy.random_u64_fn = NULL;
     ASSERT_EQ(asx_runtime_set_hooks(&hooks), ASX_OK);
-    ASSERT_EQ(asx_runtime_random_secure_u64(&v), ASX_E_HOOK_MISSING);
+    ASSERT_EQ(asx_runtime_random_secure_u64(test_runtime(), &v), ASX_E_HOOK_MISSING);
     ASSERT_EQ(v, (uint64_t)SECURE_SENTINEL);
 }
 
@@ -879,7 +879,7 @@ TEST(secure_draw_serves_application_source_in_live_builds) {
      * over the defaults the way builder entropy hooks are) is its own to
      * vouch for: it is served, and consulted. */
     ASSERT_EQ(install_test_hooks(), ASX_OK);
-    ASSERT_EQ(asx_runtime_random_secure_u64(&v), ASX_OK);
+    ASSERT_EQ(asx_runtime_random_secure_u64(test_runtime(), &v), ASX_OK);
     ASSERT_EQ(v, (uint64_t)0xCAFEBABEu);
     ASSERT_TRUE(g_entropy_count > 0);
 }
@@ -893,13 +893,13 @@ TEST(default_init_security_draw_follows_the_profile_in_live_builds) {
 #if defined(ASX_PROFILE_POSIX) || defined(ASX_PROFILE_WIN32)
     /* The live POSIX default installs the OS source; the live WIN32
      * default installs BCryptGenRandom. */
-    ASSERT_EQ(asx_runtime_random_secure_u64(&v), ASX_OK);
+    ASSERT_EQ(asx_runtime_random_secure_u64(&rt, &v), ASX_OK);
     ASSERT_TRUE(v != (uint64_t)SECURE_SENTINEL);
 #else
     /* CORE, FREESTANDING, EMBEDDED_ROUTER, HFT and AUTOMOTIVE install no
      * platform source: the runtime holds the built-in PRNG, and security
      * draws are refused rather than answered with its predictable stream. */
-    ASSERT_EQ(asx_runtime_random_secure_u64(&v), ASX_E_HOOK_INVALID);
+    ASSERT_EQ(asx_runtime_random_secure_u64(&rt, &v), ASX_E_HOOK_INVALID);
     ASSERT_EQ(v, (uint64_t)SECURE_SENTINEL);
 #endif
     asx_runtime_shutdown(&rt);
@@ -1077,7 +1077,7 @@ TEST(fault_clock_skew_adds_offset) {
     fi.param = 1000;
     ASSERT_EQ(asx_fault_inject(&fi), ASX_OK);
 
-    ASSERT_EQ(asx_runtime_now_ns(&t), ASX_OK);
+    ASSERT_EQ(asx_runtime_now_ns(test_runtime(), &t), ASX_OK);
     /* The skew adds 1000 to the clock the build reads: the logical clock
      * (42) or, live, the wall clock (1000000). */
 #if ASX_DETERMINISTIC
@@ -1102,7 +1102,7 @@ TEST(fault_entropy_const_overrides) {
     fi.param = 0xDEADBEEFu;
     ASSERT_EQ(asx_fault_inject(&fi), ASX_OK);
 
-    ASSERT_EQ(asx_runtime_random_u64(&v), ASX_OK);
+    ASSERT_EQ(asx_runtime_random_u64(test_runtime(), &v), ASX_OK);
     ASSERT_EQ(v, (uint64_t)0xDEADBEEFu);
 
     ASSERT_EQ(asx_fault_clear(), ASX_OK);

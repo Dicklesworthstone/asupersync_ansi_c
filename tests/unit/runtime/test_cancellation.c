@@ -196,7 +196,7 @@ TEST(budget_cancel_of_a_created_task_materializes_in_one_step) {
     ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     b = asx_budget_infinite();
     b.deadline = 1u; /* already passed: the clock is past 1 ns */
-    asx_runtime_virtual_advance(10u);
+    asx_runtime_virtual_advance(test_runtime(), 10u);
     ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_pending, NULL, &b, &tid), ASX_OK);
 
     mark = asx_trace_event_count();
@@ -1506,12 +1506,12 @@ TEST(checkpoint_observes_budget_deadline_inline) {
     asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     tb = asx_budget_infinite();
-    tb.deadline = asx_runtime_virtual_now() + 1000u;
+    tb.deadline = asx_runtime_virtual_now(test_runtime()) + 1000u;
     ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_pending, NULL, &tb, &tid), ASX_OK);
     ASSERT_EQ(asx_checkpoint(tid, &cr), ASX_OK);
     ASSERT_EQ(cr.cancelled, 0);
 
-    asx_runtime_virtual_advance(tb.deadline);
+    asx_runtime_virtual_advance(test_runtime(), tb.deadline);
     ASSERT_EQ(asx_checkpoint(tid, &cr), ASX_OK);
     ASSERT_EQ(cr.cancelled, 1);
     ASSERT_EQ((int)cr.kind, (int)ASX_CANCEL_DEADLINE);
@@ -1533,11 +1533,11 @@ TEST(checkpoint_strengthens_a_pending_cancel_with_a_passed_budget_deadline) {
     asx_runtime_reset(test_runtime());
     ASSERT_EQ(asx_region_open(test_runtime(), &rid), ASX_OK);
     tb = asx_budget_infinite();
-    tb.deadline = asx_runtime_virtual_now() + 1000u;
+    tb.deadline = asx_runtime_virtual_now(test_runtime()) + 1000u;
     ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_pending, NULL, &tb, &tid), ASX_OK);
     ASSERT_EQ(asx_task_cancel(tid, ASX_CANCEL_USER), ASX_OK);
 
-    asx_runtime_virtual_advance(tb.deadline + 500u);
+    asx_runtime_virtual_advance(test_runtime(), tb.deadline + 500u);
     ASSERT_EQ(asx_checkpoint(tid, &cr), ASX_OK);
     ASSERT_EQ(cr.cancelled, 1);
     ASSERT_EQ((int)cr.kind, (int)ASX_CANCEL_DEADLINE);
@@ -1943,7 +1943,7 @@ TEST(cx_checkpoint_acknowledges_and_observes_a_passed_deadline) {
 
     b = asx_budget_infinite();
     b.deadline = 1u; /* already passed: the clock is past 1 ns */
-    asx_runtime_virtual_advance(10u);
+    asx_runtime_virtual_advance(test_runtime(), 10u);
     ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_pending, NULL, &b, &late), ASX_OK);
     asx_cx_init(&cx, rid, late, ASX_CAP_NONE);
     ASSERT_EQ(asx_cx_checkpoint(&cx), ASX_E_CANCELLED);
@@ -2045,7 +2045,7 @@ TEST(cx_is_cancelled_reports_whether_a_cancel_was_requested) {
 
     b = asx_budget_infinite();
     b.deadline = 1u; /* already passed: the clock is past 1 ns */
-    asx_runtime_virtual_advance(10u);
+    asx_runtime_virtual_advance(test_runtime(), 10u);
     ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_pending, NULL, &b, &late), ASX_OK);
     ASSERT_EQ(asx_task_mask(late), ASX_OK);
     asx_cx_init(&cx, rid, late, ASX_CAP_NONE);

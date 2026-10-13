@@ -9,6 +9,7 @@
  */
 
 #include "../../test_harness.h"
+#include "../../test_runtime.h"
 #include <asx/asx.h>
 #include <asx/asx_config.h>
 #include <asx/runtime/hindsight.h>
@@ -584,7 +585,7 @@ TEST(hindsight_clock_read_produces_event) {
     setup_hooks();
 
     /* Clock read should log a hindsight event */
-    ASSERT_EQ(asx_runtime_now_ns(&now), ASX_OK);
+    ASSERT_EQ(asx_runtime_now_ns(test_runtime(), &now), ASX_OK);
 
     ASSERT_EQ(asx_hindsight_total_count(), (uint32_t)1);
     ASSERT_TRUE(asx_hindsight_get(0, &ev));
@@ -601,7 +602,7 @@ TEST(hindsight_entropy_read_produces_event) {
     setup_hooks();
 
     /* Entropy read should log a hindsight event */
-    ASSERT_EQ(asx_runtime_random_u64(&val), ASX_OK);
+    ASSERT_EQ(asx_runtime_random_u64(test_runtime(), &val), ASX_OK);
 
     ASSERT_EQ(asx_hindsight_total_count(), (uint32_t)1);
     ASSERT_TRUE(asx_hindsight_get(0, &ev));
@@ -617,9 +618,9 @@ TEST(hindsight_multiple_hook_calls_accumulate) {
     asx_trace_reset();
     setup_hooks();
 
-    ASSERT_EQ(asx_runtime_now_ns(&now), ASX_OK);
-    ASSERT_EQ(asx_runtime_random_u64(&val), ASX_OK);
-    ASSERT_EQ(asx_runtime_now_ns(&now), ASX_OK);
+    ASSERT_EQ(asx_runtime_now_ns(test_runtime(), &now), ASX_OK);
+    ASSERT_EQ(asx_runtime_random_u64(test_runtime(), &val), ASX_OK);
+    ASSERT_EQ(asx_runtime_now_ns(test_runtime(), &now), ASX_OK);
 
     ASSERT_EQ(asx_hindsight_total_count(), (uint32_t)3);
 }
@@ -719,8 +720,8 @@ TEST(hindsight_hook_events_digest_stable_across_runs) {
     asx_hindsight_reset();
     asx_trace_reset();
     setup_hooks();
-    (void)asx_runtime_now_ns(&now);
-    (void)asx_runtime_random_u64(&val);
+    (void)asx_runtime_now_ns(test_runtime(), &now);
+    (void)asx_runtime_random_u64(test_runtime(), &val);
     d1 = asx_hindsight_digest();
 
     /* Run 2 — same hook calls produce same observed values because

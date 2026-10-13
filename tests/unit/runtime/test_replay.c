@@ -82,9 +82,9 @@ TEST(snapshot_take_restore) {
 
     /* Time and entropy should be back to snapshot state */
     ASSERT_EQ(asx_lab_now(&lab), 10000000ULL);
-    ASSERT_EQ(asx_runtime_now_ns(&now), ASX_OK);
+    ASSERT_EQ(asx_runtime_now_ns(&lab.rt, &now), ASX_OK);
     ASSERT_EQ(now, (asx_time)10000000ULL);
-    ASSERT_EQ(asx_runtime_random_u64(&restored_runtime_entropy), ASX_OK);
+    ASSERT_EQ(asx_runtime_random_u64(&lab.rt, &restored_runtime_entropy), ASX_OK);
     ASSERT_EQ(restored_runtime_entropy, expected_runtime_entropy);
 
     asx_lab_shutdown(&lab);
@@ -164,7 +164,7 @@ TEST(snapshot_deterministic_replay) {
 
     /* Restore and draw again — should be identical */
     MUST_OK(asx_snapshot_restore(&lab, sid));
-    ASSERT_EQ(asx_runtime_now_ns(&now), ASX_OK);
+    ASSERT_EQ(asx_runtime_now_ns(&lab.rt, &now), ASX_OK);
     ASSERT_EQ(now, (asx_time)0);
     r_after = asx_lab_random_u64(&lab);
 

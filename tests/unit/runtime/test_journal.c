@@ -788,7 +788,7 @@ TEST(a_journal_over_the_default_clock_keeps_it_virtual_and_a_sleep_completes) {
     budget = asx_budget_from_polls(100);
     ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
     ASSERT_EQ(t.result, ASX_OK);
-    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)5000000u);
+    ASSERT_EQ(asx_runtime_virtual_now(&rt), (asx_time)5000000u);
 
     asx_runtime_shutdown(&rt);
     asx_journal_uninstall();
@@ -1774,10 +1774,10 @@ TEST(a_small_live_run_is_recorded_and_read_back) {
     ASSERT_EQ(asx_net_set_backend(ASX_NET_BACKEND_NATIVE), ASX_OK);
 
     /* Clock and entropy through the runtime's accessors. */
-    ASSERT_EQ(asx_runtime_now_ns(&t0), ASX_OK);
-    ASSERT_EQ(asx_runtime_now_ns(&t1), ASX_OK);
+    ASSERT_EQ(asx_runtime_now_ns(&rt, &t0), ASX_OK);
+    ASSERT_EQ(asx_runtime_now_ns(&rt, &t1), ASX_OK);
     ASSERT_TRUE(t1 >= t0);
-    ASSERT_EQ(asx_runtime_random_u64(&e0), ASX_OK);
+    ASSERT_EQ(asx_runtime_random_u64(&rt, &e0), ASX_OK);
 
     /* Reactor readiness on a pipe. */
     ASSERT_EQ(pipe(fds), 0);

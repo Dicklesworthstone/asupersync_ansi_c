@@ -450,12 +450,12 @@ TEST(scheduler_wakes_task_parked_on_pool_job) {
     memset(&s, 0, sizeof(s));
     ASSERT_EQ(asx_region_open(&rt, &r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_pool_waiter, &s, &t), ASX_OK);
-    MUST_OK(asx_runtime_now_ns(&t0));
+    MUST_OK(asx_runtime_now_ns(&rt, &t0));
     budget = asx_budget_from_polls(100);
     /* Nothing but the pool job can wake the task: the scheduler must block
      * on it rather than report ASX_E_WOULD_BLOCK. */
     ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
-    MUST_OK(asx_runtime_now_ns(&t1));
+    MUST_OK(asx_runtime_now_ns(&rt, &t1));
     ASSERT_EQ(s.result, 7u);
     ASSERT_TRUE(s.polls <= 3u);
     /* Woken by the completion's reactor notify, not the 1 s idle cap. */

@@ -414,12 +414,12 @@ TEST(builder_runtime_secure_draw_follows_the_profile) {
     ASSERT_EQ(asx_runtime_builder_build(&builder, &rt), ASX_OK);
 #if defined(ASX_PROFILE_POSIX) || defined(ASX_PROFILE_WIN32)
     /* The builder takes the platform's entropy, as the default init does. */
-    ASSERT_EQ(asx_runtime_random_secure_u64(&v), ASX_OK);
+    ASSERT_EQ(asx_runtime_random_secure_u64(&rt, &v), ASX_OK);
     ASSERT_TRUE(v != BUILDER_SENTINEL);
 #else
     /* No platform source in this profile: refused, not served from the
      * default PRNG, until the application installs one. */
-    ASSERT_EQ(asx_runtime_random_secure_u64(&v), ASX_E_HOOK_INVALID);
+    ASSERT_EQ(asx_runtime_random_secure_u64(&rt, &v), ASX_E_HOOK_INVALID);
     ASSERT_EQ(v, BUILDER_SENTINEL);
 #endif
     asx_runtime_shutdown(&rt);
@@ -443,7 +443,7 @@ TEST(builder_entropy_hooks_serve_secure_draws) {
     /* The source the application installed is served, on every profile:
      * installing entropy is how a profile with no platform source (and an
      * application that wants its own) gets secure draws. */
-    ASSERT_EQ(asx_runtime_random_secure_u64(&v), ASX_OK);
+    ASSERT_EQ(asx_runtime_random_secure_u64(&rt, &v), ASX_OK);
     ASSERT_EQ(v, (uint64_t)456u);
     asx_runtime_shutdown(&rt);
 }
@@ -456,7 +456,7 @@ TEST(init_from_env_runtime_serves_secure_draws) {
     asx_runtime_reset(test_runtime());
     clear_builder_test_env();
     ASSERT_EQ(asx_runtime_init_from_env(&rt, NULL), ASX_OK);
-    ASSERT_EQ(asx_runtime_random_secure_u64(&v), ASX_OK);
+    ASSERT_EQ(asx_runtime_random_secure_u64(&rt, &v), ASX_OK);
     ASSERT_TRUE(v != BUILDER_SENTINEL);
     asx_runtime_shutdown(&rt);
 }

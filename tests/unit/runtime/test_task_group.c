@@ -120,7 +120,7 @@ static owner_state g_owner;
 
 static void member_init(uint32_t i, uint64_t finish_ms, asx_status finish) {
     memset(&g_m[i], 0, sizeof(g_m[i]));
-    g_m[i].finish_at = finish_ms == 0u ? 0u : asx_runtime_virtual_now() + finish_ms * MS;
+    g_m[i].finish_at = finish_ms == 0u ? 0u : asx_runtime_virtual_now(&g_rt) + finish_ms * MS;
     g_m[i].finish = finish;
     g_m[i].ob = ASX_INVALID_ID;
 }
@@ -273,7 +273,7 @@ TEST(race_cancels_and_drains_losers_before_resolving) {
     ASSERT_EQ(mst, ASX_E_CANCELLED);
 
     /* The hour-long loser was cancelled, not waited out. */
-    ASSERT_TRUE(asx_runtime_virtual_now() < 1000u * MS);
+    ASSERT_TRUE(asx_runtime_virtual_now(&g_rt) < 1000u * MS);
 }
 
 TEST(race_winner_failure_is_group_result) {
@@ -366,7 +366,7 @@ TEST(race_loser_abort_preserves_equal_severity_fail_fast) {
     reason.origin_region = r;
     reason.timestamp = (asx_time)1000000000u;
     ASSERT_EQ(asx_task_cancel_with_reason(g_owner.group.members[1], &reason), ASX_OK);
-    asx_runtime_virtual_advance(1u * MS);
+    asx_runtime_virtual_advance(&g_rt, 1u * MS);
     run = asx_budget_from_polls(200u);
     ASSERT_EQ(asx_scheduler_run(root, &run), ASX_OK);
 
@@ -846,7 +846,7 @@ TEST(deadline_times_out_and_drains_members) {
     member_init(1, 50, ASX_OK);
     ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(spawn_group(r, ASX_TASK_GROUP_RACE, 0, 2, &owner), ASX_OK);
-    ASSERT_EQ(asx_task_group_set_deadline(&g_owner.group, asx_runtime_virtual_now() + 5u * MS),
+    ASSERT_EQ(asx_task_group_set_deadline(&g_owner.group, asx_runtime_virtual_now(&g_rt) + 5u * MS),
               ASX_OK);
     run = asx_budget_from_polls(200);
     ASSERT_EQ(asx_scheduler_run(r, &run), ASX_OK);
@@ -854,7 +854,7 @@ TEST(deadline_times_out_and_drains_members) {
     ASSERT_EQ(g_owner.result, ASX_E_TIMED_OUT);
     ASSERT_EQ(g_m[0].kind, ASX_CANCEL_TIMEOUT);
     ASSERT_EQ(g_m[1].kind, ASX_CANCEL_TIMEOUT);
-    ASSERT_TRUE(asx_runtime_virtual_now() < 50u * MS);
+    ASSERT_TRUE(asx_runtime_virtual_now(&g_rt) < 50u * MS);
 }
 
 TEST(deadline_zero_is_due_at_once) {
@@ -876,7 +876,7 @@ TEST(deadline_zero_is_due_at_once) {
     ASSERT_EQ(g_owner.result, ASX_E_TIMED_OUT);
     ASSERT_EQ(g_m[0].kind, ASX_CANCEL_TIMEOUT);
     ASSERT_EQ(g_m[1].kind, ASX_CANCEL_TIMEOUT);
-    ASSERT_TRUE(asx_runtime_virtual_now() < 50u * MS);
+    ASSERT_TRUE(asx_runtime_virtual_now(&g_rt) < 50u * MS);
 }
 
 TEST(infinite_deadline_clears_the_deadline) {
@@ -889,7 +889,7 @@ TEST(infinite_deadline_clears_the_deadline) {
     member_init(1, 50, ASX_OK);
     ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(spawn_group(r, ASX_TASK_GROUP_RACE, 0, 2, &owner), ASX_OK);
-    ASSERT_EQ(asx_task_group_set_deadline(&g_owner.group, asx_runtime_virtual_now() + 5u * MS),
+    ASSERT_EQ(asx_task_group_set_deadline(&g_owner.group, asx_runtime_virtual_now(&g_rt) + 5u * MS),
               ASX_OK);
     ASSERT_EQ(asx_task_group_set_deadline(&g_owner.group, ASX_TIME_INFINITE), ASX_OK);
     run = asx_budget_from_polls(200);
@@ -898,7 +898,7 @@ TEST(infinite_deadline_clears_the_deadline) {
     ASSERT_EQ(g_owner.result, ASX_OK);
     ASSERT_EQ(asx_task_group_winner(&g_owner.group), 1);
     ASSERT_EQ(g_m[0].kind, ASX_CANCEL_RACE_LOST);
-    ASSERT_TRUE(asx_runtime_virtual_now() >= 50u * MS);
+    ASSERT_TRUE(asx_runtime_virtual_now(&g_rt) >= 50u * MS);
 }
 
 TEST(quorum_deadline_reports_threshold_timeout) {
@@ -912,7 +912,7 @@ TEST(quorum_deadline_reports_threshold_timeout) {
     member_init(2, 0, ASX_OK);
     ASSERT_EQ(asx_region_open(&g_rt, &r), ASX_OK);
     ASSERT_EQ(spawn_group(r, ASX_TASK_GROUP_QUORUM, 2, 3, &owner), ASX_OK);
-    ASSERT_EQ(asx_task_group_set_deadline(&g_owner.group, asx_runtime_virtual_now() + 5u * MS),
+    ASSERT_EQ(asx_task_group_set_deadline(&g_owner.group, asx_runtime_virtual_now(&g_rt) + 5u * MS),
               ASX_OK);
     run = asx_budget_from_polls(200);
     ASSERT_EQ(asx_scheduler_run(r, &run), ASX_OK);
