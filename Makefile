@@ -1460,6 +1460,9 @@ $(TEST_DIR)/formal/budget_lattice_harness: $(FORMAL_CBMC_DIR)/budget_lattice_har
 $(TEST_DIR)/formal/child_region_harness: $(FORMAL_CBMC_DIR)/child_region_harness.c $(LIB_A) | $(TEST_DIR)/formal
 	$(CC) -std=c99 -Wall -Wextra -Wpedantic -Werror -Wno-unused-parameter $(INC_FLAGS) $(PROFILE_DEF) $(CODEC_DEF) $(DET_DEF) -o $@ $< $(LIB_A)
 
+$(TEST_DIR)/formal/lane_selection_harness: $(FORMAL_CBMC_DIR)/lane_selection_harness.c $(LIB_A) | $(TEST_DIR)/formal
+	$(CC) -std=c99 -Wall -Wextra -Wpedantic -Werror -Wno-unused-parameter $(INC_FLAGS) $(PROFILE_DEF) $(CODEC_DEF) $(DET_DEF) -o $@ $< $(LIB_A)
+
 formal-cbmc: $(FORMAL_CBMC_BINS)
 	@echo "[asx] formal-cbmc: running $(words $(FORMAL_CBMC_BINS)) CBMC-compatible harness(es)..."
 	@pass=0; fail=0; \
