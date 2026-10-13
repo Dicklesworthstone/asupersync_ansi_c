@@ -292,7 +292,7 @@ TEST(region_drain_leak_audits_unresolved_obligations) {
     uint64_t leaks_before;
     unresolved_ctx ctx;
 
-    asx_runtime_set_leak_policy_internal(ASX_LEAK_LOG, NULL);
+    asx_runtime_set_leak_policy_internal(g_kernels[0], ASX_LEAK_LOG, NULL);
     leaks_before = asx_obligation_leak_count();
 
     st = asx_region_open(&rid);

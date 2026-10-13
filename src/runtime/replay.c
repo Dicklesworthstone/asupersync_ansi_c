@@ -174,7 +174,7 @@ asx_oracle_result asx_oracle_quiescence(const asx_lab *lab, void *ctx) {
     {
         const asx_kernel *k = asx_kernel_for_tag(lab->rt.tag);
         uint32_t i;
-        for (i = 0; k != NULL && i < g_task_count; i++) {
+        for (i = 0; k != NULL && i < k->task_count; i++) {
             /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
             if (k->tasks[i].alive && k->tasks[i].state < ASX_TASK_COMPLETED)
                 return make_result(ASX_ORACLE_FAIL, "quiescence", "tasks still active");
@@ -192,7 +192,7 @@ asx_oracle_result asx_oracle_leak(const asx_lab *lab, void *ctx) {
     {
         const asx_kernel *k = asx_kernel_for_tag(lab->rt.tag);
         uint32_t i;
-        for (i = 0; k != NULL && i < g_region_count; i++) {
+        for (i = 0; k != NULL && i < k->region_count; i++) {
             /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
             if (k->regions[i].alive && k->regions[i].state != ASX_REGION_CLOSED)
                 return make_result(ASX_ORACLE_FAIL, "leak", "regions still open");

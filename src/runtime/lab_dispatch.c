@@ -479,8 +479,8 @@ asx_status asx_scheduler_use_lab_dispatch(uint64_t seed) {
     /* A refused spawn can retain its captured actor cell without a live
      * task slot. Do not erase its admission ticket by reseeding. */
     if (g_lab_admit_n > 0u) return ASX_E_INVALID_STATE;
-    for (i = 0; i < g_task_count; i++) {
-        ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= ASX_MAX_TASKS");
+    for (i = 0; i < lab_kernel()->task_count; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: task_count <= ASX_MAX_TASKS");
         if (lab_kernel()->tasks[i].alive) return ASX_E_INVALID_STATE;
     }
     asx_lab_dispatch_reset_internal();
@@ -621,7 +621,7 @@ static int lab_retired_take(uint32_t slot, uint16_t task_gen) {
 
 static int lab_entry_live(const lab_entry *e) {
     const asx_task_slot *t;
-    if (e->slot >= g_task_count) return 0;
+    if (e->slot >= lab_kernel()->task_count) return 0;
     t = &lab_kernel()->tasks[e->slot];
     return t->alive && t->generation == e->task_gen && t->lab_scheduled;
 }
@@ -903,7 +903,7 @@ asx_status asx_lab_admit_pending(void) {
         /* Admission adds it to its region's membership (state.rs:5212),
          * arms its budget-deadline timer (state.rs:4892), then records its
          * Spawn event (state.rs:1119). */
-        t->member_seq = asx_task_next_member_seq_internal();
+        t->member_seq = asx_task_next_member_seq_internal(lab_kernel());
         asx_lab_arm_budget_deadline_internal(t);
         asx_trace_emit(ASX_TRACE_TASK_SPAWN,
                        (uint64_t)asx_task_handle_for_slot(lab_kernel(), g_lab_admit[i]),
@@ -1349,9 +1349,9 @@ static int lab_forced_resolve(uint64_t compact, uint32_t *slot, uint16_t *task_g
     }
     /* The lab's arena shadow: a live task by its Rust (index, generation),
      * else a retired task a cancel waker scheduled. */
-    for (i = 0; i < g_task_count; i++) {
+    for (i = 0; i < lab_kernel()->task_count; i++) {
         const asx_task_slot *t = &lab_kernel()->tasks[i];
-        ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= ASX_MAX_TASKS");
+        ASX_CHECKPOINT_WAIVER("bounded: task_count <= ASX_MAX_TASKS");
         if (t->alive && t->lab_rust_live && lab_compact_task(t) == compact) {
             *slot = i;
             *task_gen = t->generation;
@@ -1534,20 +1534,20 @@ static int lab_is_quiescent(void) {
         g_lab_deferred_n > 0u) {
         return 0;
     }
-    for (i = 0; i < g_task_count; i++) {
-        ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= ASX_MAX_TASKS");
+    for (i = 0; i < lab_kernel()->task_count; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: task_count <= ASX_MAX_TASKS");
         if (lab_kernel()->tasks[i].alive && !asx_task_is_terminal(lab_kernel()->tasks[i].state))
             return 0;
     }
-    for (i = 0; i < g_region_count; i++) {
-        ASX_CHECKPOINT_WAIVER("bounded: g_region_count <= ASX_MAX_REGIONS");
+    for (i = 0; i < lab_kernel()->region_count; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: region_count <= ASX_MAX_REGIONS");
         if (lab_kernel()->regions[i].alive && lab_kernel()->regions[i].state != ASX_REGION_OPEN &&
             lab_kernel()->regions[i].state != ASX_REGION_CLOSED) {
             return 0;
         }
     }
-    for (i = 0; i < g_obligation_count; i++) {
-        ASX_CHECKPOINT_WAIVER("bounded: g_obligation_count <= ASX_MAX_OBLIGATIONS");
+    for (i = 0; i < lab_kernel()->obligation_count; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: obligation_count <= ASX_MAX_OBLIGATIONS");
         if (lab_kernel()->obligations[i].alive &&
             lab_kernel()->obligations[i].state == ASX_OBLIGATION_RESERVED)
             return 0;
@@ -1792,8 +1792,9 @@ static uint32_t lab_held_pending(const asx_task_slot *t) {
     uint32_t n = 0;
     uint32_t bound = 0;
     uint32_t idx = t->first_held;
-    while (idx != ASX_SLOT_NONE && idx < g_obligation_count && bound++ < g_obligation_count) {
-        ASX_CHECKPOINT_WAIVER("bounded: at most g_obligation_count links");
+    while (idx != ASX_SLOT_NONE && idx < lab_kernel()->obligation_count &&
+           bound++ < lab_kernel()->obligation_count) {
+        ASX_CHECKPOINT_WAIVER("bounded: at most obligation_count links");
         if (lab_kernel()->obligations[idx].alive &&
             lab_kernel()->obligations[idx].state == ASX_OBLIGATION_RESERVED)
             n++;
@@ -1820,7 +1821,7 @@ static void lab_wait_of(const asx_task_slot *t, uint32_t idx, asx_stuck_task *e)
     e->wait = ASX_STUCK_PARKED;
     e->wait_task = ASX_INVALID_ID;
     e->wait_region = ASX_INVALID_ID;
-    if (t->waiting_on != ASX_SLOT_NONE && t->waiting_on < g_task_count &&
+    if (t->waiting_on != ASX_SLOT_NONE && t->waiting_on < lab_kernel()->task_count &&
         lab_kernel()->tasks[t->waiting_on].alive) {
         e->wait = ASX_STUCK_JOIN;
         e->wait_task = asx_task_handle_for_slot(lab_kernel(), t->waiting_on);
@@ -1831,9 +1832,9 @@ static void lab_wait_of(const asx_task_slot *t, uint32_t idx, asx_stuck_task *e)
         e->wait_region = t->region_wait_region;
         return;
     }
-    for (i = 0; i < g_task_count; i++) {
+    for (i = 0; i < lab_kernel()->task_count; i++) {
         const asx_task_slot *m = &lab_kernel()->tasks[i];
-        ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= ASX_MAX_TASKS");
+        ASX_CHECKPOINT_WAIVER("bounded: task_count <= ASX_MAX_TASKS");
         if (m->alive && !asx_task_is_terminal(m->state) && m->watcher == idx &&
             m->watcher_gen == t->generation) {
             e->wait = ASX_STUCK_WATCH;
@@ -1854,9 +1855,9 @@ uint32_t asx_scheduler_stuck_tasks(asx_region_id region, asx_stuck_task *out, ui
     uint32_t i;
 
     if (!g_lab_active) n_sub = asx_region_subtree_internal(region, subtree, ASX_MAX_REGIONS);
-    for (i = 0; i < g_task_count; i++) {
+    for (i = 0; i < lab_kernel()->task_count; i++) {
         const asx_task_slot *t = &lab_kernel()->tasks[i];
-        ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= ASX_MAX_TASKS");
+        ASX_CHECKPOINT_WAIVER("bounded: task_count <= ASX_MAX_TASKS");
         if (!lab_task_waiting(t)) continue;
         if (!g_lab_active) {
             uint32_t r;
@@ -1892,9 +1893,9 @@ static int lab_futurelock_of(uint32_t i, asx_futurelock *f) {
     uint32_t o;
 
     memset(f, 0, sizeof(*f));
-    for (o = 0; o < g_obligation_count; o++) {
+    for (o = 0; o < lab_kernel()->obligation_count; o++) {
         const asx_obligation_slot *ob = &lab_kernel()->obligations[o];
-        ASX_CHECKPOINT_WAIVER("bounded: g_obligation_count <= ASX_MAX_OBLIGATIONS");
+        ASX_CHECKPOINT_WAIVER("bounded: obligation_count <= ASX_MAX_OBLIGATIONS");
         if (!ob->alive || ob->state != ASX_OBLIGATION_RESERVED) continue;
         if (ob->holder == ASX_INVALID_ID || asx_handle_slot(ob->holder) != (uint16_t)i ||
             asx_handle_generation(ob->holder) != t->generation) {
@@ -1934,11 +1935,11 @@ static uint32_t lab_scan_futurelocks(uint64_t max_idle_steps, lab_futurelock_sin
         uint32_t best = ASX_SLOT_NONE;
         uint32_t i;
         asx_futurelock f;
-        ASX_CHECKPOINT_WAIVER("bounded: each pass visits one more task, at most g_task_count");
-        for (i = 0; i < g_task_count; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: each pass visits one more task, at most task_count");
+        for (i = 0; i < lab_kernel()->task_count; i++) {
             const asx_task_slot *t = &lab_kernel()->tasks[i];
             uint64_t key;
-            ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= ASX_MAX_TASKS");
+            ASX_CHECKPOINT_WAIVER("bounded: task_count <= ASX_MAX_TASKS");
             if (!t->alive || asx_task_is_terminal(t->state)) continue;
             if (lab_idle_steps(t) <= max_idle_steps) continue;
             key = lab_compact_task(t);

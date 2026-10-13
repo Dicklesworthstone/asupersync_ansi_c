@@ -327,26 +327,79 @@ typedef struct {
 #define ASX_SLOT_NONE 0xFFFFFFFFu
 
 /* -------------------------------------------------------------------
- * Kernel arenas (defined in lifecycle.c)
- *
- * The three arenas are one runtime-owned storage block (K18): the
+ * Kernel (K18): a runtime's arenas and the lifecycle state that belongs to
+ * it and no other. The block is one runtime-owned storage block: the
  * library's static block, or the caller's asx_runtime_config.storage while
- * a runtime that was given one is live. g_regions, g_tasks and
- * g_obligations point into the bound block; asx_kernel_bind_internal
- * moves them, and nothing else does.
+ * a runtime that was given one is live.
  *
- * g_*_count is the high-water mark: every slot index below it has been
- * used at least once, so arena scans iterate [0, g_*_count) and skip
- * !alive slots. g_*_live counts currently-allocated slots.
+ * *_count is the high-water mark: every slot index below it has been used
+ * at least once, so arena scans iterate [0, *_count) and skip !alive
+ * slots. *_live counts currently-allocated slots.
  * ------------------------------------------------------------------- */
 
-/* One runtime's kernel (K18): its arenas, and the state that belongs to it
- * and no other. The block is what asx_runtime_storage_size() measures and a
- * caller may supply (asx_runtime_config.storage). */
+/* Rust's obligation mailbox (bd-2fga): under lab dispatch a Cx's
+ * obligation operations made inside a poll are posts, applied in order
+ * when the poll returns (lab/runtime.rs:4797-4808). */
+typedef enum {
+    OB_POST_RESERVE = 1,
+    OB_POST_COMMIT = 2,
+    OB_POST_ABORT = 3,
+    OB_POST_LEAK = 4,
+    OB_POST_HANDOFF = 5
+} ob_post_kind;
+
+typedef struct {
+    uint8_t kind;
+    uint32_t idx;
+    uint16_t generation;
+    asx_obligation_info reservation;
+    asx_trace_handoff handoff;
+} ob_post;
+
+/* A reservation and one resolution per slot. */
+#define OB_POST_CAP (2u * (uint32_t)(ASX_MAX_OBLIGATIONS))
+
+/* One runtime's kernel: its arenas, and the state that belongs to it and
+ * no other. The block is what asx_runtime_storage_size() measures. */
 typedef struct asx_kernel {
     asx_region_slot regions[ASX_MAX_REGIONS];
     asx_task_slot tasks[ASX_MAX_TASKS];
     asx_obligation_slot obligations[ASX_MAX_OBLIGATIONS];
+    uint32_t region_count;
+    uint32_t region_live;
+    uint32_t task_count;
+    uint32_t task_live;
+    uint32_t obligation_count;
+    uint32_t obligation_live;
+    /* LIFO free lists of released slots: the head is the index + 1 of the
+     * last one released, 0 when empty, so a zeroed kernel (the static block
+     * in .bss, a caller's cleared one) is a valid empty one. Reuse order
+     * depends only on the release sequence, so replay is stable. */
+    uint32_t task_free_head;
+    uint32_t obligation_free_head;
+    ob_post ob_posts[OB_POST_CAP];
+    uint32_t ob_post_n;
+    /* Obligation leak policy (runtime config) and cumulative leak count. */
+    asx_leak_response leak_response;
+    asx_leak_escalation_config leak_escalation;
+    int leak_escalation_set;
+    uint64_t leak_count;
+    /* Opt-in hard cleanup bound (runtime config); off is Rust's semantics. */
+    int cleanup_hard_bound;
+    uint64_t member_seq;
+    /* Fault raised during completion bookkeeping (PANIC leak policy) that
+     * the scheduler must report, mirroring a failing poll under FAIL_FAST. */
+    asx_status pending_fault;
+    /* Rust's finalizing_regions (state.rs:2101): the regions in FINALIZING,
+     * as region slots, in the order they entered it; and the finalizer
+     * budget and escalation of asx_runtime_config, which are Rust's
+     * defaults until finalizer_configured is set. */
+    uint32_t finalizing[ASX_MAX_REGIONS];
+    uint32_t finalizing_count;
+    int finalizer_configured;
+    uint32_t finalizer_poll_budget;
+    uint64_t finalizer_time_budget_ns;
+    asx_finalizer_escalation finalizer_escalation;
     uint32_t rt_generation; /* nonzero while an initialized runtime holds it */
     uint16_t tag;           /* its index in g_kernels; stamped on its handles */
 } asx_kernel;
@@ -357,8 +410,7 @@ extern asx_kernel g_kernel_static;
 
 /* The registry, by runtime tag: the kernel a handle's tag names, or NULL
  * for a tag no runtime holds. Slot 0 is never NULL: the static block when
- * no runtime holds it. Only slot 0 is ever bound while the arenas are
- * still reached through g_regions, g_tasks and g_obligations. */
+ * no runtime holds it. */
 extern asx_kernel *g_kernels[ASX_MAX_RUNTIMES];
 
 static inline asx_kernel *asx_kernel_for_tag(uint16_t tag) {
@@ -400,19 +452,7 @@ static inline uint64_t asx_handle_mint(const asx_kernel *k, uint16_t type_tag, u
     return asx_handle_with_runtime_tag(asx_handle_pack(type_tag, state_mask, index), k->tag);
 }
 
-extern asx_region_slot *g_regions;
-extern uint32_t g_region_count;
-extern uint32_t g_region_live;
-
-extern asx_task_slot *g_tasks;
-extern uint32_t g_task_count;
-extern uint32_t g_task_live;
-
-extern asx_obligation_slot *g_obligations;
-extern uint32_t g_obligation_count;
-extern uint32_t g_obligation_live;
-
-/* Bind kernel 0 (g_kernels[0] and the arena pointers) to `storage` (an
+/* Bind kernel 0 (g_kernels[0]) to `storage` (an
  * asx_runtime_storage_size() block aligned to asx_runtime_storage_align(),
  * already validated), zeroing it; NULL binds the library's static block and
  * leaves it as it is. Counters and the rest of the kernel state are cleared
@@ -611,16 +651,16 @@ asx_region_id asx_region_handle_for_slot(const asx_kernel *k, uint32_t slot_idx)
 
 /* Active obligation-leak policy (set by asx_runtime_init / reload; PANIC
  * after a bare asx_runtime_reset). */
-void asx_runtime_set_leak_policy_internal(asx_leak_response response,
+void asx_runtime_set_leak_policy_internal(asx_kernel *k, asx_leak_response response,
                                           const asx_leak_escalation_config *escalation);
 
 /* The next region-membership sequence number (asx_task_slot.member_seq). */
-uint64_t asx_task_next_member_seq_internal(void);
+uint64_t asx_task_next_member_seq_internal(asx_kernel *k);
 
 /* Opt-in hard cleanup bound (asx_runtime_config.cleanup_hard_bound; off
  * after a bare asx_runtime_reset). */
-void asx_runtime_set_cleanup_hard_bound_internal(int on);
-int asx_cleanup_hard_bound_internal(void);
+void asx_runtime_set_cleanup_hard_bound_internal(asx_kernel *k, int on);
+int asx_cleanup_hard_bound_internal(const asx_kernel *k);
 
 /* A task that acknowledged its cancel takes its cleanup budget as its
  * budget, once (see asx_task_slot.cleanup_budget). */
@@ -863,7 +903,7 @@ int asx_task_cancel_dominates_internal(const asx_task_slot *t);
 
 /* Take (and clear) a fault raised during completion bookkeeping, e.g. an
  * obligation leak under the PANIC policy. ASX_OK when none is pending. */
-asx_status asx_runtime_take_pending_fault_internal(void);
+asx_status asx_runtime_take_pending_fault_internal(asx_kernel *k);
 
 /* Leak-audit a finalizing region whose tasks are gone: every obligation of
  * it still Reserved is leaked as one batch under the leak policy (Rust's
@@ -941,9 +981,10 @@ int asx_region_finalizer_outstanding_internal(const asx_region_slot *r);
 void asx_region_finalizer_task_done_internal(asx_region_slot *r, const asx_task_slot *task);
 /* The finalizer budget and escalation (asx_runtime_config); set by init and
  * reload, back to the defaults by asx_runtime_reset. */
-void asx_region_finalizer_config_set_internal(uint32_t poll_budget, uint64_t time_budget_ns,
+void asx_region_finalizer_config_set_internal(asx_kernel *k, uint32_t poll_budget,
+                                              uint64_t time_budget_ns,
                                               asx_finalizer_escalation escalation);
-void asx_region_finalizers_reset_internal(void);
+void asx_region_finalizers_reset_internal(asx_kernel *k);
 /* Spawn a region's finalizer as its cleanup task (lifecycle.c): into a
  * FINALIZING region, with `budget`, masked, at the budget's priority. */
 ASX_MUST_USE asx_status asx_task_spawn_finalizer_internal(asx_region_id region,

@@ -54,8 +54,8 @@ static asx_status asx_region_obligations_resolved(asx_region_id id) {
     const asx_kernel *k = asx_kernel_of(id);
     uint32_t i;
 
-    for (i = 0; i < g_obligation_count; i++) {
-        ASX_CHECKPOINT_WAIVER("bounded: g_obligation_count <= MAX_OBLIGATIONS");
+    for (i = 0; i < k->obligation_count; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: k->obligation_count <= MAX_OBLIGATIONS");
         if (!k->obligations[i].alive) continue;
         if (k->obligations[i].region != id) continue;
         if (k->obligations[i].state == ASX_OBLIGATION_RESERVED) {
@@ -70,8 +70,8 @@ static int asx_region_has_uncancelled_tasks(asx_region_id id) {
     const asx_kernel *k = asx_kernel_of(id);
     uint32_t i;
 
-    for (i = 0; i < g_task_count; i++) {
-        ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= MAX_TASKS");
+    for (i = 0; i < k->task_count; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: k->task_count <= MAX_TASKS");
         const asx_task_slot *t = &k->tasks[i];
         if (!t->alive) continue;
         if (t->region != id) continue;
@@ -102,8 +102,8 @@ static void fill_drain_progress(asx_region_id id, asx_region_slot *r, asx_drain_
 
     /* Count cancelled tasks */
     out->tasks_cancelled = 0;
-    for (i = 0; i < g_task_count; i++) {
-        ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= MAX_TASKS");
+    for (i = 0; i < k->task_count; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: k->task_count <= MAX_TASKS");
         const asx_task_slot *t = &k->tasks[i];
         if (!t->alive) continue;
         if (t->region != id) continue;
@@ -114,8 +114,8 @@ static void fill_drain_progress(asx_region_id id, asx_region_slot *r, asx_drain_
     out->obligations_total = 0;
     out->obligations_reserved = 0;
     out->obligations_resolved = 0;
-    for (i = 0; i < g_obligation_count; i++) {
-        ASX_CHECKPOINT_WAIVER("bounded: g_obligation_count <= MAX_OBLIGATIONS");
+    for (i = 0; i < k->obligation_count; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: k->obligation_count <= MAX_OBLIGATIONS");
         if (!k->obligations[i].alive) continue;
         if (k->obligations[i].region != id) continue;
         out->obligations_total++;
@@ -517,45 +517,57 @@ asx_status asx_region_get_close_outcome(asx_region_id region, asx_outcome *out) 
  * sync finalizer runs inline in the drain (asx_region_defer_sync).
  * ------------------------------------------------------------------- */
 
-/* Rust's finalizing_regions (state.rs:2101): the regions in FINALIZING, as
- * region slots, in the order they entered it (push, :10241); a close
- * swap-removes its entry (:10340). */
-static uint32_t g_finalizing[ASX_MAX_REGIONS];
-static uint32_t g_finalizing_count;
+/* Rust's finalizing_regions (state.rs:2101) is the kernel's `finalizing`:
+ * the regions in FINALIZING, as region slots, in the order they entered it
+ * (push, :10241); a close swap-removes its entry (:10340). The finalizer
+ * budget and escalation of asx_runtime_config are the kernel's too; the
+ * defaults are Rust's constants (FINALIZER_POLL_BUDGET and
+ * FINALIZER_TIME_BUDGET_NANOS, record/finalizer.rs:42-45). */
 
-/* The finalizer budget and escalation of asx_runtime_config. The defaults
- * are Rust's constants (FINALIZER_POLL_BUDGET and FINALIZER_TIME_BUDGET_NANOS,
- * record/finalizer.rs:42-45). */
-static uint32_t g_finalizer_poll_budget = 100u;
-static uint64_t g_finalizer_time_budget_ns = 5000000000u;
-static asx_finalizer_escalation g_finalizer_escalation = ASX_FINALIZER_BOUNDED_LOG;
+#define FINALIZER_DEFAULT_POLL_BUDGET 100u
+#define FINALIZER_DEFAULT_TIME_BUDGET_NS 5000000000u
 
-void asx_region_finalizers_reset_internal(void) {
-    g_finalizing_count = 0u;
-    g_finalizer_poll_budget = 100u;
-    g_finalizer_time_budget_ns = 5000000000u;
-    g_finalizer_escalation = ASX_FINALIZER_BOUNDED_LOG;
+static uint32_t finalizer_poll_budget_of(const asx_kernel *k) {
+    return k->finalizer_configured ? k->finalizer_poll_budget : FINALIZER_DEFAULT_POLL_BUDGET;
 }
 
-void asx_region_finalizer_config_set_internal(uint32_t poll_budget, uint64_t time_budget_ns,
+static uint64_t finalizer_time_budget_ns_of(const asx_kernel *k) {
+    return k->finalizer_configured ? k->finalizer_time_budget_ns : FINALIZER_DEFAULT_TIME_BUDGET_NS;
+}
+
+static asx_finalizer_escalation finalizer_escalation_of(const asx_kernel *k) {
+    return k->finalizer_configured ? k->finalizer_escalation : ASX_FINALIZER_BOUNDED_LOG;
+}
+
+void asx_region_finalizers_reset_internal(asx_kernel *k) {
+    k->finalizing_count = 0u;
+    k->finalizer_configured = 0;
+}
+
+void asx_region_finalizer_config_set_internal(asx_kernel *k, uint32_t poll_budget,
+                                              uint64_t time_budget_ns,
                                               asx_finalizer_escalation escalation) {
-    g_finalizer_poll_budget = poll_budget;
-    g_finalizer_time_budget_ns = time_budget_ns;
-    g_finalizer_escalation = escalation;
+    k->finalizer_configured = 1;
+    k->finalizer_poll_budget = poll_budget;
+    k->finalizer_time_budget_ns = time_budget_ns;
+    k->finalizer_escalation = escalation;
 }
 
 void asx_region_finalizing_enter_internal(asx_region_id id) {
-    if (g_finalizing_count < ASX_MAX_REGIONS) {
-        g_finalizing[g_finalizing_count++] = (uint32_t)asx_handle_slot(id);
+    asx_kernel *k = asx_kernel_of(id);
+    if (k != NULL && k->finalizing_count < ASX_MAX_REGIONS) {
+        k->finalizing[k->finalizing_count++] = (uint32_t)asx_handle_slot(id);
     }
 }
 
 void asx_region_finalizing_leave_internal(asx_region_id id) {
+    asx_kernel *k = asx_kernel_of(id);
     uint32_t i;
-    for (i = 0; i < g_finalizing_count; i++) {
-        ASX_CHECKPOINT_WAIVER("bounded: g_finalizing_count <= ASX_MAX_REGIONS");
-        if (g_finalizing[i] != (uint32_t)asx_handle_slot(id)) continue;
-        g_finalizing[i] = g_finalizing[--g_finalizing_count];
+    if (k == NULL) return;
+    for (i = 0; i < k->finalizing_count; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: k->finalizing_count <= ASX_MAX_REGIONS");
+        if (k->finalizing[i] != (uint32_t)asx_handle_slot(id)) continue;
+        k->finalizing[i] = k->finalizing[--k->finalizing_count];
         return;
     }
 }
@@ -566,9 +578,9 @@ int asx_region_finalizer_outstanding_internal(const asx_region_slot *r) {
 
 int asx_region_finalizers_pending_internal(const asx_kernel *k) {
     uint32_t i;
-    for (i = 0; i < g_finalizing_count; i++) {
-        ASX_CHECKPOINT_WAIVER("bounded: g_finalizing_count <= ASX_MAX_REGIONS");
-        const asx_region_slot *r = &k->regions[g_finalizing[i]];
+    for (i = 0; i < k->finalizing_count; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: k->finalizing_count <= ASX_MAX_REGIONS");
+        const asx_region_slot *r = &k->regions[k->finalizing[i]];
         if (r->alive && !r->poisoned && r->state == ASX_REGION_FINALIZING &&
             asx_region_finalizer_outstanding_internal(r)) {
             return 1;
@@ -596,17 +608,18 @@ void asx_region_finalizer_task_done_internal(asx_region_slot *r, const asx_task_
  * first poll past the budget in the log, SOFT stays silent, and the opt-in
  * BOUNDED_PANIC completes the finalizer PANICKED at that poll instead. */
 static asx_status asx_finalizer_task_poll(void *user_data, asx_task_id self) {
+    const asx_kernel *k = asx_kernel_of(self);
     asx_region_slot *r = (asx_region_slot *)user_data;
     asx_region_finalizer *f = &r->finalizer;
     int spent = f->polls >= f->poll_budget || asx_cancel_now_internal() >= f->deadline;
 
     if (spent && !f->exhausted) {
         f->exhausted = 1;
-        if (g_finalizer_escalation != ASX_FINALIZER_SOFT) {
+        if (finalizer_escalation_of(k) != ASX_FINALIZER_SOFT) {
             (void)asx_runtime_log_write(ASX_LOG_WARN, "async finalizer ran past its budget");
         }
     }
-    if (spent && g_finalizer_escalation == ASX_FINALIZER_BOUNDED_PANIC) {
+    if (spent && finalizer_escalation_of(k) == ASX_FINALIZER_BOUNDED_PANIC) {
         return asx_task_panic(self, "async finalizer exceeded its budget");
     }
     f->polls++;
@@ -617,9 +630,9 @@ uint32_t asx_region_admit_finalizers_internal(asx_kernel *k) {
     uint32_t admitted = 0u;
     uint32_t i;
 
-    for (i = 0; i < g_finalizing_count; i++) {
-        ASX_CHECKPOINT_WAIVER("bounded: g_finalizing_count <= ASX_MAX_REGIONS");
-        asx_region_slot *r = &k->regions[g_finalizing[i]];
+    for (i = 0; i < k->finalizing_count; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: k->finalizing_count <= ASX_MAX_REGIONS");
+        asx_region_slot *r = &k->regions[k->finalizing[i]];
         asx_cleanup_poll_fn poll = NULL;
         void *data = NULL;
         asx_budget budget;
@@ -634,18 +647,18 @@ uint32_t asx_region_admit_finalizers_internal(asx_kernel *k) {
         /* finalizer_budget().with_deadline(now + FINALIZER_TIME_BUDGET_NANOS)
          * (state.rs:8878-8881): the poll quota, priority 128, the deadline. */
         now = asx_cancel_now_internal();
-        budget = asx_budget_from_polls(g_finalizer_poll_budget);
-        budget.deadline = g_finalizer_time_budget_ns > UINT64_MAX - now
+        budget = asx_budget_from_polls(finalizer_poll_budget_of(k));
+        budget.deadline = finalizer_time_budget_ns_of(k) > UINT64_MAX - now
                               ? UINT64_MAX
-                              : now + g_finalizer_time_budget_ns;
+                              : now + finalizer_time_budget_ns_of(k);
         r->finalizer.active = 1;
         r->finalizer.poll = poll;
         r->finalizer.data = data;
         r->finalizer.polls = 0u;
-        r->finalizer.poll_budget = g_finalizer_poll_budget;
+        r->finalizer.poll_budget = finalizer_poll_budget_of(k);
         r->finalizer.deadline = budget.deadline;
         r->finalizer.exhausted = 0;
-        st = asx_task_spawn_finalizer_internal(asx_region_handle_for_slot(k, g_finalizing[i]),
+        st = asx_task_spawn_finalizer_internal(asx_region_handle_for_slot(k, k->finalizing[i]),
                                                asx_finalizer_task_poll, r, &budget, &tid);
         if (st != ASX_OK) {
             /* Rust keeps the barrier and re-queues the finalizer when its

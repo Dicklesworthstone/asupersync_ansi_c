@@ -47,62 +47,10 @@
 #include <asx/time/timer_wheel.h>
 #include <string.h>
 
-/* -------------------------------------------------------------------
- * Global arenas (walking skeleton: fixed-size, no dynamic allocation)
- * ------------------------------------------------------------------- */
+/* The arenas and the lifecycle state they carry are the kernel's
+ * (runtime_internal.h): fixed-size, no dynamic allocation. */
 
-asx_region_slot *g_regions = g_kernel_static.regions;
-uint32_t g_region_count;
-uint32_t g_region_live;
-
-asx_task_slot *g_tasks = g_kernel_static.tasks;
-uint32_t g_task_count;
-uint32_t g_task_live;
-
-asx_obligation_slot *g_obligations = g_kernel_static.obligations;
-uint32_t g_obligation_count;
-uint32_t g_obligation_live;
-
-/* LIFO free lists of released slots (ASX_SLOT_NONE when empty). Reuse
- * order depends only on the release sequence, so replay is stable. */
-static uint32_t g_task_free_head = ASX_SLOT_NONE;
-static uint32_t g_obligation_free_head = ASX_SLOT_NONE;
-
-/* Rust's obligation mailbox (bd-2fga): under lab dispatch a Cx's
- * obligation operations made inside a poll are posts, applied in order
- * when the poll returns (lab/runtime.rs:4797-4808). */
-typedef enum {
-    OB_POST_RESERVE = 1,
-    OB_POST_COMMIT = 2,
-    OB_POST_ABORT = 3,
-    OB_POST_LEAK = 4,
-    OB_POST_HANDOFF = 5
-} ob_post_kind;
-
-typedef struct {
-    uint8_t kind;
-    uint32_t idx;
-    uint16_t generation;
-    asx_obligation_info reservation;
-    asx_trace_handoff handoff;
-} ob_post;
-
-/* A reservation and one resolution per slot. */
-#define OB_POST_CAP (2u * (uint32_t)(ASX_MAX_OBLIGATIONS))
-static ob_post g_ob_posts[OB_POST_CAP];
-static uint32_t g_ob_post_n;
-
-/* Obligation leak policy (runtime config) and cumulative leak count. */
-static asx_leak_response g_leak_response = ASX_LEAK_PANIC;
-static asx_leak_escalation_config g_leak_escalation;
-static int g_leak_escalation_set = 0;
-static uint64_t g_leak_count = 0;
-
-/* Opt-in hard cleanup bound (runtime config); off is Rust's semantics. */
-static int g_cleanup_hard_bound = 0;
-static uint64_t g_member_seq = 0;
-
-uint64_t asx_task_next_member_seq_internal(void) { return ++g_member_seq; }
+uint64_t asx_task_next_member_seq_internal(asx_kernel *k) { return ++k->member_seq; }
 
 /* -------------------------------------------------------------------
  * Reset (test support)
@@ -126,8 +74,8 @@ void asx_runtime_clear_internal(asx_kernel *k) {
         k->regions[i].budget = asx_budget_infinite();
         k->regions[i].capture_used = 0;
     }
-    g_region_count = 0;
-    g_region_live = 0;
+    k->region_count = 0;
+    k->region_live = 0;
     for (i = 0; i < ASX_MAX_TASKS; i++) {
         k->tasks[i].state = ASX_TASK_CREATED;
         k->tasks[i].region = ASX_INVALID_ID;
@@ -154,9 +102,9 @@ void asx_runtime_clear_internal(asx_kernel *k) {
         asx_task_sched_init_internal(&k->tasks[i]);
         memset(&k->tasks[i].cancel_reason, 0, sizeof(k->tasks[i].cancel_reason));
     }
-    g_task_count = 0;
-    g_task_live = 0;
-    g_task_free_head = ASX_SLOT_NONE;
+    k->task_count = 0;
+    k->task_live = 0;
+    k->task_free_head = 0u;
     for (i = 0; i < ASX_MAX_OBLIGATIONS; i++) {
         k->obligations[i].state = ASX_OBLIGATION_RESERVED;
         k->obligations[i].region = ASX_INVALID_ID;
@@ -175,17 +123,17 @@ void asx_runtime_clear_internal(asx_kernel *k) {
         k->obligations[i].checked = 0;
         k->obligations[i].posts = 0;
     }
-    g_obligation_count = 0;
-    g_obligation_live = 0;
-    g_obligation_free_head = ASX_SLOT_NONE;
-    g_ob_post_n = 0;
-    g_leak_response = ASX_LEAK_PANIC;
-    g_leak_escalation_set = 0;
-    g_leak_count = 0;
-    g_cleanup_hard_bound = 0;
-    g_member_seq = 0;
+    k->obligation_count = 0;
+    k->obligation_live = 0;
+    k->obligation_free_head = 0u;
+    k->ob_post_n = 0;
+    k->leak_response = ASX_LEAK_PANIC;
+    k->leak_escalation_set = 0;
+    k->leak_count = 0;
+    k->cleanup_hard_bound = 0;
+    k->member_seq = 0;
     asx_cancel_chain_limits_reset_internal();
-    asx_region_finalizers_reset_internal();
+    asx_region_finalizers_reset_internal(k);
     /* Reset ghost safety monitors */
     asx_ghost_reset();
     asx_scheduler_event_reset();
@@ -345,9 +293,9 @@ static void asx_task_slot_release(asx_kernel *k, uint32_t idx) {
     t->user_data = NULL;
     t->region = ASX_INVALID_ID;
     t->cancel_pending = 0;
-    t->next_free = g_task_free_head;
-    g_task_free_head = idx;
-    if (g_task_live > 0u) g_task_live--;
+    t->next_free = k->task_free_head == 0u ? ASX_SLOT_NONE : k->task_free_head - 1u;
+    k->task_free_head = idx + 1u;
+    if (k->task_live > 0u) k->task_live--;
 }
 
 /* Resolve a holder handle to its live task slot (NULL if gone). */
@@ -389,9 +337,9 @@ static void asx_obligation_slot_release(asx_kernel *k, uint32_t idx) {
     o->alive = 0;
     o->generation++;
     o->region = ASX_INVALID_ID;
-    o->next_free = g_obligation_free_head;
-    g_obligation_free_head = idx;
-    if (g_obligation_live > 0u) g_obligation_live--;
+    o->next_free = k->obligation_free_head == 0u ? ASX_SLOT_NONE : k->obligation_free_head - 1u;
+    k->obligation_free_head = idx + 1u;
+    if (k->obligation_live > 0u) k->obligation_live--;
 }
 
 /* A region's records are reclaimable once the region is CLOSED or its
@@ -408,8 +356,8 @@ static uint32_t asx_task_reclaim_closed(asx_kernel *k) {
     uint32_t i;
     uint32_t freed = 0;
 
-    for (i = g_task_count; i > 0u; i--) {
-        ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= ASX_MAX_TASKS");
+    for (i = k->task_count; i > 0u; i--) {
+        ASX_CHECKPOINT_WAIVER("bounded: k->task_count <= ASX_MAX_TASKS");
         asx_task_slot *t = &k->tasks[i - 1u];
         if (!t->alive || !asx_task_is_terminal(t->state)) continue;
         if (!asx_region_records_reclaimable(t->region)) continue;
@@ -427,8 +375,8 @@ static uint32_t asx_obligation_reclaim_resolved(asx_kernel *k) {
     uint32_t i;
     uint32_t freed = 0;
 
-    for (i = g_obligation_count; i > 0u; i--) {
-        ASX_CHECKPOINT_WAIVER("bounded: g_obligation_count <= ASX_MAX_OBLIGATIONS");
+    for (i = k->obligation_count; i > 0u; i--) {
+        ASX_CHECKPOINT_WAIVER("bounded: k->obligation_count <= ASX_MAX_OBLIGATIONS");
         asx_obligation_slot *o = &k->obligations[i - 1u];
         /* A slot a pending post names stays until the post is applied. */
         if (!o->alive || o->state == ASX_OBLIGATION_RESERVED || o->posts > 0u) continue;
@@ -439,36 +387,39 @@ static uint32_t asx_obligation_reclaim_resolved(asx_kernel *k) {
 }
 
 static asx_status asx_task_slot_alloc(asx_kernel *k, uint32_t *out_idx) {
-    if (g_task_free_head == ASX_SLOT_NONE && g_task_count >= ASX_MAX_TASKS) {
+    if (k->task_free_head == 0u && k->task_count >= ASX_MAX_TASKS) {
         (void)asx_task_reclaim_closed(k);
     }
-    if (g_task_free_head != ASX_SLOT_NONE) {
-        *out_idx = g_task_free_head;
-        g_task_free_head = k->tasks[*out_idx].next_free;
-    } else if (g_task_count < ASX_MAX_TASKS) {
-        *out_idx = g_task_count++;
+    if (k->task_free_head != 0u) {
+        *out_idx = k->task_free_head - 1u;
+        k->task_free_head =
+            k->tasks[*out_idx].next_free == ASX_SLOT_NONE ? 0u : k->tasks[*out_idx].next_free + 1u;
+    } else if (k->task_count < ASX_MAX_TASKS) {
+        *out_idx = k->task_count++;
     } else {
         return ASX_E_RESOURCE_EXHAUSTED;
     }
     k->tasks[*out_idx].next_free = ASX_SLOT_NONE;
-    g_task_live++;
+    k->task_live++;
     return ASX_OK;
 }
 
 static asx_status asx_obligation_slot_alloc(asx_kernel *k, uint32_t *out_idx) {
-    if (g_obligation_free_head == ASX_SLOT_NONE && g_obligation_count >= ASX_MAX_OBLIGATIONS) {
+    if (k->obligation_free_head == 0u && k->obligation_count >= ASX_MAX_OBLIGATIONS) {
         (void)asx_obligation_reclaim_resolved(k);
     }
-    if (g_obligation_free_head != ASX_SLOT_NONE) {
-        *out_idx = g_obligation_free_head;
-        g_obligation_free_head = k->obligations[*out_idx].next_free;
-    } else if (g_obligation_count < ASX_MAX_OBLIGATIONS) {
-        *out_idx = g_obligation_count++;
+    if (k->obligation_free_head != 0u) {
+        *out_idx = k->obligation_free_head - 1u;
+        k->obligation_free_head = k->obligations[*out_idx].next_free == ASX_SLOT_NONE
+                                      ? 0u
+                                      : k->obligations[*out_idx].next_free + 1u;
+    } else if (k->obligation_count < ASX_MAX_OBLIGATIONS) {
+        *out_idx = k->obligation_count++;
     } else {
         return ASX_E_RESOURCE_EXHAUSTED;
     }
     k->obligations[*out_idx].next_free = ASX_SLOT_NONE;
-    g_obligation_live++;
+    k->obligation_live++;
     return ASX_OK;
 }
 
@@ -478,14 +429,14 @@ static void asx_region_release_records(asx_kernel *k, asx_region_id region) {
     uint32_t i;
     uint32_t key = asx_handle_index(region); /* slot + generation */
 
-    for (i = g_task_count; i > 0u; i--) {
-        ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= ASX_MAX_TASKS");
+    for (i = k->task_count; i > 0u; i--) {
+        ASX_CHECKPOINT_WAIVER("bounded: k->task_count <= ASX_MAX_TASKS");
         if (k->tasks[i - 1u].alive && asx_handle_index(k->tasks[i - 1u].region) == key) {
             asx_task_slot_release(k, i - 1u);
         }
     }
-    for (i = g_obligation_count; i > 0u; i--) {
-        ASX_CHECKPOINT_WAIVER("bounded: g_obligation_count <= ASX_MAX_OBLIGATIONS");
+    for (i = k->obligation_count; i > 0u; i--) {
+        ASX_CHECKPOINT_WAIVER("bounded: k->obligation_count <= ASX_MAX_OBLIGATIONS");
         if (k->obligations[i - 1u].alive &&
             asx_handle_index(k->obligations[i - 1u].region) == key) {
             asx_obligation_slot_release(k, i - 1u);
@@ -493,22 +444,25 @@ static void asx_region_release_records(asx_kernel *k, asx_region_id region) {
     }
 }
 
-void asx_runtime_set_leak_policy_internal(asx_leak_response response,
+void asx_runtime_set_leak_policy_internal(asx_kernel *k, asx_leak_response response,
                                           const asx_leak_escalation_config *escalation) {
-    g_leak_response = response;
+    k->leak_response = response;
     if (escalation != NULL) {
-        g_leak_escalation = *escalation;
-        g_leak_escalation_set = 1;
+        k->leak_escalation = *escalation;
+        k->leak_escalation_set = 1;
     } else {
-        g_leak_escalation_set = 0;
+        k->leak_escalation_set = 0;
     }
 }
 
-uint64_t asx_obligation_leak_count(void) { return g_leak_count; }
+/* handle-less: kernel 0 until the query takes its runtime */
+uint64_t asx_obligation_leak_count(void) { return g_kernels[0]->leak_count; }
 
-void asx_runtime_set_cleanup_hard_bound_internal(int on) { g_cleanup_hard_bound = on ? 1 : 0; }
+void asx_runtime_set_cleanup_hard_bound_internal(asx_kernel *k, int on) {
+    k->cleanup_hard_bound = on ? 1 : 0;
+}
 
-int asx_cleanup_hard_bound_internal(void) { return g_cleanup_hard_bound; }
+int asx_cleanup_hard_bound_internal(const asx_kernel *k) { return k->cleanup_hard_bound; }
 
 void asx_task_apply_cleanup_budget_internal(asx_task_slot *t) {
     if (t->cleanup_applied || t->state != ASX_TASK_CANCELLING) return;
@@ -521,12 +475,12 @@ void asx_task_apply_cleanup_budget_internal(asx_task_slot *t) {
  * cumulative count reaches the threshold (handle_obligation_leaks,
  * runtime/state.rs:5711-5717). A threshold of 0 therefore acts as 1, as
  * LeakEscalation::new makes it (runtime/config.rs:1354). */
-static asx_leak_response obligation_leak_batch_policy(uint64_t n) {
-    g_leak_count = n > UINT64_MAX - g_leak_count ? UINT64_MAX : g_leak_count + n;
-    if (g_leak_escalation_set && g_leak_count >= g_leak_escalation.threshold) {
-        return g_leak_escalation.escalate_to;
+static asx_leak_response obligation_leak_batch_policy(asx_kernel *k, uint64_t n) {
+    k->leak_count = n > UINT64_MAX - k->leak_count ? UINT64_MAX : k->leak_count + n;
+    if (k->leak_escalation_set && k->leak_count >= k->leak_escalation.threshold) {
+        return k->leak_escalation.escalate_to;
     }
-    return g_leak_response;
+    return k->leak_response;
 }
 
 /* The runtime's clock, read without the side effects of
@@ -599,7 +553,7 @@ static int obligation_leak_apply(asx_kernel *k, uint32_t idx, asx_leak_response 
  * one; LOG warns with `log_message`. Returns 1 when the policy (PANIC)
  * demands fail-fast containment. */
 static int obligation_leak_slot(asx_kernel *k, uint32_t idx, const char *log_message) {
-    asx_leak_response policy = obligation_leak_batch_policy(1u);
+    asx_leak_response policy = obligation_leak_batch_policy(k, 1u);
     int fail_fast = obligation_leak_apply(k, idx, policy);
     if (policy == ASX_LEAK_LOG) (void)asx_runtime_log_write(ASX_LOG_WARN, log_message);
     return fail_fast;
@@ -665,13 +619,11 @@ uint32_t asx_task_resolve_held_obligations_internal(asx_task_slot *task, int *ou
     return leaks;
 }
 
-/* Fault raised during completion bookkeeping (PANIC leak policy) that the
- * scheduler must report, mirroring a failing poll under FAIL_FAST. */
-static asx_status g_pending_fault = ASX_OK;
-
-asx_status asx_runtime_take_pending_fault_internal(void) {
-    asx_status st = g_pending_fault;
-    g_pending_fault = ASX_OK;
+/* The fault raised during completion bookkeeping (PANIC leak policy) that
+ * the scheduler must report, mirroring a failing poll under FAIL_FAST. */
+asx_status asx_runtime_take_pending_fault_internal(asx_kernel *k) {
+    asx_status st = k->pending_fault;
+    k->pending_fault = ASX_OK;
     return st;
 }
 
@@ -688,17 +640,17 @@ asx_status asx_region_audit_leaks_internal(asx_region_id region) {
      * one leak batch (collect_obligation_leaks, then handle_obligation_leaks
      * with no task): counted together, one response for all of them,
      * logged once under LOG (state.rs:5711-5760). */
-    for (i = 0; i < g_obligation_count; i++) {
-        ASX_CHECKPOINT_WAIVER("bounded: g_obligation_count <= ASX_MAX_OBLIGATIONS");
+    for (i = 0; i < k->obligation_count; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: k->obligation_count <= ASX_MAX_OBLIGATIONS");
         if (k->obligations[i].alive && k->obligations[i].region == region &&
             k->obligations[i].state == ASX_OBLIGATION_RESERVED) {
             n++;
         }
     }
     if (n == 0u) return ASX_OK;
-    policy = obligation_leak_batch_policy(n);
-    for (i = 0; i < g_obligation_count; i++) {
-        ASX_CHECKPOINT_WAIVER("bounded: g_obligation_count <= ASX_MAX_OBLIGATIONS");
+    policy = obligation_leak_batch_policy(k, n);
+    for (i = 0; i < k->obligation_count; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: k->obligation_count <= ASX_MAX_OBLIGATIONS");
         if (k->obligations[i].alive && k->obligations[i].region == region &&
             k->obligations[i].state == ASX_OBLIGATION_RESERVED &&
             obligation_leak_apply(k, i, policy)) {
@@ -716,7 +668,7 @@ asx_status asx_region_audit_leaks_internal(asx_region_id region) {
     {
         asx_status fc = asx_region_contain_fault(region, ASX_E_UNRESOLVED_OBLIGATIONS);
         if (fc != ASX_OK && asx_containment_policy_active() != ASX_CONTAIN_POISON_REGION) {
-            g_pending_fault = fc;
+            k->pending_fault = fc;
         }
     }
     return ASX_E_UNRESOLVED_OBLIGATIONS;
@@ -740,7 +692,7 @@ void asx_task_on_complete_internal(asx_task_slot *task, asx_region_slot *region)
             /* PANIC: route the leak through the region's containment policy. */
             asx_status fc = asx_region_contain_fault(task->region, ASX_E_UNRESOLVED_OBLIGATIONS);
             if (fc != ASX_OK && asx_containment_policy_active() != ASX_CONTAIN_POISON_REGION) {
-                g_pending_fault = fc;
+                k->pending_fault = fc;
             }
         }
     }
@@ -856,8 +808,8 @@ uint32_t asx_region_subtree_internal(asx_region_id root, uint32_t *out_slots, ui
 #ifndef ASX_DEBUG_QUARANTINE
 static int region_has_task_records(const asx_kernel *k, uint32_t idx) {
     uint32_t i;
-    for (i = 0; i < g_task_count; i++) {
-        ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= ASX_MAX_TASKS");
+    for (i = 0; i < k->task_count; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: k->task_count <= ASX_MAX_TASKS");
         if (k->tasks[i].alive && asx_handle_slot(k->tasks[i].region) == idx &&
             asx_handle_generation(k->tasks[i].region) == k->regions[idx].generation) {
             return 1;
@@ -934,7 +886,7 @@ static asx_status region_open_with_parent(asx_kernel *k, asx_region_id parent,
                                asx_handle_pack_index(k->regions[idx].generation, (uint16_t)idx)));
         k->regions[idx].generation++;
     } else {
-        g_region_live++;
+        k->region_live++;
     }
 
     k->regions[idx].state = ASX_REGION_OPEN;
@@ -967,7 +919,7 @@ static asx_status region_open_with_parent(asx_kernel *k, asx_region_id parent,
     k->regions[idx].cancel_reason.cause = NULL;
     k->regions[idx].cancel_reason.truncated = 0;
 
-    if (idx >= g_region_count) { g_region_count = idx + 1; }
+    if (idx >= k->region_count) { k->region_count = idx + 1; }
 
     *out_id = asx_handle_mint(k, ASX_TYPE_REGION, (uint16_t)(1u << (unsigned)ASX_REGION_OPEN),
                               asx_handle_pack_index(k->regions[idx].generation, (uint16_t)idx));
@@ -1423,7 +1375,7 @@ static asx_status task_spawn_impl(asx_region_id region, asx_task_poll_fn poll_fn
     k->tasks[idx].cancel_epoch = 0;
     k->tasks[idx].cleanup_budget = asx_budget_infinite();
     k->tasks[idx].cleanup_applied = 0;
-    k->tasks[idx].member_seq = asx_task_next_member_seq_internal();
+    k->tasks[idx].member_seq = asx_task_next_member_seq_internal(k);
     k->tasks[idx].cleanup_polls_remaining = 0;
     k->tasks[idx].cancel_unmaterialized = 0;
     k->tasks[idx].cx_reason_ahead = 0;
@@ -1716,8 +1668,8 @@ asx_status asx_obligation_slot_lookup(asx_obligation_id id, asx_obligation_slot 
 static uint32_t region_pending_obligations(const asx_kernel *k, asx_region_id region) {
     uint32_t i;
     uint32_t n = 0;
-    for (i = 0; i < g_obligation_count; i++) {
-        ASX_CHECKPOINT_WAIVER("bounded: g_obligation_count <= ASX_MAX_OBLIGATIONS");
+    for (i = 0; i < k->obligation_count; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: k->obligation_count <= ASX_MAX_OBLIGATIONS");
         if (k->obligations[i].alive && k->obligations[i].counted &&
             asx_handle_index(k->obligations[i].region) == asx_handle_index(region)) {
             n++;
@@ -1774,24 +1726,24 @@ static void obligation_apply_leak(asx_kernel *k, uint32_t idx) {
         asx_status fc =
             asx_region_contain_fault(k->obligations[idx].region, ASX_E_UNRESOLVED_OBLIGATIONS);
         if (fc != ASX_OK && asx_containment_policy_active() != ASX_CONTAIN_POISON_REGION) {
-            g_pending_fault = fc;
+            k->pending_fault = fc;
         }
     }
 }
 
 /* Queue a post; a full queue is drained first, keeping the order. */
 static void obligation_post(asx_kernel *k, ob_post_kind kind, uint32_t idx) {
-    if (g_ob_post_n >= OB_POST_CAP) asx_obligation_drain_posts_internal(k);
-    g_ob_posts[g_ob_post_n].kind = (uint8_t)kind;
-    g_ob_posts[g_ob_post_n].idx = idx;
-    g_ob_posts[g_ob_post_n].generation = k->obligations[idx].generation;
-    g_ob_posts[g_ob_post_n].reservation.state = k->obligations[idx].state;
-    g_ob_posts[g_ob_post_n].reservation.kind = k->obligations[idx].kind;
-    g_ob_posts[g_ob_post_n].reservation.region = k->obligations[idx].region;
-    g_ob_posts[g_ob_post_n].reservation.holder = k->obligations[idx].holder;
-    g_ob_posts[g_ob_post_n].reservation.abort_reason = k->obligations[idx].abort_reason;
-    g_ob_posts[g_ob_post_n].reservation.held_ns = 0u;
-    g_ob_post_n++;
+    if (k->ob_post_n >= OB_POST_CAP) asx_obligation_drain_posts_internal(k);
+    k->ob_posts[k->ob_post_n].kind = (uint8_t)kind;
+    k->ob_posts[k->ob_post_n].idx = idx;
+    k->ob_posts[k->ob_post_n].generation = k->obligations[idx].generation;
+    k->ob_posts[k->ob_post_n].reservation.state = k->obligations[idx].state;
+    k->ob_posts[k->ob_post_n].reservation.kind = k->obligations[idx].kind;
+    k->ob_posts[k->ob_post_n].reservation.region = k->obligations[idx].region;
+    k->ob_posts[k->ob_post_n].reservation.holder = k->obligations[idx].holder;
+    k->ob_posts[k->ob_post_n].reservation.abort_reason = k->obligations[idx].abort_reason;
+    k->ob_posts[k->ob_post_n].reservation.held_ns = 0u;
+    k->ob_post_n++;
     k->obligations[idx].posts++;
 }
 
@@ -1801,11 +1753,11 @@ static void obligation_post(asx_kernel *k, ob_post_kind kind, uint32_t idx) {
  * untracked. A permit's resolution releases its count now. */
 void asx_obligation_drain_posts_internal(asx_kernel *k) {
     uint32_t i;
-    uint32_t n = g_ob_post_n;
-    g_ob_post_n = 0;
+    uint32_t n = k->ob_post_n;
+    k->ob_post_n = 0;
     for (i = 0; i < n; i++) {
         ASX_CHECKPOINT_WAIVER("bounded: n <= OB_POST_CAP");
-        const ob_post *p = &g_ob_posts[i];
+        const ob_post *p = &k->ob_posts[i];
         asx_obligation_slot *o = &k->obligations[p->idx];
         if (!o->alive || o->generation != p->generation) continue; /* refused */
         if (o->posts > 0u) o->posts--;
@@ -2224,7 +2176,7 @@ asx_status asx_obligation_handoff(asx_obligation_id id, asx_task_id destination)
     payload.handoff = &handoff;
     if (obligation_posting()) {
         obligation_post(k, OB_POST_HANDOFF, idx);
-        g_ob_posts[g_ob_post_n - 1u].handoff = handoff;
+        k->ob_posts[k->ob_post_n - 1u].handoff = handoff;
     } else {
         asx_trace_emit_payload_internal(ASX_TRACE_OBLIGATION_HANDOFF, id, destination, &payload);
     }

@@ -2150,7 +2150,7 @@ TEST(holder_completing_with_obligation_reserved_leaks_it_before_region_close) {
     asx_runtime_reset();
     /* LOG named: under the default PANIC the leak also fails the holder's
      * completion. */
-    asx_runtime_set_leak_policy_internal(ASX_LEAK_LOG, NULL);
+    asx_runtime_set_leak_policy_internal(g_kernels[0], ASX_LEAK_LOG, NULL);
     memset(&ctx, 0, sizeof(ctx));
     ASSERT_EQ(asx_region_open(&ctx.region), ASX_OK);
     obligation_holder_init(&holder, ctx.region, HOLDER_LEAKS, 0);

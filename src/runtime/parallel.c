@@ -132,7 +132,7 @@ static asx_time parallel_timed_deadline(const asx_task_slot *t, uint16_t slot_id
  * polls: the task completes without another poll (see the run loop; Rust
  * never force-completes, scheduler.c). */
 static int parallel_cleanup_bound_spent(const asx_task_slot *t) {
-    return asx_cleanup_hard_bound_internal() && t->cancel_pending &&
+    return asx_cleanup_hard_bound_internal(asx_kernel_of(t->region)) && t->cancel_pending &&
            (t->state == ASX_TASK_CANCELLING || t->state == ASX_TASK_CANCEL_REQUESTED ||
             t->cancel_unmaterialized) &&
            t->cleanup_polls_remaining == 0;
@@ -1235,7 +1235,8 @@ static asx_status parallel_run_impl(asx_region_id region, asx_budget *budget) {
         /* Clear lanes first */
         for (i = 0; i < ASX_MAX_LANES; i++) { g_lanes[i].count = 0; }
         /* Scan task arena and assign to lanes */
-        for (i = 0; i < g_task_count; i++) { /* ASX_CHECKPOINT_WAIVER("bounded by ASX_MAX_TASKS") */
+        for (i = 0; i < k->task_count;
+             i++) { /* ASX_CHECKPOINT_WAIVER("bounded by ASX_MAX_TASKS") */
             asx_task_slot *t = &k->tasks[i];
             asx_task_id tid;
             asx_lane_class lc;
@@ -1636,7 +1637,7 @@ static asx_status parallel_run_impl(asx_region_id region, asx_budget *budget) {
                 }
 
                 /* PENDING — still active (the hard bound's counter) */
-                if (asx_cleanup_hard_bound_internal() && t->cancel_pending &&
+                if (asx_cleanup_hard_bound_internal(k) && t->cancel_pending &&
                     t->cleanup_polls_remaining > 0) {
                     t->cleanup_polls_remaining--;
                 }

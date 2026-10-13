@@ -411,7 +411,7 @@ TEST(ghost_integration_lifecycle_obligation_leak_on_drain) {
     asx_budget budget;
     asx_runtime_reset();
     /* LOG named: under the default PANIC the leak is a fault instead. */
-    asx_runtime_set_leak_policy_internal(ASX_LEAK_LOG, NULL);
+    asx_runtime_set_leak_policy_internal(g_kernels[0], ASX_LEAK_LOG, NULL);
 
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
     /* An obligation always has a live holder, so this one leaks when the

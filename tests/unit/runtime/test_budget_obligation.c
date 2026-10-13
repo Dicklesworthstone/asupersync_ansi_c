@@ -1988,7 +1988,8 @@ TEST(region_close_leak_audit_under_panic_fails_before_closing) {
     ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)1u);
     if (asx_containment_policy_active() != ASX_CONTAIN_POISON_REGION) {
         /* The fault the audit raised is the scheduler's to report once. */
-        ASSERT_EQ(asx_runtime_take_pending_fault_internal(), ASX_E_UNRESOLVED_OBLIGATIONS);
+        ASSERT_EQ(asx_runtime_take_pending_fault_internal(g_kernels[0]),
+                  ASX_E_UNRESOLVED_OBLIGATIONS);
         run = asx_budget_infinite();
         ASSERT_EQ(asx_region_drain(r, &run), ASX_OK);
         ASSERT_EQ(asx_region_get_state(r, &rs), ASX_OK);

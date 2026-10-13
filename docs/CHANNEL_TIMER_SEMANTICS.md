@@ -146,7 +146,7 @@ Drop for SendPermit: if !self.sent { release_capacity(); obligation.abort(Cancel
 
 **Rust source:** `mpsc.rs:1663-1673`
 
-**C status:** implemented for tracked permits at holder-task completion. Reserve attaches the physical permit's drop to its obligation (`src/channel/mpsc.c:1049-1056`); completion invokes `obligation_drop_permit` (`src/runtime/lifecycle.c:613-623`), which returns the channel slot through `channel_permit_drop` (`src/channel/mpsc.c:861-874`) and aborts the obligation with `Cancel`. C has no lexical destructors or permit cleanup-stack registration: an untracked permit has no holder and stays reserved until it is sent or aborted. The conformance interpreter also explicitly drops its body's permits with `Cancel` (`drop_send_permit`, `src/conformance/interpreter.c:1150`). This source evidence adds no Rust drop fixture coverage.
+**C status:** implemented for tracked permits at holder-task completion. Reserve attaches the physical permit's drop to its obligation (`src/channel/mpsc.c:1049-1056`); completion invokes `obligation_drop_permit` (`src/runtime/lifecycle.c:567-577`), which returns the channel slot through `channel_permit_drop` (`src/channel/mpsc.c:861-874`) and aborts the obligation with `Cancel`. C has no lexical destructors or permit cleanup-stack registration: an untracked permit has no holder and stays reserved until it is sent or aborted. The conformance interpreter also explicitly drops its body's permits with `Cancel` (`drop_send_permit`, `src/conformance/interpreter.c:1150`). This source evidence adds no Rust drop fixture coverage.
 
 ### 1.4 Backpressure and Waiter Queue
 
@@ -245,7 +245,7 @@ try_recv() -> Result<T, RecvError>
 
 **C status:** implemented. `channel_wait_cancelled` (`src/channel/mpsc.c:1253-1260`) checks `asx_cx_checkpoint`, records the trace message `mpsc::reserve cancelled`, `mpsc::recv cancelled` or `mpsc::recv_many cancelled`, and withdraws the task from all three wait queues, passing any wake it held on (`asx_channel_wait_cancel`, `mpsc.c:1229-1243`). Cancellation observation requires no capability flag: the checkpoint observes the identified task's pending cancel before budget consumption (`src/cx/cx.c:416-435`); masking defers delivery but does not hide a recorded request from `asx_cx_is_cancel_requested` (`src/cx/cx.c:402-413`). Permit send and abort authenticate their physical binding without a cancellation checkpoint (`mpsc.c:886-982`). Unit tests: `test_channel_wake.c` `cancelled_waiter_does_not_absorb_wake`, `test_mpsc.c` `cancelled_cx_wins_over_ready_channel_and_traces`. Rust parity: `mpsc-recv-cancel-first-001`. Reserve cancellation has no v2 fixture.
 
-`asx_task_masked` (`src/runtime/cancellation.c:759`) adds a synchronous callback
+`asx_task_masked` (`src/runtime/cancellation.c:761`) adds a synchronous callback
 guard for a task's cancellation mask. It releases its level when the callback
 returns, including a channel poll returning `ASX_E_PENDING` or an error, and
 returns the body's status unless release fails; it does
@@ -272,7 +272,7 @@ The `session` module wraps the base channel with an `ObligationToken` per permit
 
 **C status:** `TrackedSender`/`TrackedPermit` and the leak panic: spec (Rust) — not implemented in C (`src/channel/session.c` is a different, bidirectional session channel; `include/asx/core/session.h:1-14`). The base-permit obligation is implemented: `asx_send_permit` has an `obligation` field (`include/asx/core/channel.h:69-83`), registered by `asx_channel_reserve` (`src/channel/mpsc.c:1262-1286`), committed on send (`:943`), aborted `Explicit` on abort (`:984-986`) and `Error` on disconnect (`:920`). Rust parity: `mpsc-two-phase-send-recv-001` (its trace records `obligation.reserved` and `obligation.committed` of kind `SendPermit` for both sends).
 
-Typed permit settlement authenticates the channel/token binding through `asx_obligation_check_token_internal` (`src/runtime/lifecycle.c:2035-2055`) and resolves through `asx_obligation_resolve_token_internal` (`src/runtime/lifecycle.c:2057-2076`), as called by `channel_permit_resolve` (`src/channel/mpsc.c:872-884`). A genuine permit may move to another task while retaining its original holder's ledger liability; a plain move does not transfer that holder or region. Raw owned-obligation IDs retain holder-poll authority checks (`asx_obligation_check_access_internal`, `src/runtime/lifecycle.c:1924-1960`); knowing an ID alone does not authenticate a physical permit. This is C source evidence, not Rust type-level or new handoff fixture coverage.
+Typed permit settlement authenticates the channel/token binding through `asx_obligation_check_token_internal` (`src/runtime/lifecycle.c:1987-2007`) and resolves through `asx_obligation_resolve_token_internal` (`src/runtime/lifecycle.c:2009-2028`), as called by `channel_permit_resolve` (`src/channel/mpsc.c:872-884`). A genuine permit may move to another task while retaining its original holder's ledger liability; a plain move does not transfer that holder or region. Raw owned-obligation IDs retain holder-poll authority checks (`asx_obligation_check_access_internal`, `src/runtime/lifecycle.c:1924-1960`); knowing an ID alone does not authenticate a physical permit. This is C source evidence, not Rust type-level or new handoff fixture coverage.
 
 ### 1.10 Close/Drain Semantics
 

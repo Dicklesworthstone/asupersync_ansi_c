@@ -456,9 +456,9 @@ void asx_region_wake_close_waiters_internal(asx_region_id id) {
     asx_kernel *k = asx_kernel_of(id);
     uint32_t i;
     if (k == NULL) return;
-    for (i = 0; i < g_task_count; i++) {
+    for (i = 0; i < k->task_count; i++) {
         asx_task_slot *t = &k->tasks[i];
-        ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= ASX_MAX_TASKS");
+        ASX_CHECKPOINT_WAIVER("bounded: k->task_count <= ASX_MAX_TASKS");
         if (t->alive && t->region_wait == ASX_REGION_WAIT_CLOSE && t->region_wait_region == id) {
             /* Lab dispatch: through the first waker the wait registered. */
             if (asx_lab_dispatch_active() && !asx_task_is_terminal(t->state)) {
@@ -761,7 +761,7 @@ static asx_status sched_complete(asx_task_slot *t, asx_task_id tid, asx_region_s
     sched_emit(ev, tid, round);
     asx_trace_emit(ASX_TRACE_SCHED_COMPLETE, (uint64_t)tid, round);
     asx_region_settle_internal(region);
-    return asx_runtime_take_pending_fault_internal();
+    return asx_runtime_take_pending_fault_internal(asx_kernel_of(region));
 }
 
 /* Enforce a task's budget before polling it: deadline -> DEADLINE cancel,
@@ -859,8 +859,8 @@ static uint32_t sched_drain_wakers(void) {
 static uint32_t sched_unpark_cancelled(asx_kernel *k, int stranded) {
     uint32_t i;
     uint32_t n = 0;
-    for (i = 0; i < g_task_count; i++) {
-        ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= ASX_MAX_TASKS");
+    for (i = 0; i < k->task_count; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: k->task_count <= ASX_MAX_TASKS");
         asx_task_slot *t = &k->tasks[i];
         if (!t->alive || !t->parked || !t->cancel_pending) continue;
         if (sched_scope_region(k, t) == NULL) continue;
@@ -921,8 +921,8 @@ static void sched_block(uint32_t timeout_ms) {
  * caller's next advance (fuzz finding gen-1-38, bd-ij9w). */
 static int sched_any_runnable(asx_kernel *k) {
     uint32_t i;
-    for (i = 0; i < g_task_count; i++) {
-        ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= ASX_MAX_TASKS");
+    for (i = 0; i < k->task_count; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: k->task_count <= ASX_MAX_TASKS");
         const asx_task_slot *t = &k->tasks[i];
         if (!t->alive || t->parked || asx_task_is_terminal(t->state)) continue;
         if (sched_scope_region(k, t) != NULL) return 1;
@@ -996,7 +996,7 @@ static asx_status sched_idle(asx_kernel *k, asx_time *last_idle_now, uint32_t *s
         sched_block(sched_ms_until(run_deadline, now, ASX_SCHED_MAX_IDLE_WAIT_MS));
         (void)sched_drain_wakers();
         now = sched_now();
-    } else if (asx_cleanup_hard_bound_internal() && sched_unpark_cancelled(k, 1) > 0u) {
+    } else if (asx_cleanup_hard_bound_internal(k) && sched_unpark_cancelled(k, 1) > 0u) {
         return ASX_OK;
     } else {
         return ASX_E_WOULD_BLOCK;
@@ -1196,7 +1196,7 @@ static asx_status sched_poll_slot(asx_kernel *k, uint32_t i, asx_region_slot *rs
     /* Opt-in hard bound's counter: each poll of a cancel-phase
      * task consumes one cleanup unit. Masked polls do not
      * count: the cancel is not yet acknowledged. */
-    if (asx_cleanup_hard_bound_internal() && t->cancel_pending && t->mask_depth == 0u &&
+    if (asx_cleanup_hard_bound_internal(k) && t->cancel_pending && t->mask_depth == 0u &&
         t->cleanup_polls_remaining > 0) {
         t->cleanup_polls_remaining--;
     }
@@ -1210,8 +1210,8 @@ static asx_status sched_poll_slot(asx_kernel *k, uint32_t i, asx_region_slot *rs
 static uint32_t sched_live_tasks(const asx_kernel *k) {
     uint32_t i;
     uint32_t n = 0;
-    for (i = 0; i < g_task_count; i++) {
-        ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= ASX_MAX_TASKS");
+    for (i = 0; i < k->task_count; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: k->task_count <= ASX_MAX_TASKS");
         if (k->tasks[i].alive && !asx_task_is_terminal(k->tasks[i].state)) n++;
     }
     return n;
@@ -1408,8 +1408,8 @@ static void sweep_build(asx_kernel *k) {
         g_sweep_lo[lane] = SWEEP_PRIORITIES - 1u;
         g_sweep_hi[lane] = 0u;
     }
-    for (i = 0; i < g_task_count; i++) {
-        ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= ASX_MAX_TASKS");
+    for (i = 0; i < k->task_count; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: k->task_count <= ASX_MAX_TASKS");
         const asx_task_slot *t = &k->tasks[i];
         uint32_t prio;
 
@@ -1432,7 +1432,7 @@ static void sweep_build(asx_kernel *k) {
         if (prio < g_sweep_lo[lane]) g_sweep_lo[lane] = prio;
         if (prio > g_sweep_hi[lane]) g_sweep_hi[lane] = prio;
     }
-    g_sweep_listed = g_task_count;
+    g_sweep_listed = k->task_count;
 }
 
 typedef struct {
@@ -1483,7 +1483,8 @@ static void sweep_walk_start(sweep_walk *w) {
  * *out_cancel_lane says which lane it came from. After cancel_streak_limit
  * cancel-lane polls in a row (g_sweep_streak, counted where a poll is made)
  * a ready task goes next if there is one. */
-static int sweep_walk_next(sweep_walk *w, uint32_t *out_slot, int *out_cancel_lane) {
+static int sweep_walk_next(const asx_kernel *k, sweep_walk *w, uint32_t *out_slot,
+                           int *out_cancel_lane) {
     if (!w->in_tail) {
         if (w->next_cancel != SWEEP_NIL &&
             (g_sweep_streak < LAB_CANCEL_STREAK_LIMIT || w->next_ready == SWEEP_NIL)) {
@@ -1501,9 +1502,9 @@ static int sweep_walk_next(sweep_walk *w, uint32_t *out_slot, int *out_cancel_la
         w->in_tail = 1;
     }
     /* Tasks the snapshot did not list: spawned since, ascending. */
-    while (w->tail < g_task_count) {
+    while (w->tail < k->task_count) {
         uint32_t i = w->tail++;
-        ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= ASX_MAX_TASKS");
+        ASX_CHECKPOINT_WAIVER("bounded: k->task_count <= ASX_MAX_TASKS");
         if (i < g_sweep_listed && g_sweep_next[i] != SWEEP_UNLISTED) continue;
         *out_slot = i;
         *out_cancel_lane = 0;
@@ -1537,7 +1538,7 @@ static asx_status sched_run(asx_region_id region, asx_budget *budget, int advanc
 
     /* Reset event log for this scheduler invocation */
     asx_scheduler_event_reset();
-    (void)asx_runtime_take_pending_fault_internal(); /* drop stale faults */
+    (void)asx_runtime_take_pending_fault_internal(k); /* drop stale faults */
 
     if (asx_lab_dispatch_active()) return sched_lab_run(k, budget, advance_clock);
 
@@ -1581,9 +1582,9 @@ static asx_status sched_run(asx_region_id region, asx_budget *budget, int advanc
 
         sweep_build(k);
         sweep_walk_start(&walk);
-        while (sweep_walk_next(&walk, &i, &from_cancel_lane)) {
+        while (sweep_walk_next(k, &walk, &i, &from_cancel_lane)) {
             ASX_CHECKPOINT_WAIVER("kernel-scheduler: inner poll loop bounded by "
-                                  "g_task_count <= ASX_MAX_TASKS arena capacity");
+                                  "k->task_count <= ASX_MAX_TASKS arena capacity");
             asx_task_slot *t = &k->tasks[i];
             asx_region_slot *rslot;
             asx_task_id tid;
@@ -1616,7 +1617,7 @@ static asx_status sched_run(asx_region_id region, asx_budget *budget, int advanc
              * inside a critical section and is never interrupted. Rust never force-completes:
              * its cleanup budget only strengthens the reason once spent (record/task.rs:1340,
              * lab/runtime.rs:4663; three_lane.rs:1268-1279 keeps it advisory). */
-            if (asx_cleanup_hard_bound_internal() && t->cancel_pending && t->mask_depth == 0u &&
+            if (asx_cleanup_hard_bound_internal(k) && t->cancel_pending && t->mask_depth == 0u &&
                 (t->state == ASX_TASK_CANCELLING || t->state == ASX_TASK_CANCEL_REQUESTED ||
                  t->cancel_unmaterialized) &&
                 t->cleanup_polls_remaining == 0) {
@@ -1694,8 +1695,8 @@ static asx_status sched_run(asx_region_id region, asx_budget *budget, int advanc
  * (race-deadline-wrapper-cx-reason-001, bd-9kll.4.16). */
 static void sched_fire_budget_deadlines(asx_kernel *k, asx_time now) {
     uint32_t i;
-    for (i = 0; i < g_task_count; i++) {
-        ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= ASX_MAX_TASKS");
+    for (i = 0; i < k->task_count; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: k->task_count <= ASX_MAX_TASKS");
         asx_task_slot *t = &k->tasks[i];
         if (!t->alive || asx_task_is_terminal(t->state) || t->cancel_pending) continue;
         if (t->cleanup_only || t->budget.deadline == ASX_TIME_INFINITE) continue;

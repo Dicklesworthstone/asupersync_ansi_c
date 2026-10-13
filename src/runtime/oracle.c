@@ -33,7 +33,7 @@ static const asx_region_slot *oracle_region(const asx_kernel *k, asx_region_id i
     uint32_t slot;
     if (id == ASX_INVALID_ID) return NULL;
     slot = (uint32_t)asx_handle_slot(id);
-    if (slot >= g_region_count) return NULL;
+    if (slot >= k->region_count) return NULL;
     if (!k->regions[slot].alive) return NULL;
     if (k->regions[slot].generation != asx_handle_generation(id)) return NULL;
     return &k->regions[slot];
@@ -46,7 +46,7 @@ static int oracle_names_region(asx_region_id id, uint32_t slot, uint16_t generat
 
 static int region_has_live_task(const asx_kernel *k, uint32_t slot, uint16_t generation) {
     uint32_t i;
-    for (i = 0; i < g_task_count; i++) {
+    for (i = 0; i < k->task_count; i++) {
         const asx_task_slot *t = &k->tasks[i];
         /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
         if (!t->alive || asx_task_is_terminal(t->state)) continue;
@@ -57,7 +57,7 @@ static int region_has_live_task(const asx_kernel *k, uint32_t slot, uint16_t gen
 
 static int region_has_live_child(const asx_kernel *k, uint32_t slot, uint16_t generation) {
     uint32_t i;
-    for (i = 0; i < g_region_count; i++) {
+    for (i = 0; i < k->region_count; i++) {
         const asx_region_slot *c = &k->regions[i];
         /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
         if (!c->alive || c->state == ASX_REGION_CLOSED) continue;
@@ -69,7 +69,7 @@ static int region_has_live_child(const asx_kernel *k, uint32_t slot, uint16_t ge
 static int region_holds_reserved_obligation(const asx_kernel *k, uint32_t slot,
                                             uint16_t generation) {
     uint32_t i;
-    for (i = 0; i < g_obligation_count; i++) {
+    for (i = 0; i < k->obligation_count; i++) {
         const asx_obligation_slot *o = &k->obligations[i];
         /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
         if (!o->alive || o->state != ASX_OBLIGATION_RESERVED) continue;
@@ -90,7 +90,7 @@ static asx_oracle_result check_closed_regions(const char *name, uint32_t checks)
     const char *first = NULL;
     uint32_t bad = 0;
     uint32_t i;
-    for (i = 0; i < g_region_count; i++) {
+    for (i = 0; i < k->region_count; i++) {
         const asx_region_slot *r = &k->regions[i];
         const char *why = NULL;
         /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
@@ -143,7 +143,7 @@ static asx_oracle_result check_region_tree(void) {
     uint32_t roots = 0;
     uint32_t live = 0;
     uint32_t i;
-    for (i = 0; i < g_region_count; i++) {
+    for (i = 0; i < k->region_count; i++) {
         const asx_region_slot *r = &k->regions[i];
         const char *why = NULL;
         const asx_region_slot *p;
@@ -168,8 +168,8 @@ static asx_oracle_result check_region_tree(void) {
                 if (!listed) why = "a region is not listed by its parent";
             }
             while (why == NULL && p != NULL && p->parent_id != ASX_INVALID_ID) {
-                /* ASX_CHECKPOINT_WAIVER("bounded: at most g_region_count steps") */
-                if (++steps > g_region_count) why = "the region tree has a cycle";
+                /* ASX_CHECKPOINT_WAIVER("bounded: at most k->region_count steps") */
+                if (++steps > k->region_count) why = "the region tree has a cycle";
                 p = oracle_region(k, p->parent_id);
             }
         }
@@ -201,7 +201,7 @@ static asx_oracle_result check_deadline_monotone(void) {
     const asx_kernel *k = g_kernels[0];
     uint32_t bad = 0;
     uint32_t i;
-    for (i = 0; i < g_region_count; i++) {
+    for (i = 0; i < k->region_count; i++) {
         const asx_region_slot *r = &k->regions[i];
         const asx_region_slot *p;
         /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
@@ -225,7 +225,7 @@ static asx_oracle_result check_cancel_propagation(void) {
     const asx_kernel *k = g_kernels[0];
     uint32_t bad = 0;
     uint32_t i;
-    for (i = 0; i < g_region_count; i++) {
+    for (i = 0; i < k->region_count; i++) {
         const asx_region_slot *r = &k->regions[i];
         uint32_t j;
         /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */

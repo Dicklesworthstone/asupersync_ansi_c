@@ -59,7 +59,7 @@ void asx_diagnostic_reset(void) {
 
 static uint32_t count_alive_regions(const asx_kernel *k) {
     uint32_t i, n = 0;
-    for (i = 0; i < g_region_count; i++) {
+    for (i = 0; i < k->region_count; i++) {
         /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
         if (k->regions[i].alive) n++;
     }
@@ -68,7 +68,7 @@ static uint32_t count_alive_regions(const asx_kernel *k) {
 
 static uint32_t count_alive_tasks(const asx_kernel *k) {
     uint32_t i, n = 0;
-    for (i = 0; i < g_task_count; i++) {
+    for (i = 0; i < k->task_count; i++) {
         /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
         if (k->tasks[i].alive) n++;
     }
@@ -77,7 +77,7 @@ static uint32_t count_alive_tasks(const asx_kernel *k) {
 
 static uint32_t count_alive_obligations(const asx_kernel *k) {
     uint32_t i, n = 0;
-    for (i = 0; i < g_obligation_count; i++) {
+    for (i = 0; i < k->obligation_count; i++) {
         /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
         if (k->obligations[i].alive) n++;
     }
@@ -86,7 +86,7 @@ static uint32_t count_alive_obligations(const asx_kernel *k) {
 
 static int any_region_poisoned(const asx_kernel *k) {
     uint32_t i;
-    for (i = 0; i < g_region_count; i++) {
+    for (i = 0; i < k->region_count; i++) {
         /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
         if (k->regions[i].alive && k->regions[i].poisoned) return 1;
     }
@@ -106,15 +106,15 @@ asx_status asx_inspect(const asx_runtime *rt, asx_inspection_report *out) {
     /* Entity gauges */
     out->regions.active_count = initialized ? count_alive_regions(k) : 0u;
     out->regions.capacity = ASX_MAX_REGIONS;
-    out->regions.peak_count = initialized ? g_region_count : 0u; /* high water mark */
+    out->regions.peak_count = initialized ? k->region_count : 0u; /* high water mark */
 
     out->tasks.active_count = initialized ? count_alive_tasks(k) : 0u;
     out->tasks.capacity = ASX_MAX_TASKS;
-    out->tasks.peak_count = initialized ? g_task_count : 0u;
+    out->tasks.peak_count = initialized ? k->task_count : 0u;
 
     out->obligations.active_count = initialized ? count_alive_obligations(k) : 0u;
     out->obligations.capacity = ASX_MAX_OBLIGATIONS;
-    out->obligations.peak_count = initialized ? g_obligation_count : 0u;
+    out->obligations.peak_count = initialized ? k->obligation_count : 0u;
 
     out->io_driver.active_count = asx_runtime_io_registration_count(rt);
 #if ASX_HAS_NATIVE_IO_DRIVER

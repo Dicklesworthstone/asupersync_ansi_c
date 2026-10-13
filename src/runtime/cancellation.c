@@ -442,9 +442,9 @@ static uint32_t cancel_subtree_tasks(asx_kernel *k, uint32_t n) {
         uint32_t mi;
         /* Rust visits a region's tasks in its Membership's insertion order
          * (record/region.rs:341-350, state.rs:7811-7830), not by slot. */
-        for (i = 0; i < g_task_count; i++) {
+        for (i = 0; i < k->task_count; i++) {
             ASX_CHECKPOINT_WAIVER("kernel-propagation: single-pass cancel sweep bounded by "
-                                  "g_task_count <= ASX_MAX_TASKS; O(1) per iteration");
+                                  "k->task_count <= ASX_MAX_TASKS; O(1) per iteration");
             asx_task_slot *t = &k->tasks[i];
             uint32_t j;
 
@@ -612,7 +612,9 @@ asx_status asx_region_get_cancel_reason(asx_region_id region, asx_cancel_reason 
  * applies it, then what is left of the task's budget; under the opt-in
  * hard bound, the force-completion counter. */
 static uint32_t cleanup_polls_left(const asx_task_slot *t) {
-    if (asx_cleanup_hard_bound_internal()) return t->cleanup_polls_remaining;
+    if (asx_cleanup_hard_bound_internal(asx_kernel_of(t->region))) {
+        return t->cleanup_polls_remaining;
+    }
     return t->cleanup_applied ? t->budget.poll_quota : asx_budget_polls(&t->cleanup_budget);
 }
 

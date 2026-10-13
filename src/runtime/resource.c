@@ -22,14 +22,15 @@
 /* ------------------------------------------------------------------ */
 /* Runtime-owned state storage (K18, bd-9kll.3.20)                     */
 /*                                                                     */
-/* The region, task and obligation arenas are one kernel block. The    */
-/* library's static block is registered at tag 0 until a runtime is    */
-/* initialized with its own (asx_runtime_config.storage);              */
-/* lifecycle.c's g_regions, g_tasks and g_obligations point into the   */
-/* kernel of tag 0. Binding moves the registry slot and those three    */
-/* pointers and nothing else.                                          */
+/* The region, task and obligation arenas and the lifecycle state are  */
+/* one kernel block. The library's static block is registered at tag 0 */
+/* until a runtime is initialized with its own                         */
+/* (asx_runtime_config.storage). Binding moves the registry slot and   */
+/* nothing else.                                                       */
 /* ------------------------------------------------------------------ */
 
+/* All zero (.bss): a zeroed kernel is the state of a first use before any
+ * reset, with empty free lists and Rust's finalizer defaults. */
 asx_kernel g_kernel_static;
 
 asx_kernel *g_kernels[ASX_MAX_RUNTIMES] = {&g_kernel_static};
@@ -68,9 +69,6 @@ void asx_kernel_bind_internal(void *storage) {
     }
     block->tag = 0u;
     g_kernels[0] = block;
-    g_regions = block->regions;
-    g_tasks = block->tasks;
-    g_obligations = block->obligations;
 }
 
 /* A raw reset is an explicit teardown: it ends a binding to a caller's
@@ -97,10 +95,11 @@ uint32_t asx_resource_capacity(asx_resource_kind kind) {
 }
 
 uint32_t asx_resource_used(asx_resource_kind kind) {
+    /* handle-less: kernel 0 until the query takes its runtime */
     switch (kind) {
-    case ASX_RESOURCE_REGION: return g_region_live;
-    case ASX_RESOURCE_TASK: return g_task_live;
-    case ASX_RESOURCE_OBLIGATION: return g_obligation_live;
+    case ASX_RESOURCE_REGION: return g_kernels[0]->region_live;
+    case ASX_RESOURCE_TASK: return g_kernels[0]->task_live;
+    case ASX_RESOURCE_OBLIGATION: return g_kernels[0]->obligation_live;
     case ASX_RESOURCE_KIND_COUNT: return 0;
     }
     return 0;

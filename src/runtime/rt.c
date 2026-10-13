@@ -74,7 +74,7 @@ static int runtime_io_backend_supported(asx_io_backend backend) {
 static int runtime_has_pending_obligations(const asx_kernel *k) {
     uint32_t i;
 
-    for (i = 0; i < g_obligation_count; i++) {
+    for (i = 0; i < k->obligation_count; i++) {
         /* ASX_CHECKPOINT_WAIVER("bounded arena scan over static obligation slots") */
         if (!k->obligations[i].alive) continue;
         if (k->obligations[i].state == ASX_OBLIGATION_RESERVED) return 1;
@@ -86,7 +86,7 @@ static int runtime_has_pending_obligations(const asx_kernel *k) {
 static int runtime_has_live_tasks(const asx_kernel *k) {
     uint32_t i;
 
-    for (i = 0; i < g_task_count; i++) {
+    for (i = 0; i < k->task_count; i++) {
         /* ASX_CHECKPOINT_WAIVER("bounded arena scan over static task slots") */
         if (!k->tasks[i].alive) continue;
         if (asx_task_is_terminal(k->tasks[i].state)) continue;
@@ -99,7 +99,7 @@ static int runtime_has_live_tasks(const asx_kernel *k) {
 static int runtime_has_pending_region_cleanup(const asx_kernel *k) {
     uint32_t i;
 
-    for (i = 0; i < g_region_count; i++) {
+    for (i = 0; i < k->region_count; i++) {
         /* ASX_CHECKPOINT_WAIVER("bounded arena scan over static region slots") */
         if (!k->regions[i].alive) continue;
         if (asx_cleanup_pending(&k->regions[i].cleanup) != 0u) return 1;
@@ -113,7 +113,7 @@ static int runtime_has_pending_region_cleanup(const asx_kernel *k) {
 static int runtime_has_closing_region(const asx_kernel *k) {
     uint32_t i;
 
-    for (i = 0; i < g_region_count; i++) {
+    for (i = 0; i < k->region_count; i++) {
         /* ASX_CHECKPOINT_WAIVER("bounded arena scan over static region slots") */
         if (!k->regions[i].alive) continue;
         if (k->regions[i].state != ASX_REGION_OPEN && k->regions[i].state != ASX_REGION_CLOSED) {
@@ -250,11 +250,12 @@ asx_status asx_runtime_init_checked(asx_runtime *rt, const asx_runtime_config *c
     /* Step 5: store config and mark initialized */
     memset(rt, 0, sizeof(*rt));
     runtime_config_copy(rt, config);
-    asx_runtime_set_leak_policy_internal(config->leak_response, config->leak_escalation);
-    asx_runtime_set_cleanup_hard_bound_internal(config->cleanup_hard_bound != 0u);
+    asx_runtime_set_leak_policy_internal(g_kernels[0], config->leak_response,
+                                         config->leak_escalation);
+    asx_runtime_set_cleanup_hard_bound_internal(g_kernels[0], config->cleanup_hard_bound != 0u);
     asx_cancel_chain_limits_set_internal(config->max_cancel_chain_depth,
                                          config->max_cancel_chain_memory);
-    asx_region_finalizer_config_set_internal(config->finalizer_poll_budget,
+    asx_region_finalizer_config_set_internal(g_kernels[0], config->finalizer_poll_budget,
                                              config->finalizer_time_budget_ns,
                                              config->finalizer_escalation);
     rt->hooks = *hooks;
@@ -386,8 +387,10 @@ asx_status asx_runtime_reload_config(asx_runtime *rt, const asx_runtime_config *
     if (st != ASX_OK) return st;
 
     runtime_config_copy(rt, proposed);
-    asx_runtime_set_leak_policy_internal(proposed->leak_response, proposed->leak_escalation);
-    asx_region_finalizer_config_set_internal(proposed->finalizer_poll_budget,
+    asx_runtime_set_leak_policy_internal(asx_kernel_for_tag(rt->tag), proposed->leak_response,
+                                         proposed->leak_escalation);
+    asx_region_finalizer_config_set_internal(asx_kernel_for_tag(rt->tag),
+                                             proposed->finalizer_poll_budget,
                                              proposed->finalizer_time_budget_ns,
                                              proposed->finalizer_escalation);
     return ASX_OK;
@@ -399,17 +402,17 @@ asx_status asx_runtime_reload_config(asx_runtime *rt, const asx_runtime_config *
 
 uint32_t asx_runtime_region_count(const asx_runtime *rt) {
     if (rt == NULL || !asx_runtime_is_initialized(rt)) return 0u;
-    return g_region_live;
+    return asx_kernel_for_tag(rt->tag)->region_live;
 }
 
 uint32_t asx_runtime_task_count(const asx_runtime *rt) {
     if (rt == NULL || !asx_runtime_is_initialized(rt)) return 0u;
-    return g_task_live;
+    return asx_kernel_for_tag(rt->tag)->task_live;
 }
 
 uint32_t asx_runtime_obligation_count(const asx_runtime *rt) {
     if (rt == NULL || !asx_runtime_is_initialized(rt)) return 0u;
-    return g_obligation_live;
+    return asx_kernel_for_tag(rt->tag)->obligation_live;
 }
 
 /* Rust's RuntimeState::is_quiescent (runtime/state.rs:7400-7413): no live
