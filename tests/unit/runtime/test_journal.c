@@ -63,6 +63,8 @@ static asx_status open_journal(asx_journal *j, uint32_t buffer_cap, uint32_t fla
     cfg.flags = flags;
     cfg.chain_every = chain_every;
     cfg.config_fingerprint = UINT64_C(0x1122334455667788);
+    cfg.rust_rev_hash = asx_journal_text_hash("5e60b1c4c");
+    cfg.build_hash = asx_journal_text_hash("02cdd96");
     return asx_journal_init(j, &cfg);
 }
 
@@ -133,6 +135,14 @@ TEST(an_empty_stream_is_a_header_and_an_end) {
 
     ASSERT_EQ((int)asx_journal_reader_init(&r, g_out, g_out_len), (int)ASX_JOURNAL_READ_RECORD);
     ASSERT_EQ(r.config_fingerprint, UINT64_C(0x1122334455667788));
+    /* The build identity a replay compares before it trusts the stream. */
+    ASSERT_EQ(r.rust_rev_hash, asx_journal_text_hash("5e60b1c4c"));
+    ASSERT_EQ(r.build_hash, asx_journal_text_hash("02cdd96"));
+    ASSERT_TRUE(r.rust_rev_hash != 0u);
+    ASSERT_TRUE(r.build_hash != r.rust_rev_hash);
+    ASSERT_EQ(asx_journal_text_hash(NULL), (uint64_t)0u);
+    ASSERT_EQ(asx_journal_get_u64(g_out + 24), r.rust_rev_hash);
+    ASSERT_EQ(asx_journal_get_u64(g_out + 32), r.build_hash);
     ASSERT_EQ((int)asx_journal_reader_next(&r, &rec), (int)ASX_JOURNAL_READ_END);
     ASSERT_EQ(r.data_records, (uint64_t)0u);
     asx_journal_get_stats(&j, &st);
@@ -157,7 +167,7 @@ TEST(a_bad_header_is_refused) {
     copy[8] = 2u; /* version 2 */
     ASSERT_EQ((int)asx_journal_reader_init(&r, copy, g_out_len), (int)ASX_JOURNAL_READ_BAD_HEADER);
     memcpy(copy, g_out, g_out_len);
-    copy[30] = 1u; /* reserved bytes are zero */
+    copy[44] = 1u; /* reserved bytes are zero */
     ASSERT_EQ((int)asx_journal_reader_init(&r, copy, g_out_len), (int)ASX_JOURNAL_READ_BAD_HEADER);
 }
 

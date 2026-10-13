@@ -21,7 +21,13 @@
  * Stream format v1 (all integers little-endian)
  *   header   48 bytes: "ASXJRNL\0", u32 version (1), u32 flags
  *            (ASX_JOURNAL_FLAG_*), u64 config fingerprint (the caller's,
- *            e.g. ASX_CONFIG_FINGERPRINT), 24 bytes zero (reserved).
+ *            e.g. ASX_CONFIG_FINGERPRINT), u64 rust_rev_hash (the pinned
+ *            asupersync revision the build targets), u64 build_hash (the
+ *            C build: e.g. its git sha), 8 bytes zero (reserved). Both
+ *            hashes are the caller's; asx_journal_text_hash() makes one
+ *            from a revision string. A replay compares them with its own
+ *            and refuses a stream recorded by another build; 0 means the
+ *            recorder did not say.
  *   record   24-byte head then payload:
  *              u32 payload_len | u8 kind | u8 flags | u16 reserved (0) |
  *              u64 seq (0.., every record, chain and end included) |
@@ -145,6 +151,8 @@ typedef struct {
     uint32_t flags;              /* ASX_JOURNAL_FLAG_* */
     uint32_t chain_every;        /* data records per chain record; 0 = default */
     uint64_t config_fingerprint; /* stored in the header */
+    uint64_t rust_rev_hash;      /* asx_journal_text_hash of the asupersync rev; 0 = unsaid */
+    uint64_t build_hash;         /* asx_journal_text_hash of the C build's git sha; 0 = unsaid */
 } asx_journal_config;
 
 typedef struct {
@@ -262,6 +270,8 @@ typedef struct {
     size_t pos;
     uint32_t flags;
     uint64_t config_fingerprint;
+    uint64_t rust_rev_hash;
+    uint64_t build_hash;
     uint64_t next_seq;
     uint64_t data_records;
     uint64_t chains;
@@ -280,6 +290,10 @@ ASX_API asx_journal_read_result asx_journal_reader_init(asx_journal_reader *r, c
  * verified and reported. */
 ASX_API asx_journal_read_result asx_journal_reader_next(asx_journal_reader *r,
                                                         asx_journal_record *out);
+
+/* FNV-1a-64 of a NUL-terminated string (0 for NULL): the form the header's
+ * rust_rev_hash and build_hash take. */
+ASX_API uint64_t asx_journal_text_hash(const char *text);
 
 /* Little-endian field access for payload decoding. */
 ASX_API uint64_t asx_journal_get_u64(const uint8_t *p);

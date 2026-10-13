@@ -60,6 +60,17 @@ uint64_t asx_journal_get_u64(const uint8_t *p) {
     return (uint64_t)asx_journal_get_u32(p) | ((uint64_t)asx_journal_get_u32(p + 4) << 32);
 }
 
+uint64_t asx_journal_text_hash(const char *text) {
+    uint64_t h = UINT64_C(0xcbf29ce484222325);
+    if (text == NULL) return 0u;
+    while (*text != '\0') {
+        ASX_CHECKPOINT_WAIVER("bounded: one pass over a NUL-terminated string");
+        h ^= (uint64_t)(unsigned char)*text++;
+        h *= UINT64_C(0x100000001b3);
+    }
+    return h;
+}
+
 /* FNV-1a-64 over `n` bytes: the shape of data a record does not carry. */
 static uint64_t fnv1a64(const uint8_t *data, uint32_t n) {
     uint64_t h = UINT64_C(0xcbf29ce484222325);
@@ -233,7 +244,9 @@ asx_status asx_journal_init(asx_journal *j, const asx_journal_config *cfg) {
     p = put_u32(p, ASX_JOURNAL_VERSION);
     p = put_u32(p, cfg->flags);
     p = put_u64(p, cfg->config_fingerprint);
-    memset(p, 0, 24u);
+    p = put_u64(p, cfg->rust_rev_hash);
+    p = put_u64(p, cfg->build_hash);
+    memset(p, 0, 8u);
     j_stage(j, header, ASX_JOURNAL_HEADER_BYTES);
     asx_sha256(header, ASX_JOURNAL_HEADER_BYTES, j->chain);
     asx_sha256_init(&j->window);
@@ -364,8 +377,8 @@ asx_journal_read_result asx_journal_reader_init(asx_journal_reader *r, const uin
     if (len < ASX_JOURNAL_HEADER_BYTES) return ASX_JOURNAL_READ_TRUNCATED;
     if (memcmp(bytes, k_magic, 8u) != 0) return ASX_JOURNAL_READ_BAD_HEADER;
     if (asx_journal_get_u32(bytes + 8) != ASX_JOURNAL_VERSION) return ASX_JOURNAL_READ_BAD_HEADER;
-    for (i = 24u; i < ASX_JOURNAL_HEADER_BYTES; i++) {
-        ASX_CHECKPOINT_WAIVER("bounded: the 24 reserved header bytes");
+    for (i = 40u; i < ASX_JOURNAL_HEADER_BYTES; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: the 8 reserved header bytes");
         if (bytes[i] != 0u) return ASX_JOURNAL_READ_BAD_HEADER;
     }
     r->bytes = bytes;
@@ -373,6 +386,8 @@ asx_journal_read_result asx_journal_reader_init(asx_journal_reader *r, const uin
     r->pos = ASX_JOURNAL_HEADER_BYTES;
     r->flags = asx_journal_get_u32(bytes + 12);
     r->config_fingerprint = asx_journal_get_u64(bytes + 16);
+    r->rust_rev_hash = asx_journal_get_u64(bytes + 24);
+    r->build_hash = asx_journal_get_u64(bytes + 32);
     asx_sha256(bytes, ASX_JOURNAL_HEADER_BYTES, r->chain);
     asx_sha256_init(&r->window);
     asx_sha256_update(&r->window, r->chain, ASX_SHA256_DIGEST_SIZE);
