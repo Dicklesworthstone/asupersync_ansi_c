@@ -423,7 +423,7 @@ A finalizer task gets `finalizer_budget()` (poll quota 100, `src/record/finalize
 
 Correction: at `5e60b1c4c` this enum is stored in `FinalizerStack` (`src/record/finalizer.rs:199-204`) but no runtime code outside `src/record/finalizer.rs` reads it (`git grep` finds only the re-export in `src/record/mod.rs:20`), so the policy described here is not wired into finalizer execution.
 
-**C status:** `asx_finalizer_escalation` (`include/asx/asx_config.h:1312-1316`), default `ASX_FINALIZER_BOUNDED_LOG` (`src/runtime/hooks.c:878`), validated at `src/runtime/rt.c:161-162`, installed at init and reload and read by an async finalizer task's poll (`asx_finalizer_task_poll`, `src/runtime/quiescence.c`) when it is polled past its poll budget or deadline: `SOFT` does nothing, `BOUNDED_LOG` (the default) writes one log line and lets it run on, as Rust's masked finalizer does, and `BOUNDED_PANIC` is a C-only opt-in that completes the task PANICKED at that poll. Rust has no counterpart of the third; the first two are Rust's behavior, since it never consults the enum.
+**C status:** `asx_finalizer_escalation` (`include/asx/asx_config.h:1312-1316`), default `ASX_FINALIZER_BOUNDED_LOG` (`src/runtime/hooks.c:906`), validated at `src/runtime/rt.c:161-162`, installed at init and reload and read by an async finalizer task's poll (`asx_finalizer_task_poll`, `src/runtime/quiescence.c`) when it is polled past its poll budget or deadline: `SOFT` does nothing, `BOUNDED_LOG` (the default) writes one log line and lets it run on, as Rust's masked finalizer does, and `BOUNDED_PANIC` is a C-only opt-in that completes the task PANICKED at that poll. Rust has no counterpart of the third; the first two are Rust's behavior, since it never consults the enum.
 
 ### 6.6 Registration Rejection
 
@@ -845,7 +845,7 @@ All of these are declared in `include/asx/asx_status.h`. Codes the close and adm
 | `leak_escalation` | pointer (optional) | `NULL` | `Option<LeakEscalation>` | Read (section 5.2) |
 | `finalizer_poll_budget` | `uint32_t` | 100 (`src/runtime/hooks.c:785`) | `FINALIZER_POLL_BUDGET` 100 | Validated, otherwise unread (bd-udlh) |
 | `finalizer_time_budget_ns` | `uint64_t` | 5,000,000,000 (`src/runtime/hooks.c:786`) | `FINALIZER_TIME_BUDGET_NANOS` | Unread (bd-udlh) |
-| `finalizer_escalation` | enum | `ASX_FINALIZER_BOUNDED_LOG` (`src/runtime/hooks.c:878`) | `FinalizerEscalation`, not wired in Rust (section 6.5) | Validated, otherwise unread (bd-udlh) |
+| `finalizer_escalation` | enum | `ASX_FINALIZER_BOUNDED_LOG` (`src/runtime/hooks.c:906`) | `FinalizerEscalation`, not wired in Rust (section 6.5) | Validated, otherwise unread (bd-udlh) |
 | `max_cancel_chain_depth` | `uint16_t` | 16 (`src/runtime/hooks.c:788`) | `CancelAttributionConfig::DEFAULT_MAX_DEPTH` 16 (`src/types/cancel.rs:198`) | Validated non-zero (`src/runtime/rt.c:163`); no cancel code reads it |
 | `max_cancel_chain_memory` | `uint32_t` | 4096 (`src/runtime/hooks.c:789`) | `DEFAULT_MAX_MEMORY` 4096 (`src/types/cancel.rs:201`) | No cancel code reads it |
 
