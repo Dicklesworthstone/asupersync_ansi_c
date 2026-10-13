@@ -1662,7 +1662,7 @@ static void ck_build(void) {
         (void)snprintf(key, sizeof(key), "cancel_kind.%s.cleanup_priority", k_cancel_kinds[i].rust);
         ck_u64(key, (uint64_t)cleanup.priority);
     }
-    reason = asx_cancel_reason_default(ASX_CANCEL_USER, NULL);
+    reason = asx_cancel_reason_default(&g_rt, ASX_CANCEL_USER, NULL);
     ck_u64("cancel_reason.default_timestamp_ns", (uint64_t)reason.timestamp);
 
     asx_runtime_config_init(&rt);
