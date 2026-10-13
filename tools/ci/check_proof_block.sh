@@ -219,7 +219,7 @@ check_required_field() {
     local text="$1"
     local field="$2"
 
-    echo "$text" | grep -qi "- *${field}:" && return 0
+    echo "$text" | grep -qi -- "- *${field}:" && return 0
     return 1
 }
 
