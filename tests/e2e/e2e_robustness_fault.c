@@ -233,7 +233,7 @@ static void scenario_entropy_deterministic(void) {
     /* Generate sequence */
     uint64_t vals1[4];
     uint32_t i;
-    for (i = 0; i < 4; i++) { IGNORE_RC(asx_runtime_random_u64(&vals1[i])); }
+    for (i = 0; i < 4; i++) { IGNORE_RC(asx_runtime_random_u64(test_runtime(), &vals1[i])); }
     uint64_t seq1 = g_entropy_sequence;
 
     /* Reset and replay */
@@ -241,7 +241,7 @@ static void scenario_entropy_deterministic(void) {
     g_entropy_sequence = 0;
 
     uint64_t vals2[4];
-    for (i = 0; i < 4; i++) { IGNORE_RC(asx_runtime_random_u64(&vals2[i])); }
+    for (i = 0; i < 4; i++) { IGNORE_RC(asx_runtime_random_u64(test_runtime(), &vals2[i])); }
     uint64_t seq2 = g_entropy_sequence;
 
     SCENARIO_CHECK(seq1 == seq2, "sequence counts must match");
