@@ -1130,26 +1130,27 @@ jobs:
       # release binary built above) and to the C parser, and the outcomes
       # are compared: accepted or rejected, then method, target, version,
       # headers, trailers, body length and digest, bytes used. The run is
-      # fixed-seed and bounded. It OBSERVES for now: a divergence is a
-      # finding recorded as a bead with its minimized input and listed in
-      # tools/ci/parser_differential_known.txt, and the step becomes
-      # PARSER_DIFF_MODE=gate once the first run is triaged. The report is
-      # uploaded either way. The selftest checks the comparison and the
-      # minimizer without either binary.
+      # fixed-seed and bounded. It GATES: a divergence family that is not
+      # listed in tools/ci/parser_differential_known.txt fails the step. The
+      # list holds the three approved exceptions (docs/FEATURE_PARITY.md
+      # section 2.2); any other divergence is a finding, recorded as a bead
+      # with its minimized input. The report is uploaded either way. The
+      # selftest checks the comparison and the minimizer without either
+      # binary.
       - name: Parser differential comparison selftest
         run: make parser-differential-selftest
 
-      - name: Parser differential, HTTP request (seed 1, 2000 inputs, observes)
+      - name: Parser differential, HTTP request (seed 1, 2000 inputs, gates)
         run: |
-          make parser-differential PARSER_DIFF_MODE=observe \
+          make parser-differential PARSER_DIFF_MODE=gate \
             ASX_TWIN_BIN=tools/twin_run/target/release/twin_run
 
       # The same corpus with the C parser's Host requirement off: that policy
       # (the Rust codec never checks Host) otherwise masks every other
       # difference on the inputs it rejects. A larger fixed-seed campaign.
-      - name: Parser differential, HTTP request (seed 7, 20000 inputs, Host not required, observes)
+      - name: Parser differential, HTTP request (seed 7, 20000 inputs, Host not required, gates)
         run: |
-          make parser-differential PARSER_DIFF_MODE=observe PARSER_DIFF_SEED=7 \
+          make parser-differential PARSER_DIFF_MODE=gate PARSER_DIFF_SEED=7 \
             PARSER_DIFF_COUNT=20000 PARSER_DIFF_REQUIRE_HOST=0 \
             PARSER_DIFF_OUT=build/parser-differential/out-nohost \
             ASX_TWIN_BIN=tools/twin_run/target/release/twin_run
