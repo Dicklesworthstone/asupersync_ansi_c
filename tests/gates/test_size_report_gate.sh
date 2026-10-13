@@ -113,6 +113,65 @@ EOF
 run_case render_prints_a_recorded_report 0 \
     'largest kernel objects by bss, KiB \(top 20 of every row' --render "$WORK/recorded.json"
 
+# The kernel-only closure check (tools/ci/check_kernel_only.sh), on two tiny
+# archives: mixed-case names, as a UTF-8 locale orders them differently from
+# bytes. On uutils coreutils sort and comm disagreed under en_US.UTF-8 and
+# the check failed a clean kernel, so the size-report row said "closure check
+# FAILED" for a build that was fine; the script now pins LC_ALL=C. The second
+# archive pair is the check's own negative control: a kernel object that
+# needs a symbol only the left-out module defines must still fail, naming it.
+CHECK_CC="${CC:-cc}"
+if command -v "$CHECK_CC" >/dev/null 2>&1 && command -v ar >/dev/null 2>&1; then
+    CLOSURE="$WORK/closure"
+    mkdir -p "$CLOSURE"
+    {
+        i=1
+        while [ "$i" -le 60 ]; do
+            printf 'int asx_Sym_%d(void){return %d;}\n' "$i" "$i"
+            printf 'int asx_sym_%d(void){return %d;}\n' "$i" "$i"
+            printf 'int ASX_sym%d(void){return %d;}\n' "$i" "$i"
+            printf 'int asxsym_%d(void){return %d;}\n' "$i" "$i"
+            i=$((i + 1))
+        done
+    } >"$CLOSURE/kern.c"
+    printf 'int asx_left_out(void){return 1;}\nint asx_Left_out2(void){return 2;}\n' >"$CLOSURE/left.c"
+    printf 'int asx_left_out(void);\nint asx_needs_it(void){return asx_left_out();}\n' >"$CLOSURE/needy.c"
+    if "$CHECK_CC" -c -o "$CLOSURE/kern.o" "$CLOSURE/kern.c" &&
+       "$CHECK_CC" -c -o "$CLOSURE/left.o" "$CLOSURE/left.c" &&
+       "$CHECK_CC" -c -o "$CLOSURE/needy.o" "$CLOSURE/needy.c" &&
+       ar rcs "$CLOSURE/kernel_ok.a" "$CLOSURE/kern.o" &&
+       ar rcs "$CLOSURE/kernel_needy.a" "$CLOSURE/kern.o" "$CLOSURE/needy.o" &&
+       ar rcs "$CLOSURE/full.a" "$CLOSURE/kern.o" "$CLOSURE/left.o" "$CLOSURE/needy.o"; then
+        closure_case() {
+            # name, expected exit, output regex, kernel archive
+            local name="$1" expect="$2" pattern="$3" kernel="$4" out rc status
+            out="$(LC_ALL=en_US.UTF-8 bash "$REPO_ROOT/tools/ci/check_kernel_only.sh" \
+                "$CLOSURE/full.a" "$kernel" 2>&1)"
+            rc=$?
+            printf '%s\n' "$out" >"$WORK/$name.log"
+            status="pass"
+            [ "$rc" -eq "$expect" ] || status="fail"
+            grep -Eq -- "$pattern" <<<"$out" || status="fail"
+            if [ "$status" = "pass" ]; then
+                echo "  PASS: $name (exit$rc)"
+            else
+                echo "  FAIL: $name (exit$rc; expected exit$expect matching /$pattern/; log $WORK/$name.log)"
+                failures=$((failures + 1))
+            fi
+            log_case "$name" "exit$expect:$pattern" "exit$rc" "$status" "$WORK/$name.log"
+        }
+        closure_case closure_check_passes_under_a_utf8_locale 0 \
+            'kernel-only-check: PASS' "$CLOSURE/kernel_ok.a"
+        closure_case closure_check_names_a_left_out_dependency 1 \
+            'asx_left_out +<- +.*needy\.o' "$CLOSURE/kernel_needy.a"
+    else
+        echo "  FAIL: closure_check_fixture (the tiny archives did not build)"
+        failures=$((failures + 1))
+    fi
+else
+    echo "  SKIP: closure_check cases (no C compiler or ar)"
+fi
+
 echo ""
 if [ "$failures" -eq 0 ]; then
     echo "test_size_report_gate: PASS"

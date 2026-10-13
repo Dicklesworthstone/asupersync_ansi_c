@@ -23,6 +23,11 @@
 
 set -euo pipefail
 
+# sort and comm must agree on one order. Under a UTF-8 locale on uutils
+# coreutils (the host's default since Ubuntu 25.10) they do not: comm reports
+# its input unsorted and the check failed closed on a kernel that was fine.
+export LC_ALL=C
+
 if [ $# -ne 2 ]; then
     echo "usage: $0 <full libasx.a> <kernel libasx_kernel.a>" >&2
     exit 2
