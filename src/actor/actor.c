@@ -881,7 +881,7 @@ static asx_status call_enqueue(asx_actor_slot *s, asx_cx *cx, uint64_t request, 
     }
     /* The C arenas, not Rust: a full oneshot arena refuses the call. The
      * envelope always exists, the reservation holding its place. */
-    st = asx_oneshot_create(&reply_tx, &op->reply);
+    st = asx_oneshot_create_internal(asx_kernel_of(s->mailbox), &reply_tx, &op->reply);
     if (st != ASX_OK) {
         asx_send_permit_abort(&op->permit);
         return st;

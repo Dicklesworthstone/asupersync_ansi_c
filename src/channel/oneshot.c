@@ -1,7 +1,7 @@
 /*
  * oneshot.c — single-value, single-use channel
  *
- * Walking skeleton: fixed-size arena, single-threaded.
+ * Walking skeleton: fixed-size arena per runtime kernel, single-threaded.
  *
  * Wake-driven waiting: asx_oneshot_recv finding no value inside a
  * scheduler poll parks the calling task; the send, a sender drop, or a
@@ -21,31 +21,29 @@
 #include <string.h>
 
 /* ------------------------------------------------------------------ */
-/* Internal slot                                                       */
-/* ------------------------------------------------------------------ */
-
-typedef struct {
-    asx_oneshot_state state;
-    uint16_t generation;
-    uint64_t value;
-    int sender_alive;
-    int receiver_alive;
-    int receiver_dropped;              /* asx_oneshot_receiver_drop ran (Rust receiver_dropped) */
-    int reserved;                      /* a permit holds the sending side (asx_oneshot_reserve) */
-    asx_oneshot_discard_fn discard_fn; /* asx_oneshot_set_discard */
-    void *discard_ctx;
-    asx_wait_queue waiters;   /* tasks parked in asx_oneshot_recv */
-    asx_wait_queue tx_closed; /* parked in asx_oneshot_poll_closed (Rust sender_waker) */
-    asx_wait_queue rx_closed; /* parked in asx_oneshot_receiver_poll_closed
-                               * (Rust receiver_closed_waker) */
-} asx_oneshot_slot;
-
-/* ------------------------------------------------------------------ */
 /* Arena                                                               */
 /* ------------------------------------------------------------------ */
 
-static asx_oneshot_slot g_slots[ASX_MAX_ONESHOTS];
-static uint32_t g_slot_count = 0;
+/* The arenas are the kernels' (asx_kernel.oneshots, channel_state.h): the
+ * slot field of a handle holds the index in its low half and the tag of the
+ * runtime that issued it above. The kernel a field names is where the
+ * channel's trace events go, whichever task is polled; NULL when no runtime
+ * holds the tag. */
+static asx_kernel *oneshot_kernel(uint32_t field) {
+    return asx_kernel_for_tag((uint16_t)(field >> ASX_SYNC_SLOT_TAG_SHIFT));
+}
+
+/* The slot a handle names, or why it names none: NOT_FOUND for a tag no
+ * runtime holds or an index past the slots created, STALE_HANDLE for a
+ * recycled slot. */
+static asx_status oneshot_lookup(uint32_t field, uint16_t generation, asx_oneshot_slot **out) {
+    asx_kernel *k = oneshot_kernel(field);
+    uint32_t idx = field & ASX_SYNC_SLOT_INDEX_MASK;
+    if (k == NULL || idx >= k->oneshots.count) return ASX_E_NOT_FOUND;
+    if (k->oneshots.slots[idx].generation != generation) return ASX_E_STALE_HANDLE;
+    *out = &k->oneshots.slots[idx];
+    return ASX_OK;
+}
 
 static uint16_t next_gen(uint16_t g) {
     g++;
@@ -79,7 +77,7 @@ static int oneshot_rx_closed_now(const asx_oneshot_slot *s) {
  * drop retires its poll_closed waker (oneshot.rs:658-664). */
 static void oneshot_sender_consumed(asx_oneshot_slot *s) { oneshot_retire_queue(&s->tx_closed); }
 
-static void oneshot_slot_init(asx_oneshot_slot *s) {
+static void oneshot_slot_init(asx_oneshot_slot *s, uint16_t tag) {
     s->state = ASX_ONESHOT_EMPTY;
     s->value = 0;
     s->sender_alive = 0;
@@ -88,39 +86,45 @@ static void oneshot_slot_init(asx_oneshot_slot *s) {
     s->reserved = 0;
     s->discard_fn = NULL;
     s->discard_ctx = NULL;
-    asx_wait_queue_init(&s->waiters, NULL, 0u);
-    asx_wait_queue_init(&s->tx_closed, NULL, 0u);
-    asx_wait_queue_init(&s->rx_closed, NULL, 0u);
+    asx_wait_queue_init(&s->waiters, NULL, tag);
+    asx_wait_queue_init(&s->tx_closed, NULL, tag);
+    asx_wait_queue_init(&s->rx_closed, NULL, tag);
 }
 
-void asx_oneshot_reset(void) {
+void asx_oneshot_reset_internal(asx_kernel *k) {
+    asx_oneshot_arena *a = &k->oneshots;
     uint32_t i;
     for (i = 0; i < ASX_MAX_ONESHOTS; i++) {
         asx_oneshot_discard_fn discard_fn = NULL;
         void *discard_ctx = NULL;
         uint64_t value = 0u;
         /* A value sent and never received is dropped with its channel. */
-        if (i < g_slot_count && g_slots[i].state == ASX_ONESHOT_FILLED &&
-            g_slots[i].discard_fn != NULL) {
-            discard_fn = g_slots[i].discard_fn;
-            discard_ctx = g_slots[i].discard_ctx;
-            value = g_slots[i].value;
+        if (i < a->count && a->slots[i].state == ASX_ONESHOT_FILLED &&
+            a->slots[i].discard_fn != NULL) {
+            discard_fn = a->slots[i].discard_fn;
+            discard_ctx = a->slots[i].discard_ctx;
+            value = a->slots[i].value;
         }
-        g_slots[i].generation = next_gen(g_slots[i].generation);
-        oneshot_slot_init(&g_slots[i]);
+        a->slots[i].generation = next_gen(a->slots[i].generation);
+        oneshot_slot_init(&a->slots[i], k->tag);
         if (discard_fn != NULL) discard_fn(discard_ctx, value);
     }
-    g_slot_count = 0;
+    a->count = 0;
+}
+
+void asx_oneshot_reset(const asx_runtime *rt) {
+    asx_kernel *k = asx_kernel_of_runtime(rt);
+    if (k != NULL) asx_oneshot_reset_internal(k);
 }
 
 asx_status asx_oneshot_set_discard(const asx_oneshot_sender *sender, asx_oneshot_discard_fn fn,
                                    void *ctx) {
     asx_oneshot_slot *s;
+    asx_status st;
 
     if (sender == NULL) return ASX_E_INVALID_ARGUMENT;
-    if (sender->slot >= g_slot_count) return ASX_E_NOT_FOUND;
-    s = &g_slots[sender->slot];
-    if (s->generation != sender->generation) return ASX_E_STALE_HANDLE;
+    st = oneshot_lookup(sender->slot, sender->generation, &s);
+    if (st != ASX_OK) return st;
     s->discard_fn = fn;
     s->discard_ctx = fn != NULL ? ctx : NULL;
     return ASX_OK;
@@ -130,26 +134,26 @@ asx_status asx_oneshot_set_discard(const asx_oneshot_sender *sender, asx_oneshot
 /* Lifecycle                                                           */
 /* ------------------------------------------------------------------ */
 
-/* Whether any oneshot was created since the last reset. */
-int asx_oneshot_in_use_internal(void) { return g_slot_count != 0u; }
-
-asx_status asx_oneshot_create(asx_oneshot_sender *out_sender, asx_oneshot_receiver *out_receiver) {
+asx_status asx_oneshot_create_internal(asx_kernel *k, asx_oneshot_sender *out_sender,
+                                       asx_oneshot_receiver *out_receiver) {
+    asx_oneshot_arena *a;
     uint32_t idx;
+    uint32_t field;
     asx_oneshot_slot *s;
 
-    if (out_sender == NULL || out_receiver == NULL) return ASX_E_INVALID_ARGUMENT;
-    if (asx_runtime_shared_state_refused_internal("oneshots")) return ASX_E_INVALID_STATE;
+    if (k == NULL) return ASX_E_INVALID_STATE;
+    a = &k->oneshots;
 
     /* Find free slot */
     idx = ASX_MAX_ONESHOTS;
     {
         uint32_t i;
-        for (i = 0; i < g_slot_count; i++) {
+        for (i = 0; i < a->count; i++) {
             /* ASX_CHECKPOINT_WAIVER("bounded slot search") */
-            if (!g_slots[i].sender_alive && !g_slots[i].receiver_alive &&
-                g_slots[i].state != ASX_ONESHOT_EMPTY) {
+            if (!a->slots[i].sender_alive && !a->slots[i].receiver_alive &&
+                a->slots[i].state != ASX_ONESHOT_EMPTY) {
                 /* Recycled slot: bump generation */
-                g_slots[i].generation = next_gen(g_slots[i].generation);
+                a->slots[i].generation = next_gen(a->slots[i].generation);
                 idx = i;
                 break;
             }
@@ -157,30 +161,35 @@ asx_status asx_oneshot_create(asx_oneshot_sender *out_sender, asx_oneshot_receiv
     }
 
     if (idx == ASX_MAX_ONESHOTS) {
-        if (g_slot_count >= ASX_MAX_ONESHOTS) return ASX_E_RESOURCE_EXHAUSTED;
-        idx = g_slot_count++;
+        if (a->count >= ASX_MAX_ONESHOTS) return ASX_E_RESOURCE_EXHAUSTED;
+        idx = a->count++;
     }
 
-    s = &g_slots[idx];
+    s = &a->slots[idx];
     s->generation = next_gen(s->generation);
-    oneshot_slot_init(s);
+    oneshot_slot_init(s, k->tag);
     s->sender_alive = 1;
     s->receiver_alive = 1;
 
-    out_sender->slot = idx;
+    field = ((uint32_t)k->tag << ASX_SYNC_SLOT_TAG_SHIFT) | idx;
+    out_sender->slot = field;
     out_sender->generation = s->generation;
-    out_receiver->slot = idx;
+    out_receiver->slot = field;
     out_receiver->generation = s->generation;
 
     return ASX_OK;
 }
 
+asx_status asx_oneshot_create(const asx_runtime *rt, asx_oneshot_sender *out_sender,
+                              asx_oneshot_receiver *out_receiver) {
+    if (rt == NULL || out_sender == NULL || out_receiver == NULL) return ASX_E_INVALID_ARGUMENT;
+    return asx_oneshot_create_internal(asx_kernel_of_runtime(rt), out_sender, out_receiver);
+}
+
 void asx_oneshot_sender_drop(asx_oneshot_sender *sender) {
     asx_oneshot_slot *s;
     if (sender == NULL) return;
-    if (sender->slot >= g_slot_count) return;
-    s = &g_slots[sender->slot];
-    if (s->generation != sender->generation) return;
+    if (oneshot_lookup(sender->slot, sender->generation, &s) != ASX_OK) return;
     /* A reserved sender was consumed: its permit owns the sending side. */
     if (!s->sender_alive || s->reserved) return;
 
@@ -200,9 +209,7 @@ void asx_oneshot_receiver_drop(asx_oneshot_receiver *receiver) {
     uint64_t discard_value = 0u;
     asx_oneshot_slot *s;
     if (receiver == NULL) return;
-    if (receiver->slot >= g_slot_count) return;
-    s = &g_slots[receiver->slot];
-    if (s->generation != receiver->generation) return;
+    if (oneshot_lookup(receiver->slot, receiver->generation, &s) != ASX_OK) return;
     if (s->receiver_dropped) return;
 
     s->receiver_dropped = 1;
@@ -251,7 +258,8 @@ static asx_status oneshot_deliver(const asx_oneshot_sender *sender, asx_oneshot_
     s->sender_alive = 0;
     oneshot_sender_consumed(s);
 
-    asx_trace_emit_ctx_internal(ASX_TRACE_CHANNEL_SEND, (uint64_t)sender->slot, value);
+    asx_trace_emit_internal(oneshot_kernel(sender->slot), ASX_TRACE_CHANNEL_SEND,
+                            (uint64_t)sender->slot, value);
     /* The receiver's recv waiter wakes; its poll_closed waiter stays
      * registered (a value is not a close; oneshot.rs:731-760). */
     oneshot_wake_waiters(s);
@@ -261,10 +269,7 @@ static asx_status oneshot_deliver(const asx_oneshot_sender *sender, asx_oneshot_
 
 /* Look up a sender's slot. */
 static asx_status oneshot_sender_slot(const asx_oneshot_sender *sender, asx_oneshot_slot **out) {
-    if (sender->slot >= g_slot_count) return ASX_E_NOT_FOUND;
-    *out = &g_slots[sender->slot];
-    if ((*out)->generation != sender->generation) return ASX_E_STALE_HANDLE;
-    return ASX_OK;
+    return oneshot_lookup(sender->slot, sender->generation, out);
 }
 
 asx_status asx_oneshot_try_send(asx_oneshot_sender *sender, uint64_t value) {
@@ -283,12 +288,11 @@ asx_status asx_oneshot_try_send(asx_oneshot_sender *sender, uint64_t value) {
  * try_recv registers no waker). */
 static asx_status oneshot_recv_impl(asx_oneshot_receiver *receiver, uint64_t *out_value, int park) {
     asx_oneshot_slot *s;
+    asx_status st;
 
     if (receiver == NULL || out_value == NULL) return ASX_E_INVALID_ARGUMENT;
-    if (receiver->slot >= g_slot_count) return ASX_E_NOT_FOUND;
-
-    s = &g_slots[receiver->slot];
-    if (s->generation != receiver->generation) return ASX_E_STALE_HANDLE;
+    st = oneshot_lookup(receiver->slot, receiver->generation, &s);
+    if (st != ASX_OK) return st;
     if (!s->receiver_alive) {
         asx_wait_queue_leave_current(&s->waiters);
         return ASX_E_INVALID_STATE;
@@ -300,7 +304,8 @@ static asx_status oneshot_recv_impl(asx_oneshot_receiver *receiver, uint64_t *ou
         *out_value = s->value;
         s->state = ASX_ONESHOT_CONSUMED;
         s->receiver_alive = 0;
-        asx_trace_emit_ctx_internal(ASX_TRACE_CHANNEL_RECV, (uint64_t)receiver->slot, s->value);
+        asx_trace_emit_internal(oneshot_kernel(receiver->slot), ASX_TRACE_CHANNEL_RECV,
+                                (uint64_t)receiver->slot, s->value);
         asx_wait_queue_leave_current(&s->waiters);
         /* The receiver is spent: any other task parked on it must see that. */
         oneshot_wake_waiters(s);
@@ -463,9 +468,8 @@ asx_status asx_oneshot_recv(asx_oneshot_receiver *receiver, asx_cx *cx, uint64_t
     asx_status st;
 
     if (receiver == NULL || out_value == NULL) return ASX_E_INVALID_ARGUMENT;
-    if (receiver->slot >= g_slot_count) return ASX_E_NOT_FOUND;
-    s = &g_slots[receiver->slot];
-    if (s->generation != receiver->generation) return ASX_E_STALE_HANDLE;
+    st = oneshot_lookup(receiver->slot, receiver->generation, &s);
+    if (st != ASX_OK) return st;
 
     /* A value, then a closed channel, take precedence over cancellation
      * (oneshot.rs:1088-1116). */
@@ -490,15 +494,15 @@ asx_status asx_oneshot_recv(asx_oneshot_receiver *receiver, asx_cx *cx, uint64_t
 /* ------------------------------------------------------------------ */
 
 asx_oneshot_state asx_oneshot_get_state(uint32_t slot, uint16_t generation) {
-    if (slot >= g_slot_count) return ASX_ONESHOT_EMPTY;
-    if (g_slots[slot].generation != generation) return ASX_ONESHOT_EMPTY;
-    return g_slots[slot].state;
+    asx_oneshot_slot *s;
+    if (oneshot_lookup(slot, generation, &s) != ASX_OK) return ASX_ONESHOT_EMPTY;
+    return s->state;
 }
 
 /* The slot a handle names, or NULL for a stale or unknown one. */
 static asx_oneshot_slot *oneshot_slot_of(uint32_t slot, uint16_t generation) {
-    if (slot >= g_slot_count || g_slots[slot].generation != generation) return NULL;
-    return &g_slots[slot];
+    asx_oneshot_slot *s;
+    return oneshot_lookup(slot, generation, &s) == ASX_OK ? s : NULL;
 }
 
 int asx_oneshot_sender_is_closed(const asx_oneshot_sender *sender) {
@@ -541,10 +545,10 @@ int asx_oneshot_receiver_is_closed(const asx_oneshot_receiver *receiver) {
 
 asx_status asx_oneshot_receiver_poll_closed(asx_oneshot_receiver *receiver) {
     asx_oneshot_slot *s;
+    asx_status st;
     if (receiver == NULL) return ASX_E_INVALID_ARGUMENT;
-    if (receiver->slot >= g_slot_count) return ASX_E_NOT_FOUND;
-    s = &g_slots[receiver->slot];
-    if (s->generation != receiver->generation) return ASX_E_STALE_HANDLE;
+    st = oneshot_lookup(receiver->slot, receiver->generation, &s);
+    if (st != ASX_OK) return st;
     if (s->receiver_dropped) return ASX_E_INVALID_STATE;
     if (oneshot_rx_closed_now(s)) {
         asx_wait_queue_leave_current(&s->rx_closed);

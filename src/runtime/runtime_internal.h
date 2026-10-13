@@ -491,8 +491,11 @@ typedef struct asx_kernel {
     asx_notify_state notifies;
     asx_pool_state pools;
     asx_cm_state cmutexes;
-    /* The bounded MPSC channels (channel/channel_state.h). */
+    /* The channels' arenas (channel/channel_state.h), each moved in as its
+     * channel became per runtime. */
     asx_mpsc_arena channels;
+    asx_oneshot_arena oneshots;
+    asx_watch_arena watches;
     /* The runtime's trace: ring, digest, counters, observer. */
     asx_trace_state trace;
     uint32_t rt_generation; /* nonzero while an initialized runtime holds it */
@@ -576,8 +579,6 @@ void asx_kernel_release_internal(uint16_t tag);
  * state a second runtime would share. Each is defined with its subsystem;
  * rt.c evaluates them at a second initialization and names the first that
  * answers nonzero. */
-int asx_oneshot_in_use_internal(void);
-int asx_watch_in_use_internal(void);
 int asx_broadcast_in_use_internal(void);
 int asx_session_in_use_internal(void);
 int asx_actor_in_use_internal(void);
@@ -665,6 +666,19 @@ void asx_contended_mutex_reset_internal(asx_kernel *k);
 /* Drop what kernel `k`'s channels still queue and empty their arena (a
  * clear). Defined in channel/mpsc.c. */
 void asx_channel_reset_internal(asx_kernel *k);
+
+/* The same for kernel `k`'s oneshot and watch channels: a value sent and
+ * never received, or a watch's live value, goes to its discard callback.
+ * Defined in channel/{oneshot,watch}.c. */
+void asx_oneshot_reset_internal(asx_kernel *k);
+void asx_watch_reset_internal(asx_kernel *k);
+
+/* A oneshot pair in kernel `k`'s arena: asx_oneshot_create for a caller
+ * that holds a kernel, not a runtime object (an actor call's reply, which
+ * is in the runtime of the actor's mailbox). ASX_E_INVALID_STATE for a NULL
+ * kernel (a handle whose tag no runtime holds); arguments are not checked. */
+asx_status asx_oneshot_create_internal(asx_kernel *k, asx_oneshot_sender *out_sender,
+                                       asx_oneshot_receiver *out_receiver);
 
 /* Initialize the scheduling fields of a freshly allocated task slot. */
 void asx_task_sched_init_internal(asx_task_slot *task);

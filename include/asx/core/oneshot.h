@@ -63,10 +63,14 @@ typedef struct {
  * API: Lifecycle
  * ------------------------------------------------------------------- */
 
-/* Create a oneshot channel pair.
+/* Create a oneshot channel pair in the arena of runtime `rt`. The handles
+ * name that runtime (the tag in their slot), so every other call reaches
+ * its arena through them.
  * Returns ASX_OK on success, filling sender and receiver handles.
- * Returns ASX_E_RESOURCE_EXHAUSTED if arena is full. */
-ASX_API ASX_MUST_USE asx_status asx_oneshot_create(asx_oneshot_sender *out_sender,
+ * Returns ASX_E_RESOURCE_EXHAUSTED if the runtime's arena is full.
+ * Returns ASX_E_INVALID_STATE if `rt` names no live runtime. */
+ASX_API ASX_MUST_USE asx_status asx_oneshot_create(const asx_runtime *rt,
+                                                   asx_oneshot_sender *out_sender,
                                                    asx_oneshot_receiver *out_receiver);
 
 /* Drop the sender without sending a value.
@@ -219,8 +223,8 @@ ASX_API ASX_MUST_USE asx_status asx_oneshot_receiver_poll_closed(asx_oneshot_rec
  * Reset (test support)
  * ------------------------------------------------------------------- */
 
-/* Reset all oneshot channel state (test support). */
-ASX_API void asx_oneshot_reset(void);
+/* Reset the oneshot channel state of runtime `rt` (test support). */
+ASX_API void asx_oneshot_reset(const asx_runtime *rt);
 
 #ifdef __cplusplus
 }

@@ -5134,9 +5134,9 @@ static void setup_channels(uint32_t scenario, asx_region_id root) {
     uint32_t list = asx_json_get(g_in, scenario, "channels");
     uint32_t i;
     asx_channel_reset(&g_rt);
-    asx_oneshot_reset();
+    asx_oneshot_reset(&g_rt);
     asx_broadcast_reset();
-    asx_watch_reset();
+    asx_watch_reset(&g_rt);
     g_n_channels = 0;
     for (i = 0; i < asx_json_count(g_in, list); i++) {
         uint32_t d = asx_json_item(g_in, list, i);
@@ -5179,7 +5179,7 @@ static void setup_channels(uint32_t scenario, asx_region_id root) {
             }
         } else if (strcmp(type, "oneshot") == 0) {
             c->type = IT_CH_ONESHOT;
-            st = asx_oneshot_create(&c->oneshot, &c->receivers[0].oneshot);
+            st = asx_oneshot_create(&g_rt, &c->oneshot, &c->receivers[0].oneshot);
         } else if (strcmp(type, "broadcast") == 0) {
             c->type = IT_CH_BROADCAST;
             if (asx_json_u64(g_in, asx_json_get(g_in, d, "capacity"), &n) && n <= UINT32_MAX) {
@@ -5192,7 +5192,7 @@ static void setup_channels(uint32_t scenario, asx_region_id root) {
         } else if (strcmp(type, "watch") == 0) {
             c->type = IT_CH_WATCH;
             if (asx_json_u64(g_in, asx_json_get(g_in, d, "initial"), &n)) {
-                st = asx_watch_create(n, &c->watch, &c->receivers[0].watch);
+                st = asx_watch_create(&g_rt, n, &c->watch, &c->receivers[0].watch);
             }
             for (k = 1; st == ASX_OK && k < c->n_receivers; k++) {
                 st = asx_watch_subscribe(&c->watch, &c->receivers[k].watch);

@@ -2,10 +2,8 @@
  * channel_state.h — the state of the channels that lives in a runtime's
  * kernel (internal, NOT part of the public API)
  *
- * The bounded MPSC channel's arena moves here from mpsc.c as the channels
- * become per runtime (K18, bd-9kll.3.20): runtime_internal.h embeds the
- * arena in asx_kernel, a channel id carries the runtime tag of the region
- * it was created in, and a zeroed arena is empty.
+ * Each channel's arena moves here from its source as it becomes per runtime
+ * (K18, bd-9kll.3.20): asx_kernel embeds it, a handle's tag names it.
  *
  * SPDX-License-Identifier: MIT
  */
@@ -16,6 +14,8 @@
 #include "../sync/wait_queue.h"
 #include <asx/asx_config.h>
 #include <asx/core/channel.h>
+#include <asx/core/oneshot.h>
+#include <asx/core/watch.h>
 #include <asx/platform/atomics.h>
 #include <stdint.h>
 
@@ -100,5 +100,57 @@ typedef struct {
      * initialises every field it uses: the reset need not visit it. */
     uint32_t hwm;
 } asx_mpsc_arena;
+
+/* ------------------------------------------------------------------ */
+/* Oneshot and watch channels                                          */
+/* ------------------------------------------------------------------ */
+
+/* A oneshot or watch handle names its arena by the tag of the runtime that
+ * issued it in the high half of its slot field, the index in the low half
+ * (ASX_SYNC_SLOT_TAG_SHIFT / ASX_SYNC_SLOT_INDEX_MASK, sync_state.h). */
+
+typedef struct {
+    asx_oneshot_state state;
+    uint16_t generation;
+    uint64_t value;
+    int sender_alive;
+    int receiver_alive;
+    int receiver_dropped;              /* asx_oneshot_receiver_drop ran (Rust receiver_dropped) */
+    int reserved;                      /* a permit holds the sending side (asx_oneshot_reserve) */
+    asx_oneshot_discard_fn discard_fn; /* asx_oneshot_set_discard */
+    void *discard_ctx;
+    asx_wait_queue waiters;   /* tasks parked in asx_oneshot_recv */
+    asx_wait_queue tx_closed; /* parked in asx_oneshot_poll_closed (Rust sender_waker) */
+    asx_wait_queue rx_closed; /* parked in asx_oneshot_receiver_poll_closed
+                               * (Rust receiver_closed_waker) */
+} asx_oneshot_slot;
+
+/* One runtime's oneshot channels. */
+typedef struct {
+    asx_oneshot_slot slots[ASX_MAX_ONESHOTS];
+    uint32_t count; /* slots created since the last reset */
+} asx_oneshot_arena;
+
+typedef struct {
+    uint16_t generation;
+    int sender_alive;
+    uint64_t value;
+    uint64_t version; /* incremented on each send; 0 = initial value */
+    uint32_t receiver_count;
+    /* The clones in-flight wait_for calls hold (Rust's wait_for waits on
+     * `self.clone()`): counted by receiver_count()/is_closed, outside the
+     * receiver limit, since their owners already hold a receiver. */
+    uint32_t waiter_clones;
+    asx_watch_discard_fn discard_fn; /* asx_watch_set_discard */
+    void *discard_ctx;
+    int released;           /* the channel died and its last value was dropped */
+    asx_wait_queue waiters; /* tasks parked in poll_changed / wait_for */
+} asx_watch_slot;
+
+/* One runtime's watch channels. */
+typedef struct {
+    asx_watch_slot slots[ASX_MAX_WATCHES];
+    uint32_t count; /* slots created since the last reset */
+} asx_watch_arena;
 
 #endif /* ASX_CHANNEL_CHANNEL_STATE_H */

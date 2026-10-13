@@ -85,10 +85,13 @@ typedef struct {
  * API: Lifecycle
  * ------------------------------------------------------------------- */
 
-/* Create a watch channel with an initial value.
+/* Create a watch channel with an initial value in the arena of runtime
+ * `rt`. The handles name that runtime (the tag in their slot), so every
+ * other call reaches its arena through them.
  * Returns ASX_OK on success.
- * Returns ASX_E_RESOURCE_EXHAUSTED if arena is full. */
-ASX_API ASX_MUST_USE asx_status asx_watch_create(uint64_t initial_value,
+ * Returns ASX_E_RESOURCE_EXHAUSTED if the runtime's arena is full.
+ * Returns ASX_E_INVALID_STATE if `rt` names no live runtime. */
+ASX_API ASX_MUST_USE asx_status asx_watch_create(const asx_runtime *rt, uint64_t initial_value,
                                                  asx_watch_sender *out_sender,
                                                  asx_watch_receiver *out_receiver);
 
@@ -258,8 +261,8 @@ ASX_API int asx_watch_sender_is_alive(uint32_t slot, uint16_t generation);
  * Reset (test support)
  * ------------------------------------------------------------------- */
 
-/* Reset all watch channel state (test support). */
-ASX_API void asx_watch_reset(void);
+/* Reset the watch channel state of runtime `rt` (test support). */
+ASX_API void asx_watch_reset(const asx_runtime *rt);
 
 #ifdef __cplusplus
 }
