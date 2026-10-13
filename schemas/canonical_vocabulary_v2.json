@@ -64,6 +64,7 @@
         {"$ref": "#/$defs/ev_region_cancelled"},
         {"$ref": "#/$defs/ev_cancel_requested"},
         {"$ref": "#/$defs/ev_obligation"},
+        {"$ref": "#/$defs/ev_obligation_resolved"},
         {"$ref": "#/$defs/ev_obligation_aborted"},
         {"$ref": "#/$defs/ev_obligation_handoff"},
         {"$ref": "#/$defs/ev_timer_scheduled"},
@@ -114,22 +115,34 @@
     "ev_obligation": {
       "type": "object", "required": ["k", "obligation", "task", "region", "kind"], "additionalProperties": false,
       "properties": {
-        "k": {"enum": ["obligation.reserved", "obligation.committed", "obligation.leaked"]},
+        "k": {"const": "obligation.reserved"},
         "obligation": {"$ref": "#/$defs/name"},
         "task": {"$ref": "#/$defs/name"},
         "region": {"$ref": "#/$defs/name"},
         "kind": {"$ref": "#/$defs/obligation_kind"}
       }
     },
+    "ev_obligation_resolved": {
+      "type": "object", "required": ["k", "obligation", "task", "region", "kind", "duration_ns"], "additionalProperties": false,
+      "properties": {
+        "k": {"enum": ["obligation.committed", "obligation.leaked"]},
+        "obligation": {"$ref": "#/$defs/name"},
+        "task": {"$ref": "#/$defs/name"},
+        "region": {"$ref": "#/$defs/name"},
+        "kind": {"$ref": "#/$defs/obligation_kind"},
+        "duration_ns": {"$ref": "#/$defs/u64"}
+      }
+    },
     "ev_obligation_aborted": {
-      "type": "object", "required": ["k", "obligation", "task", "region", "kind", "abort_reason"], "additionalProperties": false,
+      "type": "object", "required": ["k", "obligation", "task", "region", "kind", "abort_reason", "duration_ns"], "additionalProperties": false,
       "properties": {
         "k": {"const": "obligation.aborted"},
         "obligation": {"$ref": "#/$defs/name"},
         "task": {"$ref": "#/$defs/name"},
         "region": {"$ref": "#/$defs/name"},
         "kind": {"$ref": "#/$defs/obligation_kind"},
-        "abort_reason": {"$ref": "#/$defs/abort_reason"}
+        "abort_reason": {"$ref": "#/$defs/abort_reason"},
+        "duration_ns": {"$ref": "#/$defs/u64"}
       }
     },
     "ev_obligation_handoff": {
@@ -260,7 +273,7 @@
         [{"k": "obligation.reserved", "kind": "SendPermit", "obligation": "t.consumer/o1", "region": "root", "task": "t.consumer"},
          {"k": "task.completed", "region": "root", "task": "t.producer"},
          {"k": "task.completed", "region": "root", "task": "t.waiter"}],
-        [{"k": "obligation.committed", "kind": "SendPermit", "obligation": "t.consumer/o1", "region": "root", "task": "t.consumer"}],
+        [{"duration_ns": 0, "k": "obligation.committed", "kind": "SendPermit", "obligation": "t.consumer/o1", "region": "root", "task": "t.consumer"}],
         [{"k": "task.completed", "region": "root", "task": "t.consumer"}]
       ],
       "snapshot": {

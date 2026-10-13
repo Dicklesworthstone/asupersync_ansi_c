@@ -90,7 +90,7 @@ TEST(foata_layers_match_the_spec_example) {
         "{\"k\":\"obligation.reserved\",\"obligation\":\"t.consumer/o1\",\"task\":\"t.consumer\","
         "\"region\":\"root\",\"kind\":\"SendPermit\"},"
         "{\"k\":\"obligation.committed\",\"obligation\":\"t.consumer/o1\",\"task\":\"t.consumer\","
-        "\"region\":\"root\",\"kind\":\"SendPermit\"},"
+        "\"region\":\"root\",\"kind\":\"SendPermit\",\"duration_ns\":0},"
         "{\"k\":\"task.completed\",\"task\":\"t.producer\",\"region\":\"root\"},"
         "{\"k\":\"task.completed\",\"task\":\"t.consumer\",\"region\":\"root\"},"
         "{\"k\":\"user.trace\",\"message\":\"oneshot::recv received value\"},"

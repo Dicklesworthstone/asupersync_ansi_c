@@ -89,9 +89,9 @@ through the snapshot (`now_ns`, timer deadlines).
 | `region.cancelled` | `region`, `reason` | `RegionCancelled`, `RegionCancel{region,reason}` (`:201`) | `ASX_TRACE_REGION_CANCELLED` |
 | `cancel.requested` | `task`, `region`, `reason` | `CancelRequest`, `Cancel{task,region,reason}` (`:181`) | `ASX_TRACE_CANCEL_REQUEST` |
 | `obligation.reserved` | `obligation`, `task`, `region`, `kind` | `ObligationReserve` (`:203`) | `ASX_TRACE_OBLIGATION_RESERVE` |
-| `obligation.committed` | `obligation`, `task`, `region`, `kind` | `ObligationCommit` (`:205`) | `ASX_TRACE_OBLIGATION_COMMIT` |
-| `obligation.aborted` | `obligation`, `task`, `region`, `kind`, `abort_reason` | `ObligationAbort` (`:207`) | `ASX_TRACE_OBLIGATION_ABORT` |
-| `obligation.leaked` | `obligation`, `task`, `region`, `kind` | `ObligationLeak` (`:209`) | `ASX_TRACE_OBLIGATION_LEAK` |
+| `obligation.committed` | `obligation`, `task`, `region`, `kind`, `duration_ns` | `ObligationCommit` (`:205`) | `ASX_TRACE_OBLIGATION_COMMIT` |
+| `obligation.aborted` | `obligation`, `task`, `region`, `kind`, `abort_reason`, `duration_ns` | `ObligationAbort` (`:207`) | `ASX_TRACE_OBLIGATION_ABORT` |
+| `obligation.leaked` | `obligation`, `task`, `region`, `kind`, `duration_ns` | `ObligationLeak` (`:209`) | `ASX_TRACE_OBLIGATION_LEAK` |
 | `obligation.handoff` | `obligation`, `from_task`, `to_task`, `from_region`, `to_region` | `UserTrace` carrying `obligation_handoff_v1 <json>` (`:24-76`) | `ASX_TRACE_OBLIGATION_HANDOFF`; observer payload carries all four ownership endpoints |
 | `timer.scheduled` | `timer`, `deadline_ns` | `TimerScheduled`, `Timer{timer_id,deadline:Some}` (`:213`) | `ASX_TRACE_TIMER_SET` |
 | `timer.fired` | `timer` | `TimerFired` (`:215`) | `ASX_TRACE_TIMER_FIRE` |
@@ -128,6 +128,13 @@ reproduce exactly for the projected streams to agree.
   `permit.send`, plus the oneshot's internal SendPermit
   (`src/channel/oneshot.rs:528`, `:759-765`). **Not** the transient reserve
   of `mpsc::Sender::send`.
+- **Obligation `duration_ns`.** A resolution event (`obligation.committed`,
+  `obligation.aborted`, `obligation.leaked`) carries how long the obligation
+  was held: the resolution's virtual time minus the time its reserve was
+  applied (Rust `held_duration_ns`, `src/runtime/state.rs:5597`). The reserve
+  event carries none. C stamps the reserve when it is applied, which for a
+  reserve posted during a poll is the end of that poll, and reads the same
+  virtual clock at the resolution (`asx_obligation_info.held_ns`).
 - **Oneshot `user.trace` messages:** `"oneshot::reserve creating permit"`
   (`oneshot.rs:512`), `"oneshot::recv received value"` (`:1041`),
   `"oneshot::recv channel closed"` (`:1055`) and
@@ -294,7 +301,7 @@ table covers all 67 C codes. Each row is one of three things:
 | `ASX_E_CHANNEL_EMPTY` (705) | `ErrorKind::ChannelEmpty`; mpsc `RecvError::Empty`; oneshot/broadcast `TryRecvError::Empty` | exact |
 | `ASX_E_TIMER_NOT_FOUND` (800) | — | C-only |
 | `ASX_E_TIMERS_PENDING` (801) | — | C-only: quiescence diagnostics (snapshot `timers_pending`) |
-| `ASX_E_TIMER_DURATION_EXCEEDED` (802) | `TimerDurationExceeded{duration,max}` (`src/time/wheel.rs:216`) | exact |
+| `ASX_E_TIMER_DURATION_EXCEEDED` (802) | `TimerDurationExceeded{duration,max}` (`src/time/wheel.rs:216`) | inexact: C returns it only from `asx_interval_poll`, when no later tick exists (`src/time/sleep.c:279`); `asx_deadline_after` saturates as Rust does, so a timer registration never reports it |
 | `ASX_E_TIMED_OUT` (803) | `time::Elapsed` (`src/time/elapsed.rs:26`); `TimeoutError`; `TimedError::TimedOut`; `LockError::TimedOut`; `PoolError::Timeout`; `ErrorKind::DeadlineExceeded` | lossy: every deadline expiry |
 | `ASX_E_THRESHOLD_TIMEOUT` (804) | `ErrorKind::ThresholdTimeout` | exact |
 | `ASX_E_TASKS_STILL_ACTIVE` … `ASX_E_QUIESCENCE_TASKS_LIVE` (900–905) | — | C-only as statuses; quiescence is compared through the snapshot (`quiescent`, live counts) |

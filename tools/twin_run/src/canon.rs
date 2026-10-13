@@ -328,7 +328,7 @@ mod tests {
             ),
             ev(
                 "obligation.committed",
-                json!({"obligation": "t.consumer/o1", "task": "t.consumer", "region": "root", "kind": "SendPermit"}),
+                json!({"obligation": "t.consumer/o1", "task": "t.consumer", "region": "root", "kind": "SendPermit", "duration_ns": 0}),
             ),
             ev(
                 "task.completed",

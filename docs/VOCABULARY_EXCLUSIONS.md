@@ -44,7 +44,6 @@ fields:
 | Data | Field | Why |
 |---|---|---|
 | `Obligation` | `state` | Implied by the event kind (reserve, commit, abort, leak). |
-| `Obligation` | `duration_ns` | The virtual time the obligation was held. C keeps no reserve time, so it is not compared; when obligations resolve is bounded by the trace's causal order and the dispatch schedule only. |
 | `Region` (close begin, closed) | `parent` | Carried by the region's `region.created`. |
 | `Timer` (fired, cancelled) | `deadline` | Carried by the `timer.scheduled` of the same name. |
 | `CancelReason` (every projected reason) | the cause chain's reasons, `truncated_at_depth` | Only the chain's length and `truncated` are compared. |
