@@ -25,13 +25,13 @@
  *     come from one counter across both lanes.
  *
  * Bounded static storage: a lane holds LAB_LANE_CAP entries. Overflow is
- * sticky and makes the scheduler fail the run with
- * ASX_E_RESOURCE_EXHAUSTED rather than drop an entry.
+ * sticky and makes the scheduler fail the run with ASX_E_RESOURCE_EXHAUSTED, not drop an entry.
  *
  * SPDX-License-Identifier: MIT
  */
 
 #include "runtime_internal.h"
+#include <asx/core/ghost.h>
 #include <asx/core/transition.h>
 #define ASX_INTERNAL_TRACE_FAMILY_ACCESS 1
 #include <asx/runtime/lab.h>
@@ -437,9 +437,9 @@ uint64_t asx_lab_step_begin_internal(void) { return ++g_lab_steps; }
 void asx_lab_record_dispatch_internal(uint32_t slot, uint16_t task_gen, int cancel_lane,
                                       uint64_t step, asx_time at) {
     uint8_t lane = (uint8_t)(cancel_lane ? ASX_DISPATCH_LANE_CANCEL : ASX_DISPATCH_LANE_READY);
-    /* certificate.record(task, lane, steps) at the pick (LR:4632). */
+    /* certificate.record(task, lane, steps) at the pick (LR:4632); the ghost monitor sees it */
     g_lab_cert = asx_forced_schedule_certificate_step(g_lab_cert, g_lab_pick_task, lane, step);
-    g_lab_decisions++;
+    g_lab_decisions++, asx_ghost_determinism_record(g_lab_cert);
     if (g_lab_frec_n < g_lab_frec_cap) {
         asx_forced_dispatch *f = &g_lab_frec[g_lab_frec_n];
         f->task = g_lab_pick_task;
