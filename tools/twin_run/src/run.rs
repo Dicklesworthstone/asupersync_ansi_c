@@ -3081,9 +3081,21 @@ async fn exec_step(
             let compiled = builder
                 .compile()
                 .map_err(|e| format!("supervise {name:?}: {e}"))?;
-            let config = SupervisionConfig::new(max_restarts, window)
+            let mut config = SupervisionConfig::new(max_restarts, window)
                 .with_restart_policy(policy)
                 .with_escalation(escalation);
+            // `storm_threshold_milli`: restarts per second times 1000, an
+            // integer because DSL numbers are (DSL §3.8). Rust refuses a
+            // threshold that is not above zero by panicking.
+            if let Some(value) = step.get("storm_threshold_milli") {
+                let milli = value
+                    .as_u64()
+                    .filter(|m| *m > 0)
+                    .ok_or("storm_threshold_milli is not a positive integer")?;
+                #[allow(clippy::cast_precision_loss)]
+                let threshold = milli as f64 / 1000.0;
+                config = config.with_storm_threshold(threshold);
+            }
             let supervisor = compiled
                 .bind_managed(bindings, config)
                 .map_err(|e| format!("supervise {name:?}: {e:?}"))?;
@@ -4548,14 +4560,20 @@ fn project_report(s: &Shared, report: ManagedSupervisorReport<String>) -> RunRes
             "outcome": outcome,
         }));
     }
-    Ok(json!({
+    let mut projected = json!({
         "outcome": outcome,
         "started": report.started,
         "joined": report.joined,
         "restart_batches": report.restart_batches,
         "escalations": report.escalations,
         "children": children,
-    }))
+    });
+    // Only when set, so a supervisor without a storm threshold projects as it
+    // always did (DSL §3.8).
+    if report.restart_storm_detected {
+        projected["restart_storm_detected"] = json!(true);
+    }
+    Ok(projected)
 }
 
 /// Name the canonical ids of children spawned through `cx.spawn`. The spawn

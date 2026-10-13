@@ -539,7 +539,7 @@ snapshot outcome is its join's (vocabulary §6).
 | `server_evicted` | `server` | `h.evicted_count()` (`:1153`) | `asx_actor_evicted_count(h)` | no | ignored. The observation `value` is the number of casts evicted under `DropOldest`. |
 | `call` | `server`, `request` | `h.call(&cx, req).await` (`:1171`) | `asx_actor_call(h, &cx, request, &op, &reply)` | until the reply arrives | Checked first: `ASX_E_CANCELLED`; a stopping server: `ASX_E_DISCONNECTED`; a dropped call: `ASX_E_INVALID_STATE` (NoReply). The caller must not be in `"root"` (Rust rejects root-region callers, `gen_server.rs:1086-1094`); both interpreters reject such a scenario as a scenario error before running it. |
 | `server_stop` | `server` | `h.stop()` (`:1453`), then `h.join(&cx)` (`:1489`) | `asx_actor_stop`, then `asx_actor_join` | until its task finished | ignored; a server that never ran: `ASX_E_CANCELLED`. Later steps may not name the server. |
-| `supervise` | `as`, `policy` (`one_for_one`, `one_for_all`, `rest_for_one`), optional `escalation` (`stop`, the default, or `escalate`), `max_restarts` (at most 32), `window_ns`, `children` (1 to 8 `{name, mode: permanent\|transient\|temporary, program}`) | `SupervisorBuilder::new(name).with_restart_policy(p)`, one `.child(ChildSpec::new(child, …))` each, `.compile()?` (`supervision.rs:894`, `:924`, `:655`, `:973`); `.bind_managed(bindings, SupervisionConfig::new(max, window).with_restart_policy(p).with_escalation(e))` (`:2093`, `:470`, `:491`, `:505`) with one `ManagedChildBinding::new(child, mode, factory)` each (`:1900`); then `ManagedSupervisor::spawn(&cx)` (`:3497`), which twin_run performs itself to keep the report | `asx_supervisor_spawn(&h, own_region, &config, specs, n)`, the config's backoff and budget left at `asx_supervisor_config_init`'s (Rust's defaults) | no | ignored |
+| `supervise` | `as`, `policy` (`one_for_one`, `one_for_all`, `rest_for_one`), optional `escalation` (`stop`, the default, or `escalate`), `max_restarts` (at most 32), `window_ns`, optional `storm_threshold_milli` (a positive integer: restarts per second times 1000), `children` (1 to 8 `{name, mode: permanent\|transient\|temporary, program}`) | `SupervisorBuilder::new(name).with_restart_policy(p)`, one `.child(ChildSpec::new(child, …))` each, `.compile()?` (`supervision.rs:894`, `:924`, `:655`, `:973`); `.bind_managed(bindings, SupervisionConfig::new(max, window).with_restart_policy(p).with_escalation(e)[.with_storm_threshold(milli / 1000.0)])` (`:2093`, `:470`, `:491`, `:505`, `:483`) with one `ManagedChildBinding::new(child, mode, factory)` each (`:1900`); then `ManagedSupervisor::spawn(&cx)` (`:3497`), which twin_run performs itself to keep the report | `asx_supervisor_spawn(&h, own_region, &config, specs, n)`, the config's backoff and budget left at `asx_supervisor_config_init`'s (Rust's defaults) and its `storm_threshold` set to `milli / 1000.0` | no | ignored |
 | `supervisor_join` | `supervisor` | `handle.join().await` (`supervision.rs:3429`) | `asx_supervisor_join(h, self, &report)` until it stops returning `ASX_E_PENDING` | until the controller published its report | Ignored: the join is not interrupted. The observation `value` is the report (below); a controller that never ran gives `ASX_E_CANCELLED` and no value. |
 
 A supervised child's program runs once per generation, as the task
@@ -580,7 +580,16 @@ with the `ManagedSupervisorError` kind (`RestartLimit`,
 `DependencyUnavailable`, `ChildNotStarted`, `GenerationExhausted`,
 `Region`, `Spawn` or `Escalation`), or a cancelled or panicked outcome
 (vocabulary §4); `children` holds each child's latest finished
-generation, in start order, as `{"child", "generation", "outcome"}`. A
+generation, in start order, as `{"child", "generation", "outcome"}`. When a
+storm threshold was set and a counted restart batch crossed it, the value
+also holds `"restart_storm_detected": true` (the field is absent
+otherwise), and the controller traced `action=restart_storm` once, for the
+failed child's latest generation (`supervision.rs:3294-3305`). The check is
+the restarts in the restart window per second of window above the
+threshold (`RestartIntensityWindow::is_storm`), read after each counted
+batch is recorded; a `RESET_COUNTER` reset forgets them. Rust's e-process
+alert (`RestartStormMonitor`) is not modelled: it can alert only at a batch
+whose intensity check has already fired, so no report differs. A
 supervisor its owner did not join is aborted when the owner's program
 ends, as dropping a `ManagedSupervisorHandle` aborts the controller
 (`supervision.rs:3446`); the controller then drains every generation.

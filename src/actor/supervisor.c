@@ -142,6 +142,7 @@ typedef struct {
     uint64_t window_ns;
     asx_restart_backoff backoff;
     asx_supervisor_escalation escalation;
+    double storm_threshold; /* restarts per second, 0 for none */
     int has_budget;
     asx_budget budget;
     uint32_t n;
@@ -370,6 +371,31 @@ static void record_restart(sup_slot *s, uint64_t now) {
     s->n_restarts = kept;
     /* An allowed batch leaves fewer than max_restarts in the window. */
     if (s->n_restarts < ASX_SUPERVISOR_MAX_RESTARTS) s->restarts[s->n_restarts++] = now;
+}
+
+/* Rust's InvalidStormThreshold is a threshold that is not finite or not
+ * above zero; here 0 is the absent threshold. NaN fails both comparisons and
+ * infinity the second (DBL_MAX spelled out: no <float.h>). */
+static int storm_threshold_valid(double t) {
+    if (t == 0.0) return 1;
+    /* ASX_ANALYZER_WAIVER("cppcheck does not model an infinite double") */
+    return t > 0.0 && t <= 1.7976931348623157e308;
+}
+
+/* RestartIntensityWindow::is_storm (:5620): the restarts in the window,
+ * per second of window, exceed the threshold. The intensity window's
+ * timestamps are the history's: both are pruned and counted at the same
+ * cutoff, and both are recorded once per counted batch. The window's
+ * seconds are Duration::as_secs_f64's arithmetic. */
+static int intensity_storm(const sup_slot *s, uint64_t now) {
+    uint32_t count;
+    double window_secs;
+    if (s->storm_threshold <= 0.0) return 0;
+    count = recent_count(s, now);
+    if (count == 0u) return 0;
+    window_secs = (double)(s->window_ns / 1000000000u) + (double)(s->window_ns % 1000000000u) / 1e9;
+    if (window_secs <= 0.0) return 0;
+    return (double)count / window_secs > s->storm_threshold;
 }
 
 /* BackoffStrategy::delay_for_attempt (:5265-5302). */
@@ -1148,8 +1174,15 @@ static void restart_next(sup_slot *s) {
         return;
     }
     if (!s->counted) {
-        record_restart(s, sup_now());
+        uint64_t now = sup_now();
+        record_restart(s, now);
         s->report.restart_batches++;
+        /* :3296-3304: set once; the failed child's latest generation is
+         * the trace's. */
+        if (!s->report.restart_storm_detected && intensity_storm(s, now)) {
+            s->report.restart_storm_detected = 1u;
+            sup_trace(s, "restart_storm", s->failed, &s->latest[s->failed].c.generation);
+        }
         s->counted = 1;
     }
     call(s, SUB_START, pos, PC_RESTART_STARTED);
@@ -1385,6 +1418,7 @@ void asx_supervisor_config_init(asx_supervisor_config *cfg, const char *name, ui
     cfg->backoff.multiplier = 2u;
     cfg->escalation = ASX_ESCALATION_STOP;
     cfg->budget = NULL;
+    cfg->storm_threshold = 0.0;
 }
 
 static int copy_name(char *dst, const char *src) {
@@ -1484,6 +1518,7 @@ asx_status asx_supervisor_spawn(asx_supervisor_handle *out, asx_region_id region
     if (config->name == NULL || strlen(config->name) >= ASX_SUPERVISOR_NAME_MAX) {
         return ASX_E_INVALID_ARGUMENT;
     }
+    if (!storm_threshold_valid(config->storm_threshold)) return ASX_E_INVALID_ARGUMENT;
     for (i = 0; i < child_count; i++) {
         if (children[i].name == NULL || strlen(children[i].name) >= ASX_SUPERVISOR_NAME_MAX ||
             children[i].start == NULL ||
@@ -1531,6 +1566,7 @@ asx_status asx_supervisor_spawn(asx_supervisor_handle *out, asx_region_id region
     s->window_ns = config->window_ns;
     s->backoff = config->backoff;
     s->escalation = config->escalation;
+    s->storm_threshold = config->storm_threshold;
     s->has_budget = config->budget != NULL;
     if (config->budget != NULL) s->budget = *config->budget;
     s->n = child_count;

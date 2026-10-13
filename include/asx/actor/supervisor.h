@@ -38,8 +38,9 @@
  * The controller traces "managed_supervisor_v1 action=<action>
  * supervisor="<name>" child="<name>" generation=<n> region=<id>
  * task=<id> outcome=<ok|err|cancelled|panicked|pending>" as Rust does, with
- * the actions started, terminal, drained, parent_escalated and
- * restart_dependency_unavailable; <id> is the handle in hex (0x...).
+ * the actions started, terminal, drained, parent_escalated,
+ * restart_dependency_unavailable and restart_storm; <id> is the handle in
+ * hex (0x...).
  *
  * The C model of the start function and the body: Rust's factory returns
  * a future whose Outcome is the generation's; here the start function
@@ -50,13 +51,28 @@
  * task itself completes normally, as Rust catches it. A start function
  * that fails is the factory panicking.
  *
+ * Restart storm detection (Rust SupervisionConfig::with_storm_threshold,
+ * RestartIntensityWindow, :5555-5640; the controller's check, :3294-3305):
+ * with a storm threshold set, each counted replacement batch asks whether
+ * the restarts in the window per second of window exceed the threshold.
+ * The first time they do, the report's restart_storm_detected is set and
+ * the controller traces "action=restart_storm" once, for the failed
+ * child's latest generation; restart decisions do not change. Rust also
+ * feeds an e-process (RestartStormMonitor, :5645-5840) and reports a storm
+ * when it alerts, which needs f64 ln and exp. It is not ported, and no
+ * report differs: the monitor's likelihood ratio exceeds 1 exactly when
+ * the intensity exceeds the threshold (its expected rate is the threshold
+ * divided by its tolerance, and the likelihood ratio is
+ * max(1, intensity / expected) / tolerance), so its e-value can reach the
+ * 1/alpha alert only at a batch whose intensity check has fired, at that
+ * batch or before.
+ *
  * Not in the C model: name registration (registries), shared restart
- * domains (dynamic supervisors), restart storm detection, per-child
- * shutdown budgets (a drained generation's cleanup budget is its cancel
- * kind's, Rust's default Budget::INFINITE ceiling), and region cleanup
- * outcomes (C regions have no finalizers whose cleanup can fail), so the
- * Registration, SharedRestartLimit, Cleanup and SupervisorCleanup errors
- * never occur.
+ * domains (dynamic supervisors), per-child shutdown budgets (a drained
+ * generation's cleanup budget is its cancel kind's, Rust's default
+ * Budget::INFINITE ceiling), and region cleanup outcomes (C regions have no
+ * finalizers whose cleanup can fail), so the Registration,
+ * SharedRestartLimit, Cleanup and SupervisorCleanup errors never occur.
  *
  * SPDX-License-Identifier: MIT
  */
@@ -195,10 +211,16 @@ typedef struct {
     asx_restart_backoff backoff;
     asx_supervisor_escalation escalation;
     const asx_budget *budget; /* the supervisor region's budget, or NULL */
+    /* Restart storm detection (Rust SupervisionConfig::storm_threshold):
+     * restarts per second above which the report says so; 0 for none (Rust's
+     * None). A value that is negative, NaN or infinite is refused, as Rust's
+     * InvalidStormThreshold is. */
+    double storm_threshold;
 } asx_supervisor_config;
 
 /* A config with Rust SupervisionConfig::new's defaults: ONE_FOR_ONE,
- * exponential backoff from 100 ms doubling up to 10 s, STOP, no budget. */
+ * exponential backoff from 100 ms doubling up to 10 s, STOP, no budget, no
+ * storm detection. */
 ASX_API void asx_supervisor_config_init(asx_supervisor_config *cfg, const char *name,
                                         uint32_t max_restarts, uint64_t window_ns);
 
@@ -249,6 +271,9 @@ typedef struct {
     uint64_t joined;      /* generations joined */
     uint64_t restart_batches;
     uint8_t escalations;
+    /* A storm threshold was set and a counted replacement batch's restart
+     * intensity exceeded it (Rust restart_storm_detected). */
+    uint8_t restart_storm_detected;
     /* Each child's latest ended generation, in compiled order. */
     uint32_t completion_count;
     asx_supervisor_completion completions[ASX_SUPERVISOR_MAX_CHILDREN];
@@ -272,7 +297,8 @@ typedef struct {
  *
  * Returns ASX_OK; ASX_E_INVALID_ARGUMENT for a NULL argument, no or too
  * many children, a missing start function, max_restarts above
- * ASX_SUPERVISOR_MAX_RESTARTS or a bad dependency; ASX_E_NAME_CONFLICT for
+ * ASX_SUPERVISOR_MAX_RESTARTS, a storm threshold that is negative, NaN or
+ * infinite, or a bad dependency; ASX_E_NAME_CONFLICT for
  * duplicate child names; ASX_E_RESOURCE_EXHAUSTED when every supervisor
  * slot is in use; the spawn's status otherwise. */
 ASX_API ASX_MUST_USE asx_status asx_supervisor_spawn(asx_supervisor_handle *out,

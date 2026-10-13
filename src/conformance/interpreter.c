@@ -4130,6 +4130,10 @@ static uint32_t report_node(const it_supervisor *sv, const asx_supervisor_report
     asx_json_set(g_out, o, "restart_batches", asx_json_new_u64(g_out, r->restart_batches));
     asx_json_set(g_out, o, "escalations", asx_json_new_u64(g_out, r->escalations));
     asx_json_set(g_out, o, "children", children);
+    /* Only when set, as twin_run's projection (DSL 3.8). */
+    if (r->restart_storm_detected) {
+        asx_json_set(g_out, o, "restart_storm_detected", asx_json_new_bool(g_out, 1));
+    }
     return o;
 }
 
@@ -4177,6 +4181,20 @@ static int exec_supervisor(it_task *t, asx_task_id self, uint32_t step, uint32_t
         sv->owner = (uint32_t)(t - g_tasks);
         sv->task = IT_NO_SERVER_TASK;
         asx_supervisor_config_init(&cfg, name, (uint32_t)max_restarts, window);
+        /* `storm_threshold_milli`: restarts per second times 1000, as an
+         * integer; Rust's f64 is the same quotient (DSL 3.8). */
+        {
+            uint32_t node = asx_json_get(g_in, step, "storm_threshold_milli");
+            uint64_t milli = 0;
+            if (node != ASX_JSON_NONE) {
+                if (!asx_json_u64(g_in, node, &milli) || milli == 0u) {
+                    it_fail_task(t, idx, "storm_threshold_milli is not a positive integer");
+                    *out = STEP_END;
+                    return 1;
+                }
+                cfg.storm_threshold = (double)milli / 1000.0;
+            }
+        }
         if (strcmp(policy, "one_for_one") == 0) {
             cfg.strategy = ASX_SUPERVISOR_ONE_FOR_ONE;
         } else if (strcmp(policy, "one_for_all") == 0) {

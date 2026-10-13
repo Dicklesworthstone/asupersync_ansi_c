@@ -50,7 +50,7 @@ The port targets asupersync commit `5e60b1c4c` (2026-10).
 - **Not compared with Rust; tested in C only:** networking, files, processes and HTTP; live, non-lab scheduling.
 - **Not ported:**
   - actors: the plain `Actor` trait, system messages, overflow policies, names, monitors and links;
-  - supervision: registries, dynamic supervisors with shared restart domains, restart storm detection, per-child shutdown budgets;
+  - supervision: registries, dynamic supervisors with shared restart domains, per-child shutdown budgets;
   - I/O: kqueue, IOCP and io_uring reactors, and Windows native I/O.
 
   The module-by-module accounting is in [`docs/RUST_EXPORTED_SURFACE_INVENTORY.md`](docs/RUST_EXPORTED_SURFACE_INVENTORY.md) §11 and, per semantic unit, in [`docs/FEATURE_PARITY.md`](docs/FEATURE_PARITY.md).
@@ -1445,7 +1445,7 @@ Each child has a restart mode, as Rust's `ManagedRestartMode` decides:
 
 Restart intensity limits the restarts to `max_restarts` replacement batches in any `window_ns`, each after a backoff (none, fixed or exponential; the default, Rust's, starts at 100 ms and doubles up to 10 s). When the limit refuses a restart, the escalation policy decides: STOP leaves the child stopped, RESET_COUNTER forgets the history and retries, ESCALATE ends the supervisor with a RestartLimit error and cancels the region it was spawned in (FailFast). A panic in a child's body is caught inside its generation and reported as the child's panicked outcome.
 
-The controller watches its generations' tasks (`asx_task_watch`) and sleeps until one ends, so a quiet tree costs no polls. Its restart decisions, drain order and `managed_supervisor_v1` user traces match Rust's under lab dispatch. Name registries, dynamic supervisors with shared restart domains, restart storm detection and per-child shutdown budgets are not ported (see `include/asx/actor/supervisor.h`).
+The controller watches its generations' tasks (`asx_task_watch`) and sleeps until one ends, so a quiet tree costs no polls. Its restart decisions, drain order and `managed_supervisor_v1` user traces match Rust's under lab dispatch. Restart storm detection reports a restart intensity above a configured threshold and traces `restart_storm` once; Rust's e-process alert is not modelled, as it cannot alert before the intensity check does. Name registries, dynamic supervisors with shared restart domains and per-child shutdown budgets are not ported (see `include/asx/actor/supervisor.h`).
 
 ## Structured Concurrency and Capability Flow
 

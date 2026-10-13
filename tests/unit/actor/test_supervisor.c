@@ -434,6 +434,131 @@ static void test_reset_counter_keeps_restarting(void) {
     ASSERT(o.report.restart_batches == 4u, "four batches");
 }
 
+/* Rust's managed_restart_storm_is_reported_when_its_threshold_is_crossed:
+ * the child fails three times and then succeeds; three batches in the 60 s
+ * window are 0.05 restarts per second. Detection reads the restarts and
+ * decides nothing: the batches are the same with and without a threshold. */
+static void test_a_storm_threshold_is_reported_when_crossed(void) {
+    static const double thresholds[3] = {0.0, 1.0, 0.03};
+    static const uint8_t expected[3] = {0u, 0u, 1u};
+    uint32_t i;
+    for (i = 0; i < 3u; i++) {
+        owner o;
+        behaviour b;
+        setup();
+        memset(&b, 0, sizeof(b));
+        b.result = ASX_E_INVALID_STATE;
+        b.fail_below = 4;
+        b.later = ASX_OK;
+        owner_init(&o, 10);
+        o.cfg.storm_threshold = thresholds[i];
+        add_child(&o, "child", ASX_CHILD_TRANSIENT, &b);
+        run_owner(&o);
+        ASSERT(o.joined && o.report.outcome == ASX_OUTCOME_OK, "the supervisor finished ok");
+        ASSERT(o.report.restart_batches == 3u && b.started == 4u, "three batches, as ever");
+        ASSERT(o.report.restart_storm_detected == expected[i], "reported as Rust reports it");
+    }
+}
+
+/* The intensity is the restarts in the window per second of window, read
+ * after each batch is recorded: one batch in a 60 s window is 1/60, above a
+ * threshold of 0.01, so the first batch is the storm. Restarts that aged out
+ * of a 1 us window no longer count: each batch is alone in it (1 restart
+ * per microsecond is 1e6 per second), and a threshold above that is never
+ * crossed. */
+static void test_a_storm_is_the_restarts_in_the_window(void) {
+    owner o;
+    behaviour b;
+    setup();
+    memset(&b, 0, sizeof(b));
+    b.result = ASX_E_INVALID_STATE;
+    b.fail_below = 2;
+    b.later = ASX_OK;
+    owner_init(&o, 10);
+    o.cfg.storm_threshold = 0.01;
+    add_child(&o, "child", ASX_CHILD_TRANSIENT, &b);
+    run_owner(&o);
+    ASSERT(o.joined && o.report.restart_batches == 1u, "one batch");
+    ASSERT(o.report.restart_storm_detected == 1u, "1/60 per second is above 0.01");
+
+    setup();
+    memset(&b, 0, sizeof(b));
+    b.sleep_ns = 2000u;
+    b.result = ASX_E_INVALID_STATE;
+    b.fail_below = 4;
+    b.later = ASX_OK;
+    owner_init(&o, 10);
+    o.cfg.window_ns = 1000u;
+    o.cfg.storm_threshold = 2000000.0;
+    add_child(&o, "child", ASX_CHILD_TRANSIENT, &b);
+    run_owner(&o);
+    ASSERT(o.joined && o.report.restart_batches == 3u, "three batches");
+    ASSERT(o.report.restart_storm_detected == 0u, "each alone in a 1 us window: 1e6 per second");
+
+    setup();
+    memset(&b, 0, sizeof(b));
+    b.sleep_ns = 2000u;
+    b.result = ASX_E_INVALID_STATE;
+    b.fail_below = 4;
+    b.later = ASX_OK;
+    owner_init(&o, 10);
+    o.cfg.window_ns = 1000u;
+    o.cfg.storm_threshold = 500000.0;
+    add_child(&o, "child", ASX_CHILD_TRANSIENT, &b);
+    run_owner(&o);
+    ASSERT(o.report.restart_storm_detected == 1u, "1e6 per second is above 5e5");
+}
+
+/* RESET_COUNTER forgets the history, and the intensity with it: the batches
+ * after a reset start a window again. Two restarts a window allows are
+ * 2/60 = 0.033; with the reset after each pair the count never passes 2, so
+ * a threshold of 0.04 is not crossed while one of 0.03 is. */
+static void test_reset_counter_resets_the_intensity(void) {
+    static const double thresholds[2] = {0.04, 0.03};
+    static const uint8_t expected[2] = {0u, 1u};
+    uint32_t i;
+    for (i = 0; i < 2u; i++) {
+        owner o;
+        behaviour b;
+        setup();
+        memset(&b, 0, sizeof(b));
+        b.result = ASX_E_INVALID_STATE;
+        b.fail_below = 6;
+        b.later = ASX_OK;
+        owner_init(&o, 2);
+        o.cfg.escalation = ASX_ESCALATION_RESET_COUNTER;
+        o.cfg.storm_threshold = thresholds[i];
+        add_child(&o, "child", ASX_CHILD_TRANSIENT, &b);
+        run_owner(&o);
+        ASSERT(o.joined && o.report.restart_batches == 5u && b.started == 6u, "five batches");
+        ASSERT(o.report.restart_storm_detected == expected[i], "the count restarts at a reset");
+    }
+}
+
+static void test_a_bad_storm_threshold_is_refused(void) {
+    asx_supervisor_config cfg;
+    asx_child_spec spec;
+    asx_supervisor_handle h;
+    behaviour b;
+    volatile double zero = 0.0;
+    volatile double huge = 1.0e308;
+    double nan = zero / zero;
+    double inf = huge * 10.0;
+    setup();
+    memset(&b, 0, sizeof(b));
+    asx_supervisor_config_init(&cfg, "s", 1, 1000u);
+    ASSERT(cfg.storm_threshold == 0.0, "off by default");
+    asx_child_spec_init(&spec, "c", ASX_CHILD_PERMANENT, start_child, &b);
+    cfg.storm_threshold = -1.0;
+    ASSERT(asx_supervisor_spawn(&h, g_root, &cfg, &spec, 1) == ASX_E_INVALID_ARGUMENT, "negative");
+    cfg.storm_threshold = nan;
+    ASSERT(asx_supervisor_spawn(&h, g_root, &cfg, &spec, 1) == ASX_E_INVALID_ARGUMENT, "NaN");
+    cfg.storm_threshold = inf;
+    ASSERT(asx_supervisor_spawn(&h, g_root, &cfg, &spec, 1) == ASX_E_INVALID_ARGUMENT, "infinite");
+    cfg.storm_threshold = 0.5;
+    ASSERT(asx_supervisor_spawn(&h, g_root, &cfg, &spec, 1) == ASX_OK, "a finite one is fine");
+}
+
 /* Each generation lives 2 us, then fails; the fourth succeeds. One restart
  * a minute stops the child after its first replacement, one restart per
  * microsecond lets every restart through: the earlier one has aged out of
@@ -875,6 +1000,10 @@ int main(void) {
     RUN(test_temporary_child_never_restarts);
     RUN(test_max_restarts_zero_refuses_at_once);
     RUN(test_reset_counter_keeps_restarting);
+    RUN(test_a_storm_threshold_is_reported_when_crossed);
+    RUN(test_a_storm_is_the_restarts_in_the_window);
+    RUN(test_reset_counter_resets_the_intensity);
+    RUN(test_a_bad_storm_threshold_is_refused);
     RUN(test_restarts_age_out_of_the_window);
     RUN(test_cancelled_transient_child_is_not_restarted);
     RUN(test_a_body_returning_cancelled_is_not_an_error);
