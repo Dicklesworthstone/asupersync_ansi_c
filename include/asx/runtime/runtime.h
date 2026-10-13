@@ -1474,7 +1474,7 @@ void asx_runtime_reset_hooks_run_internal(void);
  * beyond the first brings its own storage block (asx_runtime_config.storage)
  * and is accepted only while every subsystem that is still process-wide has
  * nothing live (channels, sync primitives, actors, links, monitors,
- * the application timer wheel, lab dispatch, parallel lanes, the network,
+ * lab dispatch, parallel lanes, the network,
  * file-system, process and signal adapters, the io driver and blocking
  * pool), and asks for the process-wide settings the first one has (hooks,
  * io backend, cancel chain limits). While two runtimes are live, those

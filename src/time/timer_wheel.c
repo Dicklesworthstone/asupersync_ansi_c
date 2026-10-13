@@ -45,14 +45,14 @@
  * kernel can embed the scheduler's wheel. */
 
 /* Application-facing wheel (asx_timer_wheel_global) and the scheduler's own
- * (one per runtime kernel, set up by asx_timer_wheel_setup_scheduler): one
- * implementation, two kinds of instance. The runtime never collects the
- * application wheel, and the scheduler's timers must not be visible to
- * application code. */
-static tw_entry g_app_entries[ASX_MAX_TIMERS];
-static uint16_t g_app_overflow[ASX_MAX_TIMERS];
-static asx_timer_wheel g_app_wheel;
-static int g_app_ready = 0;
+ * (each one per runtime kernel, in the kernel's block: the application
+ * wheel is set up on first use, the scheduler's by
+ * asx_timer_wheel_setup_scheduler): one implementation, two kinds of
+ * instance. The runtime never collects the application wheel, and the
+ * scheduler's timers must not be visible to application code. The
+ * application wheel records its trace events in its own runtime's trace
+ * (asx_timer_wheel.tag), whichever task is being polled.
+ */
 
 static uint32_t tw_next_generation(uint32_t current) {
     current++;
@@ -581,12 +581,20 @@ static void tw_setup(asx_timer_wheel *w, tw_entry *entries, uint16_t *overflow, 
     tw_reset_state(w);
 }
 
-asx_timer_wheel *asx_timer_wheel_global(void) {
-    if (!g_app_ready) {
-        tw_setup(&g_app_wheel, g_app_entries, g_app_overflow, TW_APP_CAPACITY, 1);
-        g_app_ready = 1;
+asx_timer_wheel *asx_timer_wheel_global(const asx_runtime *rt) {
+    asx_kernel *k = asx_kernel_of_runtime(rt);
+
+    if (k == NULL) return NULL;
+    if (!k->app_ready) {
+        tw_setup(&k->app_wheel, k->app_entries, k->app_overflow, TW_APP_CAPACITY, 1);
+        k->app_wheel.tag = k->tag;
+        k->app_ready = 1;
     }
-    return &g_app_wheel;
+    return &k->app_wheel;
+}
+
+void asx_timer_wheel_reset_app_internal(asx_kernel *k) {
+    if (k->app_ready) asx_timer_wheel_reset(&k->app_wheel);
 }
 
 void asx_timer_wheel_setup_scheduler(asx_timer_wheel *wheel, tw_entry *entries,
@@ -645,7 +653,8 @@ static void tw_arm(asx_timer_wheel *w, uint32_t idx, asx_time deadline, void *wa
     tw_insert_entry_at(w, idx, current);
 
     if (w->traced) {
-        asx_trace_emit_ctx_internal(ASX_TRACE_TIMER_SET, tw_trace_entity_id(out_handle), deadline);
+        asx_trace_emit_internal(asx_kernel_for_tag(w->tag), ASX_TRACE_TIMER_SET,
+                                tw_trace_entity_id(out_handle), deadline);
     }
 }
 
@@ -662,11 +671,6 @@ asx_status asx_timer_register(asx_timer_wheel *wheel, asx_time deadline, void *w
     uint32_t idx;
 
     if (wheel == NULL || out_handle == NULL) return ASX_E_INVALID_ARGUMENT;
-    /* The application wheel is one for the process; a runtime's scheduler
-     * wheel is its own and never refused. */
-    if (wheel == &g_app_wheel && asx_runtime_shared_state_refused_internal("application timers")) {
-        return ASX_E_INVALID_STATE;
-    }
     if (!tw_alloc(wheel, &idx)) return ASX_E_RESOURCE_EXHAUSTED;
 
     tw_arm(wheel, idx, tw_clamp_deadline(wheel, deadline), waker_data, out_handle);
@@ -692,8 +696,8 @@ int asx_timer_cancel(asx_timer_wheel *wheel, const asx_timer_handle *handle) {
 
     e = &wheel->entries[handle->slot];
     if (wheel->traced) {
-        asx_trace_emit_ctx_internal(ASX_TRACE_TIMER_CANCEL, tw_trace_entity_id(handle),
-                                    e->deadline);
+        asx_trace_emit_internal(asx_kernel_for_tag(wheel->tag), ASX_TRACE_TIMER_CANCEL,
+                                tw_trace_entity_id(handle), e->deadline);
     }
     tw_unlink(wheel, handle->slot);
     tw_release(wheel, handle->slot);
@@ -735,8 +739,8 @@ static uint32_t tw_drain_ready(asx_timer_wheel *w, asx_time now, void **out_wake
             fired.generation = e->generation;
             out_wakers[count++] = e->waker_data;
             if (w->traced) {
-                asx_trace_emit_ctx_internal(ASX_TRACE_TIMER_FIRE, tw_trace_entity_id(&fired),
-                                            e->deadline);
+                asx_trace_emit_internal(asx_kernel_for_tag(w->tag), ASX_TRACE_TIMER_FIRE,
+                                        tw_trace_entity_id(&fired), e->deadline);
             }
             tw_release(w, i);
             if (w->active_count > 0u) w->active_count--;

@@ -176,8 +176,10 @@ ASX_API int asx_timer_next_deadline(const asx_timer_wheel *wheel, asx_time *out_
  * Singleton wheel (global instance for walking skeleton)
  * ------------------------------------------------------------------- */
 
-/* Get the global timer wheel instance. The runtime never collects it. */
-ASX_API asx_timer_wheel *asx_timer_wheel_global(void);
+/* The application timer wheel of a runtime (one per runtime, set up on
+ * first use; the zeroed runtime object names the library's static kernel).
+ * The runtime never collects it. NULL for NULL or a tag no runtime holds. */
+ASX_API asx_timer_wheel *asx_timer_wheel_global(const asx_runtime *rt);
 
 #ifdef __cplusplus
 }
@@ -264,6 +266,7 @@ struct asx_timer_wheel {
     uint64_t max_timer_duration_ns; /* longer registrations are clamped (wheel.rs:98-104) */
     uint64_t max_wheel_duration_ns; /* longer ones wait in the overflow heap */
     int traced;                     /* emit TIMER_SET / TIMER_FIRE / TIMER_CANCEL */
+    uint16_t tag;                   /* the runtime whose trace those events go to */
 };
 
 #ifdef __cplusplus

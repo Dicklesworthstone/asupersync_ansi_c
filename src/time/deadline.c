@@ -40,15 +40,19 @@ asx_status asx_deadline_after(asx_deadline *dl, uint64_t duration_ns) {
     return asx_deadline_init(dl, duration_ns > UINT64_MAX - now ? UINT64_MAX : now + duration_ns);
 }
 
-asx_status asx_deadline_arm(asx_deadline *dl, void *waker_data) {
-    if (dl == NULL) return ASX_E_INVALID_ARGUMENT;
+asx_status asx_deadline_arm(const asx_runtime *rt, asx_deadline *dl, void *waker_data) {
+    asx_kernel *k;
+
+    if (dl == NULL || rt == NULL) return ASX_E_INVALID_ARGUMENT;
     if (dl->registered) return ASX_E_INVALID_STATE;
+    k = asx_kernel_of_runtime(rt);
+    if (k == NULL) return ASX_E_INVALID_STATE;
 
     {
-        asx_timer_wheel *wheel = asx_timer_wheel_global();
+        asx_timer_wheel *wheel = asx_timer_wheel_global(rt);
         asx_time now;
         asx_status st;
-        /* The runtime never collects the global wheel, so its time stays
+        /* The runtime never collects the application wheel, so its time stays
          * where the application last collected it (0 if never). As Rust's
          * TimerDriver::register synchronizes the wheel to the clock
          * before registering (time/driver.rs:501-508), bring it to the
@@ -56,14 +60,12 @@ asx_status asx_deadline_arm(asx_deadline *dl, void *waker_data) {
          * is clamped relative to now; otherwise every arm would be
          * clamped to the stale wheel time plus 7 days, in the past once
          * the clock is beyond that. Advancing keeps pending timers. */
-        if (asx_kernel_now_ns(asx_kernel_context(), &now) == ASX_OK) {
-            asx_timer_advance(wheel, now);
-        }
+        if (asx_kernel_now_ns(k, &now) == ASX_OK) { asx_timer_advance(wheel, now); }
         st = asx_timer_register(wheel, dl->target_ns, waker_data, &dl->timer);
         if (st != ASX_OK) return st;
     }
 
-    dl->registered = 1;
+    dl->registered = 1 + (int)k->tag; /* the runtime whose wheel holds the timer */
     return ASX_OK;
 }
 
@@ -71,7 +73,8 @@ asx_status asx_deadline_disarm(asx_deadline *dl) {
     if (dl == NULL) return ASX_E_INVALID_ARGUMENT;
 
     if (dl->registered) {
-        (void)asx_timer_cancel(asx_timer_wheel_global(), &dl->timer);
+        asx_kernel *k = asx_kernel_for_tag((uint16_t)(dl->registered - 1));
+        if (k != NULL && k->app_ready) (void)asx_timer_cancel(&k->app_wheel, &dl->timer);
         dl->registered = 0;
     }
     return ASX_OK;
@@ -116,5 +119,5 @@ asx_time asx_deadline_target(const asx_deadline *dl) {
 
 int asx_deadline_is_armed(const asx_deadline *dl) {
     if (dl == NULL) return 0;
-    return dl->registered;
+    return dl->registered != 0;
 }

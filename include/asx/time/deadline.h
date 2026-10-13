@@ -31,7 +31,7 @@ extern "C" {
 typedef struct {
     asx_time target_ns;     /* absolute deadline (nanoseconds) */
     asx_timer_handle timer; /* handle into the timer wheel */
-    int registered;         /* 1 if timer has been registered */
+    int registered;         /* 0, or 1 + tag of the runtime whose wheel holds the timer */
     int expired;            /* 1 if deadline has been observed as expired */
 } asx_deadline;
 
@@ -52,15 +52,17 @@ ASX_API ASX_MUST_USE asx_status asx_deadline_init(asx_deadline *dl, asx_time tar
  *   ASX_E_HOOK_MISSING if clock hooks are not installed. */
 ASX_API ASX_MUST_USE asx_status asx_deadline_after(asx_deadline *dl, uint64_t duration_ns);
 
-/* Arm a deadline by registering it with the global timer wheel.
+/* Arm a deadline by registering it with the runtime's application timer
+ * wheel (asx_timer_wheel_global(rt)).
  * waker_data is passed to the timer and returned when the timer fires.
  * As in Rust, a target farther than the wheel's maximum duration (7 days)
  * from now is registered at that maximum: the timer fires early and the
  * owner re-checks the target (asx_deadline_is_expired).
- * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if dl is NULL,
- *   ASX_E_INVALID_STATE if already armed,
+ * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if rt or dl is NULL,
+ *   ASX_E_INVALID_STATE if already armed or if no runtime holds rt's tag,
  *   ASX_E_RESOURCE_EXHAUSTED if timer wheel is full. */
-ASX_API ASX_MUST_USE asx_status asx_deadline_arm(asx_deadline *dl, void *waker_data);
+ASX_API ASX_MUST_USE asx_status asx_deadline_arm(const asx_runtime *rt, asx_deadline *dl,
+                                                 void *waker_data);
 
 /* Disarm a deadline by cancelling its timer.
  * Safe to call if not armed (no-op).

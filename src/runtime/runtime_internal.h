@@ -445,6 +445,12 @@ typedef struct asx_kernel {
     asx_timer_wheel wheel;
     tw_entry wheel_entries[TW_RUNTIME_CAPACITY];
     uint16_t wheel_overflow[TW_RUNTIME_CAPACITY];
+    /* The application timer wheel (asx_timer_wheel_global) and its arena:
+     * set up on first use (app_ready), reset by a clear. */
+    asx_timer_wheel app_wheel;
+    tw_entry app_entries[TW_APP_CAPACITY];
+    uint16_t app_overflow[TW_APP_CAPACITY];
+    int app_ready;
     /* The wake registrations (waker.c): a waker names this kernel by the
      * tag in its slot. */
     asx_waker_state wakers;
@@ -601,6 +607,10 @@ void asx_obligation_drain_posts_internal(asx_kernel *k);
  * first reset) and, with no other kernel held, the current task. Called
  * from the clear. Defined in scheduler.c. */
 void asx_scheduler_reset_internal(asx_kernel *k);
+
+/* Reset kernel `k`'s application timer wheel when it was set up (a clear).
+ * Defined in timer_wheel.c. */
+void asx_timer_wheel_reset_app_internal(asx_kernel *k);
 
 /* Initialize the scheduling fields of a freshly allocated task slot. */
 void asx_task_sched_init_internal(asx_task_slot *task);
