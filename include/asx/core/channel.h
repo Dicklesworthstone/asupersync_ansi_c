@@ -188,11 +188,35 @@ ASX_API ASX_MUST_USE asx_status asx_channel_sender_drop(asx_channel_sender *send
 ASX_API ASX_MUST_USE asx_status asx_channel_close_sender(asx_channel_id id);
 
 /* Drop the receiver (Rust's Receiver::drop, mpsc.rs:2122). Pending
- * messages are discarded, also after asx_channel_seal. Future sends via
- * permits return ASX_E_DISCONNECTED.
+ * messages are discarded, also after asx_channel_seal (see
+ * asx_channel_set_discard). Future sends via permits return
+ * ASX_E_DISCONNECTED.
  * Open → ReceiverClosed; SenderClosed → FullyClosed; a sealed channel's
  * state stays. Returns ASX_E_INVALID_STATE once the receiver was dropped. */
 ASX_API ASX_MUST_USE asx_status asx_channel_close_receiver(asx_channel_id id);
+
+/* Called once, with the message token, for each queued message the channel
+ * discards without delivering it. It runs after the channel's state and
+ * waiters are final and must not use this channel. */
+typedef void (*asx_channel_discard_fn)(void *ctx, uint64_t value);
+
+/* Install (or with fn NULL, remove) the channel's discard callback. Rust's
+ * channels own their `T` and run its Drop for every message that is
+ * dropped unreceived; a C message is a uint64_t token, often a pointer to
+ * the application's memory, so without this the token leaks. `fn` runs
+ * exactly once per such message, oldest first, on:
+ *   - asx_channel_close_receiver, for what the queue holds (also after
+ *     asx_channel_seal);
+ *   - asx_channel_reset (the runtime's reset), for what a live channel
+ *     still queues.
+ * It never runs for a message that was received, nor for one an eviction
+ * handed back (asx_channel_send_evict_oldest*: *out_value is the caller's
+ * to release), nor for a value a failed send returned to its sender.
+ * Both queue backends order and count the calls identically. With no
+ * callback installed nothing changes. A create clears it.
+ * Returns ASX_E_NOT_FOUND / ASX_E_STALE_HANDLE for an invalid channel. */
+ASX_API ASX_MUST_USE asx_status asx_channel_set_discard(asx_channel_id id,
+                                                        asx_channel_discard_fn fn, void *ctx);
 
 /* Close the channel from the receiver side, keeping its queue: Rust's
  * `rx.close()` (mpsc.rs:1698), where asx_channel_close_receiver is the

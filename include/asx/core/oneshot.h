@@ -74,8 +74,26 @@ ASX_API ASX_MUST_USE asx_status asx_oneshot_create(asx_oneshot_sender *out_sende
 ASX_API void asx_oneshot_sender_drop(asx_oneshot_sender *sender);
 
 /* Drop the receiver without consuming.
- * Sender will get ASX_E_DISCONNECTED on try_send. */
+ * Sender will get ASX_E_DISCONNECTED on try_send. A value already sent and
+ * not received is discarded (see asx_oneshot_set_discard). */
 ASX_API void asx_oneshot_receiver_drop(asx_oneshot_receiver *receiver);
+
+/* Called once, with the value token, for a value the channel drops without
+ * delivering it. It runs after the drop's wakes and must not use this
+ * channel. */
+typedef void (*asx_oneshot_discard_fn)(void *ctx, uint64_t value);
+
+/* Install (or with fn NULL, remove) the channel's discard callback. Rust
+ * drops a sent value nobody received when the receiver is dropped; a C
+ * value is a uint64_t token, often a pointer, so without this it leaks.
+ * `fn` runs exactly once, on asx_oneshot_receiver_drop of a channel that
+ * holds a sent, unreceived value, and on asx_oneshot_reset for one still
+ * holding it. It never runs for a received value, nor for one a failed
+ * send left with its caller. With no callback nothing changes; a create
+ * clears it.
+ * Returns ASX_E_NOT_FOUND / ASX_E_STALE_HANDLE for an invalid handle. */
+ASX_API ASX_MUST_USE asx_status asx_oneshot_set_discard(const asx_oneshot_sender *sender,
+                                                        asx_oneshot_discard_fn fn, void *ctx);
 
 /* -------------------------------------------------------------------
  * API: Send / Receive

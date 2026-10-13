@@ -5,25 +5,21 @@
  * POSIX/PARALLEL builds can use the atomic committed-message backend
  * while preserving the same reserve/send/abort contract.
  *
- * Two-phase protocol:
- *   1. try_reserve — claims capacity, returns permit
- *   2. send (via permit) — enqueues value FIFO
- *      OR abort (via permit) — returns capacity without enqueuing
+ * Two-phase protocol: try_reserve claims capacity and returns a permit;
+ * send (via permit) enqueues the value FIFO, or abort returns the capacity.
  *
  * Capacity invariant: queue_len + reserved_count <= capacity
  *
  * Wake-driven waiting: inside a scheduler poll, the waiting operations
- * asx_channel_recv (empty) and asx_channel_reserve / asx_channel_send
- * (full) park the calling task in the channel's FIFO recv / reserve wait
- * queue. try_recv and try_reserve never park, as Rust's try_* register no
- * waker (bd-vc1v). After every state change the queues are settled: each
- * committed message is owed to one parked receiver, and free capacity to
- * the head of the reserve line (a commit wakes one receiver, a dequeue or
- * abort wakes the oldest producer). As upstream, no reserve jumps the
- * line: with a live producer parked ahead it reports FULL even if capacity
- * is free. Closing either side wakes everyone.
- * asx_channel_wait_cancel() withdraws a task that stops waiting and passes
- * any wake it held on. Outside a scheduler poll nothing parks.
+ * (recv on empty, reserve / send when full) park the calling task in the
+ * channel's FIFO recv / reserve wait queue; try_recv and try_reserve never
+ * park, as Rust's try_* register no waker (bd-vc1v). After every state
+ * change the queues are settled: each committed message is owed to one
+ * parked receiver, and free capacity to the head of the reserve line. As
+ * upstream, no reserve jumps the line: with a live producer parked ahead
+ * it reports FULL even if capacity is free. Closing either side wakes
+ * everyone. asx_channel_wait_cancel() withdraws a task that stops waiting
+ * and passes any wake it held on. Outside a scheduler poll nothing parks.
  *
  * Semantics specified in docs/CHANNEL_TIMER_KERNEL_SEMANTICS.md.
  *
@@ -97,6 +93,8 @@ typedef struct {
      * ring is the channel's whole arena slice, and exhausting it is
      * ASX_E_RESOURCE_EXHAUSTED rather than a full channel to park on. */
     int unbounded;
+    asx_channel_discard_fn discard_fn; /* asx_channel_set_discard */
+    void *discard_ctx;
 
     /* Bounded ring buffer */
     uint32_t capacity;
@@ -125,6 +123,8 @@ static uint32_t g_channel_count;
  * up was never created, so it is not alive and asx_channel_create()
  * initialises every field it uses: the reset need not visit it. */
 static uint32_t g_channel_hwm;
+static uint32_t channel_discard_queue(asx_channel_slot *s, uint64_t *out);
+static void channel_run_discard(asx_channel_slot *s, const uint64_t *values, uint32_t n);
 
 /* ------------------------------------------------------------------ */
 /* Internal helpers                                                   */
@@ -496,6 +496,8 @@ static asx_status channel_create_impl(asx_region_id region, uint32_t capacity, i
             channel_sender_ids_reset(s);
             s->receiver_dropped = 0;
             s->unbounded = unbounded;
+            s->discard_fn = NULL;
+            s->discard_ctx = NULL;
             s->capacity = capacity;
             s->queue_head = 0;
             s->queue_len = 0;
@@ -507,7 +509,6 @@ static asx_status channel_create_impl(asx_region_id region, uint32_t capacity, i
             channel_lf_init(s);
 #endif
             channel_waiters_init(s);
-
             g_channel_count++;
             *out_id = channel_make_handle(i, s->generation);
             return ASX_OK;
@@ -521,9 +522,8 @@ asx_status asx_channel_create(asx_region_id region, uint32_t capacity, asx_chann
     return channel_create_impl(region, capacity, 0, out_id);
 }
 
-/* Rust's unbounded_channel is channel(usize::MAX) (mpsc.rs:599-618): the
- * C channel's arena slice stands for it. A profile whose overload catalog
- * entry forbids unbounded queues refuses (DEC-008). */
+/* Rust's unbounded_channel (mpsc.rs:599-618): the channel's arena slice
+ * stands for usize::MAX; an overload catalog that forbids it refuses (DEC-008). */
 asx_status asx_channel_create_unbounded(asx_region_id region, asx_channel_id *out_id) {
     const asx_overload_catalog_entry *entry = NULL;
 
@@ -657,6 +657,8 @@ asx_status asx_channel_close_sender(asx_channel_id id) {
 }
 
 asx_status asx_channel_close_receiver(asx_channel_id id) {
+    uint64_t dropped[ASX_CHANNEL_MAX_CAPACITY];
+    uint32_t n_dropped;
     asx_channel_slot *s;
     asx_status st;
 
@@ -673,15 +675,13 @@ asx_status asx_channel_close_receiver(asx_channel_id id) {
     } else if (s->state == ASX_CHANNEL_SENDER_CLOSED) {
         s->state = ASX_CHANNEL_FULLY_CLOSED;
     }
-#if ASX_CHANNEL_BACKEND_LOCKFREE
-    channel_lf_discard_committed(s);
-#else
-    s->queue_len = 0;
-    s->queue_head = 0;
-#endif
+    /* The taken queue's messages reach the discard callback once the
+     * channel is in its final state, as Rust drops them after its wakes. */
+    n_dropped = channel_discard_queue(s, dropped);
     channel_wake_everyone(s);
     /* Nobody waits on a fully closed channel again. */
     if (s->state == ASX_CHANNEL_FULLY_CLOSED) channel_waiters_init(s);
+    channel_run_discard(s, dropped, n_dropped);
     return ASX_OK;
 }
 
@@ -1383,13 +1383,22 @@ void asx_channel_reset(void) {
     uint32_t i;
 
     for (i = 0; i < g_channel_hwm; i++) {
+        uint64_t dropped[ASX_CHANNEL_MAX_CAPACITY];
+        uint32_t n_dropped;
         /* ASX_CHECKPOINT_WAIVER("bounded: g_channel_hwm <= ASX_MAX_CHANNELS") */
-        if (g_channels[i].alive) { g_channels[i].generation++; }
+        if (g_channels[i].alive) {
+            /* What a live channel still queues is dropped unreceived. */
+            n_dropped = channel_discard_queue(&g_channels[i], dropped);
+            channel_run_discard(&g_channels[i], dropped, n_dropped);
+            g_channels[i].generation++;
+        }
         g_channels[i].alive = 0;
         g_channels[i].state = ASX_CHANNEL_OPEN;
         g_channels[i].receiver_dropped = 0;
         channel_sender_ids_reset(&g_channels[i]);
         g_channels[i].unbounded = 0;
+        g_channels[i].discard_fn = NULL;
+        g_channels[i].discard_ctx = NULL;
         g_channels[i].queue_head = 0;
         g_channels[i].queue_len = 0;
         channel_atomic_store(&g_channels[i].reserved, 0u);
@@ -1403,4 +1412,55 @@ void asx_channel_reset(void) {
     }
     g_channel_hwm = 0;
     g_channel_count = 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* Discard callback                                                   */
+/* ------------------------------------------------------------------ */
+
+asx_status asx_channel_set_discard(asx_channel_id id, asx_channel_discard_fn fn, void *ctx) {
+    asx_channel_slot *s;
+    asx_status st;
+
+    st = channel_slot_lookup(id, &s);
+    if (st != ASX_OK) { return st; }
+    s->discard_fn = fn;
+    s->discard_ctx = fn != NULL ? ctx : NULL;
+    return ASX_OK;
+}
+
+/* Empty the queue, as a receiver drop does. When a discard callback is
+ * installed the committed messages, oldest first, are moved into `out`
+ * (room for ASX_CHANNEL_MAX_CAPACITY) for channel_run_discard; returns how
+ * many. Declared above, defined here so the line numbers the docs cite stay
+ * put. */
+static uint32_t channel_discard_queue(asx_channel_slot *s, uint64_t *out) {
+    uint32_t n = 0u;
+
+    while (s->discard_fn != NULL && n < ASX_CHANNEL_MAX_CAPACITY &&
+           channel_take_oldest(s, &out[n])) {
+        ASX_CHECKPOINT_WAIVER("bounded: at most ASX_CHANNEL_MAX_CAPACITY committed messages");
+        n++;
+    }
+#if ASX_CHANNEL_BACKEND_LOCKFREE
+    channel_lf_discard_committed(s);
+#else
+    s->queue_len = 0;
+    s->queue_head = 0;
+#endif
+    return n;
+}
+
+/* Run the channel's discard callback over `n` messages taken from its
+ * queue. The callback and its context are read first, so a callback that
+ * touches the channel's slot cannot redirect the calls that follow. */
+static void channel_run_discard(asx_channel_slot *s, const uint64_t *values, uint32_t n) {
+    asx_channel_discard_fn fn = s->discard_fn;
+    void *ctx = s->discard_ctx;
+    uint32_t i;
+
+    for (i = 0u; fn != NULL && i < n; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: at most ASX_CHANNEL_MAX_CAPACITY committed messages");
+        fn(ctx, values[i]);
+    }
 }

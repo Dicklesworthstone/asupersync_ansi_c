@@ -30,8 +30,10 @@ typedef struct {
     uint64_t value;
     int sender_alive;
     int receiver_alive;
-    int receiver_dropped;     /* asx_oneshot_receiver_drop ran (Rust receiver_dropped) */
-    int reserved;             /* a permit holds the sending side (asx_oneshot_reserve) */
+    int receiver_dropped;              /* asx_oneshot_receiver_drop ran (Rust receiver_dropped) */
+    int reserved;                      /* a permit holds the sending side (asx_oneshot_reserve) */
+    asx_oneshot_discard_fn discard_fn; /* asx_oneshot_set_discard */
+    void *discard_ctx;
     asx_wait_queue waiters;   /* tasks parked in asx_oneshot_recv */
     asx_wait_queue tx_closed; /* parked in asx_oneshot_poll_closed (Rust sender_waker) */
     asx_wait_queue rx_closed; /* parked in asx_oneshot_receiver_poll_closed
@@ -84,6 +86,8 @@ static void oneshot_slot_init(asx_oneshot_slot *s) {
     s->receiver_alive = 0;
     s->receiver_dropped = 0;
     s->reserved = 0;
+    s->discard_fn = NULL;
+    s->discard_ctx = NULL;
     asx_wait_queue_init(&s->waiters, NULL);
     asx_wait_queue_init(&s->tx_closed, NULL);
     asx_wait_queue_init(&s->rx_closed, NULL);
@@ -92,10 +96,34 @@ static void oneshot_slot_init(asx_oneshot_slot *s) {
 void asx_oneshot_reset(void) {
     uint32_t i;
     for (i = 0; i < ASX_MAX_ONESHOTS; i++) {
+        asx_oneshot_discard_fn discard_fn = NULL;
+        void *discard_ctx = NULL;
+        uint64_t value = 0u;
+        /* A value sent and never received is dropped with its channel. */
+        if (i < g_slot_count && g_slots[i].state == ASX_ONESHOT_FILLED &&
+            g_slots[i].discard_fn != NULL) {
+            discard_fn = g_slots[i].discard_fn;
+            discard_ctx = g_slots[i].discard_ctx;
+            value = g_slots[i].value;
+        }
         g_slots[i].generation = next_gen(g_slots[i].generation);
         oneshot_slot_init(&g_slots[i]);
+        if (discard_fn != NULL) discard_fn(discard_ctx, value);
     }
     g_slot_count = 0;
+}
+
+asx_status asx_oneshot_set_discard(const asx_oneshot_sender *sender, asx_oneshot_discard_fn fn,
+                                   void *ctx) {
+    asx_oneshot_slot *s;
+
+    if (sender == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (sender->slot >= g_slot_count) return ASX_E_NOT_FOUND;
+    s = &g_slots[sender->slot];
+    if (s->generation != sender->generation) return ASX_E_STALE_HANDLE;
+    s->discard_fn = fn;
+    s->discard_ctx = fn != NULL ? ctx : NULL;
+    return ASX_OK;
 }
 
 /* ------------------------------------------------------------------ */
@@ -163,6 +191,9 @@ void asx_oneshot_sender_drop(asx_oneshot_sender *sender) {
 }
 
 void asx_oneshot_receiver_drop(asx_oneshot_receiver *receiver) {
+    asx_oneshot_discard_fn discard_fn = NULL;
+    void *discard_ctx = NULL;
+    uint64_t discard_value = 0u;
     asx_oneshot_slot *s;
     if (receiver == NULL) return;
     if (receiver->slot >= g_slot_count) return;
@@ -173,6 +204,12 @@ void asx_oneshot_receiver_drop(asx_oneshot_receiver *receiver) {
     s->receiver_dropped = 1;
     if (s->receiver_alive) {
         s->receiver_alive = 0;
+        if (s->state == ASX_ONESHOT_FILLED) {
+            /* Rust drops a value nobody received with the receiver. */
+            discard_value = s->value;
+            discard_fn = s->discard_fn;
+            discard_ctx = s->discard_ctx;
+        }
         if (s->state == ASX_ONESHOT_EMPTY || s->state == ASX_ONESHOT_FILLED) {
             s->state = ASX_ONESHOT_RECEIVER_DROPPED;
         }
@@ -187,6 +224,7 @@ void asx_oneshot_receiver_drop(asx_oneshot_receiver *receiver) {
     } else {
         oneshot_retire_queue(&s->rx_closed);
     }
+    if (discard_fn != NULL) discard_fn(discard_ctx, discard_value);
 }
 
 /* ------------------------------------------------------------------ */

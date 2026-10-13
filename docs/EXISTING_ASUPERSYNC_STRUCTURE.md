@@ -837,7 +837,7 @@ Rust: `src/channel/session.rs` (`TrackedSender`/`TrackedPermit` at `src/channel/
 4. Takes the queue via `mem::take()` — pending messages DROPPED (not delivered)
 5. After unlock: signals closed, wakes ALL waiting senders (they observe disconnect on next poll), then drops the items outside the lock
 
-`Receiver::close()` (`src/channel/mpsc.rs:1698`) is different: it sets `receiver_dropped` and wakes senders but keeps the queue receivable. C's `asx_channel_close_receiver` is the drop: it discards the queue, also after a seal (Rust's drop takes it, `src/channel/mpsc.rs:2138`), and wakes both wait queues, and a second drop returns `ASX_E_INVALID_STATE` (`src/channel/mpsc.c:665`; `bd-9kll.5.4`). `asx_channel_seal` is `Receiver::close()`: it wakes the parked senders and keeps the queue receivable (`src/channel/mpsc.c:688`; `bd-g652`; fixture `mpsc-seal-drains-001`).
+`Receiver::close()` (`src/channel/mpsc.rs:1698`) is different: it sets `receiver_dropped` and wakes senders but keeps the queue receivable. C's `asx_channel_close_receiver` is the drop: it discards the queue, also after a seal (Rust's drop takes it, `src/channel/mpsc.rs:2138`), and wakes both wait queues, and a second drop returns `ASX_E_INVALID_STATE` (`src/channel/mpsc.c:667`; `bd-9kll.5.4`). `asx_channel_seal` is `Receiver::close()`: it wakes the parked senders and keeps the queue receivable (`src/channel/mpsc.c:688`; `bd-g652`; fixture `mpsc-seal-drains-001`).
 
 **Last Sender Drop** (`src/channel/mpsc.rs:1241`):
 1. Decrements `sender_count` to 0

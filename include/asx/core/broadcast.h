@@ -112,9 +112,33 @@ ASX_API ASX_MUST_USE asx_status asx_broadcast_receiver_clone(const asx_broadcast
 ASX_API void asx_broadcast_sender_drop(asx_broadcast_sender *sender);
 
 /* Drop a receiver (Rust Receiver::drop, :1089). With none left, sends
- * report ASX_E_DISCONNECTED. A second drop of the same handle does
- * nothing. */
+ * report ASX_E_DISCONNECTED, and the messages the channel still buffers are
+ * dropped (see asx_broadcast_set_discard). A second drop of the same handle
+ * does nothing. */
 ASX_API void asx_broadcast_receiver_drop(asx_broadcast_receiver *receiver);
+
+/* Called once, with the message token, for each message the channel's ring
+ * drops. It runs after the operation's wakes and must not use this
+ * channel. */
+typedef void (*asx_broadcast_discard_fn)(void *ctx, uint64_t value);
+
+/* Install (or with fn NULL, remove) the channel's discard callback. Rust's
+ * ring owns each message and drops it when it falls off the ring (the
+ * receivers read clones), when the last receiver is dropped (the whole
+ * buffer goes, broadcast.rs:1089-1103), and when a send reaches no receiver
+ * (its message is dropped, :730-738); a C message is a uint64_t token, so
+ * without this a token the ring held leaks. `fn` runs exactly once per
+ * message the ring owned, oldest first, on: a send that overwrites the
+ * oldest buffered message (for that message), a send that reaches no
+ * receiver (for the sent message), the last receiver's drop (for every
+ * buffered message), and asx_broadcast_reset (for the messages a live
+ * channel still buffers). A receiver that read a message holds the token
+ * copy the channel gave it; releasing it is the application's. With no
+ * callback nothing changes; a create clears it.
+ * Returns ASX_E_INVALID_STATE for a dropped sender, ASX_E_NOT_FOUND /
+ * ASX_E_STALE_HANDLE for an invalid handle. */
+ASX_API ASX_MUST_USE asx_status asx_broadcast_set_discard(const asx_broadcast_sender *sender,
+                                                          asx_broadcast_discard_fn fn, void *ctx);
 
 /* -------------------------------------------------------------------
  * API: Send

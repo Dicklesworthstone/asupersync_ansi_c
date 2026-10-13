@@ -32,6 +32,9 @@ typedef struct {
      * `self.clone()`): counted by receiver_count()/is_closed, outside the
      * receiver limit, since their owners already hold a receiver. */
     uint32_t waiter_clones;
+    asx_watch_discard_fn discard_fn; /* asx_watch_set_discard */
+    void *discard_ctx;
+    int released;           /* the channel died and its last value was dropped */
     asx_wait_queue waiters; /* tasks parked in poll_changed / wait_for */
 } asx_watch_slot;
 
@@ -55,18 +58,53 @@ static void watch_wake_waiters(asx_watch_slot *s) {
     if (s->waiters.len > 0u) (void)asx_wait_queue_wake_all(&s->waiters);
 }
 
+/* The channel has no sender and no receiver left (Rust: the last Arc is
+ * dropped): its last value is dropped, once. */
+static void watch_release_if_dead(asx_watch_slot *s) {
+    if (s->sender_alive || s->receiver_count != 0u || s->waiter_clones != 0u || s->released) return;
+    s->released = 1;
+    if (s->discard_fn != NULL) s->discard_fn(s->discard_ctx, s->value);
+}
+
 void asx_watch_reset(void) {
     uint32_t i;
     for (i = 0; i < ASX_MAX_WATCHES; i++) {
+        asx_watch_discard_fn discard_fn = NULL;
+        void *discard_ctx = NULL;
+        uint64_t value = g_slots[i].value;
+        /* A live channel's value is dropped with it. */
+        if (i < g_slot_count && !g_slots[i].released && g_slots[i].discard_fn != NULL &&
+            (g_slots[i].sender_alive || g_slots[i].receiver_count != 0u ||
+             g_slots[i].waiter_clones != 0u)) {
+            discard_fn = g_slots[i].discard_fn;
+            discard_ctx = g_slots[i].discard_ctx;
+        }
         g_slots[i].generation = next_gen(g_slots[i].generation);
         g_slots[i].sender_alive = 0;
         g_slots[i].value = 0;
         g_slots[i].version = 0;
         g_slots[i].receiver_count = 0;
         g_slots[i].waiter_clones = 0;
+        g_slots[i].discard_fn = NULL;
+        g_slots[i].discard_ctx = NULL;
+        g_slots[i].released = 0;
         watch_waiters_init(&g_slots[i]);
+        if (discard_fn != NULL) discard_fn(discard_ctx, value);
     }
     g_slot_count = 0;
+}
+
+asx_status asx_watch_set_discard(const asx_watch_sender *sender, asx_watch_discard_fn fn,
+                                 void *ctx) {
+    asx_watch_slot *s;
+
+    if (sender == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (sender->slot >= g_slot_count) return ASX_E_NOT_FOUND;
+    s = &g_slots[sender->slot];
+    if (s->generation != sender->generation) return ASX_E_STALE_HANDLE;
+    s->discard_fn = fn;
+    s->discard_ctx = fn != NULL ? ctx : NULL;
+    return ASX_OK;
 }
 
 /* ------------------------------------------------------------------ */
@@ -108,6 +146,9 @@ asx_status asx_watch_create(uint64_t initial_value, asx_watch_sender *out_sender
     s->version = 0;
     s->receiver_count = 1;
     s->waiter_clones = 0;
+    s->discard_fn = NULL;
+    s->discard_ctx = NULL;
+    s->released = 0;
     watch_waiters_init(s);
 
     out_sender->slot = idx;
@@ -178,6 +219,7 @@ void asx_watch_sender_drop(asx_watch_sender *sender) {
     if (s->generation != sender->generation) return;
     s->sender_alive = 0;
     watch_wake_waiters(s);
+    watch_release_if_dead(s);
 }
 
 void asx_watch_receiver_drop(asx_watch_receiver *receiver) {
@@ -187,6 +229,7 @@ void asx_watch_receiver_drop(asx_watch_receiver *receiver) {
     s = &g_slots[receiver->slot];
     if (s->generation != receiver->generation) return;
     if (s->receiver_count > 0) s->receiver_count--;
+    watch_release_if_dead(s);
 }
 
 /* ------------------------------------------------------------------ */
@@ -195,6 +238,7 @@ void asx_watch_receiver_drop(asx_watch_receiver *receiver) {
 
 asx_status asx_watch_send(asx_watch_sender *sender, uint64_t value) {
     asx_watch_slot *s;
+    uint64_t replaced;
 
     if (sender == NULL) return ASX_E_INVALID_ARGUMENT;
     if (sender->slot >= g_slot_count) return ASX_E_NOT_FOUND;
@@ -203,11 +247,15 @@ asx_status asx_watch_send(asx_watch_sender *sender, uint64_t value) {
     if (s->generation != sender->generation) return ASX_E_STALE_HANDLE;
     if (!s->sender_alive) return ASX_E_INVALID_STATE;
 
+    replaced = s->value;
     s->value = value;
     s->version++;
 
     asx_trace_emit(ASX_TRACE_CHANNEL_SEND, (uint64_t)sender->slot, value);
     watch_wake_waiters(s);
+    /* The value this one replaced is dropped (watch.rs:497-503); a token
+     * sent again is the same value, not a replacement. */
+    if (s->discard_fn != NULL && replaced != value) s->discard_fn(s->discard_ctx, replaced);
 
     return ASX_OK;
 }
@@ -216,6 +264,7 @@ asx_status asx_watch_send(asx_watch_sender *sender, uint64_t value) {
  * version, whether or not the closure changed the value. */
 asx_status asx_watch_send_modify(asx_watch_sender *sender, asx_watch_modify_fn modify, void *ctx) {
     asx_watch_slot *s;
+    uint64_t replaced;
     uint64_t value;
 
     if (sender == NULL || modify == NULL) return ASX_E_INVALID_ARGUMENT;
@@ -226,12 +275,16 @@ asx_status asx_watch_send_modify(asx_watch_sender *sender, asx_watch_modify_fn m
     if (!s->sender_alive) return ASX_E_INVALID_STATE;
 
     value = s->value;
+    replaced = value;
     modify(ctx, &value);
     s->value = value;
     s->version++;
 
     asx_trace_emit(ASX_TRACE_CHANNEL_SEND, (uint64_t)sender->slot, value);
     watch_wake_waiters(s);
+    /* The written-back value replaces the old one (watch.rs:567); a closure
+     * that left the token as it was replaced nothing. */
+    if (s->discard_fn != NULL && replaced != value) s->discard_fn(s->discard_ctx, replaced);
 
     return ASX_OK;
 }

@@ -47,6 +47,12 @@ typedef struct {
     uint32_t capacity;
     uint64_t buffer[ASX_BROADCAST_MAX_CAPACITY];
     uint64_t write_seq; /* messages published so far (Rust total_sent) */
+    /* Sequence of the oldest message the ring still owns: those below it
+     * were dropped (the last receiver's drop takes the whole buffer), so a
+     * later overwrite of their slots drops nothing. */
+    uint64_t live_from;
+    asx_broadcast_discard_fn discard_fn; /* asx_broadcast_set_discard */
+    void *discard_ctx;
     uint32_t receiver_count;
     asx_wait_queue waiters; /* tasks parked in asx_broadcast_recv */
     bc_waker_slot wakers[ASX_BROADCAST_MAX_RECEIVERS];
@@ -229,13 +235,43 @@ static asx_broadcast_slot *broadcast_sender_slot(const asx_broadcast_sender *sen
     return s;
 }
 
+/* The messages the ring still owns, oldest first, are dropped: copied out
+ * and handed to the discard callback, after which the ring owns none (so a
+ * later overwrite of those slots drops nothing). A no-op without a
+ * callback beyond that bookkeeping. */
+static void broadcast_release_ring(asx_broadcast_slot *s) {
+    uint64_t dropped[ASX_BROADCAST_MAX_CAPACITY];
+    asx_broadcast_discard_fn fn = s->discard_fn;
+    void *ctx = s->discard_ctx;
+    uint64_t first = s->write_seq > s->capacity ? s->write_seq - s->capacity : 0u;
+    uint64_t seq;
+    uint32_t n = 0u;
+    uint32_t i;
+
+    if (first < s->live_from) first = s->live_from;
+    for (seq = first; fn != NULL && seq < s->write_seq && n < ASX_BROADCAST_MAX_CAPACITY; seq++) {
+        ASX_CHECKPOINT_WAIVER("bounded: at most the ring capacity of messages");
+        dropped[n++] = s->buffer[seq % s->capacity];
+    }
+    s->live_from = s->write_seq;
+    for (i = 0u; fn != NULL && i < n; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: at most ASX_BROADCAST_MAX_CAPACITY messages");
+        fn(ctx, dropped[i]);
+    }
+}
+
 void asx_broadcast_reset(void) {
     uint32_t i;
     for (i = 0; i < ASX_MAX_BROADCASTS; i++) {
+        /* What a live channel's ring still owns is dropped with it. */
+        if (i < g_slot_count && g_slots[i].capacity > 0u) broadcast_release_ring(&g_slots[i]);
         g_slots[i].generation = next_gen(g_slots[i].generation);
         g_slots[i].sender_count = 0;
         g_slots[i].capacity = 0;
         g_slots[i].write_seq = 0;
+        g_slots[i].live_from = 0;
+        g_slots[i].discard_fn = NULL;
+        g_slots[i].discard_ctx = NULL;
         g_slots[i].receiver_count = 0;
         memset(g_slots[i].buffer, 0, sizeof(g_slots[i].buffer));
         broadcast_waiters_init(&g_slots[i]);
@@ -280,6 +316,9 @@ asx_status asx_broadcast_create(uint32_t capacity, asx_broadcast_sender *out_sen
     s->sender_count = 1;
     s->capacity = capacity;
     s->write_seq = 0;
+    s->live_from = 0;
+    s->discard_fn = NULL;
+    s->discard_ctx = NULL;
     s->receiver_count = 1;
     memset(s->buffer, 0, sizeof(s->buffer));
     broadcast_waiters_init(s);
@@ -370,6 +409,20 @@ void asx_broadcast_receiver_drop(asx_broadcast_receiver *receiver) {
     if (s == NULL) return;
     receiver->dropped = 1;
     if (s->receiver_count > 0) s->receiver_count--;
+    /* The last receiver takes the whole buffer with it (broadcast.rs:1089). */
+    if (s->receiver_count == 0u) broadcast_release_ring(s);
+}
+
+asx_status asx_broadcast_set_discard(const asx_broadcast_sender *sender,
+                                     asx_broadcast_discard_fn fn, void *ctx) {
+    asx_broadcast_slot *s;
+    asx_status st;
+
+    s = broadcast_sender_slot(sender, &st);
+    if (s == NULL) return st;
+    s->discard_fn = fn;
+    s->discard_ctx = fn != NULL ? ctx : NULL;
+    return ASX_OK;
 }
 
 /* ------------------------------------------------------------------ */
@@ -448,6 +501,8 @@ asx_status asx_broadcast_permit_send(asx_broadcast_permit *permit, uint64_t valu
                                      uint32_t *out_receivers) {
     asx_broadcast_slot *s;
     asx_status st;
+    uint64_t overwritten = 0u;
+    int overwrote = 0;
     uint32_t ring_idx;
     uint32_t credit;
 
@@ -490,11 +545,20 @@ asx_status asx_broadcast_permit_send(asx_broadcast_permit *permit, uint64_t valu
         (void)st; /* only an already-resolved obligation refuses */
         permit->obligation = ASX_INVALID_ID;
     }
-    /* Every receiver dropped since the reserve: nothing is published. */
-    if (s->receiver_count == 0u) return ASX_OK;
+    /* Every receiver dropped since the reserve: nothing is published, and
+     * the message is dropped (broadcast.rs:730-738). */
+    if (s->receiver_count == 0u) {
+        if (s->discard_fn != NULL) s->discard_fn(s->discard_ctx, value);
+        return ASX_OK;
+    }
 
-    /* Write into ring buffer (overwrites old messages) */
+    /* Write into ring buffer (overwrites old messages): the one it takes
+     * the place of, if the ring still owns it, falls off the ring. */
     ring_idx = (uint32_t)(s->write_seq % s->capacity);
+    if (s->write_seq >= s->capacity && s->write_seq - s->capacity >= s->live_from) {
+        overwritten = s->buffer[ring_idx];
+        overwrote = 1;
+    }
     s->buffer[ring_idx] = value;
     s->write_seq++;
 
@@ -502,6 +566,7 @@ asx_status asx_broadcast_permit_send(asx_broadcast_permit *permit, uint64_t valu
     broadcast_wake_waiters(s);
 
     if (out_receivers != NULL) *out_receivers = s->receiver_count;
+    if (overwrote && s->discard_fn != NULL) s->discard_fn(s->discard_ctx, overwritten);
     return ASX_OK;
 }
 

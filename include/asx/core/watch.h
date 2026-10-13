@@ -114,8 +114,30 @@ ASX_API ASX_MUST_USE asx_status asx_watch_receiver_clone(const asx_watch_receive
  * but has_changed will eventually return 0. */
 ASX_API void asx_watch_sender_drop(asx_watch_sender *sender);
 
-/* Drop a receiver. */
+/* Drop a receiver. With the sender gone too, the channel's last value is
+ * dropped (see asx_watch_set_discard). */
 ASX_API void asx_watch_receiver_drop(asx_watch_receiver *receiver);
+
+/* Called once, with the value token, for each value the channel drops. It
+ * runs after the operation's wakes and must not use this channel. */
+typedef void (*asx_watch_discard_fn)(void *ctx, uint64_t value);
+
+/* Install (or with fn NULL, remove) the channel's discard callback. Rust's
+ * watch cell owns its `T`: every send and send_modify drops the value it
+ * replaces (watch.rs:497-503, :567-571), and the last value is dropped with
+ * the channel; a C value is a uint64_t token, often a pointer, so without
+ * this a replaced token leaks. `fn` runs exactly once per such value:
+ * on asx_watch_send and asx_watch_send_modify (for the value replaced,
+ * including the initial one; sending the token the channel already holds
+ * replaces nothing, so it is not called), when the channel is left with no
+ * sender and
+ * no receiver (for the last value), and on asx_watch_reset (for the value
+ * a live channel still holds). A receiver that read a value holds the
+ * token copy it was given; releasing it is the application's. With no
+ * callback nothing changes; a create clears it.
+ * Returns ASX_E_NOT_FOUND / ASX_E_STALE_HANDLE for an invalid handle. */
+ASX_API ASX_MUST_USE asx_status asx_watch_set_discard(const asx_watch_sender *sender,
+                                                      asx_watch_discard_fn fn, void *ctx);
 
 /* -------------------------------------------------------------------
  * API: Send (update value)
