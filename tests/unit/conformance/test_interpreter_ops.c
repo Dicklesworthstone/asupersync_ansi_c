@@ -221,6 +221,164 @@ TEST(an_err_return_is_a_normal_exit_for_monitors_and_links) {
     ASSERT_EQ(heard, 2u);
 }
 
+/* ---- Futurelock scenarios (DSL 1 and 5, bd-9kll.9.6) ---- */
+
+#define FUTURELOCK_HEAD(threshold, expect)                                                         \
+    "{\"schema\":\"asx.scenario.v2\",\"id\":\"unit-futurelock-001\","                              \
+    "\"description\":\"threshold " #threshold ", expecting " expect "\","                          \
+    "\"unit\":\"obligation\",\"rules\":[\"inv.determinism.replayable\"],\"seed\":42,"              \
+    "\"lab\":{\"max_steps\":200,\"futurelock_max_idle_steps\":" #threshold "},"                    \
+    "\"regions\":[{\"name\":\"r.main\",\"parent\":\"root\",\"budget\":null}],"                     \
+    "\"channels\":[],\"sync\":[{\"name\":\"n\",\"type\":\"notify\"}],"
+
+#define FUTURELOCK_TAIL(expect) "\"script\":[],\"expect\":{\"kind\":\"" expect "\"}}"
+
+/* The run's futurelock.detected events: how many (all of them), and the
+ * first `cap` idle_steps, sorted ascending. */
+static uint32_t futurelock_events(uint32_t root, uint64_t *idle, uint32_t cap) {
+    uint32_t trace = asx_json_get(&g_out, root, "trace");
+    uint32_t n = 0;
+    uint32_t l;
+    uint32_t e;
+    uint32_t i;
+    uint32_t j;
+    for (l = 0; l < asx_json_count(&g_out, trace); l++) {
+        uint32_t layer = asx_json_item(&g_out, trace, l);
+        for (e = 0; e < asx_json_count(&g_out, layer); e++) {
+            uint32_t ev = asx_json_item(&g_out, layer, e);
+            const char *k = asx_json_get_string(&g_out, ev, "k");
+            if (k != NULL && strcmp(k, "futurelock.detected") == 0) {
+                uint64_t v = 0;
+                if (n < cap) {
+                    (void)asx_json_u64(&g_out, asx_json_get(&g_out, ev, "idle_steps"), &v);
+                    idle[n] = v;
+                }
+                n++;
+            }
+        }
+    }
+    for (i = 1; i < n && i < cap; i++) {
+        for (j = i; j > 0 && idle[j - 1u] > idle[j]; j--) {
+            uint64_t t = idle[j];
+            idle[j] = idle[j - 1u];
+            idle[j - 1u] = t;
+        }
+    }
+    return n;
+}
+
+/* The deliberate futurelock: t.holder reserves a Lease and waits on a notify
+ * nobody signals until t.driver has yielded eight times; it is not polled for
+ * that long, so Rust's check (threshold 3) reports it at every step from its
+ * fourth idle step, and it commits and completes once woken. The report
+ * names the task, its region and the Lease, and the counts run on by one. */
+TEST(a_holder_idle_past_the_threshold_is_reported_at_every_step) {
+    static const char text[] = FUTURELOCK_HEAD(
+        3,
+        "futurelock") "\"tasks\":[{\"name\":\"t.holder\",\"region\":\"r.main\",\"budget\":null,"
+                      "\"program\":["
+                      "{\"op\":\"reserve\",\"kind\":\"Lease\",\"as\":\"o.1\"},"
+                      "{\"op\":\"notify_wait\",\"notify\":\"n\"},"
+                      "{\"op\":\"commit\",\"obligation\":\"o.1\"}]},"
+                      "{\"name\":\"t.driver\",\"region\":\"r.main\",\"budget\":null,\"program\":["
+                      "{\"op\":\"yield\"},{\"op\":\"yield\"},{\"op\":\"yield\"},{\"op\":\"yield\"},"
+                      "{\"op\":\"yield\"},{\"op\":\"yield\"},{\"op\":\"yield\"},{\"op\":\"yield\"},"
+                      "{\"op\":\"notify_one\",\"notify\":\"n\"}]}]," FUTURELOCK_TAIL("futurelock");
+    uint32_t root = 0;
+    uint64_t idle[32];
+    uint32_t n;
+    uint32_t i;
+    uint32_t trace;
+    uint32_t first = ASX_JSON_NONE;
+    uint32_t l;
+    uint32_t e;
+    ASSERT_EQ(run_text(text, &root), ASX_OK);
+    memset(idle, 0, sizeof(idle));
+    n = futurelock_events(root, idle, 32u);
+    ASSERT_TRUE(n >= 3u && n <= 32u);
+    ASSERT_EQ(idle[0], (uint64_t)4u); /* threshold 3: the first count over it */
+    for (i = 1; i < n; i++) ASSERT_EQ(idle[i], idle[i - 1u] + 1u);
+    /* One report, in full. */
+    trace = asx_json_get(&g_out, root, "trace");
+    for (l = 0; l < asx_json_count(&g_out, trace) && first == ASX_JSON_NONE; l++) {
+        uint32_t layer = asx_json_item(&g_out, trace, l);
+        for (e = 0; e < asx_json_count(&g_out, layer) && first == ASX_JSON_NONE; e++) {
+            uint32_t ev = asx_json_item(&g_out, layer, e);
+            const char *k = asx_json_get_string(&g_out, ev, "k");
+            if (k != NULL && strcmp(k, "futurelock.detected") == 0) first = ev;
+        }
+    }
+    ASSERT_TRUE(first != ASX_JSON_NONE);
+    ASSERT_STR_EQ(asx_json_get_string(&g_out, first, "task"), "t.holder");
+    ASSERT_STR_EQ(asx_json_get_string(&g_out, first, "region"), "r.main");
+    {
+        uint32_t held = asx_json_get(&g_out, first, "held");
+        uint32_t item;
+        ASSERT_EQ(asx_json_count(&g_out, held), 1u);
+        item = asx_json_item(&g_out, held, 0);
+        ASSERT_STR_EQ(asx_json_get_string(&g_out, item, "obligation"), "t.holder/o1");
+        ASSERT_STR_EQ(asx_json_get_string(&g_out, item, "kind"), "Lease");
+    }
+}
+
+/* Negative: a lone holder is polled at every step (it yields), so it is never
+ * idle past a threshold of 1; and a task that is idle but holds nothing is
+ * not a futurelock. Both runs report nothing and finish ok. */
+TEST(a_polled_holder_and_an_idle_task_without_an_obligation_are_not_reported) {
+    static const char polled[] = FUTURELOCK_HEAD(
+        1, "ok") "\"tasks\":[{\"name\":\"t.holder\",\"region\":\"r.main\",\"budget\":null,"
+                 "\"program\":["
+                 "{\"op\":\"reserve\",\"kind\":\"Lease\",\"as\":\"o.1\"},"
+                 "{\"op\":\"yield\"},{\"op\":\"yield\"},{\"op\":\"yield\"},{\"op\":\"yield\"},"
+                 "{\"op\":\"yield\"},{\"op\":\"yield\"},{\"op\":\"commit\",\"obligation\":\"o.1\"}]"
+                 "}]," FUTURELOCK_TAIL("ok");
+    static const char idle_only[] = FUTURELOCK_HEAD(
+        3,
+        "ok") "\"tasks\":[{\"name\":\"t.idle\",\"region\":\"r.main\",\"budget\":null,\"program\":["
+              "{\"op\":\"notify_wait\",\"notify\":\"n\"}]},"
+              "{\"name\":\"t.driver\",\"region\":\"r.main\",\"budget\":null,\"program\":["
+              "{\"op\":\"yield\"},{\"op\":\"yield\"},{\"op\":\"yield\"},{\"op\":\"yield\"},"
+              "{\"op\":\"yield\"},{\"op\":\"yield\"},{\"op\":\"yield\"},{\"op\":\"yield\"},"
+              "{\"op\":\"notify_one\",\"notify\":\"n\"}]}]," FUTURELOCK_TAIL("ok");
+    uint32_t root = 0;
+    uint64_t idle[4];
+    ASSERT_EQ(run_text(polled, &root), ASX_OK);
+    ASSERT_EQ(futurelock_events(root, idle, 4u), 0u);
+    ASSERT_EQ(run_text(idle_only, &root), ASX_OK);
+    ASSERT_EQ(futurelock_events(root, idle, 4u), 0u);
+}
+
+/* The expectation is checked in both directions: `futurelock` needs the
+ * knob and a report, and `ok` with the knob needs none. */
+TEST(a_futurelock_expectation_is_checked_both_ways) {
+    static const char no_knob[] = SCENARIO_HEAD
+        "\"channels\":[],\"sync\":[],"
+        "\"tasks\":[{\"name\":\"t.a\",\"region\":\"r.main\",\"budget\":null,\"program\":["
+        "{\"op\":\"yield\"}]}],"
+        "\"script\":[],\"expect\":{\"kind\":\"futurelock\"}}";
+    static const char none_reported[] =
+        FUTURELOCK_HEAD(3, "futurelock") "\"tasks\":[{\"name\":\"t.a\",\"region\":\"r.main\","
+                                         "\"budget\":null,\"program\":["
+                                         "{\"op\":\"yield\"}]}]," FUTURELOCK_TAIL("futurelock");
+    static const char unexpected[] = FUTURELOCK_HEAD(
+        3, "ok") "\"tasks\":[{\"name\":\"t.holder\",\"region\":\"r.main\",\"budget\":null,"
+                 "\"program\":["
+                 "{\"op\":\"reserve\",\"kind\":\"Lease\",\"as\":\"o.1\"},"
+                 "{\"op\":\"notify_wait\",\"notify\":\"n\"},"
+                 "{\"op\":\"commit\",\"obligation\":\"o.1\"}]},"
+                 "{\"name\":\"t.driver\",\"region\":\"r.main\",\"budget\":null,\"program\":["
+                 "{\"op\":\"yield\"},{\"op\":\"yield\"},{\"op\":\"yield\"},{\"op\":\"yield\"},"
+                 "{\"op\":\"yield\"},{\"op\":\"yield\"},{\"op\":\"notify_one\",\"notify\":\"n\"}]}]"
+                 "," FUTURELOCK_TAIL("ok");
+    uint32_t root = 0;
+    ASSERT_TRUE(run_text(no_knob, &root) != ASX_OK);
+    ASSERT_TRUE(strstr(g_error, "lab.futurelock_max_idle_steps") != NULL);
+    ASSERT_TRUE(run_text(none_reported, &root) != ASX_OK);
+    ASSERT_TRUE(strstr(g_error, "none reported") != NULL);
+    ASSERT_TRUE(run_text(unexpected, &root) != ASX_OK);
+    ASSERT_TRUE(strstr(g_error, "expects ok") != NULL);
+}
+
 /* A step the interpreter has no handler for still fails closed, so the
  * count above means something. */
 TEST(an_unknown_step_fails_the_run_closed) {
@@ -241,6 +399,9 @@ int main(void) {
     RUN_TEST(a_skip_needs_a_declared_requirement_the_profile_forbids);
     RUN_TEST(an_err_return_is_a_normal_exit_for_monitors_and_links);
     RUN_TEST(an_unknown_step_fails_the_run_closed);
+    RUN_TEST(a_holder_idle_past_the_threshold_is_reported_at_every_step);
+    RUN_TEST(a_polled_holder_and_an_idle_task_without_an_obligation_are_not_reported);
+    RUN_TEST(a_futurelock_expectation_is_checked_both_ways);
     TEST_REPORT();
     return test_failures;
 }

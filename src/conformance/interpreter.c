@@ -312,7 +312,7 @@ typedef struct {
     asx_trace_handoff handoff;
     it_reason reason; /* CANCEL_REQUEST */
     int has_reason;
-    uint32_t text_off; /* USER */
+    uint32_t text_off; /* USER; LAB_FUTURELOCK: its index in g_futurelocks */
     uint32_t text_len;
     int rearm;            /* TIMER_SET: the same sleep timer registered again */
     asx_region_id parent; /* REGION_OPEN: the new region's parent */
@@ -1095,6 +1095,25 @@ static void name_generation(const char *text) {
     (void)generation_entry(sv, p.child, p.generation, (asx_region_id)p.region, (asx_task_id)p.task);
 }
 
+/* A futurelock report as the check emitted it (the payload is valid only
+ * during the observer call): the held list in the obligation arena's order. */
+typedef struct {
+    asx_region_id region;
+    uint32_t held_count;
+    asx_obligation_id held[ASX_FUTURELOCK_HELD_MAX];
+    asx_obligation_kind kind[ASX_FUTURELOCK_HELD_MAX];
+} it_futurelock;
+
+#define IT_MAX_FUTURELOCKS 256u
+
+static it_futurelock g_futurelocks[IT_MAX_FUTURELOCKS];
+static uint32_t g_n_futurelocks;
+/* lab.futurelock_max_idle_steps (DSL §1): whether the scenario declares it,
+ * and its value when the run is under lab dispatch, the only scheduler with
+ * steps to check at (0: no check). */
+static int g_futurelock_declared;
+static uint64_t g_futurelock_max;
+
 /* ------------------------------------------------------------------ */
 /* Trace observer: the runtime's events, captured as they are emitted   */
 /* ------------------------------------------------------------------ */
@@ -1127,6 +1146,7 @@ static void it_observe(void *ctx, const asx_trace_event *ev, const asx_trace_pay
     case ASX_TRACE_TIMER_SET:
     case ASX_TRACE_TIMER_FIRE:
     case ASX_TRACE_TIMER_CANCEL:
+    case ASX_TRACE_LAB_FUTURELOCK:
     case ASX_TRACE_USER: break;
     default:
         it_fail("unknown runtime trace event kind", asx_trace_event_kind_str(ev->kind));
@@ -1170,6 +1190,26 @@ static void it_observe(void *ctx, const asx_trace_event *ev, const asx_trace_pay
         e->has_reason = 1;
     } else if (ev->kind == ASX_TRACE_TIMER_SET) {
         e->rearm = payload != NULL && payload->text != NULL && strcmp(payload->text, "rearm") == 0;
+    } else if (ev->kind == ASX_TRACE_LAB_FUTURELOCK) {
+        /* The report as emitted: the held list is the payload's only. */
+        const asx_futurelock *f = payload->futurelock;
+        it_futurelock *r;
+        uint32_t held;
+        uint32_t h;
+        if (f == NULL || g_n_futurelocks >= IT_MAX_FUTURELOCKS ||
+            f->held_count > ASX_FUTURELOCK_HELD_MAX) {
+            it_fail("futurelock report: no payload, too many reports or too many held", NULL);
+            return;
+        }
+        r = &g_futurelocks[g_n_futurelocks];
+        held = f->held_count;
+        r->region = f->region;
+        r->held_count = held;
+        for (h = 0; h < held; h++) {
+            r->held[h] = f->held[h];
+            r->kind[h] = f->held_kind[h];
+        }
+        e->text_off = g_n_futurelocks++;
     } else if (ev->kind == ASX_TRACE_USER) {
         const char *text = payload->text != NULL ? payload->text : "";
         size_t len = strlen(text);
@@ -5145,6 +5185,37 @@ static uint32_t project_events(uint32_t obligations) {
             asx_json_set(g_out, obligations, name, record);
             break;
         }
+        case ASX_TRACE_LAB_FUTURELOCK: {
+            const it_task *t = task_by_id((asx_task_id)e->entity);
+            const it_futurelock *r = &g_futurelocks[e->text_off];
+            uint32_t held;
+            uint32_t h;
+            ev = event_object("futurelock.detected");
+            if (t == NULL) {
+                it_fail("futurelock report of an unknown task", NULL);
+                break;
+            }
+            asx_json_set(g_out, ev, "task", asx_json_new_string(g_out, t->name));
+            asx_json_set(g_out, ev, "region",
+                         asx_json_new_string(g_out, region_name_of(r->region)));
+            asx_json_set(g_out, ev, "idle_steps", asx_json_new_u64(g_out, e->aux));
+            held = asx_json_new_array(g_out);
+            for (h = 0; h < r->held_count; h++) {
+                const char *kind = obligation_kind_name(r->kind[h]);
+                uint32_t item;
+                if (kind == NULL) {
+                    it_fail("futurelock holds an obligation of a kind Rust does not have", NULL);
+                    break;
+                }
+                item = asx_json_new_object(g_out);
+                asx_json_set(g_out, item, "obligation",
+                             asx_json_new_string(g_out, obligation_name(r->held[h], t)));
+                asx_json_set(g_out, item, "kind", asx_json_new_string(g_out, kind));
+                asx_json_push(g_out, held, item);
+            }
+            asx_json_set(g_out, ev, "held", held);
+            break;
+        }
         case ASX_TRACE_USER: {
             it_sup_trace p;
             ev = event_object("user.trace");
@@ -5452,7 +5523,9 @@ static uint32_t sorted_observations(void) {
     return arr;
 }
 
-/* must_fail (DSL §5): the named step returned the named status. */
+/* must_fail (DSL §5): the named step returned the named status. futurelock:
+ * the run reported at least one (only a run under lab dispatch has steps to
+ * report at); ok: it reported none. */
 static void check_expectation(uint32_t scenario, uint32_t observations) {
     uint32_t expect = asx_json_get(g_in, scenario, "expect");
     const char *kind = it_str(expect, "kind");
@@ -5463,6 +5536,18 @@ static void check_expectation(uint32_t scenario, uint32_t observations) {
     uint32_t m;
     if (kind == NULL) {
         it_fail("scenario without expect.kind", NULL);
+        return;
+    }
+    if (strcmp(kind, "futurelock") == 0) {
+        if (!g_futurelock_declared) {
+            it_fail("expect futurelock needs lab.futurelock_max_idle_steps", NULL);
+        } else if (g_futurelock_max != 0u && g_n_futurelocks == 0u) {
+            it_fail("futurelock expected, none reported", NULL);
+        }
+        return;
+    }
+    if (strcmp(kind, "ok") == 0 && g_n_futurelocks != 0u) {
+        it_fail("a futurelock was reported in a scenario that expects ok", NULL);
         return;
     }
     if (strcmp(kind, "must_fail") != 0) return;
@@ -5538,6 +5623,7 @@ static asx_status conformance_run(const asx_json_doc *in, uint32_t scenario, asx
     g_n_sups = 0;
     g_n_regions = 0;
     g_n_events = 0;
+    g_n_futurelocks = 0;
     g_text_used = 0;
     g_n_obl_names = 0;
     if (error != NULL && error_cap > 0u) error[0] = '\0';
@@ -5584,6 +5670,28 @@ static asx_status conformance_run(const asx_json_doc *in, uint32_t scenario, asx
         return st;
     }
     if (lab) asx_scheduler_record_dispatches(g_dispatches, IT_MAX_DISPATCHES);
+    /* DSL section 1: lab.futurelock_max_idle_steps is
+     * LabConfig::futurelock_max_idle_steps with panic_on_futurelock off, so
+     * the per-step check emits Rust's FuturelockDetected events. */
+    g_futurelock_max = 0u;
+    {
+        uint32_t lab_node = asx_json_get(in, scenario, "lab");
+        uint32_t knob = asx_json_get(in, lab_node, "futurelock_max_idle_steps");
+        g_futurelock_declared = asx_json_u64(in, knob, &g_futurelock_max);
+    }
+    if (g_futurelock_declared && g_futurelock_max == 0u) {
+        it_fail("lab.futurelock_max_idle_steps must be at least 1", NULL);
+        return ASX_E_INVALID_ARGUMENT;
+    }
+    if (lab && g_futurelock_declared) {
+        st = asx_lab_set_futurelock_check(g_futurelock_max);
+        if (st != ASX_OK) {
+            it_fail("futurelock check refused", NULL);
+            return st;
+        }
+    } else {
+        g_futurelock_max = 0u;
+    }
     g_forced_on = 0;
     if (lab && g_forced != NULL) {
         /* Replay the recorded schedule: every lab step takes its task from
