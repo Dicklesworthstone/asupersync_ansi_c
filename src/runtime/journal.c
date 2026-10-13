@@ -140,7 +140,7 @@ static void j_chain_locked(asx_journal *j) {
     p = put_u64(p, j->seq);
     p = put_u64(p, 0u);
     p = put_bytes(p, j->chain, ASX_JOURNAL_CHAIN_PAYLOAD_BYTES);
-    j_stage(j, rec, (uint32_t)sizeof(rec));
+    j_stage(j, rec, (uint32_t)(p - rec));
     j->seq++;
     j->stats.chains++;
     j->since_chain = 0u;
@@ -194,7 +194,7 @@ static uint8_t *j_begin(asx_journal *j, uint8_t kind, uint8_t flags, int sample_
     p = put_u16(p, 0u);
     p = put_u64(p, j->seq);
     p = put_u64(p, sample_trace ? asx_trace_emitted_total() : 0u);
-    j_stage(j, rec, ASX_JOURNAL_RECORD_HEAD_BYTES);
+    j_stage(j, rec, (uint32_t)(p - rec));
     dst = j->cfg.buffer + j->used;
     j->used += payload;
     j->stats.bytes += payload;
@@ -293,7 +293,7 @@ asx_status asx_journal_finish(asx_journal *j) {
         p = put_u32(p, (uint32_t)(int32_t)j->status);
         p = put_u32(p, 0u);
         p = put_bytes(p, j->chain, ASX_SHA256_DIGEST_SIZE);
-        j_stage(j, rec, (uint32_t)sizeof(rec));
+        j_stage(j, rec, (uint32_t)(p - rec));
         j->seq++;
         j->finished = 1;
         j_sink_locked(j);
