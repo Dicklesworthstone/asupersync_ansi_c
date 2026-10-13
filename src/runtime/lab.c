@@ -53,6 +53,7 @@ asx_status asx_lab_config_init_checked(asx_lab_config *cfg, uint64_t application
     cfg->start_time_ns = 0;
     cfg->max_polls = 1024;
     cfg->auto_advance = 0u;
+    cfg->scheduler = ASX_LAB_SCHEDULER_DISPATCH;
     return ASX_OK;
 }
 
@@ -80,6 +81,18 @@ static asx_status lab_bootstrap_runtime(asx_lab *lab) {
     st = asx_runtime_init_checked(&lab->rt, &rt_cfg, &hooks, fingerprint);
     if (st != ASX_OK) return st;
     asx_runtime_virtual_set_internal(lab->config.start_time_ns);
+
+    /* Rust's LabRuntime dispatch, seeded as the lab is: the runtime was just
+     * initialized, so no task is alive and nothing awaits admission. The
+     * runtime stays on it until it is reset or initialized again, which a
+     * lab reset does through this function. */
+    if (lab->config.scheduler == ASX_LAB_SCHEDULER_DISPATCH) {
+        st = asx_scheduler_use_lab_dispatch(lab->config.seed);
+        if (st != ASX_OK) {
+            asx_runtime_shutdown(&lab->rt);
+            return st;
+        }
+    }
     return ASX_OK;
 }
 
@@ -90,6 +103,9 @@ asx_status asx_lab_init_checked(asx_lab *lab, const asx_lab_config *cfg,
     if (application_fingerprint != asx_header_lab_fingerprint(asx_runtime_config_fingerprint()))
         return ASX_E_CONFIG_MISMATCH;
     if (lab == NULL || cfg == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (cfg->scheduler != ASX_LAB_SCHEDULER_DISPATCH && cfg->scheduler != ASX_LAB_SCHEDULER_SWEEP) {
+        return ASX_E_INVALID_ARGUMENT;
+    }
 
     memset(lab, 0, sizeof(*lab));
     lab->config = *cfg;

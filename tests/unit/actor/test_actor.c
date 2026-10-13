@@ -343,7 +343,8 @@ static void test_refused_server_reply_does_not_repoll_following_sleep(void) {
     ASSERT(asx_lab_init(&g_refused_lab, &config) == ASX_OK, "real virtual-clock runtime");
     ASSERT(asx_region_open(&g_root) == ASX_OK, "root in the initialized lab");
     region = child_region();
-    ASSERT(asx_scheduler_use_lab_dispatch(config.seed) == ASX_OK, "the real witness dispatch seed");
+    /* asx_lab_init seeded the dispatch with config.seed, the real witness
+     * dispatch seed (bd-9kll.9.5); this test used to switch it on here. */
     memset(&c, 0, sizeof(c));
     c.spawn_status = ASX_E_PENDING;
     c.call_status = ASX_E_PENDING;
@@ -431,7 +432,8 @@ static void test_reseed_refuses_pending_actor_admission_then_cleanup_completes(v
     config.seed = 42u;
     ASSERT(asx_lab_init(&g_refused_lab, &config) == ASX_OK, "real lab runtime");
     ASSERT(asx_region_open(&g_root) == ASX_OK, "root after lab initialization");
-    ASSERT(asx_scheduler_use_lab_dispatch(42u) == ASX_OK, "initial dispatch admission");
+    /* asx_lab_init already admitted the dispatch seed (bd-9kll.9.5); the
+     * refused reseed below still has to find a captured cell pending. */
     memset(&c, 0, sizeof(c));
     c.region = child_region();
     c.spawn_status = ASX_E_PENDING;

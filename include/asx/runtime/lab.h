@@ -12,6 +12,15 @@
  * waiting on a timer and jumps to the earliest one. Reading the clock
  * never moves it.
  *
+ * Scheduling is Rust's LabRuntime dispatch with one worker, seeded from
+ * config.seed (asx_scheduler_use_lab_dispatch): each step draws one value
+ * from a seeded xorshift64 and polls one task chosen by lane, priority and
+ * wake order, ties broken by the draw. The same tasks under another seed
+ * can run in another order, and under the same seed in the same order, so a
+ * schedule is reproduced by its seed. asx_scheduler_record_dispatches
+ * reads the order back. config.scheduler selects the sweep scheduler (the
+ * one a live host runs) instead.
+ *
  * Usage:
  *   asx_lab lab;
  *   asx_lab_config cfg;
@@ -49,13 +58,24 @@ extern "C" {
  * Lab configuration
  * ------------------------------------------------------------------- */
 
+/* The scheduler asx_lab_run drives (asx_lab_config.scheduler). */
+#define ASX_LAB_SCHEDULER_DISPATCH 0u /* Rust's lab dispatch, seeded from config.seed */
+#define ASX_LAB_SCHEDULER_SWEEP 1u    /* the sweep scheduler of a live host; seed unused */
+
 typedef struct {
-    uint64_t seed;          /* PRNG seed for deterministic entropy (default 42, as Rust) */
+    uint64_t seed;          /* seeds task dispatch and entropy (default 42, as Rust) */
     asx_time start_time_ns; /* Virtual time start (0 = default) */
     uint32_t max_polls;     /* Max polls per scenario step (0 = 1024 default) */
     /* Rust LabConfig::auto_advance (default off): asx_lab_run jumps the
      * clock to the earliest timer when every task waits on one. */
     uint8_t auto_advance;
+    /* ASX_LAB_SCHEDULER_DISPATCH (default) polls one task per step, as
+     * Rust's LabRuntime with one worker, drawing from a PRNG seeded with
+     * `seed`. ASX_LAB_SCHEDULER_SWEEP polls every runnable task each round
+     * in arena order: what asx_scheduler_run does for a live host, where
+     * the seed only reaches entropy. Any other value is refused by
+     * asx_lab_init. */
+    uint8_t scheduler;
 } asx_lab_config;
 
 /* Initialize config with defaults. */
@@ -75,7 +95,11 @@ typedef struct {
 } asx_lab;
 
 /* Initialize the lab runtime with deterministic config.
- * Sets up virtual time, seeded entropy, and runtime hooks. */
+ * Sets up virtual time, seeded entropy, and runtime hooks, and, with
+ * config.scheduler == ASX_LAB_SCHEDULER_DISPATCH (the default), turns on
+ * lab dispatch seeded with config.seed (asx_scheduler_use_lab_dispatch), so
+ * the step counter, certificate and dispatch recording start from the lab.
+ * ASX_E_INVALID_ARGUMENT for an unknown config.scheduler. */
 ASX_API ASX_MUST_USE asx_status asx_lab_init_checked(asx_lab *lab, const asx_lab_config *cfg,
                                                      uint64_t application_fingerprint);
 #define asx_lab_init(lab, cfg) asx_lab_init_checked((lab), (cfg), ASX_LAB_CONFIG_FINGERPRINT)
@@ -103,6 +127,7 @@ static inline uint64_t asx_header_lab_fingerprint(uint64_t fingerprint) {
         offsetof(asx_lab_config, start_time_ns),
         offsetof(asx_lab_config, max_polls),
         offsetof(asx_lab_config, auto_advance),
+        offsetof(asx_lab_config, scheduler),
     };
     size_t i;
     for (i = 0u; i < sizeof(values) / sizeof(values[0]); i++) {
@@ -143,10 +168,15 @@ ASX_API ASX_MUST_USE asx_status asx_lab_advance_to_next_timer(asx_lab *lab, uint
 /* Get current virtual time. Reading it never moves it. */
 ASX_API asx_time asx_lab_now(const asx_lab *lab);
 
-/* Run the region subtree: with config.auto_advance, as
- * asx_scheduler_run (the clock jumps to the earliest timer whenever
- * every task waits on one); without it, as asx_scheduler_run_until_idle
- * (due timers fire, the clock stays). Returns that function's status. */
+/* Run the lab's tasks: with config.auto_advance, as asx_scheduler_run (the
+ * clock jumps to the earliest timer whenever every task waits on one);
+ * without it, as asx_scheduler_run_until_idle (due timers fire, the clock
+ * stays). Returns that function's status.
+ *
+ * Under lab dispatch (the default scheduler) every live task of the lab
+ * runs, as Rust's run_until_idle does, and `region` only has to be valid;
+ * the budget counts steps. Under the sweep scheduler the region's subtree
+ * runs and the budget counts polls. */
 ASX_API ASX_MUST_USE asx_status asx_lab_run(asx_lab *lab, asx_region_id region, asx_budget *budget);
 
 /* -------------------------------------------------------------------
