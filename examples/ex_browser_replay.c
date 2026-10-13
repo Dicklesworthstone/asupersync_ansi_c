@@ -78,7 +78,7 @@ static void scenario_trace_in_sandbox(void) {
     SCENARIO_CHECK(asx_surface_gate(ASX_SURFACE_TRACE) == ASX_OK, "trace_available");
 
     asx_runtime_reset(&g_rt);
-    asx_trace_reset();
+    asx_trace_reset(&g_rt);
 
     asx_region_id rid;
     asx_task_id tid;
@@ -89,7 +89,7 @@ static void scenario_trace_in_sandbox(void) {
     SCENARIO_CHECK(asx_region_drain(rid, &budget) == ASX_OK, "drain");
 
     /* Trace events were emitted */
-    uint32_t count = asx_trace_event_count();
+    uint32_t count = asx_trace_event_count(&g_rt);
     SCENARIO_CHECK(count > 0, "events_emitted");
 
     SCENARIO_END();
@@ -107,7 +107,7 @@ static void scenario_digest_deterministic(void) {
 
     /* Run 1 */
     asx_runtime_reset(&g_rt);
-    asx_trace_reset();
+    asx_trace_reset(&g_rt);
 
     asx_region_id rid;
     asx_task_id tid;
@@ -117,11 +117,11 @@ static void scenario_digest_deterministic(void) {
     asx_budget budget = asx_budget_from_polls(64);
     SCENARIO_CHECK(asx_region_drain(rid, &budget) == ASX_OK, "r1_drain");
 
-    uint64_t d1 = asx_trace_digest();
+    uint64_t d1 = asx_trace_digest(&g_rt);
 
     /* Run 2 (identical) */
     asx_runtime_reset(&g_rt);
-    asx_trace_reset();
+    asx_trace_reset(&g_rt);
 
     SCENARIO_CHECK(asx_region_open(&g_rt, &rid) == ASX_OK, "r2_region");
     SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "r2_spawn");
@@ -129,7 +129,7 @@ static void scenario_digest_deterministic(void) {
     budget = asx_budget_from_polls(64);
     SCENARIO_CHECK(asx_region_drain(rid, &budget) == ASX_OK, "r2_drain");
 
-    uint64_t d2 = asx_trace_digest();
+    uint64_t d2 = asx_trace_digest(&g_rt);
 
     SCENARIO_CHECK(d1 == d2, "digests_match");
     SCENARIO_CHECK(d1 != 0, "digest_nonzero");

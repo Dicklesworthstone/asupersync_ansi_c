@@ -72,7 +72,7 @@ static void scenario_trace_events(void) {
     SCENARIO_BEGIN("lab_replay.trace_events_emitted");
 
     asx_runtime_reset(&g_rt);
-    asx_trace_reset();
+    asx_trace_reset(&g_rt);
 
     asx_region_id rid;
     asx_task_id tid;
@@ -83,7 +83,7 @@ static void scenario_trace_events(void) {
     SCENARIO_CHECK(asx_region_drain(rid, &budget) == ASX_OK, "drain");
 
     /* Verify trace events were emitted */
-    uint32_t count = asx_trace_event_count();
+    uint32_t count = asx_trace_event_count(&g_rt);
     SCENARIO_CHECK(count > 0, "events_emitted");
 
     /* The task's completion is recorded, and the region closes after it:
@@ -93,7 +93,7 @@ static void scenario_trace_events(void) {
     uint32_t completed_at = UINT32_MAX;
     uint32_t closed_at = UINT32_MAX;
     for (i = 0; i < count; i++) {
-        SCENARIO_CHECK(asx_trace_event_get(i, &ev), "get_event");
+        SCENARIO_CHECK(asx_trace_event_get(&g_rt, i, &ev), "get_event");
         if (ev.kind == ASX_TRACE_SCHED_COMPLETE) completed_at = i;
         if (ev.kind == ASX_TRACE_REGION_CLOSED) closed_at = i;
     }
@@ -116,7 +116,7 @@ static void scenario_digest_deterministic(void) {
 
     /* Run 1 */
     asx_runtime_reset(&g_rt);
-    asx_trace_reset();
+    asx_trace_reset(&g_rt);
 
     asx_region_id rid;
     asx_task_id tid;
@@ -126,11 +126,11 @@ static void scenario_digest_deterministic(void) {
     asx_budget budget = asx_budget_from_polls(64);
     SCENARIO_CHECK(asx_region_drain(rid, &budget) == ASX_OK, "run1_drain");
 
-    uint64_t d1 = asx_trace_digest();
+    uint64_t d1 = asx_trace_digest(&g_rt);
 
     /* Run 2 (identical inputs) */
     asx_runtime_reset(&g_rt);
-    asx_trace_reset();
+    asx_trace_reset(&g_rt);
 
     SCENARIO_CHECK(asx_region_open(&g_rt, &rid) == ASX_OK, "run2_region");
     SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "run2_spawn");
@@ -138,7 +138,7 @@ static void scenario_digest_deterministic(void) {
     budget = asx_budget_from_polls(64);
     SCENARIO_CHECK(asx_region_drain(rid, &budget) == ASX_OK, "run2_drain");
 
-    uint64_t d2 = asx_trace_digest();
+    uint64_t d2 = asx_trace_digest(&g_rt);
 
     /* Digests must match */
     SCENARIO_CHECK(d1 == d2, "digests_match");

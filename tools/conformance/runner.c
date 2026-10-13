@@ -75,6 +75,9 @@ static char g_a[BYTES_CAP];
 static char g_b[BYTES_CAP];
 static char g_error[1024];
 
+/* A zeroed runtime object names the library's static kernel (tag 0). */
+static asx_runtime g_rt;
+
 static int load(const char *path, asx_json_doc *doc, uint32_t *root) {
     FILE *f = fopen(path, "rb");
     size_t n;
@@ -542,19 +545,19 @@ static int fixture_authentic(uint32_t root, const char *id) {
 static int trace_binary_round_trip(const char *id) {
     static uint8_t buf[ASX_TRACE_BINARY_HEADER + ASX_TRACE_BINARY_EVENT * ASX_TRACE_CAPACITY];
     uint32_t len = 0;
-    asx_status st = asx_trace_export_binary(buf, (uint32_t)sizeof(buf), &len);
+    asx_status st = asx_trace_export_binary(&g_rt, buf, (uint32_t)sizeof(buf), &len);
     if (st != ASX_OK) {
         fprintf(stdout, "FAIL %s: binary trace export: %s\n", id, asx_status_name(st));
         return 0;
     }
-    st = asx_trace_continuity_check(buf, len);
+    st = asx_trace_continuity_check(&g_rt, buf, len);
     if (st != ASX_OK) {
         fprintf(stdout, "FAIL %s: binary trace round trip: %s\n", id, asx_status_name(st));
         return 0;
     }
     if (len > ASX_TRACE_BINARY_HEADER) {
         buf[len - 1u] = (uint8_t)(buf[len - 1u] ^ 0xFFu);
-        st = asx_trace_continuity_check(buf, len);
+        st = asx_trace_continuity_check(&g_rt, buf, len);
         buf[len - 1u] = (uint8_t)(buf[len - 1u] ^ 0xFFu);
         if (st == ASX_OK) {
             fprintf(stdout, "FAIL %s: a corrupted binary trace was accepted\n", id);
