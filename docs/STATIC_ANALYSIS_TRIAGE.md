@@ -32,7 +32,7 @@ scheduler's pick path, or a restructure of a loop that is correct, is not.
 
 | lane | tool (pinned) | scope | configurations | where | make target |
 |---|---|---|---|---|---|
-| cppcheck | cppcheck 2.22.0 | all of `src/` | its own (all `#ifdef` branches) | `check` job | `lint-static-analysis` |
+| cppcheck | cppcheck 2.22.0 | all of `src/` | its own (all `#ifdef` branches, except each `ASX_MUTANT_*` macro the sources test, which is `-U`ndefined: see below) | `check` job | `lint` (and `lint-static-analysis`) |
 | clang-tidy | clang-tidy 18.1.8: `bugprone-*`, `cert-*`, `misc-*`, `performance-*`, `portability-*` and `clang-analyzer-*` (minus the exclusions in `tools/ci/run_static_analysis.sh`: `optin.performance.Padding`, `optin.core.EnumCastOutOfRange`) | all of `src/` | CORE (JSON, deterministic) and POSIX live (JSON, `DETERMINISTIC=0`): the profile macros select different code, and CORE compiles `src/platform/posix` to nothing | `check` job | `lint-static-analysis` |
 | GCC `-fanalyzer` | GCC 15.2 (the `gcc:15.2.0` image) | every `src/` unit of `make build` | `CORE` (`PROFILE=CORE DETERMINISTIC=1`) and `POSIX_LIVE` (`PROFILE=POSIX DETERMINISTIC=0`), the build's own flags | `gcc-analyzer` job | `lint-gcc-analyzer` |
 
@@ -43,6 +43,23 @@ collected, and it fails (exit 2) when a unit does not compile, never passing
 a unit it did not analyze. The analyzer's findings change between GCC
 releases, so the compiler is pinned: a different GCC is a warning locally and
 a failure under `STRICT_GATES=1` / CI.
+
+### Planted mutants are not analyzed
+
+An `ASX_MUTANT_<NAME>` macro guards a planted bug that only a gate's own build
+defines (`tests/gates/test_*_mutants.sh`). cppcheck explores every `#ifdef`
+configuration, so left alone it lints the planted code as if it shipped, and
+`make lint` failed on `src/net/net.c` `quad[qlen]` (`arrayIndexOutOfBoundsCond`,
+the `ASX_MUTANT_RESOLVE_HOST` plant). Both cppcheck invocations (`make lint`
+and `tools/ci/run_static_analysis.sh`) therefore pass `-U<macro>` for every
+`ASX_MUTANT_*` identifier found by grep in `src/` and `include/`, so a new
+mutant is covered without an edit and needs no waiver. Clang-tidy and the GCC
+analyzer compile the build's own flags and never define a mutant.
+`tests/gates/test_static_analysis_fail_closed.sh`
+(`cppcheck_planted_mutants_are_undefined`) pins that the script lane passes
+the flag. The `ASX_ANALYZER_WAIVER("planted mutant ...")` comments in
+`src/net/net.c` and `src/runtime/event_log.c` predate this and are now
+unreachable; they can go with the next edit of those files.
 
 ## 3. How a new finding is triaged
 
@@ -112,3 +129,4 @@ copy them.
 | 2026-10-13 | `ac534ab` | `-fanalyzer`, gcc 15.2, whole `src/`, CORE and POSIX live | 7 locations, all false positives; waived in section 4; the `gcc-analyzer` lane pins gcc 15.2 and blocks new ones |
 | 2026-10-13 | `d0f1b40` | clang-tidy 18.1.8, the lane's checks plus `clang-analyzer-*`, whole `src/`, CORE and POSIX live | 25 distinct unwaived locations; 5 were edge-case undefined behaviour or indeterminate reads (a zero-length `memcpy` of NULL in two places, an unzeroed `accept` address, an aliasable length, a NULL-data buffer with room), the rest style checks; all fixed or, for the feature-test macros and the flag-enum check, waived or excluded (section 4). The POSIX adapters had never been analyzed by clang-tidy |
 | 2026-10-13 | `76ba65c` | the same lane re-run with the fixes | 3 more locations, all in `process_posix.c` (a NULL `cmd`/`out` reaching the backend through the journal's wrapper), and the same `ss` read through two more callers; fixed. cppcheck reports 3 `moduloofone` at `hindsight.c:103,154,155` (a capacity of 1): not part of this change, for the file's owner |
+| 2026-10-13 | `502fced` | `make lint STRICT_GATES=1`, cppcheck 2.22.0, whole `src/` | 1 finding: `src/net/net.c` `quad[qlen]` `arrayIndexOutOfBoundsCond`, in the `ASX_MUTANT_RESOLVE_HOST` configuration, which `make lint` explored (the waiver comment applied only to `lint-static-analysis`). Both cppcheck invocations now `-U` every `ASX_MUTANT_*` macro (section 2) |

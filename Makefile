@@ -46,6 +46,13 @@ CPPCHECK_JOBS ?= 8
 CPPCHECK ?= $(shell if cppcheck --version 2>/dev/null | grep -q 'Cppcheck $(CPPCHECK_VERSION)'; then \
 	echo cppcheck; elif command -v uvx >/dev/null 2>&1; then \
 	echo "uvx --from cppcheck==$(CPPCHECK_WHEEL) cppcheck"; fi)
+# Each ASX_MUTANT_<NAME> macro the sources test is a planted bug that only a
+# gate's own build defines (tests/gates/test_*_mutants.sh). cppcheck explores
+# every #ifdef configuration, so without -U it lints the planted code as if it
+# shipped (src/net/net.c quad[qlen], arrayIndexOutOfBoundsCond). The macros
+# are found by grep, so a new mutant is covered without an edit here;
+# tools/ci/run_static_analysis.sh derives the same list.
+CPPCHECK_UNDEF ?= $(addprefix -U,$(sort $(shell grep -rhoE 'ASX_MUTANT_[A-Za-z0-9_]+' src include 2>/dev/null)))
 # Pinned clang-tidy for the section 10.7 static-analysis gate, resolved the
 # same way as clang-format.
 CLANG_TIDY_VERSION ?= 18.1.8
@@ -714,6 +721,7 @@ lint:
 		         --suppress=unusedFunction \
 		         --suppress=normalCheckLevelMaxBranches \
 		         --suppress=toomanyconfigs \
+		         $(CPPCHECK_UNDEF) \
 		         -I include src/ && \
 		echo "[asx] lint: PASS (cppcheck $(CPPCHECK_VERSION))" || \
 		{ echo "[asx] lint: FAIL"; exit 1; }; \

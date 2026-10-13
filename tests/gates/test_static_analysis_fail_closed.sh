@@ -74,6 +74,18 @@ make_stub cppcheck_waived.sh stderr 1 "$WORK/waived.c:2:style:knownConditionTrue
 make_stub cppcheck_many.sh stderr 256 "$WORK/plain.c:2:style:knownConditionTrueFalse:stub finding"
 make_stub tidy_stdout.sh stdout 1 "$WORK/plain.c:2:5: warning: stub finding [misc-stub]"
 
+# An analyzer that, like cppcheck, would explore the planted-mutant
+# configuration unless it is told -U<macro>: it reports a finding unless the
+# runner passed -UASX_MUTANT_RESOLVE_HOST (a mutant macro src/net/net.c
+# tests). It is the cppcheck_planted_mutants_are_undefined case's subject.
+cat >"$WORK/cppcheck_undef.sh" <<EOF
+#!/usr/bin/env bash
+for a in "\$@"; do
+    [ "\$a" = "-UASX_MUTANT_RESOLVE_HOST" ] && exit 0
+done
+printf '%s\\n' '$WORK/plain.c:2:style:knownConditionTrueFalse:planted mutant configuration explored' >&2
+EOF
+
 # run_case <name> <expected exit: 0|nonzero> <expected output regex> <env...> -- [runner args...]
 run_case() {
     local name="$1" expect="$2" pattern="$3"
@@ -122,6 +134,8 @@ run_case clang_tidy_stdout_finding_fails nonzero 'clang-tidy: 1 finding' \
     CPPCHECK= CLANG_TIDY="bash $WORK/tidy_stdout.sh" FAIL_ON_MISSING_LINTER=0 --
 run_case waived_finding_passes 0 'cppcheck: 0 finding\(s\), 1 waived' \
     CPPCHECK="bash $WORK/cppcheck_waived.sh" CLANG_TIDY= FAIL_ON_MISSING_LINTER=0 --
+run_case cppcheck_planted_mutants_are_undefined 0 'cppcheck: 0 finding\(s\), 0 waived' \
+    CPPCHECK="bash $WORK/cppcheck_undef.sh" CLANG_TIDY= FAIL_ON_MISSING_LINTER=0 --
 run_case strict_ignores_waivers nonzero 'FAIL — 1 unwaived finding' \
     CPPCHECK="bash $WORK/cppcheck_waived.sh" CLANG_TIDY= FAIL_ON_MISSING_LINTER=0 -- --strict
 run_case findings_256_do_not_wrap_exit nonzero 'FAIL — 256 unwaived finding' \
@@ -187,18 +201,18 @@ import sys
 prefix = '"run_id":' + json.dumps(sys.argv[2])
 with open(sys.argv[1]) as stream:
     rows = [json.loads(line) for line in stream if prefix in line]
-if len(rows) != 12:
-    raise ValueError(f"expected all twelve actual controls, got {len(rows)}")
+if len(rows) != 13:
+    raise ValueError(f"expected all thirteen actual controls, got {len(rows)}")
 if any(row["suite"] != "static_analysis_fail_closed" or
        row["run_id"] != sys.argv[2] for row in rows):
     raise ValueError("record does not belong to the current static-analysis run")
 waived = next(row for row in rows if row["test"] == "waived_finding_passes")
 if waived["expected"] != r"0:cppcheck: 0 finding\(s\), 1 waived":
     raise ValueError("JSON encoding changed the original expected regex")
-print("all twelve current-run records are valid JSON and preserve the expected regex")
+print("all thirteen current-run records are valid JSON and preserve the expected regex")
 PY
 then
-    echo "  PASS: current_run_jsonl_is_valid (12 records)"
+    echo "  PASS: current_run_jsonl_is_valid (13 records)"
 else
     cat "$WORK/jsonl.log" >&2
     echo "  FAIL: current_run_jsonl_is_valid (log $WORK/jsonl.log)"
@@ -207,7 +221,7 @@ fi
 
 echo ""
 if [ "$failures" -eq 0 ]; then
-    echo "test_static_analysis_fail_closed: PASS (12 cases)"
+    echo "test_static_analysis_fail_closed: PASS (13 cases)"
     exit 0
 fi
 echo "test_static_analysis_fail_closed: FAIL ($failures case(s))"

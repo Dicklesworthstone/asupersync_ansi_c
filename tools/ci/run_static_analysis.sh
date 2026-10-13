@@ -39,6 +39,15 @@ VERBOSE=0
 STRICT=0
 read -r -a CPPCHECK_CMD <<< "${CPPCHECK-cppcheck}"
 read -r -a CLANG_TIDY_CMD <<< "${CLANG_TIDY-clang-tidy}"
+# Each ASX_MUTANT_<NAME> macro the sources test is a planted bug that only a
+# gate's own build defines. cppcheck explores every #ifdef configuration, so
+# each is undefined (-U): otherwise the planted code is linted as if it
+# shipped. Found by grep so a new mutant is covered without an edit here; the
+# Makefile's `lint` derives the same list.
+MUTANT_UNDEFS=()
+while IFS= read -r mutant_macro; do
+    MUTANT_UNDEFS+=("-U${mutant_macro}")
+done < <(grep -rhoE 'ASX_MUTANT_[A-Za-z0-9_]+' "$REPO_ROOT/src" "$REPO_ROOT/include" | sort -u)
 FAIL_ON_MISSING_LINTER="${FAIL_ON_MISSING_LINTER:-0}"
 
 # Counters
@@ -162,6 +171,7 @@ run_cppcheck() {
         --suppress=normalCheckLevelMaxBranches \
         --suppress=toomanyconfigs \
         --template='{file}:{line}:{severity}:{id}:{message}' \
+        ${MUTANT_UNDEFS[@]+"${MUTANT_UNDEFS[@]}"} \
         -I "$REPO_ROOT/include" \
         "${SCAN_DIRS[@]/#/$REPO_ROOT/}" \
         2>&1 | tee "$tmpfile" >/dev/null; then
