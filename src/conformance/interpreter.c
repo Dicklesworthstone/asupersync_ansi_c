@@ -367,6 +367,17 @@ static const asx_forced_schedule *g_forced = NULL;
 static const char *const *g_forced_names = NULL;
 static asx_forced_run_config g_forced_cfg;
 static int g_forced_on = 0;
+
+/* The forced schedule of the lab run (Rust's start/finish_forced_schedule_
+ * recording, bd-9kll.9.3), when asx_conformance_record_schedule armed it:
+ * storage for its dispatches, the receipt, and whether the last run made
+ * one. */
+static asx_forced_dispatch g_sched_storage[IT_MAX_DISPATCHES];
+static asx_forced_schedule g_sched_out;
+static uint64_t g_sched_config_hash;
+static int g_sched_armed = 0;
+static int g_sched_active = 0;
+static int g_sched_have = 0;
 static char g_text[IT_TEXT_CAP];
 static uint32_t g_text_used;
 
@@ -5018,6 +5029,18 @@ void asx_conformance_force_schedule(const asx_forced_schedule *schedule, const c
     g_forced_names = names;
 }
 
+void asx_conformance_record_schedule(int on, uint64_t config_hash) {
+    g_sched_armed = on != 0;
+    g_sched_config_hash = config_hash;
+    g_sched_have = 0;
+}
+
+int asx_conformance_recorded_schedule(asx_forced_schedule *out) {
+    if (out == NULL || !g_sched_have) return 0;
+    *out = g_sched_out;
+    return 1;
+}
+
 /* A recorded task id to the scenario task that plays it: the name the
  * fixture's dispatch list gives the dispatch it first appears in. A task
  * with no scenario name yet (or none: a supervisor's generation, a region
@@ -6115,6 +6138,19 @@ static asx_status conformance_run(const asx_json_doc *in, uint32_t scenario, asx
         return st;
     }
     if (lab) asx_scheduler_record_dispatches(g_dispatches, IT_MAX_DISPATCHES);
+    /* Record the run's forced schedule, before the first step. A replay of
+     * another schedule is not itself recorded. */
+    if (g_sched_active) {
+        /* A recording a failed run left open. */
+        asx_status closed = asx_lab_finish_forced_schedule_recording(0u, 0, &g_sched_out);
+        (void)closed;
+    }
+    g_sched_active = 0;
+    g_sched_have = 0;
+    if (lab && g_sched_armed && g_forced == NULL &&
+        asx_lab_start_forced_schedule_recording(g_sched_storage, IT_MAX_DISPATCHES) == ASX_OK) {
+        g_sched_active = 1;
+    }
     /* DSL section 1: lab.futurelock_max_idle_steps is
      * LabConfig::futurelock_max_idle_steps with panic_on_futurelock off, so
      * the per-step check emits Rust's FuturelockDetected events. */
@@ -6295,6 +6331,20 @@ static asx_status conformance_run(const asx_json_doc *in, uint32_t scenario, asx
     project_refused_admissions();
     snapshot = build_snapshot(obligations);
     stuck = stuck_tasks_node(root);
+    if (g_sched_active) {
+        /* The receipt of the recording, bound to the snapshot's own
+         * quiescent flag (Rust's is_quiescent). A run that ended with work
+         * stuck has no canonical form, nor one that outgrew the storage;
+         * finishing also closes the recorder. */
+        int quiescent = 0;
+        g_sched_active = 0;
+        (void)asx_json_bool(out, asx_json_get(out, snapshot, "quiescent"), &quiescent);
+        if (asx_lab_finish_forced_schedule_recording(g_sched_config_hash, quiescent,
+                                                     &g_sched_out) == ASX_OK &&
+            !g_failed) {
+            g_sched_have = g_sched_out.terminal_quiescent != 0u;
+        }
+    }
     observations = sorted_observations();
     dispatches = project_dispatches();
     if (!g_failed) check_expectation(scenario, observations);

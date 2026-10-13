@@ -396,8 +396,27 @@ state.rs:7811-7830). The order is that of the cancel lane entries and the
      `_finish_forced_schedule_recording` are Rust's
      start/finish_forced_schedule_recording (capture with Rust ids,
      bind to the terminal step, clock and certificate).
-   - Still open: wiring a Rust-recorded schedule into the conformance
-     interpreter (name to task mapping, the resolver) and the C-to-Rust
-     direction, which needs twin_run to replay a C-recorded schedule with
-     `run_forced_schedule`. The timed and stolen lanes and more than one
-     worker are not modelled by asx's lab and are refused.
+   - Done: Rust's schedule is replayed in C through the conformance
+     interpreter (`asx_conformance_force_schedule`, the name to task
+     resolver) on every `asx-conformance compare`.
+   - Done (bd-9kll.9.3, C to Rust): the interpreter records the C lab's
+     forced schedule with Rust arena ids (`asx_conformance_record_schedule`,
+     bound to the snapshot's own `quiescent`), `asx-conformance schedule
+     --out-dir` writes it as the canonical artifact and requires it to be
+     byte for byte the artifact Rust recorded (all 589 scenarios that have
+     one on both sides, the committed fixtures and 400 generated ones, at the
+     time of writing), and `twin_run forced-replay` hands it to Rust's
+     `LabRuntime::run_forced_schedule`, whose typed error names the first
+     dispatch that is not the recorded one. Rust's runner executes a whole
+     schedule in one call, so a scenario whose script steps the lab between
+     dispatches is `UNAVAILABLE` (about a third of the fixtures and most
+     generated scenarios), and 24 of the 589 are refused by Rust for its own
+     recording too (a cancel-lane dispatch it finds in the ready lane,
+     `LaneMismatch`; C's artifact is byte-identical to the one Rust
+     recorded, so the refusal is Rust's runner's). Where Rust replays it, the
+     replay's trace, snapshot, observations and certificate equal C's run
+     (244 of 244). `tests/e2e/scheduler_certificate_parity.sh` (`make
+     scheduler-certificate-parity`) runs all of it with one JSONL record per
+     scenario and check.
+   - Still open: the timed and stolen lanes and more than one worker are
+     not modelled by asx's lab and are refused.

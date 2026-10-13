@@ -917,6 +917,186 @@ static int forced_replay(const char *id, uint32_t root, uint32_t scenario, uint3
     return 1;
 }
 
+static int requirement_skip(const char *id, uint32_t scenario);
+
+/* ---- C's own schedule, for Rust to replay (bd-9kll.9.3, C -> Rust) ------
+ *
+ * `asx-conformance schedule --out-dir DIR fixture.json...` runs each
+ * fixture's scenario on the C lab recording its forced schedule with Rust
+ * arena ids (asx_conformance_record_schedule), writes the canonical artifact
+ * as lowercase hex to DIR/<scenario_id>.sched, and says whether it is byte
+ * for byte the artifact Rust recorded for the same scenario. `twin_run
+ * forced-replay` then hands the artifacts to Rust's run_forced_schedule,
+ * which revalidates every dispatch (task and generation, worker, lane, step,
+ * time) and the terminal certificate.
+ *
+ *   SCHEDULE id certificate=<hex> dispatches=<n> bytes=<n> (identical to Rust's)
+ *   DIFFERENT id: <first difference>
+ *   NONE id: <why neither side has one, or which side lacks it>
+ *   ERROR id: <why>
+ *
+ * Exit 1 when any scenario is DIFFERENT or ERROR, or only one side has a
+ * schedule. */
+static int write_hex_file(const char *dir, const char *id, const uint8_t *bytes, size_t len) {
+    static char path[512];
+    FILE *f;
+    size_t i;
+    if (snprintf(path, sizeof(path), "%s/%s.sched", dir, id) >= (int)sizeof(path)) return 0;
+    f = fopen(path, "wb");
+    if (f == NULL) return 0;
+    for (i = 0; i < len; i++) {
+        if (fprintf(f, "%02x", (unsigned)bytes[i]) < 0) {
+            (void)fclose(f);
+            return 0;
+        }
+    }
+    if (fputc('\n', f) == EOF) {
+        (void)fclose(f);
+        return 0;
+    }
+    return fclose(f) == 0;
+}
+
+/* 0 equal, else 1 with the first difference printed. */
+static int schedule_difference(const char *id, const asx_forced_schedule *rust,
+                               const asx_forced_schedule *c) {
+    uint32_t n =
+        rust->dispatch_count < c->dispatch_count ? rust->dispatch_count : c->dispatch_count;
+    uint32_t i;
+    for (i = 0; i < n; i++) {
+        const asx_forced_dispatch *r = &rust->dispatches[i];
+        const asx_forced_dispatch *d = &c->dispatches[i];
+        if (r->task != d->task || r->worker != d->worker || r->lane != d->lane ||
+            r->at_step != d->at_step || r->at_nanos != d->at_nanos) {
+            fprintf(stdout,
+                    "DIFFERENT %s: dispatch %u: Rust task 0x%llx worker %u lane %u step %llu "
+                    "@%llu, C task 0x%llx worker %u lane %u step %llu @%llu\n",
+                    id, (unsigned)i, (unsigned long long)r->task, (unsigned)r->worker,
+                    (unsigned)r->lane, (unsigned long long)r->at_step,
+                    (unsigned long long)r->at_nanos, (unsigned long long)d->task,
+                    (unsigned)d->worker, (unsigned)d->lane, (unsigned long long)d->at_step,
+                    (unsigned long long)d->at_nanos);
+            return 1;
+        }
+    }
+    if (rust->dispatch_count != c->dispatch_count) {
+        fprintf(stdout, "DIFFERENT %s: Rust has %u dispatches, C %u (the first %u agree)\n", id,
+                (unsigned)rust->dispatch_count, (unsigned)c->dispatch_count, (unsigned)n);
+        return 1;
+    }
+    if (rust->terminal_steps != c->terminal_steps || rust->terminal_nanos != c->terminal_nanos ||
+        rust->terminal_schedule_hash != c->terminal_schedule_hash) {
+        fprintf(stdout,
+                "DIFFERENT %s: terminal receipt: Rust steps %llu @%llu hash %016llx, C steps "
+                "%llu @%llu hash %016llx\n",
+                id, (unsigned long long)rust->terminal_steps,
+                (unsigned long long)rust->terminal_nanos,
+                (unsigned long long)rust->terminal_schedule_hash,
+                (unsigned long long)c->terminal_steps, (unsigned long long)c->terminal_nanos,
+                (unsigned long long)c->terminal_schedule_hash);
+        return 1;
+    }
+    fprintf(stdout, "DIFFERENT %s: header fields differ (seed %llu/%llu, config %016llx/%016llx)\n",
+            id, (unsigned long long)rust->seed, (unsigned long long)c->seed,
+            (unsigned long long)rust->config_hash, (unsigned long long)c->config_hash);
+    return 1;
+}
+
+/* One fixture. Returns 0 when it holds (a schedule identical to Rust's, or
+ * neither side has one), 1 when it does not. */
+static int schedule_one(const char *dir, const char *path) {
+    uint32_t root;
+    uint32_t scenario;
+    uint32_t schedule;
+    uint32_t run = ASX_JSON_NONE;
+    const char *id;
+    const char *hex;
+    asx_forced_decode_limits limits;
+    asx_forced_schedule rust;
+    asx_forced_schedule mine;
+    asx_forced_error ferr;
+    size_t rust_len = 0;
+    size_t mine_len = 0;
+    int have_rust = 0;
+    uint64_t config_hash = 0;
+    asx_status st;
+
+    if (!load(path, &g_fixture, &root)) return 1;
+    id = asx_json_get_string(&g_fixture, root, "scenario_id");
+    scenario = asx_json_get(&g_fixture, root, "scenario");
+    schedule = asx_json_get(&g_fixture, root, "schedule");
+    if (id == NULL || scenario == ASX_JSON_NONE || schedule == ASX_JSON_NONE ||
+        !fixture_authentic(root, id)) {
+        fprintf(stdout, "ERROR %s: not an asx.fixture.v2 file with scenario and schedule\n", path);
+        return 1;
+    }
+    switch (requirement_skip(id, scenario)) {
+    case -1: return 1;
+    case 1: return 0;
+    default: break;
+    }
+    hex = asx_json_get_string(&g_fixture, schedule, "forced_schedule");
+    memset(&rust, 0, sizeof(rust));
+    if (hex != NULL) {
+        rust_len = hex_decode(hex, g_forced_bytes, sizeof(g_forced_bytes));
+        limits.max_encoded_bytes = sizeof(g_forced_bytes);
+        limits.max_dispatches = FORCED_MAX_DISPATCHES;
+        memset(&ferr, 0, sizeof(ferr));
+        if (rust_len == 0u ||
+            asx_forced_schedule_decode(g_forced_bytes, rust_len, &limits, g_forced_storage,
+                                       FORCED_MAX_DISPATCHES, &rust, &ferr) != ASX_OK) {
+            fprintf(stdout, "ERROR %s: Rust's forced schedule does not decode\n", id);
+            return 1;
+        }
+        have_rust = 1;
+        config_hash = rust.config_hash;
+    }
+
+    asx_conformance_record_schedule(1, config_hash);
+    asx_json_doc_init(&g_run);
+    st = asx_conformance_run(&g_fixture, scenario, &g_run, &run, g_error, sizeof(g_error));
+    if (st != ASX_OK) {
+        asx_conformance_record_schedule(0, 0u);
+        fprintf(stdout, "ERROR %s: C run failed: %s\n", id, g_error[0] != '\0' ? g_error : "?");
+        return 1;
+    }
+    if (!asx_conformance_recorded_schedule(&mine)) {
+        asx_conformance_record_schedule(0, 0u);
+        if (!have_rust) {
+            fprintf(stdout, "NONE %s: neither Rust nor C ended quiescent\n", id);
+            return 0;
+        }
+        fprintf(stdout, "DIFFERENT %s: Rust recorded a schedule, C ended with work stuck\n", id);
+        return 1;
+    }
+    asx_conformance_record_schedule(0, 0u);
+    memset(&ferr, 0, sizeof(ferr));
+    st =
+        asx_forced_schedule_encode(&mine, g_forced_again, sizeof(g_forced_again), &mine_len, &ferr);
+    if (st != ASX_OK) {
+        fprintf(stdout, "ERROR %s: C's schedule does not encode: %s\n", id,
+                asx_forced_error_kind_name(ferr.kind));
+        return 1;
+    }
+    if (!have_rust) {
+        fprintf(stdout, "DIFFERENT %s: C recorded a schedule, Rust ended with work stuck\n", id);
+        return 1;
+    }
+    if (mine_len != rust_len || memcmp(g_forced_again, g_forced_bytes, rust_len) != 0) {
+        (void)schedule_difference(id, &rust, &mine);
+        return 1;
+    }
+    if (!write_hex_file(dir, id, g_forced_again, mine_len)) {
+        fprintf(stdout, "ERROR %s: cannot write %s/%s.sched\n", id, dir, id);
+        return 1;
+    }
+    fprintf(stdout,
+            "SCHEDULE %s certificate=%016llx dispatches=%u bytes=%u (identical to Rust's)\n", id,
+            (unsigned long long)mine.terminal_schedule_hash, (unsigned)mine.dispatch_count,
+            (unsigned)mine_len);
+    return 0;
+}
+
 /* Scenarios skipped because they declare a requirement this build's profile
  * forbids (DEC-008), and the summary says so. */
 static unsigned g_skipped_forbidden;
@@ -1678,6 +1858,7 @@ static int usage(void) {
                     "       asx-conformance compare <fixture.json>...\n"
                     "       asx-conformance compare-sweep [--trace] [--known <file>] "
                     "<fixture.json>...\n"
+                    "       asx-conformance schedule --out-dir <dir> <fixture.json>...\n"
                     "       asx-conformance self-test <fixture.json>\n"
                     "       asx-conformance canon <cases.jsonl>\n"
                     "       asx-conformance constants <rust_kernel_constants.json>\n");
@@ -1954,6 +2135,21 @@ static int cmd_compare_sweep(int argc, char **argv) {
                : 1;
 }
 
+/* schedule --out-dir DIR fixture.json... (see schedule_one) */
+static int cmd_schedule(int argc, char **argv) {
+    const char *dir = NULL;
+    int i = 2;
+    unsigned bad = 0;
+    if (i + 1 < argc && strcmp(argv[i], "--out-dir") == 0) {
+        dir = argv[i + 1];
+        i += 2;
+    }
+    if (dir == NULL || i >= argc) return usage();
+    for (; i < argc; i++) bad += (unsigned)schedule_one(dir, argv[i]);
+    fprintf(stdout, "asx-conformance schedule: %u not identical or failed\n", bad);
+    return bad == 0u ? 0 : 1;
+}
+
 int main(int argc, char **argv) {
     int i;
     unsigned pass = 0;
@@ -1968,6 +2164,7 @@ int main(int argc, char **argv) {
     if (strcmp(argv[1], "canon") == 0 && argc == 3) return cmd_canon(argv[2]);
     if (strcmp(argv[1], "constants") == 0 && argc == 3) return cmd_constants(argv[2]);
     if (strcmp(argv[1], "compare-sweep") == 0) return cmd_compare_sweep(argc, argv);
+    if (strcmp(argv[1], "schedule") == 0) return cmd_schedule(argc, argv);
     if (strcmp(argv[1], "self-test") == 0 && argc == 3) {
         cmp_result r = compare_one(argv[2], 1);
         if (r == CMP_FAIL) {

@@ -1106,6 +1106,13 @@ jobs:
       - name: Live differential oracle detects and minimizes a runtime mutation
         run: make test-fuzz-differential
 
+      # bd-9kll.4.8, bd-9kll.9.3: the schedule certificate and every dispatch
+      # equal Rust's over the committed fixtures and 1000 generated scenarios,
+      # C's recorded forced schedule is Rust's artifact byte for byte, and
+      # Rust's run_forced_schedule replays C's schedule where it can run it.
+      - name: Scheduler certificate parity and C-to-Rust forced replay (seed 1, 1000 scenarios)
+        run: make scheduler-certificate-parity SCHED_CERT_SEED=1 SCHED_CERT_COUNT=1000
+
       - name: Trace canonicalizer differential (seed 9, 100000 traces)
         run: make canon-differential CANON_SEED=9 CANON_COUNT=100000
 

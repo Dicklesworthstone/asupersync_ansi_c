@@ -46,6 +46,94 @@ static asx_status parse_only(const char *text, uint32_t *root) {
     "\"lab\":{\"max_steps\":600},"                                                                 \
     "\"regions\":[{\"name\":\"r.main\",\"parent\":\"root\",\"budget\":null}],"
 
+/* A lab run's forced schedule (Rust's start/finish_forced_schedule_recording,
+ * bd-9kll.9.3): armed, the run records its dispatches with Rust arena ids and
+ * a terminal receipt that is the run's own certificate, encodes to a canonical
+ * artifact and decodes back; disarmed, nothing is recorded; a run that ends
+ * with work stuck has no canonical form. */
+#define SCHEDULE_SCENARIO(tasks_json, sync_json)                                                   \
+    SCENARIO_HEAD "\"channels\":[],\"sync\":[" sync_json "],\"tasks\":[" tasks_json                \
+                  "],\"script\":[],\"expect\":{\"kind\":\"ok\"}}"
+
+TEST(a_lab_run_records_its_forced_schedule_when_armed) {
+    static const char text[] =
+        SCHEDULE_SCENARIO("{\"name\":\"t.a\",\"region\":\"r.main\",\"budget\":null,\"program\":["
+                          "{\"op\":\"yield\"},{\"op\":\"trace\",\"message\":\"a\"}]},"
+                          "{\"name\":\"t.b\",\"region\":\"r.main\",\"budget\":null,\"program\":["
+                          "{\"op\":\"sleep\",\"ns\":100},{\"op\":\"trace\",\"message\":\"b\"}]}",
+                          "");
+    static asx_forced_dispatch storage[64];
+    static uint8_t bytes[4096];
+    asx_forced_schedule sched;
+    asx_forced_schedule back;
+    asx_forced_decode_limits limits;
+    asx_forced_error ferr;
+    char cert[17];
+    size_t len = 0;
+    uint32_t root = 0;
+    uint32_t i;
+
+    asx_conformance_record_schedule(1, UINT64_C(0xFEEDFACE));
+    ASSERT_EQ(run_text(text, &root), ASX_OK);
+    ASSERT_TRUE(asx_conformance_recorded_schedule(&sched));
+    ASSERT_EQ(sched.version, (uint32_t)ASX_FORCED_SCHEDULE_SCHEMA_VERSION);
+    ASSERT_EQ(sched.seed, (uint64_t)42u);
+    ASSERT_EQ(sched.config_hash, UINT64_C(0xFEEDFACE));
+    ASSERT_TRUE(sched.terminal_quiescent);
+    ASSERT_TRUE(!sched.truncated);
+    /* t.a polls twice, t.b twice (before and after its sleep), and the
+     * dispatches are in step order with a non-decreasing clock. */
+    ASSERT_EQ(sched.dispatch_count, 4u);
+    for (i = 1u; i < sched.dispatch_count; i++) {
+        ASSERT_TRUE(sched.dispatches[i].at_step > sched.dispatches[i - 1u].at_step);
+        ASSERT_TRUE(sched.dispatches[i].at_nanos >= sched.dispatches[i - 1u].at_nanos);
+    }
+    ASSERT_EQ(sched.terminal_nanos, (uint64_t)100u);
+
+    /* The receipt's hash is the certificate the run projected. */
+    (void)snprintf(cert, sizeof(cert), "%016llx", (unsigned long long)sched.terminal_schedule_hash);
+    ASSERT_STR_EQ(asx_json_get_string(&g_out, root, "certificate_hash"), cert);
+    ASSERT_EQ(asx_forced_schedule_certificate(sched.dispatches, sched.dispatch_count),
+              sched.terminal_schedule_hash);
+
+    /* Canonical bytes, and back. */
+    memset(&ferr, 0, sizeof(ferr));
+    ASSERT_EQ(asx_forced_schedule_encode(&sched, bytes, sizeof(bytes), &len, &ferr), ASX_OK);
+    ASSERT_EQ(len, asx_forced_schedule_encoded_size(sched.dispatch_count));
+    limits.max_encoded_bytes = sizeof(bytes);
+    limits.max_dispatches = 64u;
+    ASSERT_EQ(asx_forced_schedule_decode(bytes, len, &limits, storage, 64u, &back, &ferr), ASX_OK);
+    ASSERT_EQ(back.dispatch_count, sched.dispatch_count);
+    ASSERT_EQ(back.terminal_schedule_hash, sched.terminal_schedule_hash);
+    ASSERT_EQ(back.config_hash, sched.config_hash);
+
+    /* Disarmed, a run records nothing. */
+    asx_conformance_record_schedule(0, 0u);
+    ASSERT_EQ(run_text(text, &root), ASX_OK);
+    ASSERT_TRUE(!asx_conformance_recorded_schedule(&sched));
+}
+
+TEST(a_run_that_ends_with_work_stuck_has_no_recorded_schedule) {
+    /* The lab keeps stepping a stuck task up to its own bound (1000), so the
+     * step limit is above it. */
+    static const char text[] =
+        "{\"schema\":\"asx.scenario.v2\",\"id\":\"unit-stuck-001\",\"description\":\"d\","
+        "\"unit\":\"timers\",\"rules\":[\"inv.determinism.replayable\"],\"seed\":42,"
+        "\"lab\":{\"max_steps\":5000},"
+        "\"regions\":[{\"name\":\"r.main\",\"parent\":\"root\",\"budget\":null}],"
+        "\"channels\":[],\"sync\":[{\"name\":\"n.never\",\"type\":\"notify\"}],"
+        "\"tasks\":[{\"name\":\"t.a\",\"region\":\"r.main\",\"budget\":null,\"program\":["
+        "{\"op\":\"notify_wait\",\"notify\":\"n.never\"}]}],"
+        "\"script\":[],\"expect\":{\"kind\":\"ok\"}}";
+    asx_forced_schedule sched;
+    uint32_t root = 0;
+
+    asx_conformance_record_schedule(1, 0u);
+    ASSERT_EQ(run_text(text, &root), ASX_OK);
+    asx_conformance_record_schedule(0, 0u);
+    ASSERT_TRUE(!asx_conformance_recorded_schedule(&sched));
+}
+
 /* The interval and DelayQueue steps (DSL 3.9) and the watch steps (3.6): 13
  * steps in t.a and 6 in t.b, each observed once. */
 TEST(the_interval_delay_queue_and_watch_steps_are_dispatched) {
@@ -721,6 +809,8 @@ TEST(a_timeout_around_another_step_fails_the_run_closed) {
 
 int main(void) {
     fprintf(stderr, "=== test_interpreter_ops ===\n");
+    RUN_TEST(a_lab_run_records_its_forced_schedule_when_armed);
+    RUN_TEST(a_run_that_ends_with_work_stuck_has_no_recorded_schedule);
     RUN_TEST(a_sender_closed_with_a_permit_held_is_dropped_after_the_permit);
     RUN_TEST(a_mask_beyond_the_bound_panics_the_task_and_depth_64_runs);
     RUN_TEST(the_close_outcome_of_a_region_is_observed_under_the_driver);

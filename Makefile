@@ -1993,6 +1993,30 @@ fuzz-differential: $(CONFORMANCE_RUNNER)
 		fi; exit $$rc
 
 # ---------------------------------------------------------------------------
+# scheduler-certificate-parity — Rust's and C's scheduler agree on every
+# dispatch and on the schedule certificate, and each replays the other's
+# recorded schedule (bd-9kll.4.8, bd-9kll.9.3). tests/e2e/
+# scheduler_certificate_parity.sh runs it over the committed Rust fixtures and
+# SCHED_CERT_COUNT generated scenarios of SCHED_CERT_SEED, captured now:
+# certificate and dispatch equality, Rust's schedule replayed in C, C's
+# recorded schedule byte-identical to Rust's artifact, and C's schedule
+# replayed by Rust's run_forced_schedule (twin_run forced-replay) with C's run
+# equal to Rust's replay. One JSONL record per scenario and check in
+# $(BUILD_DIR)/test-logs, the first divergence in each failing one. It needs
+# cargo and the pinned asupersync like fuzz-differential.
+# ---------------------------------------------------------------------------
+SCHED_CERT_SEED ?= 1
+SCHED_CERT_COUNT ?= 1000
+
+.PHONY: scheduler-certificate-parity
+scheduler-certificate-parity: $(CONFORMANCE_RUNNER)
+	@echo "[asx] scheduler-certificate-parity: seed=$(SCHED_CERT_SEED) count=$(SCHED_CERT_COUNT)"
+	@ASX_CONFORMANCE_RUNNER="$(abspath $(CONFORMANCE_RUNNER))" \
+		ASX_TWIN_BIN="$(ASX_TWIN_BIN)" \
+		ASX_E2E_SCHED_SEED="$(SCHED_CERT_SEED)" ASX_E2E_SCHED_COUNT="$(SCHED_CERT_COUNT)" \
+		BUILD_DIR="$(abspath $(BUILD_DIR))" bash tests/e2e/scheduler_certificate_parity.sh
+
+# ---------------------------------------------------------------------------
 # fuzz-minimize — reduce every scenario the last fuzz-differential run of
 # FUZZ_V2_SEED FAILed to a 1-minimal reproduction (twin_run minimize: delete
 # steps, tasks, script entries and declarations while Rust still runs it and

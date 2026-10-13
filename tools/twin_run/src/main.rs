@@ -16,7 +16,7 @@ mod run;
 #[path = "gen.rs"]
 mod scenario_gen;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use serde_json::{Value, json};
@@ -25,6 +25,7 @@ use sha2::{Digest, Sha256};
 fn usage() -> ExitCode {
     eprintln!(
         "usage: twin_run capture <scenario.json>... --out <dir>\n       \
+         twin_run forced-replay --schedules <dir> --out <dir> <scenario.json>...\n       \
          twin_run generate --seed <u64> --count <n> --out <dir>\n       \
          twin_run canon-fuzz --seed <u64> --count <n> --out <file.jsonl>\n       \
          twin_run minimize <scenario.json> --runner <asx-conformance> --out <dir>\n       \
@@ -249,6 +250,116 @@ fn capture(paths: &[PathBuf], out: &PathBuf) -> ExitCode {
     }
 }
 
+/// The bytes of a lowercase hex string (surrounding whitespace ignored).
+fn hex_bytes(text: &str) -> Result<Vec<u8>, String> {
+    let hex = text.trim();
+    if hex.is_empty() || !hex.len().is_multiple_of(2) {
+        return Err("not an even-length hex string".to_string());
+    }
+    (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).map_err(|e| e.to_string()))
+        .collect()
+}
+
+/// bd-9kll.9.3, C to Rust: replay on Rust's lab the schedule the C runtime
+/// recorded for each scenario (`asx-conformance schedule --out-dir`, one
+/// `<id>.sched` hex file each), through Rust's own `run_forced_schedule`.
+/// A scenario may be a scenario file or a fixture holding one. Prints
+/// REPLAYED (with the replay's semantic digest and certificate), UNAVAILABLE
+/// (the scenario's script steps the lab between dispatches, which Rust's
+/// runner cannot interleave), NONE (C recorded no schedule: it did not end
+/// quiescent) or REFUSED (Rust rejected C's artifact, with its typed error:
+/// the first divergence), and writes each replay's fixture to `out`. Exit
+/// status 1 when any scenario is REFUSED or fails.
+fn forced_replay(scenarios: &[PathBuf], schedules: &Path, out: &Path) -> ExitCode {
+    if let Err(err) = std::fs::create_dir_all(out) {
+        eprintln!("twin_run: cannot create {}: {err}", out.display());
+        return ExitCode::from(1);
+    }
+    let provenance = match provenance() {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!("twin_run: {err}");
+            return ExitCode::from(1);
+        }
+    };
+    let (mut replayed, mut unavailable, mut none, mut failed) = (0usize, 0usize, 0usize, 0usize);
+    for path in scenarios {
+        let document: Value = match std::fs::read_to_string(path)
+            .map_err(|e| e.to_string())
+            .and_then(|s| serde_json::from_str(&s).map_err(|e| e.to_string()))
+        {
+            Ok(v) => v,
+            Err(err) => {
+                println!("ERROR {}: unreadable: {err}", path.display());
+                failed += 1;
+                continue;
+            }
+        };
+        let scenario = document.get("scenario").unwrap_or(&document);
+        let Some(id) = scenario["id"].as_str().map(str::to_string) else {
+            println!("ERROR {}: no string id", path.display());
+            failed += 1;
+            continue;
+        };
+        let sched_path = schedules.join(format!("{id}.sched"));
+        let Ok(text) = std::fs::read_to_string(&sched_path) else {
+            println!("NONE {id}: no schedule at {}", sched_path.display());
+            none += 1;
+            continue;
+        };
+        let bytes = match hex_bytes(&text) {
+            Ok(b) => b,
+            Err(err) => {
+                println!("ERROR {id}: {}: {err}", sched_path.display());
+                failed += 1;
+                continue;
+            }
+        };
+        match run::replay_forced_schedule(scenario, &bytes) {
+            Ok(mut fixture) => {
+                fixture["provenance"] = provenance.clone();
+                let file = out.join(format!("{id}.json"));
+                let written = canon::canonical_json(&fixture)
+                    .and_then(|t| std::fs::write(&file, t + "\n").map_err(|e| e.to_string()));
+                if let Err(err) = written {
+                    println!("ERROR {id}: cannot write {}: {err}", file.display());
+                    failed += 1;
+                    continue;
+                }
+                println!(
+                    "REPLAYED {id} {} certificate={}",
+                    fixture["semantic_digest"].as_str().unwrap_or(""),
+                    fixture["schedule"]["certificate_hash"]
+                        .as_str()
+                        .unwrap_or("")
+                );
+                replayed += 1;
+            }
+            Err(err) => {
+                if let Some(why) = err.strip_prefix(run::FORCED_UNAVAILABLE) {
+                    println!("UNAVAILABLE {id}: {why}");
+                    unavailable += 1;
+                } else {
+                    println!("REFUSED {id}: {err}");
+                    failed += 1;
+                }
+            }
+        }
+    }
+    println!(
+        "twin_run forced-replay: {} scenario(s): {replayed} replayed, {unavailable} unavailable, \
+         {none} without a C schedule, {failed} refused or failed",
+        scenarios.len()
+    );
+    if failed > 0 {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
@@ -267,6 +378,24 @@ fn main() -> ExitCode {
             }
             match out {
                 Some(out) if !paths.is_empty() => capture(&paths, &out),
+                _ => usage(),
+            }
+        }
+        Some("forced-replay") => {
+            let mut scenarios = Vec::new();
+            let (mut schedules, mut out) = (None, None);
+            let mut rest = args[1..].iter();
+            while let Some(arg) = rest.next() {
+                match arg.as_str() {
+                    "--schedules" => schedules = rest.next().map(PathBuf::from),
+                    "--out" => out = rest.next().map(PathBuf::from),
+                    _ => scenarios.push(PathBuf::from(arg)),
+                }
+            }
+            match (schedules, out) {
+                (Some(schedules), Some(out)) if !scenarios.is_empty() => {
+                    forced_replay(&scenarios, &schedules, &out)
+                }
                 _ => usage(),
             }
         }

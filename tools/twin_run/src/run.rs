@@ -22,6 +22,7 @@ use asupersync::cx::{ChildRegion, ChildRegionSpec};
 use asupersync::gen_server::{
     CallError, CastError, CastOverflowPolicy, GenServer, GenServerHandle, Reply, SystemMsg,
 };
+use asupersync::lab::runtime::{ForcedSchedule, ForcedScheduleDecodeLimits, ForcedScheduleLimits};
 use asupersync::lab::{LabConfig, LabRuntime};
 use asupersync::link::{Link, LinkRef};
 use asupersync::monitor::{DownReason, Monitor, MonitorRef, WatchError, WatchTarget};
@@ -3731,8 +3732,52 @@ pub fn run_scenario(scenario: &Value) -> RunResult<Value> {
 /// As [`run_scenario`], also appending the raw lab trace (seq, kind, data)
 /// to `raw` for diagnosing a divergence (`twin_run trace`).
 pub fn run_scenario_with(scenario: &Value, raw: Option<&mut Vec<String>>) -> RunResult<Value> {
+    run_scenario_inner(scenario, raw, None)
+}
+
+/// The prefix of the error of a scenario whose forced replay is not
+/// available (rather than refused).
+pub const FORCED_UNAVAILABLE: &str = "forced replay unavailable: ";
+/// The prefix of the error of an artifact Rust's `run_forced_schedule`
+/// refused or could not decode.
+pub const FORCED_REFUSED: &str = "forced replay refused: ";
+
+/// bd-9kll.9.3, C to Rust: run the scenario on a fresh lab runtime whose
+/// scheduler takes every dispatch from `artifact`, the canonical bytes of a
+/// forced schedule the C runtime recorded for it
+/// (`asx-conformance schedule`), through Rust's own `run_forced_schedule`:
+/// it revalidates the seed and configuration, every task generation, worker,
+/// lane, step and time, and the terminal certificate, and fails at the first
+/// dispatch that is not the one the artifact says. Returns the fixture the
+/// run projects, as `run_scenario` does, with the schedule section the
+/// artifact's.
+///
+/// Rust's runner executes a whole schedule in one call, so a scenario whose
+/// script steps the lab or changes its state between dispatches cannot be
+/// replayed: its error starts with [`FORCED_UNAVAILABLE`]. A refusal starts
+/// with [`FORCED_REFUSED`].
+pub fn replay_forced_schedule(scenario: &Value, artifact: &[u8]) -> RunResult<Value> {
+    run_scenario_inner(scenario, None, Some(artifact))
+}
+
+fn run_scenario_inner(
+    scenario: &Value,
+    raw: Option<&mut Vec<String>>,
+    replay: Option<&[u8]>,
+) -> RunResult<Value> {
     if scenario.get("schema").and_then(Value::as_str) != Some("asx.scenario.v2") {
         return Err("not an asx.scenario.v2 document".to_string());
+    }
+    if replay.is_some()
+        && scenario
+            .get("script")
+            .and_then(Value::as_array)
+            .is_some_and(|script| !script.is_empty())
+    {
+        return Err(format!(
+            "{FORCED_UNAVAILABLE}the scenario's script runs the lab between dispatches, which \
+             run_forced_schedule cannot interleave"
+        ));
     }
     let lab_cfg = scenario.get("lab").ok_or("missing lab")?;
     let mut config = LabConfig::new(u64_field(scenario, "seed")?)
@@ -3761,8 +3806,10 @@ pub fn run_scenario_with(scenario: &Value, raw: Option<&mut Vec<String>>) -> Run
             .panic_on_futurelock(false);
     }
     let mut lab = LabRuntime::new(config);
-    lab.start_forced_schedule_recording(1 << 20)
-        .map_err(|e| format!("{e:?}"))?;
+    if replay.is_none() {
+        lab.start_forced_schedule_recording(1 << 20)
+            .map_err(|e| format!("{e:?}"))?;
+    }
     let shared: SharedRef = Arc::new(Mutex::new(Shared::default()));
     lock(&shared).futurelock_declared = futurelock_max_idle_steps.is_some();
     // Only a handoff's destination needs its Cx held (to try_transfer to
@@ -4086,8 +4133,26 @@ pub fn run_scenario_with(scenario: &Value, raw: Option<&mut Vec<String>>) -> Run
         )?;
     }
 
-    // Finish: run to quiescence with timer auto-advance.
-    let report = lab.run_with_auto_advance();
+    // Finish: run to quiescence with timer auto-advance, or (bd-9kll.9.3)
+    // replay the schedule the C runtime recorded, exactly.
+    let mut step_limit_reached = false;
+    let mut replayed = None;
+    if let Some(bytes) = replay {
+        let max_steps = u64_field(lab_cfg, "max_steps")?;
+        let decode = ForcedScheduleDecodeLimits::new(bytes.len().max(1), 1 << 20, 1 << 26);
+        let artifact = ForcedSchedule::try_from_canonical_bytes(bytes, decode)
+            .map_err(|e| format!("{FORCED_REFUSED}the artifact does not decode: {e:?}"))?;
+        let limits = ForcedScheduleLimits::new(artifact.dispatches().len().max(1), max_steps);
+        lab.run_forced_schedule(&artifact, limits)
+            .map_err(|e| format!("{FORCED_REFUSED}{e:?}"))?;
+        replayed = Some(artifact);
+    } else {
+        let report = lab.run_with_auto_advance();
+        step_limit_reached = matches!(
+            report.termination,
+            asupersync::lab::AutoAdvanceTermination::StepLimitReached
+        );
+    }
     // Before anything can fail the run: a failing scenario is the one to
     // diagnose.
     if let Some(raw) = raw {
@@ -4102,16 +4167,16 @@ pub fn run_scenario_with(scenario: &Value, raw: Option<&mut Vec<String>>) -> Run
     }
     // Exceeding lab.max_steps is a harness failure (DSL §2), as the C
     // interpreter reports it; the lab itself just stops there.
-    if matches!(
-        report.termination,
-        asupersync::lab::AutoAdvanceTermination::StepLimitReached
-    ) {
+    if step_limit_reached {
         return Err("lab.max_steps exceeded: run_with_auto_advance".to_string());
     }
 
-    let schedule = lab
-        .finish_forced_schedule_recording()
-        .map_err(|e| format!("{e:?}"))?;
+    let schedule = match replayed {
+        Some(artifact) => artifact,
+        None => lab
+            .finish_forced_schedule_recording()
+            .map_err(|e| format!("{e:?}"))?,
+    };
     // A forced schedule only replays a run that reached quiescence (its
     // canonical form refuses a partial source, lab/runtime.rs:1587); a
     // scenario that ends with work stuck has none, and its snapshot says so.

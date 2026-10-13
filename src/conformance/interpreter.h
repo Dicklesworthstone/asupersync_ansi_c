@@ -65,6 +65,21 @@ ASX_MUST_USE asx_status asx_conformance_run_sweep(const asx_json_doc *in, uint32
  * runs. NULL clears the replay. */
 void asx_conformance_force_schedule(const asx_forced_schedule *schedule, const char *const *names);
 
+/* Record the forced schedule of every lab run that follows (Rust's
+ * start/finish_forced_schedule_recording, lab/runtime.rs:2618; bd-9kll.9.3),
+ * with Rust arena ids, so the run's artifact can be handed to Rust's
+ * run_forced_schedule. `config_hash` is what the artifact carries as the
+ * lab's configuration hash (Rust's is a LabConfig hash that C does not
+ * compute: the fixture's own artifact has it). Not recorded while a schedule
+ * is being replayed (asx_conformance_force_schedule). `on` 0 disarms. */
+void asx_conformance_record_schedule(int on, uint64_t config_hash);
+
+/* The last run's recorded schedule: 1 and *out filled (its dispatches live
+ * in interpreter storage until the next run), or 0 when nothing was
+ * recorded, the run ended with work stuck (no canonical form), or it had
+ * more dispatches than the storage holds. */
+int asx_conformance_recorded_schedule(asx_forced_schedule *out);
+
 /* Run these kernel-state oracles (docs/LAB_ORACLE_CATALOG.md) at the end of
  * every run that follows, as if each scenario had listed them in its
  * lab.oracles: a comma-separated list of Rust registry names ("task_leak",

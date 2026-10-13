@@ -133,7 +133,9 @@ None of these subcommands, outputs or the seed derivation exist in
 `tools/fixture_capture`, and its provenance block has none of those four
 fields (section 3). Neither tool has a `replay-check` step that re-runs a
 capture and compares digests; `twin_run` records the lab's forced schedule in
-`schedule.forced_schedule` (`run.rs:1986-1999`) but does not replay it.
+`schedule.forced_schedule` and, with `forced-replay`, replays the schedule the
+C runtime recorded for a scenario through `LabRuntime::run_forced_schedule`
+(bd-9kll.9.3; docs/SCHEDULING_MODEL_CONTRACT.md).
 
 ## 6. Schemas
 
