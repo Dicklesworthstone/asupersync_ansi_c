@@ -1796,6 +1796,33 @@ conformance-ghost:
 	@echo "[asx] conformance-ghost: PASS"
 
 # ---------------------------------------------------------------------------
+# twin-run-check — the Rust half of the oracle is code too (bd-9kll.2.23):
+# tools/twin_run is formatted (cargo fmt --check), lint-clean with the tests
+# included (clippy -D warnings), its unit tests pass (the trace projection of
+# hand-built traces, canon, minimize) and the release binary that captures
+# the fixtures builds. A twin_run that does not compile, or a projection that
+# drifted, otherwise surfaces only in whichever batch first builds it. Needs
+# cargo with rust-toolchain.toml's pinned nightly; CI runs each target as a
+# step of the fuzz-rust-differential job, which has that toolchain.
+# ---------------------------------------------------------------------------
+TWIN_RUN_MANIFEST := tools/twin_run/Cargo.toml
+
+.PHONY: twin-run-fmt twin-run-clippy twin-run-test twin-run-build twin-run-check
+twin-run-fmt:
+	cargo fmt --manifest-path $(TWIN_RUN_MANIFEST) --check
+
+twin-run-clippy:
+	cargo clippy --locked --manifest-path $(TWIN_RUN_MANIFEST) --all-targets -- -D warnings
+
+twin-run-test:
+	cargo test --locked --manifest-path $(TWIN_RUN_MANIFEST)
+
+twin-run-build:
+	cargo build --release --locked --manifest-path $(TWIN_RUN_MANIFEST) --bin twin_run
+
+twin-run-check: twin-run-fmt twin-run-clippy twin-run-test twin-run-build
+
+# ---------------------------------------------------------------------------
 # fuzz-differential — Rust-vs-C differential fuzzing over DSL v2 (bd-ij9w):
 # twin_run generates FUZZ_V2_COUNT scenarios for FUZZ_V2_SEED, runs them in
 # asupersync's LabRuntime, and the C runtime runs every scenario Rust could

@@ -1064,6 +1064,23 @@ jobs:
             tools/twin_run/target
           key: twin-run-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'tools/twin_run/Cargo.lock') }}
 
+      # The Rust half of the oracle is code too (bd-9kll.2.23): format, lint,
+      # unit tests (the trace projection of hand-built traces among them) and
+      # the release build run before anything is captured with it. A link arm
+      # that did not compile, or a summary line that drifted, failed only in
+      # the first batch that built twin_run; now it fails here, first.
+      - name: twin_run format (cargo fmt --check)
+        run: make twin-run-fmt
+
+      - name: twin_run lint (clippy -D warnings, tests included)
+        run: make twin-run-clippy
+
+      - name: twin_run unit tests (trace projection, canon, minimize)
+        run: make twin-run-test
+
+      - name: twin_run release build
+        run: make twin-run-build
+
       - name: Differential fuzzing (seed 9, 200 scenarios)
         run: |
           if ! make fuzz-differential FUZZ_V2_SEED=9 FUZZ_V2_COUNT=200; then
