@@ -1187,7 +1187,7 @@ void asx_actor_reset(void) {
     memset(g_actors, 0, (size_t)g_actor_hwm * sizeof(g_actors[0]));
     g_actor_hwm = 0u;
     g_live_servers = 0;
-}
     /* The monitor table holds server handles and task ids, so it goes with
      * the servers on a runtime reset. */
     asx_monitor_reset();
+}
