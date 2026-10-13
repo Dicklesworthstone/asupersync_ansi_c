@@ -89,7 +89,7 @@ def source_line(root, name, number):
     return ""
 
 
-def report(fixtures_path, generated_path, top, min_gap, source_root):
+def report(fixtures_path, generated_path, top, min_gap, source_root, detail):
     with open(fixtures_path, encoding="utf-8") as handle:
         fixtures = json.load(handle)
     with open(generated_path, encoding="utf-8") as handle:
@@ -133,6 +133,19 @@ def report(fixtures_path, generated_path, top, min_gap, source_root):
     print("files with the most lines no corpus executes:")
     for gap, name, n, fh, gh, neither, _only in never:
         print("%5d  %-46s of %5d" % (neither, name, n))
+    for wanted in detail:
+        key = wanted if wanted.startswith("src/") else "src/" + wanted
+        if key not in fixtures and key not in generated:
+            print("\n%s: not instrumented" % key)
+            continue
+        f = fixtures.get(key, {})
+        g = generated.get(key, {})
+        lines = set(f) | set(g)
+        missing = {int(n) for n in lines if f.get(n, 0) <= 0 and g.get(n, 0) <= 0}
+        print("\n%s: %d of %d instrumented lines executed by neither" % (key, len(missing), len(lines)))
+        for lo, hi in ranges(missing):
+            span = "%d" % lo if lo == hi else "%d-%d" % (lo, hi)
+            print("  %-11s %s" % (span, source_line(source_root, key, lo)))
     return 0
 
 
@@ -148,10 +161,18 @@ def main(argv):
     r.add_argument("--top", type=int, default=15)
     r.add_argument("--min-gap", type=int, default=5)
     r.add_argument("--source-root", default=".")
+    r.add_argument(
+        "--detail",
+        action="append",
+        default=[],
+        help="a file whose lines no corpus executes are listed (repeatable)",
+    )
     args = parser.parse_args(argv)
     if args.cmd == "collect":
         return collect(args.build_dir, args.out)
-    return report(args.fixtures, args.generated, args.top, args.min_gap, args.source_root)
+    return report(
+        args.fixtures, args.generated, args.top, args.min_gap, args.source_root, args.detail
+    )
 
 
 if __name__ == "__main__":

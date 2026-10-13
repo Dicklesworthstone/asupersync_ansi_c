@@ -16,6 +16,8 @@
 #   FUZZ_COV_CORPUS  glob of generated fixture directories
 #                    (default build/fuzz_v2/seed-*/fixtures)
 #   FUZZ_COV_TOP     files shown (default 15)
+#   FUZZ_COV_DETAIL  space-separated files (src/...) whose lines no corpus
+#                    executes are listed with their source text
 #
 # Exit 0 with the report; 2 when there is no generated corpus.
 #
@@ -72,5 +74,11 @@ measure() { # label dir...
 measure fixtures fixtures/rust_reference_v2
 measure generated "${dirs[@]}"
 
+detail=()
+for f in ${FUZZ_COV_DETAIL:-}; do
+    detail+=(--detail "$f")
+done
+
 echo
-"$PY" tools/ci/fuzz_coverage.py report "$COV/fixtures.json" "$COV/generated.json" --top "$TOP" --source-root .
+"$PY" tools/ci/fuzz_coverage.py report "$COV/fixtures.json" "$COV/generated.json" \
+    --top "$TOP" --source-root . ${detail[@]+"${detail[@]}"}
