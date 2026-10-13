@@ -334,6 +334,9 @@ asx_status asx_journal_ring_sink(void *ctx, const uint8_t *bytes, uint32_t len) 
         return ASX_E_INVALID_ARGUMENT;
     }
     r->total += (uint64_t)len;
+    /* Nothing to store, and bytes may be NULL here: memcpy's pointers must be
+     * non-NULL even for a zero length. */
+    if (len == 0u) return ASX_OK;
     if (len >= r->cap) {
         memcpy(r->storage, bytes + (len - r->cap), (size_t)r->cap);
         r->head = 0u;

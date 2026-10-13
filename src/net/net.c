@@ -162,7 +162,6 @@ static int parse_ipv6_host(const char *host, uint8_t out[16]) {
             if (!parse_ipv4_host(quad, v4)) return 0;
             groups[n++] = (uint16_t)(((uint32_t)v4[0] << 8) | v4[1]);
             groups[n++] = (uint16_t)(((uint32_t)v4[2] << 8) | v4[3]);
-            p = end;
             break;
         }
         while (p < end && hex_digit_value(*p) >= 0) {

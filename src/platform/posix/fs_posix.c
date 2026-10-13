@@ -20,10 +20,10 @@
 #ifdef ASX_PROFILE_POSIX
 
 #if !defined(_GNU_SOURCE)
-#define _GNU_SOURCE
+#define _GNU_SOURCE /* ASX_ANALYZER_WAIVER("feature-test macro the platform headers require") */
 #endif
 #if !defined(_FILE_OFFSET_BITS)
-#define _FILE_OFFSET_BITS 64
+#define _FILE_OFFSET_BITS 64 /* ASX_ANALYZER_WAIVER("feature-test macro: 64-bit off_t") */
 #endif
 
 #include "../../fs/fs_native.h"

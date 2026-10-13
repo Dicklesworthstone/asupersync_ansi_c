@@ -14,7 +14,7 @@
 
 /* Required for clock_gettime, struct timespec, syscall, O_CLOEXEC */
 #if !defined(_GNU_SOURCE)
-#define _GNU_SOURCE
+#define _GNU_SOURCE /* ASX_ANALYZER_WAIVER("feature-test macro the platform headers require") */
 #endif
 
 #include <asx/asx_config.h>

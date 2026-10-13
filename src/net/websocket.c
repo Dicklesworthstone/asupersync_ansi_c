@@ -1160,13 +1160,16 @@ asx_status asx_ws_engine_feed(asx_ws_engine *ws, const uint8_t *data, uint32_t l
 
 asx_status asx_ws_engine_recv(asx_ws_engine *ws, asx_ws_opcode *opcode, uint8_t *buf, uint32_t cap,
                               uint32_t *len) {
+    uint32_t n;
+
     if (ws == NULL || opcode == NULL || len == NULL || (buf == NULL && cap > 0u)) {
         return ASX_E_INVALID_ARGUMENT;
     }
     if (!ws->msg_ready) return ASX_E_PENDING;
-    *len = ws->msg_len;
-    if (ws->msg_len > cap) return ASX_E_BUFFER_TOO_SMALL;
-    if (ws->msg_len > 0u) memcpy(buf, ws->msg_buf, ws->msg_len);
+    n = ws->msg_len; /* one read: *len is a uint32_t the caller chose, and may alias the field */
+    *len = n;
+    if (n > cap) return ASX_E_BUFFER_TOO_SMALL;
+    if (n > 0u) memcpy(buf, ws->msg_buf, n);
     *opcode = (asx_ws_opcode)ws->msg_opcode;
     ws->msg_ready = 0u;
     ws->msg_len = 0u;

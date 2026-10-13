@@ -33,7 +33,7 @@
 #ifdef ASX_PROFILE_POSIX
 
 #if !defined(_GNU_SOURCE)
-#define _GNU_SOURCE
+#define _GNU_SOURCE /* ASX_ANALYZER_WAIVER("feature-test macro the platform headers require") */
 #endif
 
 #include "../../process/process_native.h"
@@ -623,6 +623,10 @@ static asx_status native_process_spawn_impl(const asx_process_command *cmd,
     ssize_t n;
     pid_t pid;
     int i;
+
+    /* The callers in src/process check these; the backend is also reachable
+     * through the journal's wrapper, which passes both through unchanged. */
+    if (cmd == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
 
     proc_reap_detached();
     for (idx = 0; idx < ASX_NATIVE_MAX_PROCESSES; idx++) {

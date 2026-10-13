@@ -22,7 +22,7 @@
 #ifdef ASX_PROFILE_POSIX
 
 #if !defined(_GNU_SOURCE)
-#define _GNU_SOURCE
+#define _GNU_SOURCE /* ASX_ANALYZER_WAIVER("feature-test macro the platform headers require") */
 #endif
 
 #include "../../net/net_native.h"
@@ -185,13 +185,13 @@ static int native_set_flags(int fd) {
 static socklen_t native_to_sockaddr(const asx_socket_addr *a, struct sockaddr_storage *ss) {
     memset(ss, 0, sizeof(*ss));
     if (a->family == ASX_AF_INET6) {
-        struct sockaddr_in6 *s6 = (struct sockaddr_in6 *)(void *)ss;
+        struct sockaddr_in6 *s6 = (struct sockaddr_in6 *)ss;
         s6->sin6_family = AF_INET6;
         s6->sin6_port = htons(a->port);
         memcpy(&s6->sin6_addr, a->addr, 16);
         return (socklen_t)sizeof(*s6);
     } else {
-        struct sockaddr_in *s4 = (struct sockaddr_in *)(void *)ss;
+        struct sockaddr_in *s4 = (struct sockaddr_in *)ss;
         s4->sin_family = AF_INET;
         s4->sin_port = htons(a->port);
         memcpy(&s4->sin_addr, a->addr, 4);
@@ -202,12 +202,12 @@ static socklen_t native_to_sockaddr(const asx_socket_addr *a, struct sockaddr_st
 static void native_from_sockaddr(const struct sockaddr_storage *ss, asx_socket_addr *a) {
     memset(a, 0, sizeof(*a));
     if (ss->ss_family == AF_INET6) {
-        const struct sockaddr_in6 *s6 = (const struct sockaddr_in6 *)(const void *)ss;
+        const struct sockaddr_in6 *s6 = (const struct sockaddr_in6 *)ss;
         a->family = ASX_AF_INET6;
         a->port = ntohs(s6->sin6_port);
         memcpy(a->addr, &s6->sin6_addr, 16);
     } else {
-        const struct sockaddr_in *s4 = (const struct sockaddr_in *)(const void *)ss;
+        const struct sockaddr_in *s4 = (const struct sockaddr_in *)ss;
         a->family = ASX_AF_INET4;
         a->port = ntohs(s4->sin_port);
         memcpy(a->addr, &s4->sin_addr, 4);
@@ -217,7 +217,8 @@ static void native_from_sockaddr(const struct sockaddr_storage *ss, asx_socket_a
 static void native_refresh_local(native_sock *s) {
     struct sockaddr_storage ss;
     socklen_t len = (socklen_t)sizeof(ss);
-    if (getsockname(s->fd, (struct sockaddr *)(void *)&ss, &len) == 0) {
+    memset(&ss, 0, sizeof(ss));
+    if (getsockname(s->fd, (struct sockaddr *)&ss, &len) == 0) {
         native_from_sockaddr(&ss, &s->local);
     }
 }
@@ -369,8 +370,7 @@ static asx_status native_tcp_listen_impl(const asx_socket_addr *addr, asx_native
     if (fd < 0) return native_errno_status(errno);
     (void)setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
     len = native_to_sockaddr(addr, &ss);
-    if (bind(fd, (struct sockaddr *)(void *)&ss, len) != 0 ||
-        listen(fd, ASX_NATIVE_LISTEN_BACKLOG) != 0) {
+    if (bind(fd, (struct sockaddr *)&ss, len) != 0 || listen(fd, ASX_NATIVE_LISTEN_BACKLOG) != 0) {
         asx_status st = native_errno_status(errno);
         (void)close(fd);
         return st;
@@ -411,7 +411,10 @@ static asx_status native_tcp_accept_impl(asx_native_handle listener, asx_native_
     int fd;
 
     if (l == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
-    fd = accept(l->fd, (struct sockaddr *)(void *)&ss, &len);
+    /* accept() fills the peer address only up to the length it reports; the
+     * rest of ss must not be indeterminate when native_from_sockaddr reads it. */
+    memset(&ss, 0, sizeof(ss));
+    fd = accept(l->fd, (struct sockaddr *)&ss, &len);
     if (fd < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR || errno == ECONNABORTED) {
             return native_wait(l, ASX_IO_READABLE);
@@ -499,7 +502,7 @@ static asx_status native_tcp_connect_impl(const asx_socket_addr *addr, asx_nativ
     fd = native_open(addr, SOCK_STREAM);
     if (fd < 0) return native_errno_status(errno);
     len = native_to_sockaddr(addr, &ss);
-    rv = connect(fd, (struct sockaddr *)(void *)&ss, len);
+    rv = connect(fd, (struct sockaddr *)&ss, len);
     if (rv != 0 && errno != EINPROGRESS && errno != EINTR) {
         asx_status st = native_errno_status(errno);
         (void)close(fd);
@@ -709,7 +712,7 @@ static asx_status native_udp_bind_impl(const asx_socket_addr *addr, asx_native_h
     fd = native_open(addr, SOCK_DGRAM);
     if (fd < 0) return native_errno_status(errno);
     len = native_to_sockaddr(addr, &ss);
-    if (bind(fd, (struct sockaddr *)(void *)&ss, len) != 0) {
+    if (bind(fd, (struct sockaddr *)&ss, len) != 0) {
         asx_status st = native_errno_status(errno);
         (void)close(fd);
         return st;
@@ -762,7 +765,7 @@ asx_status asx_native_udp_connect(asx_native_handle sock, const asx_socket_addr 
         st = ASX_E_INVALID_ARGUMENT;
     } else {
         len = native_to_sockaddr(peer, &ss);
-        if (connect(s->fd, (struct sockaddr *)(void *)&ss, len) != 0) {
+        if (connect(s->fd, (struct sockaddr *)&ss, len) != 0) {
             st = native_errno_status(errno);
         } else {
             s->peer = *peer;
@@ -784,8 +787,7 @@ static asx_status native_udp_send_impl(asx_native_handle sock, const uint8_t *sr
     if (to != NULL) {
         struct sockaddr_storage ss;
         socklen_t sl = native_to_sockaddr(to, &ss);
-        n = sendto(s->fd, src, (size_t)len, ASX_NATIVE_SEND_FLAGS, (struct sockaddr *)(void *)&ss,
-                   sl);
+        n = sendto(s->fd, src, (size_t)len, ASX_NATIVE_SEND_FLAGS, (struct sockaddr *)&ss, sl);
     } else {
         if (!s->has_peer) return ASX_E_INVALID_STATE;
         n = send(s->fd, src, (size_t)len, ASX_NATIVE_SEND_FLAGS);
@@ -831,7 +833,9 @@ static asx_status native_udp_recv_impl(asx_native_handle sock, uint8_t *dst, uin
 
     if (s == NULL || out_read == NULL || (dst == NULL && cap > 0u)) return ASX_E_INVALID_ARGUMENT;
     *out_read = 0;
-    n = recvfrom(s->fd, dst, (size_t)cap, 0, (struct sockaddr *)(void *)&ss, &sl);
+    /* recvfrom() fills the source address only up to the length it reports. */
+    memset(&ss, 0, sizeof(ss));
+    n = recvfrom(s->fd, dst, (size_t)cap, 0, (struct sockaddr *)&ss, &sl);
     if (n >= 0) {
         *out_read = (uint32_t)n;
         if (from != NULL) native_from_sockaddr(&ss, from);

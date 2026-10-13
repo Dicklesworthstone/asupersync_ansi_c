@@ -29,7 +29,7 @@
 #ifdef ASX_PROFILE_POSIX
 
 #if !defined(_GNU_SOURCE)
-#define _GNU_SOURCE
+#define _GNU_SOURCE /* ASX_ANALYZER_WAIVER("feature-test macro the platform headers require") */
 #endif
 
 #include "../../signal/signal_native.h"

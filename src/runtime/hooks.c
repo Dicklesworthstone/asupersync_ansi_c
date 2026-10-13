@@ -1400,7 +1400,9 @@ static asx_status asx_codec_buffer_reserve(asx_codec_buffer *buf, size_t additio
         return ASX_E_RESOURCE_EXHAUSTED;
     }
     required = buf->len + additional + 1u;
-    if (required <= buf->cap) { return ASX_OK; }
+    /* Room is only room when there is storage: a buffer whose data is NULL
+     * (a caller's hand-built struct) allocates here, as an empty one does. */
+    if (required <= buf->cap && buf->data != NULL) { return ASX_OK; }
 
     next_cap = (buf->cap == 0u) ? 128u : buf->cap;
     while (next_cap < required) {
