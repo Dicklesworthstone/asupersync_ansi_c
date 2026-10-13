@@ -15,7 +15,7 @@
 set -euo pipefail
 
 SRCROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-BUILDDIR="$SRCROOT/build_asan"
+BUILDDIR="$SRCROOT/build/asan"
 FUZZ_DIFF="$BUILDDIR/fuzz/fuzz_differential"
 FUZZ_MIN="$BUILDDIR/fuzz/fuzz_minimize"
 LOGFILE=""
@@ -69,7 +69,10 @@ check_binary() {
 
 if [ ! -x "$FUZZ_DIFF" ] || [ ! -x "$FUZZ_MIN" ]; then
     log "ASan binaries not found, building..."
-    bash "$SRCROOT/build_asan.sh" >/dev/null 2>&1
+    if ! bash "$SRCROOT/build_asan.sh"; then
+        log "FAIL: the ASan+UBSan build failed (output above)"
+        exit 1
+    fi
 fi
 
 emit_jsonl "{\"kind\":\"session_start\",\"mode\":\"$MODE\",\"diff_iters\":$DIFF_ITERS,\"determinism_iters\":$DETERMINISM_ITERS}"
