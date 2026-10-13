@@ -217,7 +217,7 @@ RUNTIME_SRC := \
 	src/runtime/io_driver.c \
 	src/runtime/config_reload.c \
 	src/runtime/regression_localize.c \
-	src/runtime/replay.c \
+	src/runtime/replay.c src/runtime/oracle.c \
 	src/runtime/event_log.c \
 	src/runtime/snapshot.c \
 	src/runtime/waker.c \
