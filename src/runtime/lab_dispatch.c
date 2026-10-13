@@ -59,6 +59,17 @@ typedef struct {
 static int g_lab_active = 0;
 static uint64_t g_lab_rng = 0;
 
+/* Lab dispatch is one runtime's: its queues name task slots by index and
+ * live in this file, so it drives kernel 0 (a bridge until its state moves
+ * into the kernel; the init guard refuses a second runtime while it is
+ * active). */
+static asx_kernel *lab_kernel(void) { return g_kernels[0]; }
+
+/* The index of `t` in its kernel's task arena. */
+static uint32_t lab_slot_of(const asx_task_slot *t) {
+    return (uint32_t)(t - asx_kernel_of(t->region)->tasks);
+}
+
 /* Entropy (Rust DetEntropy, util/entropy.rs:66-150): the runtime's source
  * is seeded with the lab seed as given (LabConfig::entropy_seed, set by
  * LabConfig::new(seed), lab/config.rs:190) and counts its forks. A task's
@@ -367,11 +378,11 @@ void asx_lab_entropy_spawned_internal(asx_task_slot *t, const asx_task_slot *spa
     t->lab_ent.state = ASX_LAB_ENTROPY_OWED;
     if (parent_region != NULL) {
         t->lab_ent_parent_region = 1u;
-        t->lab_ent_parent = (uint32_t)(parent_region - g_regions);
+        t->lab_ent_parent = (uint32_t)(parent_region - asx_kernel_of(t->region)->regions);
         t->lab_ent_parent_gen = parent_region->generation;
     } else {
         t->lab_ent_parent_region = 0u;
-        t->lab_ent_parent = (uint32_t)(spawner - g_tasks);
+        t->lab_ent_parent = lab_slot_of(spawner);
         t->lab_ent_parent_gen = spawner->generation;
     }
 }
@@ -380,10 +391,10 @@ void asx_lab_entropy_first_poll_internal(asx_task_slot *t) {
     asx_lab_entropy *parent = NULL;
     if (t->lab_ent.state != ASX_LAB_ENTROPY_OWED) return;
     if (t->lab_ent_parent_region) {
-        asx_region_slot *r = &g_regions[t->lab_ent_parent];
+        asx_region_slot *r = &lab_kernel()->regions[t->lab_ent_parent];
         if (r->alive && r->generation == t->lab_ent_parent_gen) parent = &r->lab_principal;
     } else {
-        asx_task_slot *p = &g_tasks[t->lab_ent_parent];
+        asx_task_slot *p = &lab_kernel()->tasks[t->lab_ent_parent];
         if (p->alive && p->generation == t->lab_ent_parent_gen) parent = &p->lab_ent;
     }
     /* A source C no longer holds (its task or region slot was reused):
@@ -440,9 +451,9 @@ void asx_lab_record_dispatch_internal(uint32_t slot, uint16_t task_gen, int canc
     if (g_lab_frec_n < UINT32_MAX) g_lab_frec_n++;
     if (g_lab_rec_n < g_lab_rec_cap) {
         asx_dispatch_record *d = &g_lab_rec[g_lab_rec_n];
-        d->task = g_tasks[slot].generation == task_gen
-                      ? asx_task_handle_for_slot(g_kernels[0], slot)
-                      : asx_handle_mint(g_kernels[0], ASX_TYPE_TASK, 0u,
+        d->task = lab_kernel()->tasks[slot].generation == task_gen
+                      ? asx_task_handle_for_slot(lab_kernel(), slot)
+                      : asx_handle_mint(lab_kernel(), ASX_TYPE_TASK, 0u,
                                         asx_handle_pack_index(task_gen, (uint16_t)slot));
         d->step = step;
         d->at = at;
@@ -450,7 +461,8 @@ void asx_lab_record_dispatch_internal(uint32_t slot, uint16_t task_gen, int canc
     }
     if (g_lab_rec_n < UINT32_MAX) g_lab_rec_n++;
     /* TaskRecord::mark_polled(steps) after the poll (LR:4809): the futurelock idle count. */
-    if (g_tasks[slot].generation == task_gen) g_tasks[slot].lab_last_polled_step = step;
+    if (lab_kernel()->tasks[slot].generation == task_gen)
+        lab_kernel()->tasks[slot].lab_last_polled_step = step;
 }
 void asx_scheduler_record_dispatches(asx_dispatch_record *buf, uint32_t capacity) {
     g_lab_rec = buf;
@@ -469,7 +481,7 @@ asx_status asx_scheduler_use_lab_dispatch(uint64_t seed) {
     if (g_lab_admit_n > 0u) return ASX_E_INVALID_STATE;
     for (i = 0; i < g_task_count; i++) {
         ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= ASX_MAX_TASKS");
-        if (g_tasks[i].alive) return ASX_E_INVALID_STATE;
+        if (lab_kernel()->tasks[i].alive) return ASX_E_INVALID_STATE;
     }
     asx_lab_dispatch_reset_internal();
     g_lab_rng = lab_rng_seed(seed);
@@ -492,7 +504,7 @@ static void lab_push(lab_lane *lane, const asx_task_slot *t, uint8_t priority) {
         return;
     }
     e = &lane->e[lane->n++];
-    e->slot = (uint32_t)(t - g_tasks);
+    e->slot = lab_slot_of(t);
     e->task_gen = t->generation;
     e->priority = priority;
     e->gen = g_lab_next_gen++;
@@ -525,7 +537,7 @@ static void lab_defer(const asx_task_slot *t, uint8_t priority, uint8_t wake) {
         return;
     }
     d = &g_lab_deferred[g_lab_deferred_n++];
-    d->slot = (uint32_t)(t - g_tasks);
+    d->slot = lab_slot_of(t);
     d->task_gen = t->generation;
     d->priority = priority;
     d->wake = wake;
@@ -553,7 +565,7 @@ void asx_lab_drain_deferred_cancels(void) {
     g_lab_deferred_n = 0;
     for (pass = 0; pass < 2u; pass++) {
         for (i = 0; i < n; i++) {
-            asx_task_slot *t = &g_tasks[batch[i].slot];
+            asx_task_slot *t = &lab_kernel()->tasks[batch[i].slot];
             ASX_CHECKPOINT_WAIVER("bounded: n <= LAB_DEFER_CAP");
             if (batch[i].wake != (uint8_t)pass) continue;
             if (!t->alive || t->generation != batch[i].task_gen) continue;
@@ -577,7 +589,7 @@ void asx_lab_schedule_cancel_retired(uint32_t slot, uint16_t task_gen, uint8_t p
         g_lab_retired[g_lab_retired_n].slot = slot;
         g_lab_retired[g_lab_retired_n].task_gen = task_gen;
         /* Called as the task completes, while its slot still holds it. */
-        g_lab_retired[g_lab_retired_n].rust_task = lab_compact_task(&g_tasks[slot]);
+        g_lab_retired[g_lab_retired_n].rust_task = lab_compact_task(&lab_kernel()->tasks[slot]);
         g_lab_retired_n++;
         g_lab_scheduled++;
     }
@@ -610,7 +622,7 @@ static int lab_retired_take(uint32_t slot, uint16_t task_gen) {
 static int lab_entry_live(const lab_entry *e) {
     const asx_task_slot *t;
     if (e->slot >= g_task_count) return 0;
-    t = &g_tasks[e->slot];
+    t = &lab_kernel()->tasks[e->slot];
     return t->alive && t->generation == e->task_gen && t->lab_scheduled;
 }
 
@@ -654,8 +666,8 @@ static int lab_pop(lab_lane *lane, uint64_t r, uint32_t *out_slot, uint16_t *out
         e = lane->e[chosen];
         lab_remove_at(lane, chosen);
         if (lab_entry_live(&e)) {
-            g_lab_pick_task = lab_compact_task(&g_tasks[e.slot]);
-            g_tasks[e.slot].lab_scheduled = 0u;
+            g_lab_pick_task = lab_compact_task(&lab_kernel()->tasks[e.slot]);
+            lab_kernel()->tasks[e.slot].lab_scheduled = 0u;
             g_lab_scheduled--;
             *out_slot = e.slot;
             *out_task_gen = e.task_gen;
@@ -706,7 +718,7 @@ static void lab_purge(lab_lane *lane, uint32_t slot, uint16_t task_gen) {
 /* forget_task (LR:6495-6509, PR:828-835): a completed task that is still
  * scheduled loses every entry; one that is not keeps its leftovers. */
 void asx_lab_forget(asx_task_slot *t) {
-    uint32_t slot = (uint32_t)(t - g_tasks);
+    uint32_t slot = lab_slot_of(t);
     if (!t->lab_scheduled) return;
     lab_purge(&g_lab_cancel, slot, t->generation);
     lab_purge(&g_lab_ready, slot, t->generation);
@@ -721,7 +733,7 @@ void asx_lab_defer_admission(asx_task_slot *t) {
     }
     g_lab_mailbox_ids++; /* its provisional id */
     t->lab_admission_pending = 1u;
-    g_lab_admit[g_lab_admit_n++] = (uint32_t)(t - g_tasks);
+    g_lab_admit[g_lab_admit_n++] = lab_slot_of(t);
     {
         asx_region_slot *r;
         if (asx_region_slot_lookup(t->region, &r) == ASX_OK) r->lab_pending_admissions++;
@@ -755,7 +767,7 @@ void asx_lab_refusal_watch(uint32_t ticket, const asx_task_slot *t) {
     if (asx_task_refusal_delivered(ticket)) return;
     rf = &g_lab_refusal[ticket - 1u];
     rf->has_waiter = 1u;
-    rf->waiter = (uint32_t)(t - g_tasks);
+    rf->waiter = lab_slot_of(t);
     rf->waiter_gen = t->generation;
     rf->waiter_prio = t->lab_waker_prio;
 }
@@ -778,7 +790,7 @@ int asx_lab_admissions_pending(void) { return g_lab_admit_n > 0u; }
 /* cancel_task_for_handle (state.rs:3462): fails only for a task that is
  * gone, whose abort Rust ignores. */
 static void lab_apply_handle_cancel(const lab_handle_cancel *h) {
-    asx_task_slot *t = &g_tasks[h->slot];
+    asx_task_slot *t = &lab_kernel()->tasks[h->slot];
     asx_status st;
     if (!t->alive || t->generation != h->task_gen) return;
     /* Ended cancelled before the drain: Rust strengthened its Cx reason
@@ -789,7 +801,7 @@ static void lab_apply_handle_cancel(const lab_handle_cancel *h) {
         }
         return;
     }
-    st = asx_task_cancel_reason_internal(asx_task_handle_for_slot(g_kernels[0], h->slot),
+    st = asx_task_cancel_reason_internal(asx_task_handle_for_slot(lab_kernel(), h->slot),
                                          &h->reason, ASX_CANCEL_SRC_HANDLE);
     (void)st;
 }
@@ -845,14 +857,14 @@ asx_status asx_lab_admit_pending(void) {
             asx_actor_refusal_delivered_internal(refusal + 1u);
             rf->delivered = 1u;
             if (rf->has_waiter) {
-                asx_task_slot *w = &g_tasks[rf->waiter];
+                asx_task_slot *w = &lab_kernel()->tasks[rf->waiter];
                 if (w->alive && w->generation == rf->waiter_gen) {
                     asx_lab_schedule(w, rf->waiter_prio);
                 }
             }
             continue;
         }
-        t = &g_tasks[g_lab_admit[i]];
+        t = &lab_kernel()->tasks[g_lab_admit[i]];
         if (!t->alive || !t->lab_admission_pending) continue;
         t->lab_admission_pending = 0u;
         {
@@ -894,7 +906,7 @@ asx_status asx_lab_admit_pending(void) {
         t->member_seq = asx_task_next_member_seq_internal();
         asx_lab_arm_budget_deadline_internal(t);
         asx_trace_emit(ASX_TRACE_TASK_SPAWN,
-                       (uint64_t)asx_task_handle_for_slot(g_kernels[0], g_lab_admit[i]),
+                       (uint64_t)asx_task_handle_for_slot(lab_kernel(), g_lab_admit[i]),
                        (uint64_t)t->region);
         {
             /* Aborted before admission: admission hands the first lane
@@ -932,7 +944,7 @@ void asx_lab_cancel_wake(asx_task_slot *t) {
             g_lab_overflow = 1;
             return;
         }
-        g_lab_wake[g_lab_wake_n++] = (uint32_t)(t - g_tasks);
+        g_lab_wake[g_lab_wake_n++] = lab_slot_of(t);
         return;
     }
     asx_lab_schedule_cancel(t, t->lab_waker_prio);
@@ -949,7 +961,7 @@ void asx_lab_cancel_batch_end(void) {
     n = g_lab_wake_n;
     g_lab_wake_n = 0;
     for (i = 0; i < n; i++) {
-        asx_task_slot *t = &g_tasks[g_lab_wake[i]];
+        asx_task_slot *t = &lab_kernel()->tasks[g_lab_wake[i]];
         ASX_CHECKPOINT_WAIVER("bounded: wakes <= ASX_MAX_TASKS");
         asx_lab_schedule_cancel(t, t->lab_waker_prio);
     }
@@ -961,7 +973,7 @@ asx_status asx_lab_region_open_command(asx_task_slot *opener, asx_region_id pare
     if (g_lab_rcmd_n >= LAB_REGION_CMD_CAP) return ASX_E_RESOURCE_EXHAUSTED;
     c = &g_lab_rcmd[g_lab_rcmd_n++];
     c->cancel = 0u;
-    c->opener = (uint32_t)(opener - g_tasks);
+    c->opener = lab_slot_of(opener);
     c->opener_gen = opener->generation;
     /* The principal's id comes from the spawn mailbox at the request
      * (cx.rs:4502). */
@@ -1029,7 +1041,7 @@ static void lab_apply_retain(const lab_region_cmd *c, uint32_t *woken, uint32_t 
     asx_task_slot *t;
     asx_status st = asx_region_defer_sync(c->region, lab_retained_noop, NULL);
 
-    t = &g_tasks[c->opener];
+    t = &lab_kernel()->tasks[c->opener];
     if (!t->alive || t->generation != c->opener_gen || t->region_wait != ASX_REGION_WAIT_WATCH) {
         return;
     }
@@ -1057,16 +1069,16 @@ static void lab_apply_watch(const lab_region_cmd *c, uint32_t *woken, uint32_t *
         asx_link_remove_internal(c->region);
         return;
     }
-    t = &g_tasks[c->opener];
+    t = &lab_kernel()->tasks[c->opener];
     if (!t->alive || t->generation != c->opener_gen || t->region_wait != ASX_REGION_WAIT_WATCH) {
         return;
     }
     if (c->cancel >= LAB_CMD_LINK_TASK) {
-        st = asx_link_apply_internal(asx_task_handle_for_slot(g_kernels[0], c->opener), c->region,
+        st = asx_link_apply_internal(asx_task_handle_for_slot(lab_kernel(), c->opener), c->region,
                                      c->cancel == LAB_CMD_LINK_SERVER, c->principal_id,
                                      c->budget.poll_quota, c->budget.priority, &ref);
     } else {
-        st = asx_monitor_apply_internal(asx_task_handle_for_slot(g_kernels[0], c->opener),
+        st = asx_monitor_apply_internal(asx_task_handle_for_slot(lab_kernel(), c->opener),
                                         c->region, c->cancel == LAB_CMD_MONITOR_SERVER,
                                         c->principal_id, c->budget.poll_quota, &ref);
     }
@@ -1134,7 +1146,7 @@ void asx_lab_drain_region_commands(void) {
                          LAB_MAILBOX_GENERATION | (uint64_t)c->principal_id);
             }
         }
-        t = &g_tasks[c->opener];
+        t = &lab_kernel()->tasks[c->opener];
         if (!t->alive || t->generation != c->opener_gen || t->region_wait != ASX_REGION_WAIT_OPEN) {
             if (st == ASX_OK) {
                 asx_cancel_reason close = asx_region_close_reason_internal();
@@ -1150,17 +1162,17 @@ void asx_lab_drain_region_commands(void) {
     g_lab_deferring = 0;
     for (i = 0; i < n_opened; i++) {
         ASX_CHECKPOINT_WAIVER("bounded: n_opened <= LAB_REGION_BATCH");
-        asx_task_wake_slot_internal(&g_tasks[opened[i]]);
+        asx_task_wake_slot_internal(&lab_kernel()->tasks[opened[i]]);
     }
     for (i = 0; i < n_retained; i++) {
         ASX_CHECKPOINT_WAIVER("bounded: n_retained <= LAB_REGION_BATCH");
         /* ASX_ANALYZER_WAIVER("gcc: retained[0..n_retained) is written by lab_apply_retain") */
-        asx_task_wake_slot_internal(&g_tasks[retained[i]]);
+        asx_task_wake_slot_internal(&lab_kernel()->tasks[retained[i]]);
     }
     for (i = 0; i < n_watched; i++) {
         ASX_CHECKPOINT_WAIVER("bounded: n_watched <= LAB_REGION_BATCH");
         /* ASX_ANALYZER_WAIVER("gcc: watched[0..n_watched) is written by lab_apply_watch") */
-        asx_task_wake_slot_internal(&g_tasks[watched[i]]);
+        asx_task_wake_slot_internal(&lab_kernel()->tasks[watched[i]]);
     }
 }
 
@@ -1173,7 +1185,7 @@ asx_status asx_lab_handle_cancel_command(const asx_task_slot *t, const asx_cance
         if (g_lab_hc_n >= LAB_HANDLE_CAP) return ASX_E_RESOURCE_EXHAUSTED;
         h = &g_lab_hc[g_lab_hc_n++];
     }
-    h->slot = (uint32_t)(t - g_tasks);
+    h->slot = lab_slot_of(t);
     h->task_gen = t->generation;
     h->reason = *reason;
     return ASX_OK;
@@ -1276,8 +1288,8 @@ static int lab_take_exact(lab_lane *lane, uint32_t slot, uint16_t task_gen) {
         if (lane->e[k].slot != slot || lane->e[k].task_gen != task_gen) continue;
         if (lab_entry_live(&lane->e[k])) {
             lab_remove_at(lane, k);
-            g_lab_pick_task = lab_compact_task(&g_tasks[slot]);
-            g_tasks[slot].lab_scheduled = 0u;
+            g_lab_pick_task = lab_compact_task(&lab_kernel()->tasks[slot]);
+            lab_kernel()->tasks[slot].lab_scheduled = 0u;
             g_lab_scheduled--;
             return 1;
         }
@@ -1325,7 +1337,7 @@ static int lab_forced_resolve(uint64_t compact, uint32_t *slot, uint16_t *task_g
     /* The lab's arena shadow: a live task by its Rust (index, generation),
      * else a retired task a cancel waker scheduled. */
     for (i = 0; i < g_task_count; i++) {
-        const asx_task_slot *t = &g_tasks[i];
+        const asx_task_slot *t = &lab_kernel()->tasks[i];
         ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= ASX_MAX_TASKS");
         if (t->alive && t->lab_rust_live && lab_compact_task(t) == compact) {
             *slot = i;
@@ -1511,18 +1523,21 @@ static int lab_is_quiescent(void) {
     }
     for (i = 0; i < g_task_count; i++) {
         ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= ASX_MAX_TASKS");
-        if (g_tasks[i].alive && !asx_task_is_terminal(g_tasks[i].state)) return 0;
+        if (lab_kernel()->tasks[i].alive && !asx_task_is_terminal(lab_kernel()->tasks[i].state))
+            return 0;
     }
     for (i = 0; i < g_region_count; i++) {
         ASX_CHECKPOINT_WAIVER("bounded: g_region_count <= ASX_MAX_REGIONS");
-        if (g_regions[i].alive && g_regions[i].state != ASX_REGION_OPEN &&
-            g_regions[i].state != ASX_REGION_CLOSED) {
+        if (lab_kernel()->regions[i].alive && lab_kernel()->regions[i].state != ASX_REGION_OPEN &&
+            lab_kernel()->regions[i].state != ASX_REGION_CLOSED) {
             return 0;
         }
     }
     for (i = 0; i < g_obligation_count; i++) {
         ASX_CHECKPOINT_WAIVER("bounded: g_obligation_count <= ASX_MAX_OBLIGATIONS");
-        if (g_obligations[i].alive && g_obligations[i].state == ASX_OBLIGATION_RESERVED) return 0;
+        if (lab_kernel()->obligations[i].alive &&
+            lab_kernel()->obligations[i].state == ASX_OBLIGATION_RESERVED)
+            return 0;
     }
     return 1;
 }
@@ -1674,7 +1689,7 @@ asx_status asx_lab_watch_monitor_command(asx_task_slot *opener, asx_task_id targ
     c = &g_lab_rcmd[g_lab_rcmd_n++];
     memset(c, 0, sizeof(*c));
     c->cancel = to_server ? LAB_CMD_MONITOR_SERVER : LAB_CMD_MONITOR_TASK;
-    c->opener = (uint32_t)(opener - g_tasks);
+    c->opener = lab_slot_of(opener);
     c->opener_gen = opener->generation;
     c->region = target;
     c->principal_id = server_slot;
@@ -1701,7 +1716,7 @@ asx_status asx_lab_watch_link_command(asx_task_slot *opener, asx_task_id peer, i
     c = &g_lab_rcmd[g_lab_rcmd_n++];
     memset(c, 0, sizeof(*c));
     c->cancel = to_server ? LAB_CMD_LINK_SERVER : LAB_CMD_LINK_TASK;
-    c->opener = (uint32_t)(opener - g_tasks);
+    c->opener = lab_slot_of(opener);
     c->opener_gen = opener->generation;
     c->region = peer;
     c->principal_id = server_slot;
@@ -1730,7 +1745,7 @@ asx_status asx_lab_retain_command(asx_task_slot *opener, asx_region_id region) {
     c = &g_lab_rcmd[g_lab_rcmd_n++];
     memset(c, 0, sizeof(*c));
     c->cancel = LAB_CMD_RETAIN;
-    c->opener = (uint32_t)(opener - g_tasks);
+    c->opener = lab_slot_of(opener);
     c->opener_gen = opener->generation;
     c->region = region;
     return ASX_OK;
@@ -1766,8 +1781,10 @@ static uint32_t lab_held_pending(const asx_task_slot *t) {
     uint32_t idx = t->first_held;
     while (idx != ASX_SLOT_NONE && idx < g_obligation_count && bound++ < g_obligation_count) {
         ASX_CHECKPOINT_WAIVER("bounded: at most g_obligation_count links");
-        if (g_obligations[idx].alive && g_obligations[idx].state == ASX_OBLIGATION_RESERVED) n++;
-        idx = g_obligations[idx].next_held;
+        if (lab_kernel()->obligations[idx].alive &&
+            lab_kernel()->obligations[idx].state == ASX_OBLIGATION_RESERVED)
+            n++;
+        idx = lab_kernel()->obligations[idx].next_held;
     }
     return n;
 }
@@ -1791,9 +1808,9 @@ static void lab_wait_of(const asx_task_slot *t, uint32_t idx, asx_stuck_task *e)
     e->wait_task = ASX_INVALID_ID;
     e->wait_region = ASX_INVALID_ID;
     if (t->waiting_on != ASX_SLOT_NONE && t->waiting_on < g_task_count &&
-        g_tasks[t->waiting_on].alive) {
+        lab_kernel()->tasks[t->waiting_on].alive) {
         e->wait = ASX_STUCK_JOIN;
-        e->wait_task = asx_task_handle_for_slot(g_kernels[0], t->waiting_on);
+        e->wait_task = asx_task_handle_for_slot(lab_kernel(), t->waiting_on);
         return;
     }
     if (t->region_wait == ASX_REGION_WAIT_CLOSE) {
@@ -1802,12 +1819,12 @@ static void lab_wait_of(const asx_task_slot *t, uint32_t idx, asx_stuck_task *e)
         return;
     }
     for (i = 0; i < g_task_count; i++) {
-        const asx_task_slot *m = &g_tasks[i];
+        const asx_task_slot *m = &lab_kernel()->tasks[i];
         ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= ASX_MAX_TASKS");
         if (m->alive && !asx_task_is_terminal(m->state) && m->watcher == idx &&
             m->watcher_gen == t->generation) {
             e->wait = ASX_STUCK_WATCH;
-            e->wait_task = asx_task_handle_for_slot(g_kernels[0], i);
+            e->wait_task = asx_task_handle_for_slot(lab_kernel(), i);
             return;
         }
     }
@@ -1825,7 +1842,7 @@ uint32_t asx_scheduler_stuck_tasks(asx_region_id region, asx_stuck_task *out, ui
 
     if (!g_lab_active) n_sub = asx_region_subtree_internal(region, subtree, ASX_MAX_REGIONS);
     for (i = 0; i < g_task_count; i++) {
-        const asx_task_slot *t = &g_tasks[i];
+        const asx_task_slot *t = &lab_kernel()->tasks[i];
         ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= ASX_MAX_TASKS");
         if (!lab_task_waiting(t)) continue;
         if (!g_lab_active) {
@@ -1840,7 +1857,7 @@ uint32_t asx_scheduler_stuck_tasks(asx_region_id region, asx_stuck_task *out, ui
         }
         if (out != NULL && total < cap) {
             asx_stuck_task *e = &out[total];
-            e->task = asx_task_handle_for_slot(g_kernels[0], i);
+            e->task = asx_task_handle_for_slot(lab_kernel(), i);
             e->region = t->region;
             e->state = t->state;
             e->held = lab_held_pending(t);
@@ -1857,13 +1874,13 @@ uint32_t asx_scheduler_stuck_tasks(asx_region_id region, asx_stuck_task *out, ui
  * obligation-arena order as Rust's obligations_iter gives them. Returns 0
  * when it holds none. */
 static int lab_futurelock_of(uint32_t i, asx_futurelock *f) {
-    const asx_task_slot *t = &g_tasks[i];
+    const asx_task_slot *t = &lab_kernel()->tasks[i];
     uint32_t held = 0;
     uint32_t o;
 
     memset(f, 0, sizeof(*f));
     for (o = 0; o < g_obligation_count; o++) {
-        const asx_obligation_slot *ob = &g_obligations[o];
+        const asx_obligation_slot *ob = &lab_kernel()->obligations[o];
         ASX_CHECKPOINT_WAIVER("bounded: g_obligation_count <= ASX_MAX_OBLIGATIONS");
         if (!ob->alive || ob->state != ASX_OBLIGATION_RESERVED) continue;
         if (ob->holder == ASX_INVALID_ID || asx_handle_slot(ob->holder) != (uint16_t)i ||
@@ -1871,7 +1888,7 @@ static int lab_futurelock_of(uint32_t i, asx_futurelock *f) {
             continue;
         }
         if (held < ASX_FUTURELOCK_HELD_MAX) {
-            f->held[held] = asx_handle_mint(g_kernels[0], ASX_TYPE_OBLIGATION,
+            f->held[held] = asx_handle_mint(lab_kernel(), ASX_TYPE_OBLIGATION,
                                             (uint16_t)(1u << (unsigned)ASX_OBLIGATION_RESERVED),
                                             asx_handle_pack_index(ob->generation, (uint16_t)o));
             f->held_kind[held] = ob->kind;
@@ -1879,7 +1896,7 @@ static int lab_futurelock_of(uint32_t i, asx_futurelock *f) {
         held++;
     }
     if (held == 0u) return 0;
-    f->task = asx_task_handle_for_slot(g_kernels[0], i);
+    f->task = asx_task_handle_for_slot(lab_kernel(), i);
     f->region = t->region;
     f->idle_steps = lab_idle_steps(t);
     f->held_count = held;
@@ -1906,7 +1923,7 @@ static uint32_t lab_scan_futurelocks(uint64_t max_idle_steps, lab_futurelock_sin
         asx_futurelock f;
         ASX_CHECKPOINT_WAIVER("bounded: each pass visits one more task, at most g_task_count");
         for (i = 0; i < g_task_count; i++) {
-            const asx_task_slot *t = &g_tasks[i];
+            const asx_task_slot *t = &lab_kernel()->tasks[i];
             uint64_t key;
             ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= ASX_MAX_TASKS");
             if (!t->alive || asx_task_is_terminal(t->state)) continue;

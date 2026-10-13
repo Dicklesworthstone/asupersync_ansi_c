@@ -926,10 +926,10 @@ ASX_MUST_USE asx_status asx_task_complete_state_internal(asx_task_slot *t, asx_t
  * its timers and before its pick (lab/runtime.rs:4509-4513). Spawns the next
  * finalizer of every FINALIZING region that has none running, in the order
  * the regions entered FINALIZING; returns how many it spawned. */
-uint32_t asx_region_admit_finalizers_internal(void);
+uint32_t asx_region_admit_finalizers_internal(asx_kernel *k);
 /* Whether any FINALIZING region still has an async finalizer to run or
  * running: the run is not quiescent while there is one. */
-int asx_region_finalizers_pending_internal(void);
+int asx_region_finalizers_pending_internal(const asx_kernel *k);
 /* A region enters FINALIZING (finalizing_regions.push) or leaves it for
  * CLOSED (swap_remove), by id. */
 void asx_region_finalizing_enter_internal(asx_region_id id);

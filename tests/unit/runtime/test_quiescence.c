@@ -585,7 +585,7 @@ TEST(defer_async_finalizers_run_one_at_a_time_in_lifo_order_with_sync_ones) {
     ASSERT_EQ(g_async_events[2], 2);
     ASSERT_EQ(g_async_events[3], 10);
     ASSERT_EQ(g_async_events[4], 11);
-    ASSERT_EQ(asx_cleanup_pending(&g_regions[asx_handle_slot(rid)].cleanup), 0u);
+    ASSERT_EQ(asx_cleanup_pending(&g_kernels[0]->regions[asx_handle_slot(rid)].cleanup), 0u);
 }
 
 TEST(defer_async_region_finalizing_refuses_ordinary_spawn_but_takes_cleanup) {
@@ -726,7 +726,7 @@ TEST(defer_async_argument_errors_and_registration_states) {
         ASSERT_EQ(asx_region_defer_async(rid, async_fin_poll, &f), ASX_OK);
     }
     ASSERT_EQ(asx_region_defer_async(rid, async_fin_poll, &f), ASX_E_RESOURCE_EXHAUSTED);
-    ASSERT_EQ(asx_cleanup_async_pending(&g_regions[asx_handle_slot(rid)].cleanup),
+    ASSERT_EQ(asx_cleanup_async_pending(&g_kernels[0]->regions[asx_handle_slot(rid)].cleanup),
               (uint32_t)ASX_CLEANUP_STACK_CAPACITY);
     ASSERT_EQ(asx_region_close(rid), ASX_OK);
     ASSERT_EQ(asx_region_defer_async(rid, async_fin_poll, &f), ASX_E_REGION_CLOSED);

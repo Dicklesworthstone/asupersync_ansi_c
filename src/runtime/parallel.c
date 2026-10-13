@@ -602,12 +602,12 @@ void asx_parallel_reset(void) {
  * the next run's classification, the timed-lane bookkeeping, and for the
  * timed lane the deadline the entry carries (kept across re-assignments
  * until the task leaves the lane, so a fired wake timer does not erase it). */
-static void parallel_note_assignment(uint16_t slot_idx, asx_lane_class lane) {
+static void parallel_note_assignment(const asx_kernel *k, uint16_t slot_idx, asx_lane_class lane) {
     g_task_lane_override_valid[slot_idx] = 1u;
     g_task_lane_override[slot_idx] = lane;
     g_task_ready_to_poll[slot_idx] = (uint8_t)(lane == ASX_LANE_TIMED ? 0u : 1u);
     if (lane == ASX_LANE_TIMED) {
-        asx_time deadline = parallel_task_deadline(&g_tasks[slot_idx]);
+        asx_time deadline = parallel_task_deadline(&k->tasks[slot_idx]);
         g_task_timed_since_valid[slot_idx] = 1u;
         g_task_timed_since_round[slot_idx] = g_current_round;
         if (deadline < g_task_timed_deadline[slot_idx]) {
@@ -638,7 +638,7 @@ asx_status asx_lane_assign(asx_task_id tid, asx_lane_class lane) {
     already_assigned = parallel_find_task_lane(slot_idx, generation, &old_lane, &old_pos);
 
     if (already_assigned && old_lane == (uint32_t)lane) {
-        parallel_note_assignment(slot_idx, lane);
+        parallel_note_assignment(asx_kernel_of(tid), slot_idx, lane);
         return ASX_OK;
     }
 
@@ -661,7 +661,7 @@ asx_status asx_lane_assign(asx_task_id tid, asx_lane_class lane) {
     l->count++;
     if (slot_idx < ASX_MAX_TASKS) {
         uint32_t owner;
-        parallel_note_assignment(slot_idx, lane);
+        parallel_note_assignment(asx_kernel_of(tid), slot_idx, lane);
         owner = parallel_seed_task_owner(slot_idx);
         if (owner < ASX_MAX_WORKERS) { g_worker_lane_depths[owner][(int)lane]++; }
     }
@@ -882,17 +882,17 @@ static void parallel_drain_ready_sources(asx_region_id region, uint32_t round) {
 }
 
 /* Whether the live task in arena slot `slot_idx` has a cancel request. */
-static int parallel_cancel_requested(uint16_t slot_idx) {
+static int parallel_cancel_requested(const asx_kernel *k, uint16_t slot_idx) {
     const asx_task_slot *t;
     if (slot_idx >= ASX_MAX_TASKS) { return 0; }
-    t = &g_tasks[slot_idx];
+    t = &k->tasks[slot_idx];
     return t->alive && !asx_task_is_terminal(t->state) && t->cancel_pending;
 }
 
 /* A cancel requested since the lanes were last classified moves its task
  * to the cancel lane, as Rust's inject_cancel promotes a task queued in a
  * lower lane (three_lane.rs:3078-3097). The request has already woken it. */
-static void parallel_promote_cancelled(void) {
+static void parallel_promote_cancelled(const asx_kernel *k) {
     int lane_idx;
 
     for (lane_idx = 0; lane_idx < (int)ASX_MAX_LANES; lane_idx++) {
@@ -903,11 +903,11 @@ static void parallel_promote_cancelled(void) {
         while (pos < lane->count) { /* ASX_CHECKPOINT_WAIVER("bounded by ASX_LANE_TASK_CAPACITY") */
             uint16_t slot_idx = asx_handle_slot(lane->tasks[pos]);
 
-            if (parallel_cancel_requested(slot_idx)) {
-                const asx_task_slot *t = &g_tasks[slot_idx];
-                asx_task_id tid = asx_handle_mint(g_kernels[0], ASX_TYPE_TASK,
-                                                  (uint16_t)(1u << (unsigned)t->state),
-                                                  asx_handle_pack_index(t->generation, slot_idx));
+            if (parallel_cancel_requested(k, slot_idx)) {
+                const asx_task_slot *t = &k->tasks[slot_idx];
+                asx_task_id tid =
+                    asx_handle_mint(k, ASX_TYPE_TASK, (uint16_t)(1u << (unsigned)t->state),
+                                    asx_handle_pack_index(t->generation, slot_idx));
                 /* On success the task left this lane at `pos`: the next one
                  * now sits there. A full cancel lane leaves it be. */
                 if (asx_lane_assign(tid, ASX_LANE_CANCEL) == ASX_OK) { continue; }
@@ -921,7 +921,7 @@ static void parallel_promote_cancelled(void) {
  * task, and in the timed lane only one that is due or woken. The cancel
  * streak's fairness yield defers cancel work only for work that can run
  * (Rust's fairness bounds count eligible work, three_lane.rs:19-24). */
-static int parallel_lane_has_eligible(asx_lane_class lc, asx_time now) {
+static int parallel_lane_has_eligible(const asx_kernel *k, asx_lane_class lc, asx_time now) {
     const lane_internal *lane = &g_lanes[(int)lc];
     uint32_t pos;
 
@@ -931,7 +931,7 @@ static int parallel_lane_has_eligible(asx_lane_class lc, asx_time now) {
         const asx_task_slot *t;
 
         if (slot_idx >= ASX_MAX_TASKS) { continue; }
-        t = &g_tasks[slot_idx];
+        t = &k->tasks[slot_idx];
         if (!parallel_task_pollable(t)) { continue; }
         if (lc == ASX_LANE_TIMED && !g_task_ready_to_poll[slot_idx] &&
             parallel_timed_deadline(t, slot_idx) > now) {
@@ -947,7 +947,7 @@ static int parallel_lane_has_eligible(asx_lane_class lc, asx_time now) {
  * (or woken), the first in the lane among equal deadlines, skipping parked
  * tasks and ones already dispatched this round. A task that is gone is
  * returned at once for the run loop to reap. */
-static uint32_t parallel_pick_timed(const lane_internal *lane, asx_time now) {
+static uint32_t parallel_pick_timed(const asx_kernel *k, const lane_internal *lane, asx_time now) {
     uint32_t best = lane->count;
     asx_time best_deadline = ASX_TIME_INFINITE;
     uint32_t pos;
@@ -959,7 +959,7 @@ static uint32_t parallel_pick_timed(const lane_internal *lane, asx_time now) {
         asx_time deadline;
 
         if (slot_idx >= ASX_MAX_TASKS) { return pos; }
-        t = &g_tasks[slot_idx];
+        t = &k->tasks[slot_idx];
         if (!t->alive || asx_task_is_terminal(t->state)) { return pos; }
         if (g_task_polled_stamp[slot_idx] == g_round_stamp) { continue; }
         if (parallel_task_parked(t)) { continue; }
@@ -976,7 +976,8 @@ static uint32_t parallel_pick_timed(const lane_internal *lane, asx_time now) {
 /* Tally the tasks left in the lanes: those parked, and those unparked but
  * not runnable this round (a timed task not yet due, or one starved of
  * quota). */
-static void parallel_count_waiting(uint32_t *out_parked, uint32_t *out_unparked) {
+static void parallel_count_waiting(const asx_kernel *k, uint32_t *out_parked,
+                                   uint32_t *out_unparked) {
     uint32_t lane_idx;
 
     *out_parked = 0u;
@@ -991,7 +992,7 @@ static void parallel_count_waiting(uint32_t *out_parked, uint32_t *out_unparked)
             const asx_task_slot *t;
 
             if (slot_idx >= ASX_MAX_TASKS) { continue; }
-            t = &g_tasks[slot_idx];
+            t = &k->tasks[slot_idx];
             if (!t->alive || asx_task_is_terminal(t->state)) { continue; }
             if (parallel_task_parked(t)) {
                 (*out_parked)++;
@@ -1168,15 +1169,17 @@ static int g_run_active;
 static asx_region_id g_run_region;
 static asx_status g_run_admission_status;
 
-void asx_parallel_task_admitted_internal(uint32_t slot_idx) {
+void asx_parallel_task_admitted_internal(asx_task_id tid) {
+    const asx_kernel *k = asx_kernel_of(tid);
+    uint32_t slot_idx = asx_handle_slot(tid);
     const asx_task_slot *t;
     asx_lane_class lc;
     lane_internal *l;
     asx_status st;
     uint32_t owner;
 
-    if (!g_run_active || slot_idx >= ASX_MAX_TASKS) { return; }
-    t = &g_tasks[slot_idx];
+    if (!g_run_active || k == NULL || slot_idx >= ASX_MAX_TASKS) { return; }
+    t = &k->tasks[slot_idx];
     if (!t->alive || t->region != g_run_region || asx_task_is_terminal(t->state)) { return; }
 
     /* A reused slot carries nothing of its last task. */
@@ -1193,11 +1196,10 @@ void asx_parallel_task_admitted_internal(uint32_t slot_idx) {
         return;
     }
 
-    l->tasks[l->count] =
-        asx_handle_mint(g_kernels[0], ASX_TYPE_TASK, (uint16_t)(1u << (unsigned)t->state),
-                        asx_handle_pack_index(t->generation, (uint16_t)slot_idx));
+    l->tasks[l->count] = asx_handle_mint(k, ASX_TYPE_TASK, (uint16_t)(1u << (unsigned)t->state),
+                                         asx_handle_pack_index(t->generation, (uint16_t)slot_idx));
     l->count++;
-    parallel_note_assignment((uint16_t)slot_idx, lc);
+    parallel_note_assignment(k, (uint16_t)slot_idx, lc);
     owner = parallel_seed_task_owner((uint16_t)slot_idx);
     if (owner < ASX_MAX_WORKERS) { g_worker_lane_depths[owner][(int)lc]++; }
 }
@@ -1210,6 +1212,7 @@ void asx_parallel_task_admitted_internal(uint32_t slot_idx) {
  * ------------------------------------------------------------------- */
 
 static asx_status parallel_run_impl(asx_region_id region, asx_budget *budget) {
+    asx_kernel *k = asx_kernel_of(region);
     asx_region_slot *rslot;
     asx_status st;
     uint32_t round;
@@ -1233,7 +1236,7 @@ static asx_status parallel_run_impl(asx_region_id region, asx_budget *budget) {
         for (i = 0; i < ASX_MAX_LANES; i++) { g_lanes[i].count = 0; }
         /* Scan task arena and assign to lanes */
         for (i = 0; i < g_task_count; i++) { /* ASX_CHECKPOINT_WAIVER("bounded by ASX_MAX_TASKS") */
-            asx_task_slot *t = &g_tasks[i];
+            asx_task_slot *t = &k->tasks[i];
             asx_task_id tid;
             asx_lane_class lc;
 
@@ -1241,7 +1244,7 @@ static asx_status parallel_run_impl(asx_region_id region, asx_budget *budget) {
             if (t->region != region) continue;
             if (asx_task_is_terminal(t->state)) continue;
 
-            tid = asx_handle_mint(g_kernels[0], ASX_TYPE_TASK, (uint16_t)(1u << (unsigned)t->state),
+            tid = asx_handle_mint(k, ASX_TYPE_TASK, (uint16_t)(1u << (unsigned)t->state),
                                   asx_handle_pack_index(t->generation, (uint16_t)i));
 
             /* Classify by cancel state */
@@ -1297,7 +1300,7 @@ static asx_status parallel_run_impl(asx_region_id region, asx_budget *budget) {
             (void)asx_scheduler_fire_due_timers_internal();
         }
         parallel_drain_ready_sources(region, round);
-        parallel_promote_cancelled();
+        parallel_promote_cancelled(k);
         now = g_lanes[ASX_LANE_TIMED].count > 0u ? parallel_now() : 0u;
 
         total_active = asx_lane_total_tasks();
@@ -1332,8 +1335,8 @@ static asx_status parallel_run_impl(asx_region_id region, asx_budget *budget) {
                 g_metrics.cancel_streak >= g_cancel_streak_limit) {
                 /* Defer cancel work only for other work that can run now:
                  * a parked or not-yet-due task is not work. */
-                if (parallel_lane_has_eligible(ASX_LANE_TIMED, now) ||
-                    parallel_lane_has_eligible(ASX_LANE_READY, now)) {
+                if (parallel_lane_has_eligible(k, ASX_LANE_TIMED, now) ||
+                    parallel_lane_has_eligible(k, ASX_LANE_READY, now)) {
                     sat_inc_u32(&g_metrics.fairness_yields);
                     continue;
                 }
@@ -1356,7 +1359,7 @@ static asx_status parallel_run_impl(asx_region_id region, asx_budget *budget) {
                  * deadline goes first. A dispatch takes the task out of
                  * the lane (it completes or becomes ready work), so each
                  * pick is a fresh one. */
-                if (li == (int)ASX_LANE_TIMED) { j = parallel_pick_timed(lane, now); }
+                if (li == (int)ASX_LANE_TIMED) { j = parallel_pick_timed(k, lane, now); }
                 if (j >= lane->count) { break; }
 
                 if (asx_budget_is_exhausted(budget)) { return parallel_return_budget(round); }
@@ -1367,7 +1370,7 @@ static asx_status parallel_run_impl(asx_region_id region, asx_budget *budget) {
                     lane_remove_internal(tid);
                     continue; /* don't increment j, array shifted */
                 }
-                t = &g_tasks[slot_idx];
+                t = &k->tasks[slot_idx];
 
                 if (!t->alive || asx_task_is_terminal(t->state)) {
                     /* Remove completed task from lane */
@@ -1385,8 +1388,7 @@ static asx_status parallel_run_impl(asx_region_id region, asx_budget *budget) {
                 }
 
                 /* Refresh handle from live slot to avoid stale state masks. */
-                tid = asx_handle_mint(g_kernels[0], ASX_TYPE_TASK,
-                                      (uint16_t)(1u << (unsigned)t->state),
+                tid = asx_handle_mint(k, ASX_TYPE_TASK, (uint16_t)(1u << (unsigned)t->state),
                                       asx_handle_pack_index(t->generation, slot_idx));
                 lane->tasks[j] = tid;
                 worker_idx = parallel_select_worker((asx_lane_class)li, tid);
@@ -1452,7 +1454,7 @@ static asx_status parallel_run_impl(asx_region_id region, asx_budget *budget) {
                     parallel_commit_worker_event(worker_idx);
                     asx_trace_emit(ASX_TRACE_SCHED_COMPLETE, (uint64_t)tid, round);
                     asx_region_settle_internal(
-                        asx_region_handle_for_slot(g_kernels[0], (uint32_t)(rslot - g_regions)));
+                        asx_region_handle_for_slot(k, (uint32_t)(rslot - k->regions)));
                     continue;
                 }
 
@@ -1482,7 +1484,7 @@ static asx_status parallel_run_impl(asx_region_id region, asx_budget *budget) {
                     parallel_commit_worker_event(worker_idx);
                     asx_trace_emit(ASX_TRACE_SCHED_COMPLETE, (uint64_t)tid, round);
                     asx_region_settle_internal(
-                        asx_region_handle_for_slot(g_kernels[0], (uint32_t)(rslot - g_regions)));
+                        asx_region_handle_for_slot(k, (uint32_t)(rslot - k->regions)));
                     continue;
                 }
 
@@ -1581,7 +1583,7 @@ static asx_status parallel_run_impl(asx_region_id region, asx_budget *budget) {
                     parallel_commit_worker_event(worker_idx);
                     asx_trace_emit(ASX_TRACE_SCHED_COMPLETE, (uint64_t)tid, round);
                     asx_region_settle_internal(
-                        asx_region_handle_for_slot(g_kernels[0], (uint32_t)(rslot - g_regions)));
+                        asx_region_handle_for_slot(k, (uint32_t)(rslot - k->regions)));
                     continue;
                 } else if (poll_result != ASX_E_PENDING) {
                     asx_task_state from;
@@ -1621,7 +1623,7 @@ static asx_status parallel_run_impl(asx_region_id region, asx_budget *budget) {
                     parallel_commit_worker_event(worker_idx);
                     asx_trace_emit(ASX_TRACE_SCHED_COMPLETE, (uint64_t)tid, round);
                     asx_region_settle_internal(
-                        asx_region_handle_for_slot(g_kernels[0], (uint32_t)(rslot - g_regions)));
+                        asx_region_handle_for_slot(k, (uint32_t)(rslot - k->regions)));
 
                     if (!panicked && !was_cancelled) {
                         asx_status fc_ = asx_region_contain_fault(region, poll_result);
@@ -1663,7 +1665,7 @@ static asx_status parallel_run_impl(asx_region_id region, asx_budget *budget) {
 
             /* Track starvation: eligible work that went unpolled. A lane
              * holding only parked or not-yet-due tasks is not starved. */
-            if (polls_this_lane == 0 && parallel_lane_has_eligible((asx_lane_class)li, now)) {
+            if (polls_this_lane == 0 && parallel_lane_has_eligible(k, (asx_lane_class)li, now)) {
                 lane->starvation_count++;
             } else {
                 lane->starvation_count = 0;
@@ -1676,11 +1678,11 @@ static asx_status parallel_run_impl(asx_region_id region, asx_budget *budget) {
             uint32_t parked = 0u;
             uint32_t unparked = 0u;
             asx_time idle_now = g_lanes[ASX_LANE_TIMED].count > 0u ? parallel_now() : 0u;
-            int runnable = parallel_lane_has_eligible(ASX_LANE_CANCEL, idle_now) ||
-                           parallel_lane_has_eligible(ASX_LANE_TIMED, idle_now) ||
-                           parallel_lane_has_eligible(ASX_LANE_READY, idle_now);
+            int runnable = parallel_lane_has_eligible(k, ASX_LANE_CANCEL, idle_now) ||
+                           parallel_lane_has_eligible(k, ASX_LANE_TIMED, idle_now) ||
+                           parallel_lane_has_eligible(k, ASX_LANE_READY, idle_now);
 
-            parallel_count_waiting(&parked, &unparked);
+            parallel_count_waiting(k, &parked, &unparked);
 
             /* Nothing could be polled. Runnable work that went unpolled was
              * starved of quota (below). Otherwise every task left is parked

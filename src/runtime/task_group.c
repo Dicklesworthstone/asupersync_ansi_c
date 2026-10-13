@@ -77,7 +77,7 @@ static asx_status group_abort_member(asx_task_group *g, uint32_t i,
 /* Collect completed members (joining them) and register the owner as the
  * completion watcher of the rest. */
 static void group_collect(asx_task_group *g, const asx_task_slot *owner) {
-    uint32_t owner_idx = (uint32_t)(owner - g_tasks);
+    uint32_t owner_idx = (uint32_t)(owner - asx_kernel_of(owner->region)->tasks);
     uint32_t n = g->mode == ASX_TASK_GROUP_FIRST_OK ? g->spawned : g->count;
     uint32_t i;
     /* Rust's join_all awaits the members' joins one by one, in order

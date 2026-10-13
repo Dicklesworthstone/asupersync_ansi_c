@@ -325,12 +325,12 @@ ASX_API ASX_MUST_USE asx_status asx_inject_timed(asx_task_id tid);
  * Returns ASX_E_INVALID_ARGUMENT for malformed/stale/non-task handles. */
 ASX_API ASX_MUST_USE asx_status asx_inject_ready(asx_task_id tid);
 
-/* Runtime-internal: called by the task spawn path for the task in arena
- * slot `slot_idx` once it is created. A task spawned into the region of the
- * asx_parallel_run in progress joins that run's lanes at once (O(1)), so the
- * run polls it and does not report quiescence while it is live. A no-op when
- * no run is in progress or the task belongs to another region. */
-void asx_parallel_task_admitted_internal(uint32_t slot_idx);
+/* Runtime-internal: called by the task spawn path for the task `tid` once
+ * it is created. A task spawned into the region of the asx_parallel_run in
+ * progress joins that run's lanes at once (O(1)), so the run polls it and
+ * does not report quiescence while it is live. A no-op when no run is in
+ * progress or the task belongs to another region. */
+void asx_parallel_task_admitted_internal(asx_task_id tid);
 
 /* -------------------------------------------------------------------
  * API: Scheduling metrics

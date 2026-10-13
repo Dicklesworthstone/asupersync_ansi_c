@@ -153,7 +153,9 @@ static void lab_deadline_disarm(asx_task_slot *t) {
 }
 
 void asx_task_timer_disarm_internal(asx_task_slot *task) {
+    asx_kernel *k;
     if (task == NULL) return;
+    k = asx_kernel_of(task->region);
     /* A finished task's budget-deadline timer leaves the wheel with it
      * (take_cancel_wakers, types/task_context.rs:1118-1124). */
     lab_deadline_disarm(task);
@@ -161,7 +163,7 @@ void asx_task_timer_disarm_internal(asx_task_slot *task) {
      * Sleep future is dropped, TimerCancelled). */
     if (task->traced_deadline != 0u) {
         asx_trace_emit(ASX_TRACE_TIMER_CANCEL,
-                       (uint64_t)asx_task_handle_for_slot(g_kernels[0], (uint32_t)(task - g_tasks)),
+                       (uint64_t)asx_task_handle_for_slot(k, (uint32_t)(task - k->tasks)),
                        task->traced_deadline);
         task->traced_deadline = 0u;
     }
@@ -169,8 +171,8 @@ void asx_task_timer_disarm_internal(asx_task_slot *task) {
 }
 
 /* Arm (or tighten) a task's timer. Keeps the earliest deadline. */
-static void timer_arm(uint32_t idx, asx_time deadline) {
-    asx_task_slot *t = &g_tasks[idx];
+static void timer_arm(asx_kernel *k, uint32_t idx, asx_time deadline) {
+    asx_task_slot *t = &k->tasks[idx];
     if (t->timer_armed) {
         if (deadline >= t->wake_at) return;
         /* Tighter: Rust moves the registration (timer.update), which goes
@@ -190,14 +192,15 @@ static void timer_arm(uint32_t idx, asx_time deadline) {
  * created or admitted (Cx::arm_budget_deadline, cx/cx.rs:3860-3890;
  * runtime/state.rs:4400-4403, 4892), a wheel timer behind those registered
  * before it. */
-static void lab_deadline_register(uint32_t slot, asx_time at) {
-    asx_task_slot *t = &g_tasks[slot];
+static void lab_deadline_register(asx_kernel *k, uint32_t slot, asx_time at) {
+    asx_task_slot *t = &k->tasks[slot];
     if (!timer_register(slot, TIMER_KIND_DEADLINE, at, &t->deadline_timer)) return;
     t->deadline_timer_armed = 1u;
     t->deadline_timer_at = at;
 }
 
 void asx_lab_arm_budget_deadline_internal(asx_task_slot *t) {
+    asx_kernel *k = asx_kernel_of(t->region);
     if (t->budget.deadline == ASX_TIME_INFINITE) return;
     if (t->deadline_timer_armed) {
         /* The creation's budget, met after the task was armed: still the
@@ -207,7 +210,7 @@ void asx_lab_arm_budget_deadline_internal(asx_task_slot *t) {
         if (t->deadline_timer_at == t->budget.deadline) return;
         lab_deadline_disarm(t);
     }
-    lab_deadline_register((uint32_t)(t - g_tasks), t->budget.deadline);
+    lab_deadline_register(k, (uint32_t)(t - k->tasks), t->budget.deadline);
 }
 
 /* The budget-deadline timer fires (BudgetDeadlineWake, cx/cx.rs:313-367):
@@ -216,19 +219,19 @@ void asx_lab_arm_budget_deadline_internal(asx_task_slot *t) {
  * DEADLINE cancel stamped with the deadline, its cancel waker at once. A
  * deadline past the wheel's horizon fires early, at the horizon: it is
  * registered again for the real one (cx/cx.rs:340-351). */
-static void lab_deadline_fire(uint32_t slot) {
-    asx_task_slot *t = &g_tasks[slot];
+static void lab_deadline_fire(asx_kernel *k, uint32_t slot) {
+    asx_task_slot *t = &k->tasks[slot];
     asx_time at = t->deadline_timer_at;
     asx_status st;
     lab_deadline_disarm(t);
     if (!t->alive || asx_task_is_terminal(t->state) || t->cancel_pending) return;
     if (sched_now() < at) {
-        lab_deadline_register(slot, at);
+        lab_deadline_register(k, slot, at);
         return;
     }
     if (t->budget.deadline == ASX_TIME_INFINITE || t->budget.deadline > at) return;
-    st = asx_task_cancel_budget_internal(asx_task_handle_for_slot(g_kernels[0], slot),
-                                         ASX_CANCEL_DEADLINE, at);
+    st =
+        asx_task_cancel_budget_internal(asx_task_handle_for_slot(k, slot), ASX_CANCEL_DEADLINE, at);
     (void)st;
     t->cancel_wakers_pending = 0u;
     asx_lab_cancel_wake(t);
@@ -258,7 +261,7 @@ int asx_scheduler_next_timer_internal(asx_time *out_next) {
  * timer that first observes a cancel records a cancel (fuzz finding
  * gen-1-21, bd-ij9w). The whole due set is collected before any is acted
  * on. Returns the number of timers fired. */
-static uint32_t timers_fire(asx_time now) {
+static uint32_t timers_fire(asx_kernel *k, asx_time now) {
     void *due[2u * (uint32_t)ASX_MAX_TASKS];
     asx_timer_wheel *wheel = asx_timer_wheel_runtime();
     int lab = asx_lab_dispatch_active();
@@ -270,9 +273,9 @@ static uint32_t timers_fire(asx_time now) {
     for (i = 0; i < n; i++) {
         ASX_CHECKPOINT_WAIVER("bounded: due timers <= 2 * ASX_MAX_TASKS");
         uint32_t slot = (uint32_t)((uintptr_t)due[i] >> 1);
-        asx_task_slot *t = &g_tasks[slot];
+        asx_task_slot *t = &k->tasks[slot];
         if (((uintptr_t)due[i] & 1u) != 0u) {
-            lab_deadline_fire(slot);
+            lab_deadline_fire(k, slot);
             continue;
         }
         t->timer_armed = 0u;
@@ -396,30 +399,34 @@ void asx_task_wake_slot_internal(asx_task_slot *task) {
 }
 
 void asx_task_join_detach_internal(asx_task_slot *task) {
+    asx_kernel *k;
     uint32_t self_idx;
     uint32_t *link;
 
     if (task == NULL || task->waiting_on == ASX_SLOT_NONE) return;
-    self_idx = (uint32_t)(task - g_tasks);
-    link = &g_tasks[task->waiting_on].first_waiter;
+    k = asx_kernel_of(task->region);
+    self_idx = (uint32_t)(task - k->tasks);
+    link = &k->tasks[task->waiting_on].first_waiter;
     while (*link != ASX_SLOT_NONE) {
         ASX_CHECKPOINT_WAIVER("bounded: waiter list length <= ASX_MAX_TASKS");
         if (*link == self_idx) {
             *link = task->next_waiter;
             break;
         }
-        link = &g_tasks[*link].next_waiter;
+        link = &k->tasks[*link].next_waiter;
     }
     task->waiting_on = ASX_SLOT_NONE;
     task->next_waiter = ASX_SLOT_NONE;
 }
 
 void asx_task_join_wake_waiters_internal(asx_task_slot *task) {
+    asx_kernel *k;
     uint32_t w;
 
     if (task == NULL) return;
+    k = asx_kernel_of(task->region);
     if (task->watcher != ASX_SLOT_NONE) {
-        asx_task_slot *ws = &g_tasks[task->watcher];
+        asx_task_slot *ws = &k->tasks[task->watcher];
         if (ws->generation == task->watcher_gen) {
             if (asx_lab_dispatch_active()) {
                 /* The waker the watch was registered with. */
@@ -436,7 +443,7 @@ void asx_task_join_wake_waiters_internal(asx_task_slot *task) {
     task->first_waiter = ASX_SLOT_NONE;
     while (w != ASX_SLOT_NONE) {
         ASX_CHECKPOINT_WAIVER("bounded: waiter list length <= ASX_MAX_TASKS");
-        asx_task_slot *ws = &g_tasks[w];
+        asx_task_slot *ws = &k->tasks[w];
         uint32_t next = ws->next_waiter;
         ws->next_waiter = ASX_SLOT_NONE;
         ws->waiting_on = ASX_SLOT_NONE;
@@ -446,9 +453,11 @@ void asx_task_join_wake_waiters_internal(asx_task_slot *task) {
 }
 
 void asx_region_wake_close_waiters_internal(asx_region_id id) {
+    asx_kernel *k = asx_kernel_of(id);
     uint32_t i;
+    if (k == NULL) return;
     for (i = 0; i < g_task_count; i++) {
-        asx_task_slot *t = &g_tasks[i];
+        asx_task_slot *t = &k->tasks[i];
         ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= ASX_MAX_TASKS");
         if (t->alive && t->region_wait == ASX_REGION_WAIT_CLOSE && t->region_wait_region == id) {
             /* Lab dispatch: through the first waker the wait registered. */
@@ -469,7 +478,9 @@ static asx_time sched_now(void) {
     return now;
 }
 
-uint32_t asx_scheduler_fire_due_timers_internal(void) { return timers_fire(sched_now()); }
+uint32_t asx_scheduler_fire_due_timers_internal(void) {
+    return timers_fire(g_kernels[0], sched_now());
+}
 
 /* -------------------------------------------------------------------
  * Public wake/park/timer/join API
@@ -512,7 +523,7 @@ asx_status asx_task_arm_timer(asx_task_id self, asx_time deadline) {
     asx_status st = asx_task_slot_lookup(self, &t);
     if (st != ASX_OK) return st;
     if (asx_task_is_terminal(t->state)) return ASX_E_INVALID_STATE;
-    timer_arm((uint32_t)(t - g_tasks), deadline);
+    timer_arm(asx_kernel_of(self), (uint32_t)(t - asx_kernel_of(self)->tasks), deadline);
     return ASX_OK;
 }
 
@@ -550,7 +561,7 @@ static void sched_trace_sleep_timer(asx_task_id self, asx_task_slot *t, asx_time
         t->timer_partial = 0u;
         wake_timer_disarm(t);
     }
-    timer_arm((uint32_t)(t - g_tasks), deadline);
+    timer_arm(asx_kernel_of(self), (uint32_t)(t - asx_kernel_of(self)->tasks), deadline);
 }
 
 asx_status asx_task_wait_until(asx_task_id self, asx_time deadline) {
@@ -618,12 +629,14 @@ asx_status asx_task_watch(asx_task_id target, asx_task_id watcher) {
     if (st != ASX_OK) return st;
     st = asx_task_slot_lookup(watcher, &tw);
     if (st != ASX_OK) return st;
+    /* A watcher of another runtime is no task of the target's. */
+    if (asx_kernel_of(watcher) != asx_kernel_of(target)) return ASX_E_NOT_FOUND;
     if (tt == tw) return ASX_E_INVALID_ARGUMENT;
     if (asx_task_is_terminal(tt->state)) {
         asx_task_wake_slot_internal(tw);
         return ASX_OK;
     }
-    tt->watcher = (uint32_t)(tw - g_tasks);
+    tt->watcher = (uint32_t)(tw - asx_kernel_of(target)->tasks);
     tt->watcher_gen = tw->generation;
     tt->watcher_prio = tw->lab_waker_prio;
     return ASX_OK;
@@ -640,6 +653,8 @@ asx_status asx_task_join_poll(asx_task_id self, asx_task_id target, asx_outcome 
     if (st != ASX_OK) return st;
     st = asx_task_slot_lookup(self, &ts);
     if (st != ASX_OK) return st;
+    /* A target of another runtime is no task this one can join. */
+    if (asx_kernel_of(self) != asx_kernel_of(target)) return ASX_E_NOT_FOUND;
     if (ts == tt) return ASX_E_INVALID_ARGUMENT;
 
     if (asx_task_is_terminal(tt->state)) {
@@ -647,8 +662,8 @@ asx_status asx_task_join_poll(asx_task_id self, asx_task_id target, asx_outcome 
         return asx_task_join(target, out_outcome);
     }
 
-    self_idx = (uint32_t)(ts - g_tasks);
-    target_idx = (uint32_t)(tt - g_tasks);
+    self_idx = (uint32_t)(ts - asx_kernel_of(self)->tasks);
+    target_idx = (uint32_t)(tt - asx_kernel_of(self)->tasks);
     if (ts->waiting_on != target_idx) {
         asx_task_join_detach_internal(ts);
         ts->next_waiter = tt->first_waiter;
@@ -697,13 +712,13 @@ static void sched_compute_scope(asx_region_id root) {
 }
 
 /* Resolve a live task's region slot if it lies in the current scope. */
-static asx_region_slot *sched_scope_region(const asx_task_slot *t) {
+static asx_region_slot *sched_scope_region(asx_kernel *k, const asx_task_slot *t) {
     uint32_t slot = asx_handle_slot(t->region);
     if (slot >= ASX_MAX_REGIONS) return NULL;
     if (g_scope_mark[slot] != g_scope_epoch) return NULL;
-    if (!g_regions[slot].alive) return NULL;
-    if (g_regions[slot].generation != asx_handle_generation(t->region)) return NULL;
-    return &g_regions[slot];
+    if (!k->regions[slot].alive) return NULL;
+    if (k->regions[slot].generation != asx_handle_generation(t->region)) return NULL;
+    return &k->regions[slot];
 }
 
 /* -------------------------------------------------------------------
@@ -841,14 +856,14 @@ static uint32_t sched_drain_wakers(void) {
  * to completion. By default, as in Rust, such a task stays parked and the
  * run reports ASX_E_WOULD_BLOCK (Rust reports a futurelock,
  * lab/runtime.rs:5612; fuzz finding gen-1-93, bd-9kll.3.2). */
-static uint32_t sched_unpark_cancelled(int stranded) {
+static uint32_t sched_unpark_cancelled(asx_kernel *k, int stranded) {
     uint32_t i;
     uint32_t n = 0;
     for (i = 0; i < g_task_count; i++) {
         ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= ASX_MAX_TASKS");
-        asx_task_slot *t = &g_tasks[i];
+        asx_task_slot *t = &k->tasks[i];
         if (!t->alive || !t->parked || !t->cancel_pending) continue;
-        if (sched_scope_region(t) == NULL) continue;
+        if (sched_scope_region(k, t) == NULL) continue;
         if (stranded) {
             if (t->timer_armed || t->waiting_on != ASX_SLOT_NONE) continue;
         } else if (t->cancel_polled) {
@@ -904,13 +919,13 @@ static void sched_block(uint32_t timeout_ms) {
  * (run_until_idle, lab/runtime.rs:3428-3447; the timer pass is inside the
  * step, :4509), so an idle run_until_idle leaves due timers unfired for the
  * caller's next advance (fuzz finding gen-1-38, bd-ij9w). */
-static int sched_any_runnable(void) {
+static int sched_any_runnable(asx_kernel *k) {
     uint32_t i;
     for (i = 0; i < g_task_count; i++) {
         ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= ASX_MAX_TASKS");
-        const asx_task_slot *t = &g_tasks[i];
+        const asx_task_slot *t = &k->tasks[i];
         if (!t->alive || t->parked || asx_task_is_terminal(t->state)) continue;
-        if (sched_scope_region(t) != NULL) return 1;
+        if (sched_scope_region(k, t) != NULL) return 1;
     }
     return 0;
 }
@@ -940,11 +955,11 @@ static uint32_t sched_ms_until(asx_time deadline, asx_time now, uint32_t cap_ms)
  * caller's run budget deadline, ASX_TIME_INFINITE = none); the round loop
  * then reports
  * ASX_E_TIMED_OUT. */
-static asx_status sched_idle(asx_time *last_idle_now, uint32_t *stall, asx_time run_deadline,
-                             int advance_clock) {
+static asx_status sched_idle(asx_kernel *k, asx_time *last_idle_now, uint32_t *stall,
+                             asx_time run_deadline, int advance_clock) {
     asx_time now;
 
-    if (sched_unpark_cancelled(0) > 0u) return ASX_OK;
+    if (sched_unpark_cancelled(k, 0) > 0u) return ASX_OK;
     if (sched_drain_wakers() > 0u) return ASX_OK;
 
     /* Run-until-idle: nothing is runnable, so the run ends, due timers
@@ -967,12 +982,12 @@ static asx_status sched_idle(asx_time *last_idle_now, uint32_t *stall, asx_time 
             asx_runtime_virtual_advance(target);
             now = sched_now();
         }
-        if (timers_fire(now) > 0u) return ASX_OK;
+        if (timers_fire(k, now) > 0u) return ASX_OK;
         if (now < target) {
             sched_block(sched_ms_until(target, now, ASX_SCHED_MAX_IDLE_WAIT_MS));
             (void)sched_drain_wakers();
             now = sched_now();
-            (void)timers_fire(now);
+            (void)timers_fire(k, now);
         }
         /* ASX_ANALYZER_WAIVER("config-dependent: 0 without blocking pool/native I/O") */
     } else if (sched_external_pending()) {
@@ -981,7 +996,7 @@ static asx_status sched_idle(asx_time *last_idle_now, uint32_t *stall, asx_time 
         sched_block(sched_ms_until(run_deadline, now, ASX_SCHED_MAX_IDLE_WAIT_MS));
         (void)sched_drain_wakers();
         now = sched_now();
-    } else if (asx_cleanup_hard_bound_internal() && sched_unpark_cancelled(1) > 0u) {
+    } else if (asx_cleanup_hard_bound_internal() && sched_unpark_cancelled(k, 1) > 0u) {
         return ASX_OK;
     } else {
         return ASX_E_WOULD_BLOCK;
@@ -1031,10 +1046,10 @@ static void sched_fire_due_cancel_waker(asx_task_slot *t) {
     asx_lab_schedule_cancel(t, t->lab_waker_prio);
 }
 
-static asx_status sched_poll_slot(uint32_t i, asx_region_slot *rslot, uint32_t round,
+static asx_status sched_poll_slot(asx_kernel *k, uint32_t i, asx_region_slot *rslot, uint32_t round,
                                   int *out_done) {
-    asx_task_slot *t = &g_tasks[i];
-    asx_task_id tid = asx_task_handle_for_slot(g_kernels[0], i);
+    asx_task_slot *t = &k->tasks[i];
+    asx_task_id tid = asx_task_handle_for_slot(k, i);
     asx_region_id task_region = t->region;
     int lab = asx_lab_dispatch_active();
     uint16_t task_gen = t->generation;
@@ -1088,7 +1103,7 @@ static asx_status sched_poll_slot(uint32_t i, asx_region_slot *rslot, uint32_t r
     t->in_poll = 0;
     /* Obligation posts made during this poll are applied while the task
      * record still exists (lab/runtime.rs:4797-4808; bd-2fga). */
-    if (lab) asx_obligation_drain_posts_internal(g_kernels[0]);
+    if (lab) asx_obligation_drain_posts_internal(k);
     /* Acknowledged during this poll and still running: the cleanup
      * budget becomes the task's budget now (Rust applies the
      * acknowledgement after the poll, lab/runtime.rs:4809). A task
@@ -1175,7 +1190,7 @@ static asx_status sched_poll_slot(uint32_t i, asx_region_slot *rslot, uint32_t r
      * drops it and the round-start pass for parked tasks too. Never in a release build. */
     if (!lab && t->parked && !t->cancel_pending && !t->cleanup_only &&
         t->budget.deadline != ASX_TIME_INFINITE) {
-        timer_arm(i, t->budget.deadline);
+        timer_arm(k, i, t->budget.deadline);
     }
 #endif
     /* Opt-in hard bound's counter: each poll of a cancel-phase
@@ -1192,12 +1207,12 @@ static asx_status sched_poll_slot(uint32_t i, asx_region_slot *rslot, uint32_t r
  * Lab dispatch run (bd-9kll.4.2; lab_dispatch.c has the model)
  * ------------------------------------------------------------------- */
 
-static uint32_t sched_live_tasks(void) {
+static uint32_t sched_live_tasks(const asx_kernel *k) {
     uint32_t i;
     uint32_t n = 0;
     for (i = 0; i < g_task_count; i++) {
         ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= ASX_MAX_TASKS");
-        if (g_tasks[i].alive && !asx_task_is_terminal(g_tasks[i].state)) n++;
+        if (k->tasks[i].alive && !asx_task_is_terminal(k->tasks[i].state)) n++;
     }
     return n;
 }
@@ -1206,7 +1221,7 @@ static uint32_t sched_live_tasks(void) {
  * spawned from polls, draw the step's value, fire the timers that are due,
  * then pick a task and poll it. *out_dispatched tells whether one was
  * picked. */
-static asx_status sched_lab_step(uint32_t step, int *out_dispatched) {
+static asx_status sched_lab_step(asx_kernel *k, uint32_t step, int *out_dispatched) {
     uint64_t r;
     uint32_t slot;
     uint16_t task_gen = 0;
@@ -1233,9 +1248,9 @@ static asx_status sched_lab_step(uint32_t step, int *out_dispatched) {
     asx_lab_drain_deferred_cancels();
     if (asx_lab_handle_cancels_pending() || asx_lab_deferred_cancels_pending()) return ASX_OK;
     r = asx_lab_step_draw_internal();
-    if (sched_timers_pending()) (void)timers_fire(sched_now());
+    if (sched_timers_pending()) (void)timers_fire(k, sched_now());
     (void)sched_drain_wakers();
-    (void)asx_region_admit_finalizers_internal(); /* schedule_async_finalizers, LR:4513 */
+    (void)asx_region_admit_finalizers_internal(k); /* schedule_async_finalizers, LR:4513 */
     if (asx_lab_dispatch_overflowed()) return ASX_E_RESOURCE_EXHAUSTED;
     if (asx_lab_forced_active()) {
         /* A recorded schedule names the task (run_forced_schedule,
@@ -1250,11 +1265,11 @@ static asx_status sched_lab_step(uint32_t step, int *out_dispatched) {
     *out_dispatched = 1;
     /* Recorded at the pick, before the poll (LR:4627-4644). */
     asx_lab_record_dispatch_internal(slot, task_gen, cancel_lane, lab_step, sched_now());
-    t = &g_tasks[slot];
+    t = &k->tasks[slot];
     /* A retired task a cancel waker scheduled: a dispatch that polls
      * nothing (LR:4772-4790). */
     if (!t->alive || t->generation != task_gen || asx_task_is_terminal(t->state)) return ASX_OK;
-    tid = asx_task_handle_for_slot(g_kernels[0], slot);
+    tid = asx_task_handle_for_slot(k, slot);
     st = asx_region_slot_lookup(t->region, &rslot);
     if (st != ASX_OK) return st;
     if (t->state == ASX_TASK_FINALIZING) {
@@ -1262,7 +1277,7 @@ static asx_status sched_lab_step(uint32_t step, int *out_dispatched) {
     }
     asx_task_apply_cleanup_budget_internal(t);
     sched_enforce_budget(t, tid, &now, &have_now);
-    st = sched_poll_slot(slot, rslot, step, &done);
+    st = sched_poll_slot(k, slot, rslot, step, &done);
     if (st == ASX_OK && asx_lab_dispatch_overflowed()) st = ASX_E_RESOURCE_EXHAUSTED;
     return st;
 }
@@ -1273,7 +1288,7 @@ static asx_status sched_lab_step(uint32_t step, int *out_dispatched) {
  * (LR:3224-3316) otherwise: when nothing is scheduled, move the clock to
  * the next timer and fire it outside any step, and stop at quiescence or
  * after 1000 steps without a dispatch. The budget counts steps. */
-static asx_status sched_lab_run(asx_budget *budget, int advance_clock) {
+static asx_status sched_lab_run(asx_kernel *k, asx_budget *budget, int advance_clock) {
     uint32_t step = 0;
     uint32_t stuck = 0;
     asx_status st;
@@ -1299,7 +1314,7 @@ static asx_status sched_lab_run(asx_budget *budget, int advance_clock) {
                 asx_trace_emit(ASX_TRACE_SCHED_BUDGET, ASX_INVALID_ID, step);
                 return ASX_E_POLL_BUDGET_EXHAUSTED;
             }
-            st = sched_lab_step(step++, &dispatched);
+            st = sched_lab_step(k, step++, &dispatched);
             if (st != ASX_OK) return st;
             if (dispatched) {
                 stuck = 0;
@@ -1308,7 +1323,7 @@ static asx_status sched_lab_run(asx_budget *budget, int advance_clock) {
             }
             continue;
         }
-        if (sched_live_tasks() == 0u && !asx_region_finalizers_pending_internal()) {
+        if (sched_live_tasks(k) == 0u && !asx_region_finalizers_pending_internal(k)) {
             sched_emit(ASX_SCHED_EVENT_QUIESCENT, ASX_INVALID_ID, step);
             asx_trace_emit(ASX_TRACE_SCHED_QUIESCENT, ASX_INVALID_ID, step);
             return ASX_OK;
@@ -1324,14 +1339,14 @@ static asx_status sched_lab_run(asx_budget *budget, int advance_clock) {
             } else if (++stuck > 1000u) {
                 return ASX_E_WOULD_BLOCK;
             }
-            (void)timers_fire(sched_now());
+            (void)timers_fire(k, sched_now());
             continue;
         }
         /* Live tasks, nothing scheduled, no timer: Rust keeps stepping
          * (each step draws a value) until its stuck bound. */
         if (++stuck > 1000u) return ASX_E_WOULD_BLOCK;
         if (asx_budget_consume_poll(budget) == 0) return ASX_E_POLL_BUDGET_EXHAUSTED;
-        st = sched_lab_step(step++, &dispatched);
+        st = sched_lab_step(k, step++, &dispatched);
         if (st != ASX_OK) return st;
     }
 }
@@ -1380,7 +1395,7 @@ static uint32_t g_sweep_streak;
 
 /* List every live in-scope task in its (lane, priority) bucket, in arena
  * order. Needs sched_compute_scope for this round. */
-static void sweep_build(void) {
+static void sweep_build(asx_kernel *k) {
     uint32_t lane;
     uint32_t p;
     uint32_t i;
@@ -1395,12 +1410,12 @@ static void sweep_build(void) {
     }
     for (i = 0; i < g_task_count; i++) {
         ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= ASX_MAX_TASKS");
-        const asx_task_slot *t = &g_tasks[i];
+        const asx_task_slot *t = &k->tasks[i];
         uint32_t prio;
 
         g_sweep_next[i] = SWEEP_UNLISTED;
         if (!t->alive || asx_task_is_terminal(t->state)) continue;
-        if (sched_scope_region(t) == NULL) continue;
+        if (sched_scope_region(k, t) == NULL) continue;
         /* A budget cancel the task raised itself is on its Cx only until a
          * checkpoint acknowledges it (cancel_unmaterialized): no cancel
          * lane entry in Rust, so it stays ready work. */
@@ -1498,7 +1513,7 @@ static int sweep_walk_next(sweep_walk *w, uint32_t *out_slot, int *out_cancel_la
 }
 
 static asx_status sched_run(asx_region_id region, asx_budget *budget, int advance_clock);
-static void sched_fire_budget_deadlines(asx_time now);
+static void sched_fire_budget_deadlines(asx_kernel *k, asx_time now);
 asx_status asx_scheduler_run(asx_region_id region, asx_budget *budget) {
     return sched_run(region, budget, 1);
 }
@@ -1508,6 +1523,7 @@ asx_status asx_scheduler_run_until_idle(asx_region_id region, asx_budget *budget
 }
 
 static asx_status sched_run(asx_region_id region, asx_budget *budget, int advance_clock) {
+    asx_kernel *k = asx_kernel_of(region);
     asx_region_slot *root;
     asx_status st;
     uint32_t round;
@@ -1523,7 +1539,7 @@ static asx_status sched_run(asx_region_id region, asx_budget *budget, int advanc
     asx_scheduler_event_reset();
     (void)asx_runtime_take_pending_fault_internal(); /* drop stale faults */
 
-    if (asx_lab_dispatch_active()) return sched_lab_run(budget, advance_clock);
+    if (asx_lab_dispatch_active()) return sched_lab_run(k, budget, advance_clock);
 
     g_sweep_streak = 0u;
     for (round = 0;; round++) {
@@ -1558,31 +1574,31 @@ static asx_status sched_run(asx_region_id region, asx_budget *budget, int advanc
         (void)sched_drain_wakers();
         /* Due timers and budget deadlines fire at the start of a round, before any
          * task polls, as in a lab step; run-until-idle fires none with nothing runnable. */
-        if (advance_clock || sched_any_runnable()) {
-            if (sched_timers_pending()) (void)timers_fire(sched_now());
-            sched_fire_budget_deadlines(sched_now());
+        if (advance_clock || sched_any_runnable(k)) {
+            if (sched_timers_pending()) (void)timers_fire(k, sched_now());
+            sched_fire_budget_deadlines(k, sched_now());
         }
 
-        sweep_build();
+        sweep_build(k);
         sweep_walk_start(&walk);
         while (sweep_walk_next(&walk, &i, &from_cancel_lane)) {
             ASX_CHECKPOINT_WAIVER("kernel-scheduler: inner poll loop bounded by "
                                   "g_task_count <= ASX_MAX_TASKS arena capacity");
-            asx_task_slot *t = &g_tasks[i];
+            asx_task_slot *t = &k->tasks[i];
             asx_region_slot *rslot;
             asx_task_id tid;
 
             if (!t->alive) continue;
             if (asx_task_is_terminal(t->state)) continue;
-            rslot = sched_scope_region(t);
+            rslot = sched_scope_region(k, t);
             if (rslot == NULL && t->spawned_in_poll && !t->first_polled) {
                 sched_compute_scope(region); /* a region opened this round (bd-9kll.4.12) */
-                rslot = sched_scope_region(t);
+                rslot = sched_scope_region(k, t);
             }
             if (rslot == NULL) continue;
 
             active++;
-            tid = asx_task_handle_for_slot(g_kernels[0], i);
+            tid = asx_task_handle_for_slot(k, i);
 
             /* FINALIZING: asx_task_finalize() was called, so cleanup is done: complete. */
             if (t->state == ASX_TASK_FINALIZING) {
@@ -1646,14 +1662,14 @@ static asx_status sched_run(asx_region_id region, asx_budget *budget, int advanc
             }
             {
                 int done = 0;
-                st = sched_poll_slot(i, rslot, round, &done);
+                st = sched_poll_slot(k, i, rslot, round, &done);
                 if (st != ASX_OK) return st;
                 if (done) active--;
             }
         }
 
         /* No active tasks left: quiescent, unless a finalizer was just spawned */
-        if (active == 0 && asx_region_admit_finalizers_internal() > 0u) continue;
+        if (active == 0 && asx_region_admit_finalizers_internal(k) > 0u) continue;
         if (active == 0) {
             sched_emit(ASX_SCHED_EVENT_QUIESCENT, ASX_INVALID_ID, round);
             asx_trace_emit(ASX_TRACE_SCHED_QUIESCENT, ASX_INVALID_ID, round);
@@ -1661,7 +1677,7 @@ static asx_status sched_run(asx_region_id region, asx_budget *budget, int advanc
         }
 
         if (progress == 0u) {
-            st = sched_idle(&last_idle_now, &idle_stall, budget->deadline, advance_clock);
+            st = sched_idle(k, &last_idle_now, &idle_stall, budget->deadline, advance_clock);
             if (st != ASX_OK) return st;
         }
     }
@@ -1676,19 +1692,19 @@ static asx_status sched_run(asx_region_id region, asx_budget *budget, int advanc
  * the round (a supervisor aborting a member with the reason of its own
  * Deadline) reached the task first and its origin outranked the task's own
  * (race-deadline-wrapper-cx-reason-001, bd-9kll.4.16). */
-static void sched_fire_budget_deadlines(asx_time now) {
+static void sched_fire_budget_deadlines(asx_kernel *k, asx_time now) {
     uint32_t i;
     for (i = 0; i < g_task_count; i++) {
         ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= ASX_MAX_TASKS");
-        asx_task_slot *t = &g_tasks[i];
+        asx_task_slot *t = &k->tasks[i];
         if (!t->alive || asx_task_is_terminal(t->state) || t->cancel_pending) continue;
         if (t->cleanup_only || t->budget.deadline == ASX_TIME_INFINITE) continue;
-        if (now < t->budget.deadline || sched_scope_region(t) == NULL) continue;
+        if (now < t->budget.deadline || sched_scope_region(k, t) == NULL) continue;
 #ifdef ASX_MUTANT_SWEEP_PARKED_DEADLINE_NO_WAKE
         if (t->parked) continue; /* oracle mutant: the deadline waits for the task's wake */
 #endif
-        if (asx_task_cancel_budget_internal(asx_task_handle_for_slot(g_kernels[0], i),
-                                            ASX_CANCEL_DEADLINE, t->budget.deadline) == ASX_OK) {
+        if (asx_task_cancel_budget_internal(asx_task_handle_for_slot(k, i), ASX_CANCEL_DEADLINE,
+                                            t->budget.deadline) == ASX_OK) {
             asx_task_wake_slot_internal(t);
         }
     }

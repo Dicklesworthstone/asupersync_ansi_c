@@ -494,9 +494,9 @@ TEST(runtime_arenas_live_in_the_callers_storage_and_return_to_the_static_block) 
     asx_outcome outcome;
 
     asx_runtime_reset();
-    static_regions = (const void *)g_regions;
-    static_tasks = (const void *)g_tasks;
-    static_obligations = (const void *)g_obligations;
+    static_regions = (const void *)g_kernels[0]->regions;
+    static_tasks = (const void *)g_kernels[0]->tasks;
+    static_obligations = (const void *)g_kernels[0]->obligations;
     ASSERT_TRUE(storage_block_make(&blk, 0xA5u));
     make_valid_config(&cfg);
     make_valid_hooks(&hooks);
@@ -504,9 +504,9 @@ TEST(runtime_arenas_live_in_the_callers_storage_and_return_to_the_static_block) 
     cfg.storage_size = blk.size;
     MUST_OK(asx_runtime_init(&rt, &cfg, &hooks));
     ASSERT_TRUE(asx_runtime_is_initialized(&rt));
-    ASSERT_TRUE(pointer_in_block(g_regions, &blk));
-    ASSERT_TRUE(pointer_in_block(g_tasks, &blk));
-    ASSERT_TRUE(pointer_in_block(g_obligations, &blk));
+    ASSERT_TRUE(pointer_in_block(g_kernels[0]->regions, &blk));
+    ASSERT_TRUE(pointer_in_block(g_kernels[0]->tasks, &blk));
+    ASSERT_TRUE(pointer_in_block(g_kernels[0]->obligations, &blk));
     ASSERT_EQ(asx_runtime_get_config(&rt, &got), ASX_OK);
     ASSERT_TRUE(got.storage == (void *)blk.block);
     ASSERT_EQ(got.storage_size, blk.size);
@@ -514,9 +514,9 @@ TEST(runtime_arenas_live_in_the_callers_storage_and_return_to_the_static_block) 
     /* The runtime works in it: init zeroed the block, a region opens in
      * slot 0 and a task completes. */
     ASSERT_EQ(asx_region_open(&region), ASX_OK);
-    ASSERT_TRUE(g_regions[0].alive);
+    ASSERT_TRUE(g_kernels[0]->regions[0].alive);
     ASSERT_EQ(asx_task_spawn(region, dummy_poll, NULL, &task), ASX_OK);
-    ASSERT_TRUE(g_tasks[0].alive);
+    ASSERT_TRUE(g_kernels[0]->tasks[0].alive);
     run = asx_budget_from_polls(8u);
     ASSERT_EQ(asx_scheduler_run(region, &run), ASX_OK);
     ASSERT_EQ(asx_task_get_outcome(task, &outcome), ASX_OK);
@@ -524,15 +524,15 @@ TEST(runtime_arenas_live_in_the_callers_storage_and_return_to_the_static_block) 
 
     /* Shutdown ends the binding. */
     asx_runtime_shutdown(&rt);
-    ASSERT_TRUE((const void *)g_regions == static_regions);
-    ASSERT_TRUE((const void *)g_tasks == static_tasks);
-    ASSERT_TRUE((const void *)g_obligations == static_obligations);
+    ASSERT_TRUE((const void *)g_kernels[0]->regions == static_regions);
+    ASSERT_TRUE((const void *)g_kernels[0]->tasks == static_tasks);
+    ASSERT_TRUE((const void *)g_kernels[0]->obligations == static_obligations);
 
     /* A runtime given no storage uses the static block again. */
     cfg.storage = NULL;
     cfg.storage_size = 0u;
     MUST_OK(asx_runtime_init(&rt, &cfg, &hooks));
-    ASSERT_TRUE((const void *)g_regions == static_regions);
+    ASSERT_TRUE((const void *)g_kernels[0]->regions == static_regions);
     ASSERT_EQ(asx_region_open(&region), ASX_OK);
     asx_runtime_shutdown(&rt);
     storage_block_free(&blk);
@@ -604,7 +604,7 @@ TEST(runtime_storage_refusals_bind_nothing_and_change_no_byte) {
     const void *static_regions;
 
     asx_runtime_reset();
-    static_regions = (const void *)g_regions;
+    static_regions = (const void *)g_kernels[0]->regions;
     ASSERT_TRUE(storage_block_make(&blk, 0xA5u));
     make_valid_config(&cfg);
     make_valid_hooks(&hooks);
@@ -630,14 +630,14 @@ TEST(runtime_storage_refusals_bind_nothing_and_change_no_byte) {
     }
 
     /* The library's own block. */
-    cfg.storage = (void *)g_regions;
+    cfg.storage = (void *)g_kernels[0]->regions;
     cfg.storage_size = blk.size;
     ASSERT_EQ(asx_runtime_init(&rt, &cfg, &hooks), ASX_E_INVALID_ARGUMENT);
 
     /* Nothing was bound, reset or written. */
     ASSERT_TRUE(!asx_runtime_is_initialized(&rt));
     ASSERT_EQ(memcmp(&rt, &before, sizeof(rt)), 0);
-    ASSERT_TRUE((const void *)g_regions == static_regions);
+    ASSERT_TRUE((const void *)g_kernels[0]->regions == static_regions);
     ASSERT_TRUE(block_is_filled(&blk, 0xA5u));
     storage_block_free(&blk);
 }
@@ -660,7 +660,7 @@ TEST(refused_storage_init_preserves_the_live_runtime_and_the_block) {
     make_valid_config(&cfg);
     make_valid_hooks(&hooks);
     MUST_OK(asx_runtime_init(&a, &cfg, &hooks));
-    static_regions = (const void *)g_regions;
+    static_regions = (const void *)g_kernels[0]->regions;
     ASSERT_EQ(asx_region_open(&region), ASX_OK);
     ASSERT_EQ(asx_task_spawn(region, dummy_poll, NULL, &task), ASX_OK);
 
@@ -677,7 +677,7 @@ TEST(refused_storage_init_preserves_the_live_runtime_and_the_block) {
     ASSERT_TRUE(asx_runtime_is_initialized(&a));
     ASSERT_EQ(memcmp(&a, &before_a, sizeof(a)), 0);
     ASSERT_EQ(memcmp(&b, &before_b, sizeof(b)), 0);
-    ASSERT_TRUE((const void *)g_regions == static_regions);
+    ASSERT_TRUE((const void *)g_kernels[0]->regions == static_regions);
     ASSERT_TRUE(block_is_filled(&blk, 0xA5u));
     run = asx_budget_from_polls(8u);
     ASSERT_EQ(asx_scheduler_run(region, &run), ASX_OK);

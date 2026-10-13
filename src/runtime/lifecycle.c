@@ -1445,11 +1445,11 @@ static asx_status task_spawn_impl(asx_region_id region, asx_task_poll_fn poll_fn
 
     r->task_count++;
     r->task_total++;
-    /* A parallel run in progress admits the task to its lanes (bd-9kll.4.11). */
-    asx_parallel_task_admitted_internal((uint32_t)idx);
 
     *out_id = asx_handle_mint(k, ASX_TYPE_TASK, (uint16_t)(1u << (unsigned)ASX_TASK_CREATED),
                               asx_handle_pack_index(k->tasks[idx].generation, (uint16_t)idx));
+    /* A parallel run in progress admits the task to its lanes (bd-9kll.4.11). */
+    asx_parallel_task_admitted_internal(*out_id);
 
     (void)asx_event_emit(ASX_EVENT_TASK_SPAWN, *out_id, (uint64_t)region, ASX_OK);
     /* A deferred spawn is traced when it is admitted, as Rust records its

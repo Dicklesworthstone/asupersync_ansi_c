@@ -57,60 +57,62 @@ void asx_diagnostic_reset(void) {
 /* Runtime inspection                                                  */
 /* ------------------------------------------------------------------ */
 
-static uint32_t count_alive_regions(void) {
+static uint32_t count_alive_regions(const asx_kernel *k) {
     uint32_t i, n = 0;
     for (i = 0; i < g_region_count; i++) {
         /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
-        if (g_regions[i].alive) n++;
+        if (k->regions[i].alive) n++;
     }
     return n;
 }
 
-static uint32_t count_alive_tasks(void) {
+static uint32_t count_alive_tasks(const asx_kernel *k) {
     uint32_t i, n = 0;
     for (i = 0; i < g_task_count; i++) {
         /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
-        if (g_tasks[i].alive) n++;
+        if (k->tasks[i].alive) n++;
     }
     return n;
 }
 
-static uint32_t count_alive_obligations(void) {
+static uint32_t count_alive_obligations(const asx_kernel *k) {
     uint32_t i, n = 0;
     for (i = 0; i < g_obligation_count; i++) {
         /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
-        if (g_obligations[i].alive) n++;
+        if (k->obligations[i].alive) n++;
     }
     return n;
 }
 
-static int any_region_poisoned(void) {
+static int any_region_poisoned(const asx_kernel *k) {
     uint32_t i;
     for (i = 0; i < g_region_count; i++) {
         /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
-        if (g_regions[i].alive && g_regions[i].poisoned) return 1;
+        if (k->regions[i].alive && k->regions[i].poisoned) return 1;
     }
     return 0;
 }
 
 asx_status asx_inspect(const asx_runtime *rt, asx_inspection_report *out) {
+    const asx_kernel *k;
     int initialized;
 
     if (rt == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
 
     memset(out, 0, sizeof(*out));
     initialized = asx_runtime_is_initialized(rt);
+    k = asx_kernel_for_tag(rt->tag); /* the kernel this runtime holds, when it is initialized */
 
     /* Entity gauges */
-    out->regions.active_count = initialized ? count_alive_regions() : 0u;
+    out->regions.active_count = initialized ? count_alive_regions(k) : 0u;
     out->regions.capacity = ASX_MAX_REGIONS;
     out->regions.peak_count = initialized ? g_region_count : 0u; /* high water mark */
 
-    out->tasks.active_count = initialized ? count_alive_tasks() : 0u;
+    out->tasks.active_count = initialized ? count_alive_tasks(k) : 0u;
     out->tasks.capacity = ASX_MAX_TASKS;
     out->tasks.peak_count = initialized ? g_task_count : 0u;
 
-    out->obligations.active_count = initialized ? count_alive_obligations() : 0u;
+    out->obligations.active_count = initialized ? count_alive_obligations(k) : 0u;
     out->obligations.capacity = ASX_MAX_OBLIGATIONS;
     out->obligations.peak_count = initialized ? g_obligation_count : 0u;
 
@@ -137,16 +139,8 @@ asx_status asx_inspect(const asx_runtime *rt, asx_inspection_report *out) {
 
     /* Error ledger — summarize across all tasks */
     {
-        uint32_t i;
         out->errors.total_errors = 0;
         out->errors.overflowed = 0;
-        for (i = 0; i < g_task_count; i++) {
-            /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
-            if (g_tasks[i].alive) {
-                /* We can't easily query per-task error counts without
-                 * a task handle. Track the task count as a proxy. */
-            }
-        }
         /* Note: per-task error counts require task handles.
          * The total_errors field stays 0 until a task-enumeration
          * API is added. This is documented as a known limitation. */
@@ -161,7 +155,7 @@ asx_status asx_inspect(const asx_runtime *rt, asx_inspection_report *out) {
     out->safety_profile = asx_runtime_safety_profile(rt);
     out->containment_policy = asx_runtime_containment_policy(rt);
     out->initialized = initialized;
-    out->any_poisoned = initialized ? any_region_poisoned() : 0;
+    out->any_poisoned = initialized ? any_region_poisoned(k) : 0;
 
     /* Telemetry */
     out->telemetry_emitted = initialized ? asx_telemetry_emitted_count() : 0u;

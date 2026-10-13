@@ -32,6 +32,7 @@ void asx_runtime_snapshot_init(asx_runtime_snapshot *snap) {
 /* ------------------------------------------------------------------ */
 
 asx_status asx_runtime_snapshot_capture(asx_runtime_snapshot *snap) {
+    const asx_kernel *k = g_kernels[0]; /* handle-less: kernel 0 until capture takes its runtime */
     uint32_t i;
     uint32_t ri = 0;
     uint32_t ti = 0;
@@ -58,42 +59,40 @@ asx_status asx_runtime_snapshot_capture(asx_runtime_snapshot *snap) {
 
     /* Capture live regions */
     for (i = 0; i < ASX_MAX_REGIONS && ri < ASX_SNAPSHOT_MAX_REGIONS; i++) {
-        if (!g_regions[i].alive) continue;
+        if (!k->regions[i].alive) continue;
         snap->regions[ri].id =
-            asx_handle_mint(g_kernels[0], ASX_TYPE_REGION,
-                            (uint16_t)(1u << (unsigned)ASX_REGION_OPEN),
-                            asx_handle_pack_index(g_regions[i].generation, (uint16_t)i));
-        snap->regions[ri].state = g_regions[i].state;
-        snap->regions[ri].task_count = g_regions[i].task_count;
-        snap->regions[ri].task_total = g_regions[i].task_total;
-        snap->regions[ri].poisoned = g_regions[i].poisoned;
+            asx_handle_mint(k, ASX_TYPE_REGION, (uint16_t)(1u << (unsigned)ASX_REGION_OPEN),
+                            asx_handle_pack_index(k->regions[i].generation, (uint16_t)i));
+        snap->regions[ri].state = k->regions[i].state;
+        snap->regions[ri].task_count = k->regions[i].task_count;
+        snap->regions[ri].task_total = k->regions[i].task_total;
+        snap->regions[ri].poisoned = k->regions[i].poisoned;
         ri++;
     }
     snap->region_count = ri;
 
     /* Capture live tasks */
     for (i = 0; i < ASX_MAX_TASKS && ti < ASX_SNAPSHOT_MAX_TASKS; i++) {
-        if (!g_tasks[i].alive) continue;
+        if (!k->tasks[i].alive) continue;
         snap->tasks[ti].id =
-            asx_handle_mint(g_kernels[0], ASX_TYPE_TASK,
-                            (uint16_t)(1u << (unsigned)ASX_TASK_CREATED),
-                            asx_handle_pack_index(g_tasks[i].generation, (uint16_t)i));
-        snap->tasks[ti].state = g_tasks[i].state;
-        snap->tasks[ti].region = g_tasks[i].region;
-        snap->tasks[ti].outcome_severity = g_tasks[i].outcome.severity;
+            asx_handle_mint(k, ASX_TYPE_TASK, (uint16_t)(1u << (unsigned)ASX_TASK_CREATED),
+                            asx_handle_pack_index(k->tasks[i].generation, (uint16_t)i));
+        snap->tasks[ti].state = k->tasks[i].state;
+        snap->tasks[ti].region = k->tasks[i].region;
+        snap->tasks[ti].outcome_severity = k->tasks[i].outcome.severity;
         ti++;
     }
     snap->task_count = ti;
 
     /* Capture live obligations */
     for (i = 0; i < ASX_MAX_OBLIGATIONS && oi < ASX_SNAPSHOT_MAX_OBLIGATIONS; i++) {
-        if (!g_obligations[i].alive) continue;
+        if (!k->obligations[i].alive) continue;
         snap->obligations[oi].id =
-            asx_handle_mint(g_kernels[0], ASX_TYPE_OBLIGATION,
+            asx_handle_mint(k, ASX_TYPE_OBLIGATION,
                             (uint16_t)(1u << (unsigned)ASX_OBLIGATION_RESERVED),
-                            asx_handle_pack_index(g_obligations[i].generation, (uint16_t)i));
-        snap->obligations[oi].state = g_obligations[i].state;
-        snap->obligations[oi].region = g_obligations[i].region;
+                            asx_handle_pack_index(k->obligations[i].generation, (uint16_t)i));
+        snap->obligations[oi].state = k->obligations[i].state;
+        snap->obligations[oi].region = k->obligations[i].region;
         oi++;
     }
     snap->obligation_count = oi;

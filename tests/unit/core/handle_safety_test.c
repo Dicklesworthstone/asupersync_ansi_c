@@ -282,7 +282,7 @@ TEST(cleanup_drain_during_region_finalize) {
     /* Push cleanups onto the region's internal stack */
     {
         uint16_t slot_idx = asx_handle_slot(rid);
-        asx_cleanup_stack *stk = &g_regions[slot_idx].cleanup;
+        asx_cleanup_stack *stk = &g_kernels[0]->regions[slot_idx].cleanup;
 
         ASSERT_EQ(asx_cleanup_push(stk, cleanup_record, &v1, &h1), ASX_OK);
         ASSERT_EQ(asx_cleanup_push(stk, cleanup_record, &v2, &h2), ASX_OK);

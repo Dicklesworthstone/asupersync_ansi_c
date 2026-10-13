@@ -245,7 +245,7 @@ try_recv() -> Result<T, RecvError>
 
 **C status:** implemented. `channel_wait_cancelled` (`src/channel/mpsc.c:1253-1260`) checks `asx_cx_checkpoint`, records the trace message `mpsc::reserve cancelled`, `mpsc::recv cancelled` or `mpsc::recv_many cancelled`, and withdraws the task from all three wait queues, passing any wake it held on (`asx_channel_wait_cancel`, `mpsc.c:1229-1243`). Cancellation observation requires no capability flag: the checkpoint observes the identified task's pending cancel before budget consumption (`src/cx/cx.c:416-435`); masking defers delivery but does not hide a recorded request from `asx_cx_is_cancel_requested` (`src/cx/cx.c:402-413`). Permit send and abort authenticate their physical binding without a cancellation checkpoint (`mpsc.c:886-982`). Unit tests: `test_channel_wake.c` `cancelled_waiter_does_not_absorb_wake`, `test_mpsc.c` `cancelled_cx_wins_over_ready_channel_and_traces`. Rust parity: `mpsc-recv-cancel-first-001`. Reserve cancellation has no v2 fixture.
 
-`asx_task_masked` (`src/runtime/cancellation.c:757`) adds a synchronous callback
+`asx_task_masked` (`src/runtime/cancellation.c:759`) adds a synchronous callback
 guard for a task's cancellation mask. It releases its level when the callback
 returns, including a channel poll returning `ASX_E_PENDING` or an error, and
 returns the body's status unless release fails; it does
@@ -729,7 +729,7 @@ For deterministic parity with Rust, and the current C status of each:
 | Failure | Rust detection | Rust result | C (lab dispatch) |
 |---------|-----------|----------|---|
 | Cancel-streak limit hit | `cancel_streak >= effective_limit` (`three_lane.rs:6969-6972`) | Skip cancel lane, try timed/ready; fallback cancel if none | Ready lane first after 16 cancel dispatches (`lab_dispatch.c:611-631`) |
-| No tasks available | All lanes empty | Spin -> yield -> park (section 3.10) | Step dispatches nothing; the run auto-advances the clock or returns (`scheduler.c:1270-1324`) |
+| No tasks available | All lanes empty | Spin -> yield -> park (section 3.10) | Step dispatches nothing; the run auto-advances the clock or returns (`scheduler.c:1285-1339`) |
 | Work steal failure | All stealers empty | Continue to Phase 5 / backoff | Not applicable (one worker) |
 | Shutdown requested | Checked in `run_loop_until` (`three_lane.rs:5601`, `:5647`) | Exit loop | Not applicable |
 

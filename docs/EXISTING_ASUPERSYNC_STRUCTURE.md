@@ -149,7 +149,7 @@ Rust `RegionState`: `src/record/region.rs:76`. C `asx_region_state`: `include/as
 |-------|-----------|-------------|
 | `Open` | `ASX_REGION_OPEN` | Active; tasks, child regions and obligations may be created |
 | `Closing` | `ASX_REGION_CLOSING` | Close requested or region cancelled; no new tasks, child regions or obligations; existing work continues |
-| `Draining` | `ASX_REGION_DRAINING` | Entered only while the region still has child **regions** (Rust `src/runtime/state.rs:10220`; C `src/runtime/quiescence.c:237-243`) |
+| `Draining` | `ASX_REGION_DRAINING` | Entered only while the region still has child **regions** (Rust `src/runtime/state.rs:10220`; C `src/runtime/quiescence.c:240-246`) |
 | `Finalizing` | `ASX_REGION_FINALIZING` | All ordinary child tasks Completed and child regions Closed; region finalizers run (LIFO), and explicitly admitted cleanup tasks may still be live |
 | `Closed` | `ASX_REGION_CLOSED` | Terminal; both retain the region's aggregated close outcome (C severity only), while Rust also reclaims the region heap (`src/record/region.rs:1139`; see §7.5) |
 
@@ -160,8 +160,8 @@ Rust `RegionState`: `src/record/region.rs:76`. C `asx_region_state`: `include/as
 | R1 | `Open` | `Closing` | Rust `begin_close(reason)` (`src/record/region.rs:1699`); C `asx_region_close` (`src/runtime/lifecycle.c:1162`) | state==Open | No new spawns; Rust sets or strengthens the cancel reason if one is given. C's plain close cancels no task |
 | R1a | `Open` | `Closing` | An ancestor region is cancelled | The cancel walks the subtree, parents first (Rust `cancel_request`, `src/runtime/state.rs:7547`; C `asx_region_cancel`, `src/runtime/cancellation.c:518`) | Descendant gets ParentCancelled from its immediate parent; its tasks are cancelled |
 | R1b | `Open` | `Closing` | This region is cancelled | Live region | Region reason set or strengthened; its tasks get CancelRequested |
-| R2 | `Closing` | `Draining` | Rust `begin_drain()` (`src/record/region.rs:1743`) from `advance_region_state` (`src/runtime/state.rs:10220`); C `src/runtime/quiescence.c:237-243` | state==Closing and at least one child region | Waits for child regions. Not a cancel step: when the close came from a cancel request, the tasks were already cancelled by it (Variant vs the spec, row `rule.region.close_cancel_children`) |
-| R3 | `Closing` | `Finalizing` | Rust `begin_finalize()` (`src/record/region.rs:1756`); C `src/runtime/quiescence.c:245` | Every task terminal, every child region Closed, no pending spawn (`can_region_finalize`, `src/runtime/state.rs:7938`) | **Fast path**: skip drain phase |
+| R2 | `Closing` | `Draining` | Rust `begin_drain()` (`src/record/region.rs:1743`) from `advance_region_state` (`src/runtime/state.rs:10220`); C `src/runtime/quiescence.c:240-246` | state==Closing and at least one child region | Waits for child regions. Not a cancel step: when the close came from a cancel request, the tasks were already cancelled by it (Variant vs the spec, row `rule.region.close_cancel_children`) |
+| R3 | `Closing` | `Finalizing` | Rust `begin_finalize()` (`src/record/region.rs:1756`); C `src/runtime/quiescence.c:248` | Every task terminal, every child region Closed, no pending spawn (`can_region_finalize`, `src/runtime/state.rs:7938`) | **Fast path**: skip drain phase |
 | R4 | `Draining` | `Finalizing` | Same as R3 | Same as R3 | Finalizer execution begins (LIFO) |
 | R5 | `Finalizing` | `Closed` | Rust `complete_close()` (`src/record/region.rs:1786`); C `src/runtime/quiescence.c:262-266` | See 3.4 | Both record a close outcome and wake close waiters. C aggregates task outcome severities and unlinks the region from its parent; Rust also reclaims its region heap |
 
@@ -176,7 +176,7 @@ region close outcome in §7.5.
 
 C exposes that severity-based request through `asx_region_close_with_outcome`
 (`src/runtime/lifecycle.c:1130`), then drives completion through
-`asx_region_wait_closed` (`src/runtime/quiescence.c:371`). The wait is host-only
+`asx_region_wait_closed` (`src/runtime/quiescence.c:374`). The wait is host-only
 and adds no cancellation: an Open child region must be closed by its owner.
 `asx_scope_finish` (`src/cx/scope.c:203`) uses the scope's budget, saves the first
 body outcome and requests close once; same-severity retries only resume the
@@ -216,9 +216,9 @@ All must hold before transition to Closed:
 4. Finalizers drained (Rust: empty finalizer stack; C: cleanup stack drained LIFO, `src/core/cleanup.c:94-113`)
 5. C only: the ghost linearity monitor reports the region's unresolved obligations (`src/core/ghost.c:182`); it reports and does not block
 
-Finalizers run before the remaining ledger check in both engines (`src/runtime/quiescence.c:249-261`). C exposes its synchronous LIFO stack through `asx_region_defer_sync` (`src/runtime/quiescence.c`), the one registration, and async finalizers through `asx_region_defer_async`. Registration requires an Open, unpoisoned region and a caller that holds it (the host or a task of that region); an entry cannot be taken back. Callbacks may resolve obligations or admit explicit cleanup tasks. Closure waits for those tasks and for the active callback drain to return (`src/runtime/quiescence.c:253-255`). Each callback is retired before invocation, recursive drains cannot invoke it twice (`src/core/cleanup.c:94-113`), and nested cancellation/drain traversal validates its saved region handles before advancing them.
+Finalizers run before the remaining ledger check in both engines (`src/runtime/quiescence.c:252-264`). C exposes its synchronous LIFO stack through `asx_region_defer_sync` (`src/runtime/quiescence.c`), the one registration, and async finalizers through `asx_region_defer_async`. Registration requires an Open, unpoisoned region and a caller that holds it (the host or a task of that region); an entry cannot be taken back. Callbacks may resolve obligations or admit explicit cleanup tasks. Closure waits for those tasks and for the active callback drain to return (`src/runtime/quiescence.c:256-258`). Each callback is retired before invocation, recursive drains cannot invoke it twice (`src/core/cleanup.c:94-113`), and nested cancellation/drain traversal validates its saved region handles before advancing them.
 
-If item 3 still fails once finalizers and cleanup tasks finish, both leak-audit the remaining Reserved obligations and then close: Rust (`src/runtime/state.rs:10271`), C through `asx_region_audit_leaks_internal` (`src/runtime/lifecycle.c:678`). C marks them Leaked under LOG/SILENT/PANIC and Aborted under RECOVER, with leak accounting. Under PANIC the audit returns `ASX_E_UNRESOLVED_OBLIGATIONS` before closing; the region stays Finalizing until a later advance. C exposes its aggregated close severity through `asx_region_get_close_outcome` (`src/runtime/quiescence.c:475`). The outcome-aware request/wait in §3.2 uses these same finalization and leak-audit paths. The genuine Scope factory and serialized, masked async-finalizer barrier remain K4 gaps (`bd-9kll.3.4`); synchronous finalizer APIs still have no Rust-captured DSL v2 witness.
+If item 3 still fails once finalizers and cleanup tasks finish, both leak-audit the remaining Reserved obligations and then close: Rust (`src/runtime/state.rs:10271`), C through `asx_region_audit_leaks_internal` (`src/runtime/lifecycle.c:678`). C marks them Leaked under LOG/SILENT/PANIC and Aborted under RECOVER, with leak accounting. Under PANIC the audit returns `ASX_E_UNRESOLVED_OBLIGATIONS` before closing; the region stays Finalizing until a later advance. C exposes its aggregated close severity through `asx_region_get_close_outcome` (`src/runtime/quiescence.c:480`). The outcome-aware request/wait in §3.2 uses these same finalization and leak-audit paths. The genuine Scope factory and serialized, masked async-finalizer barrier remain K4 gaps (`bd-9kll.3.4`); synchronous finalizer APIs still have no Rust-captured DSL v2 witness.
 
 ### 3.5 Operations Gated by Region State
 
@@ -273,20 +273,20 @@ Completed         .        .        .           .           .           .
 | # | From | To | Trigger | Postconditions |
 |---|------|----|---------|----------------|
 | T1 | `Created` | `Running` | Rust `start_running()` (`src/record/task.rs:1078`); C first poll (`src/runtime/scheduler.c:1069`) | Task poll function invoked |
-| T2 | `Created` | `CancelRequested` | Rust `request_cancel*` (`src/record/task.rs:803`) | Cancel before first poll; Rust sets `cancel_epoch` to 1. C takes T2 in one step, as does a budget cancel that reaches the record of a task not yet polled (`src/runtime/cancellation.c:281`, `src/runtime/cancellation.c:127`) |
+| T2 | `Created` | `CancelRequested` | Rust `request_cancel*` (`src/record/task.rs:803`) | Cancel before first poll; Rust sets `cancel_epoch` to 1. C takes T2 in one step, as does a budget cancel that reaches the record of a task not yet polled (`src/runtime/cancellation.c:282`, `src/runtime/cancellation.c:128`) |
 | T3 | `Created` | `Completed` | Rust `complete(outcome)` (`src/record/task.rs:1260`); C `asx_task_refuse_admission_internal` (`src/runtime/lifecycle.c:1492`) | C takes T3 with Cancelled when deferred admission is refused for a closed region or task limit. Ordinary polling first takes T1; Created→Completed(Err) at spawn is still absent |
-| T4 | `Running` | `CancelRequested` | Rust `request_cancel*`; C `asx_task_cancel_reason_internal` (`src/runtime/cancellation.c:147`) | Cancel delivered; `cancel_epoch` becomes 1 (C `src/runtime/cancellation.c:299`) |
-| T5 | `Running` | `Completed` | `complete(outcome)`; C `sched_complete` (`src/runtime/scheduler.c:730`) | Normal completion, error, or panic |
+| T4 | `Running` | `CancelRequested` | Rust `request_cancel*`; C `asx_task_cancel_reason_internal` (`src/runtime/cancellation.c:148`) | Cancel delivered; `cancel_epoch` becomes 1 (C `src/runtime/cancellation.c:300`) |
+| T5 | `Running` | `Completed` | `complete(outcome)`; C `sched_complete` (`src/runtime/scheduler.c:745`) | Normal completion, error, or panic |
 | T6 | `CancelRequested` | `CancelRequested` | `request_cancel*` (`src/record/task.rs:735`) | **Strengthening**: reason strengthened, cleanup budgets met; not a new cancel |
-| T7 | `CancelRequested` | `Cancelling` | Rust `acknowledge_cancel()` (`src/record/task.rs:1341`); C `asx_checkpoint` (`src/runtime/cancellation.c:617`) | Unmasked checkpoint; cleanup budget becomes the task's budget, `polls_remaining` set (C applies it after the acknowledging poll, `src/runtime/lifecycle.c:509`) |
+| T7 | `CancelRequested` | `Cancelling` | Rust `acknowledge_cancel()` (`src/record/task.rs:1341`); C `asx_checkpoint` (`src/runtime/cancellation.c:619`) | Unmasked checkpoint; cleanup budget becomes the task's budget, `polls_remaining` set (C applies it after the acknowledging poll, `src/runtime/lifecycle.c:509`) |
 | T8 | `CancelRequested` | `Completed` | `complete(outcome)` | **Outcome is `Cancelled(reason)`**: Rust maps `Ok`/`Err` in any cancel state to `Cancelled(reason)` (`src/record/task.rs:1267`); C likewise (`asx_task_cancel_dominates_internal`, `src/runtime/scheduler.c:404`). `Panicked` passes through. Exception in both: a task spawned inside another task's poll that acknowledged a cancel arriving after its first poll keeps its value (Rust `classify_spawn_completion`, `src/runtime/task_handle.rs:173`) |
 | T9 | `Cancelling` | `Cancelling` | `request_cancel*` (`src/record/task.rs:751`) | **Strengthening**: as T6; the met budget also becomes the task's budget |
-| T10 | `Cancelling` | `Finalizing` | Rust `cleanup_done()` (`src/record/task.rs:1378`); C `asx_task_finalize` (`src/runtime/cancellation.c:786`) | Cleanup finished. Rust's lab takes it when a task in a cancel state finishes its poll with `Ok` (`src/lab/runtime.rs:4876`; other results go through T11); C takes it at the same point in every scheduler (`src/runtime/cancellation.c:867` `asx_task_complete_state_internal`), or when the task calls `asx_task_finalize` itself; T11 is left for a panic (row `rule.cancel.drain`) |
+| T10 | `Cancelling` | `Finalizing` | Rust `cleanup_done()` (`src/record/task.rs:1378`); C `asx_task_finalize` (`src/runtime/cancellation.c:788`) | Cleanup finished. Rust's lab takes it when a task in a cancel state finishes its poll with `Ok` (`src/lab/runtime.rs:4876`; other results go through T11); C takes it at the same point in every scheduler (`src/runtime/cancellation.c:869` `asx_task_complete_state_internal`), or when the task calls `asx_task_finalize` itself; T11 is left for a panic (row `rule.cancel.drain`) |
 | T11 | `Cancelling` | `Completed` | `complete(outcome)` | `Ok`/`Err` become `Cancelled(reason)` as in T8; a panic stays `Panicked` |
 | T12 | `Finalizing` | `Finalizing` | `request_cancel*` (`src/record/task.rs:777`) | **Strengthening**: as T9 |
 | T13 | `Finalizing` | `Completed` | Rust `finalize_done()` (`src/record/task.rs:1416`); C at the next dispatch (`src/runtime/scheduler.c:1254`) | Rust returns a `CancelWitness` (phase Completed); outcome is `Cancelled(reason)` |
 
-**Strengthening (T6, T9, T12):** Not state changes. Cancel reason strengthened via `CancelReason::strengthen` (`src/types/cancel.rs:956`; §6.4). Cleanup budget combined via `Budget::combine` (min on deadline and quotas, max on priority). Both leave `cancel_epoch` unchanged (C `src/runtime/cancellation.c:261`).
+**Strengthening (T6, T9, T12):** Not state changes. Cancel reason strengthened via `CancelReason::strengthen` (`src/types/cancel.rs:956`; §6.4). Cleanup budget combined via `Budget::combine` (min on deadline and quotas, max on priority). Both leave `cancel_epoch` unchanged (C `src/runtime/cancellation.c:262`).
 
 ### 4.4 Forbidden Transitions (23 Must-Fail)
 
@@ -309,13 +309,13 @@ independently owned runtime storage.
 > **Superseded by `asupersync_v4_formal_semantics.md` §3.2 `CANCEL-ACKNOWLEDGE` (`rule.cancel.acknowledge` #2), `CHECKPOINT-MASKED` (`rule.cancel.checkpoint_masked` #10) and §6 PROG-CANCEL (`prog.cancel.drains` #9); C status: see C_REFINEMENT_MAP.md rows `rule.cancel.acknowledge`, `rule.cancel.checkpoint_masked` (Variant) and `prog.cancel.drains` (Partial).**
 
 1. A cancel request moves the task to `CancelRequested` and wakes it so it can reach a checkpoint
-2. Task does **not** acknowledge the cancel until a checkpoint: Rust `Cx::checkpoint` (`src/cx/cx.rs:2749`), C `asx_checkpoint` (`src/runtime/cancellation.c:617`). C has no `asx_is_cancelled`
+2. Task does **not** acknowledge the cancel until a checkpoint: Rust `Cx::checkpoint` (`src/cx/cx.rs:2749`), C `asx_checkpoint` (`src/runtime/cancellation.c:619`). C has no `asx_is_cancelled`
 3. Between `CancelRequested` and acknowledgement, task continues normal poll logic
 4. Once acknowledged at an unmasked checkpoint, the task transitions to `Cancelling` and its cleanup budget becomes its budget (`acknowledge_cancel`, `src/record/task.rs:1341`). Under a mask (depth > 0, bounded by 64 in both) the cancel stays pending; neither engine consumes mask per checkpoint as the spec does (Variant)
 5. A spent cleanup budget only strengthens the reason to `PollQuota` (lab, `src/lab/runtime.rs:4664`; advisory in production, `src/runtime/scheduler/three_lane.rs:1273`): Rust never force-completes a task. C's opt-in `cleanup_hard_bound` does (a deviation excluded from parity, bd-9kll.3.2)
 6. **A task that completes while `CancelRequested` (or later) does not keep its natural outcome: `Ok`/`Err` become `Cancelled(reason)`** (T8; the first extraction said the opposite). The exception is in T8
 
-The synchronous C guard `asx_task_masked` (`src/runtime/cancellation.c:757`;
+The synchronous C guard `asx_task_masked` (`src/runtime/cancellation.c:759`;
 public contract `include/asx/runtime/runtime.h:702-712`) calls its body once
 under one additional mask level and releases that level on every C return,
 including an error or `ASX_E_PENDING`. It returns the body's status unless
@@ -343,7 +343,7 @@ unconditional liveness or the masked serialized async-finalizer barrier.
 
 ### 4.6 Poll Contract
 
-C has no `ASX_POLL_*` codes. A C poll function (`asx_task_poll_fn`, `include/asx/runtime/runtime.h:88`) returns an `asx_status`, mapped in `sched_poll_slot` (`src/runtime/scheduler.c:1034`):
+C has no `ASX_POLL_*` codes. A C poll function (`asx_task_poll_fn`, `include/asx/runtime/runtime.h:88`) returns an `asx_status`, mapped in `sched_poll_slot` (`src/runtime/scheduler.c:1049`):
 
 | Poll Return | Meaning | State Effect |
 |------------|---------|-------------|
@@ -582,7 +582,7 @@ Properties (in severity; on payloads the left bias makes join non-commutative, a
 region_outcome = fold(join, default, [child_1_outcome, ..., child_n_outcome, finalizer outcomes...])
 ```
 
-Rust folds each completed task's and finalizer's outcome into the region's `close_outcome` (`record_close_outcome`, `src/record/region.rs:1144`, called at `src/runtime/state.rs:8521`). With nothing folded, the default is `Cancelled(reason)` if the region was cancelled and `Ok` otherwise (`src/record/region.rs:1820`), so an empty region's outcome is not always `Ok`. The spec's form is `R[r].policy.aggregate(child_outcomes, finalizer_outcomes)`. C folds all completed task severities, including explicit cleanup tasks (`src/runtime/lifecycle.c:712-719`), and exposes the recorded result through `asx_region_get_close_outcome` (`src/runtime/quiescence.c:475`) even before Closed. With no recorded task outcome, the getter returns `ASX_E_NOT_FOUND` until Closed, then applies the same cancellation/Ok default (`src/runtime/quiescence.c:424-427`). C callbacks return void, so there is no separate finalizer outcome or Rust-style payload. The outcome-aware body close in §3.2 does not supply a typed Scope factory, and vocabulary v2 has no region-outcome observation (`bd-9kll.3.4`, `bd-9kll.3.14`).
+Rust folds each completed task's and finalizer's outcome into the region's `close_outcome` (`record_close_outcome`, `src/record/region.rs:1144`, called at `src/runtime/state.rs:8521`). With nothing folded, the default is `Cancelled(reason)` if the region was cancelled and `Ok` otherwise (`src/record/region.rs:1820`), so an empty region's outcome is not always `Ok`. The spec's form is `R[r].policy.aggregate(child_outcomes, finalizer_outcomes)`. C folds all completed task severities, including explicit cleanup tasks (`src/runtime/lifecycle.c:712-719`), and exposes the recorded result through `asx_region_get_close_outcome` (`src/runtime/quiescence.c:480`) even before Closed. With no recorded task outcome, the getter returns `ASX_E_NOT_FOUND` until Closed, then applies the same cancellation/Ok default (`src/runtime/quiescence.c:424-427`). C callbacks return void, so there is no separate finalizer outcome or Rust-style payload. The outcome-aware body close in §3.2 does not supply a typed Scope factory, and vocabulary v2 has no region-outcome observation (`bd-9kll.3.4`, `bd-9kll.3.14`).
 
 The value returned by Rust's Scope region body is a separate result
 (`src/cx/scope.rs:877-932`). It selects normal close, supplied-reason cancel or
@@ -980,7 +980,7 @@ Optional window-based coalescing (`CoalescingConfig`, defaults off, 1 ms window,
 
 ## 11. Deterministic Scheduler Semantics
 
-> **Partly superseded by `asupersync_v4_formal_semantics.md` §1.11 (lanes, [Implementation]), §2.4 (`SchedulerState`, normative: a task is in at most one lane, lanes have strict priority, timed ties broken deterministically), §3.0 `ENQUEUE` / `SCHEDULE-STEP` and §5 INV-SCHED-LANES (none in the Canonical Rule Index), with the "Scheduler fairness" `pick_next` pseudo-code and bounded-fairness lemma (explanatory only) and §6 PROG-CANCEL (`prog.cancel.drains` #9); C status: see C_REFINEMENT_MAP.md supplementary rows "§1.11 lanes, §3.0 ENQUEUE, §5 INV-SCHED-LANES" (Variant) and "§3.0 SCHEDULE-STEP" (Partial), and row `prog.cancel.drains` (Partial).** This section describes Rust's production multi-worker `ThreeLaneScheduler` (`src/runtime/scheduler/three_lane.rs`, "TL" below). **C does not port it.** C ports the single-worker `LabScheduler` of Rust's lab runtime (`src/lab/runtime.rs:6064`), which the fixtures capture: `src/runtime/lab_dispatch.c` has a cancel lane and a ready lane, the cancel-streak limit 16, one xorshift64 draw per step and the RNG tie-break, and no timed lane. C's round-robin `asx_scheduler_run` (`src/runtime/scheduler.c:1502`) has no lanes. C has no governor, work stealing, fairness certificate, adaptive streak or spin/yield/park; `docs/CHANNEL_TIMER_SEMANTICS.md` §3 records these as not implemented. Two Rust facts the spec text does not match: no non-test Rust code at `5e60b1c4c` feeds the timed lane (no caller of `inject_timed`, `schedule_local_timed` or the lab's `schedule_timed` outside tests was found), and the cancel-streak fallback contradicts §2.4's strict lane priority.
+> **Partly superseded by `asupersync_v4_formal_semantics.md` §1.11 (lanes, [Implementation]), §2.4 (`SchedulerState`, normative: a task is in at most one lane, lanes have strict priority, timed ties broken deterministically), §3.0 `ENQUEUE` / `SCHEDULE-STEP` and §5 INV-SCHED-LANES (none in the Canonical Rule Index), with the "Scheduler fairness" `pick_next` pseudo-code and bounded-fairness lemma (explanatory only) and §6 PROG-CANCEL (`prog.cancel.drains` #9); C status: see C_REFINEMENT_MAP.md supplementary rows "§1.11 lanes, §3.0 ENQUEUE, §5 INV-SCHED-LANES" (Variant) and "§3.0 SCHEDULE-STEP" (Partial), and row `prog.cancel.drains` (Partial).** This section describes Rust's production multi-worker `ThreeLaneScheduler` (`src/runtime/scheduler/three_lane.rs`, "TL" below). **C does not port it.** C ports the single-worker `LabScheduler` of Rust's lab runtime (`src/lab/runtime.rs:6064`), which the fixtures capture: `src/runtime/lab_dispatch.c` has a cancel lane and a ready lane, the cancel-streak limit 16, one xorshift64 draw per step and the RNG tie-break, and no timed lane. C's round-robin `asx_scheduler_run` (`src/runtime/scheduler.c:1517`) has no lanes. C has no governor, work stealing, fairness certificate, adaptive streak or spin/yield/park; `docs/CHANNEL_TIMER_SEMANTICS.md` §3 records these as not implemented. Two Rust facts the spec text does not match: no non-test Rust code at `5e60b1c4c` feeds the timed lane (no caller of `inject_timed`, `schedule_local_timed` or the lab's `schedule_timed` outside tests was found), and the cancel-streak fallback contradicts §2.4's strict lane priority.
 
 ### 11.1 Three-Lane Architecture
 
@@ -1108,7 +1108,7 @@ Production only (TL constants at `src/runtime/scheduler/three_lane.rs:195`):
 | Yield | 2 | Thread yield (OS scheduler cooperative) |
 | Park | until woken | Park only if `enable_parking` (default true). Timeout = min(timer-driver deadline, local timed, global timed); a follower uses only the local deadline; an already-due deadline parks 1 ns; no deadline parks without timeout (`src/runtime/scheduler/three_lane.rs:5814`). Before backoff, the I/O leader blocks in the reactor for up to 250 ms |
 
-C has none: native idle drains wakers, jumps the virtual clock or blocks for at most 1000 ms (`src/runtime/scheduler.c:966`); the lab auto-advances the clock.
+C has none: native idle drains wakers, jumps the virtual clock or blocks for at most 1000 ms (`src/runtime/scheduler.c:981`); the lab auto-advances the clock.
 
 ### 11.11 Queue Data Structures
 
@@ -1142,7 +1142,7 @@ C lab lanes are static arrays of `8 * ASX_MAX_TASKS` entries; overflow fails the
 
 | Interaction | Behavior |
 |-------------|----------|
-| Task cancelled with pending timer | A `Sleep` under a task context completes early when its task has a cancel whose kind is not Timeout or Deadline and an unmasked checkpoint reports it; it then cancels its registration (also on drop). C: `sleep_observes_cancel` (`src/time/sleep.c:50`) and `asx_task_cancel_timer` (`src/runtime/scheduler.c:582`) |
+| Task cancelled with pending timer | A `Sleep` under a task context completes early when its task has a cancel whose kind is not Timeout or Deadline and an unmasked checkpoint reports it; it then cancels its registration (also on drop). C: `sleep_observes_cancel` (`src/time/sleep.c:50`) and `asx_task_cancel_timer` (`src/runtime/scheduler.c:593`) |
 | Timer fires for cancelled task | For a Timeout or Deadline cancel the sleep runs to its deadline (fixture `budget-deadline-sleep-checkpoint-001`) and the cancel is acknowledged at the next checkpoint. For other kinds the wake comes from the cancel, not the timer |
 | Region closing with timers pending | Unverified: no region code touches the timer driver. Fixture `region-lifecycle-close-cancels-children-001` shows a sleeper cancelled when its region closes |
 
@@ -1203,7 +1203,7 @@ Fixture `quiescence-pending-timer-001` ends `quiescent: true` with both its regi
 
 ### 13.2 Quiescence Checks
 
-C checks quiescence per region: `asx_quiescence_check` (`src/runtime/quiescence.c:144`) and the Q1–Q4 report `asx_quiescence_check_detailed` (`src/runtime/quiescence.c:170`). The codes C actually returns are given first; the first extraction's codes, in brackets, are never returned.
+C checks quiescence per region: `asx_quiescence_check` (`src/runtime/quiescence.c:147`) and the Q1–Q4 report `asx_quiescence_check_detailed` (`src/runtime/quiescence.c:173`). The codes C actually returns are given first; the first extraction's codes, in brackets, are never returned.
 
 | Check | Condition | Error if Violated |
 |-------|-----------|-------------------|
@@ -1230,7 +1230,7 @@ If finalization encounters unresolved obligations:
 
 ### 13.5 Runtime Shutdown Sequence
 
-The Rust runtime shutdown sequence was not re-verified at `5e60b1c4c` (unverified); a Rust region close command is `cancel_request` plus `advance_region_state` (`src/runtime/state.rs:5004`). C's explicit cancelling subtree shutdown is `asx_region_drain` (`src/runtime/quiescence.c:401`); it is separate from the outcome-aware body finish in §3.2:
+The Rust runtime shutdown sequence was not re-verified at `5e60b1c4c` (unverified); a Rust region close command is `cancel_request` plus `advance_region_state` (`src/runtime/state.rs:5004`). C's explicit cancelling subtree shutdown is `asx_region_drain` (`src/runtime/quiescence.c:405`); it is separate from the outcome-aware body finish in §3.2:
 
 1. Every `Open` region of the subtree moves to `Closing`, parents first
 2. Every live task of the subtree is cancelled with `ParentCancelled` (task-only `asx_cancel_propagate`; the regions' reasons are not set)

@@ -71,38 +71,38 @@ static int runtime_io_backend_supported(asx_io_backend backend) {
     return 0;
 }
 
-static int runtime_has_pending_obligations(void) {
+static int runtime_has_pending_obligations(const asx_kernel *k) {
     uint32_t i;
 
     for (i = 0; i < g_obligation_count; i++) {
         /* ASX_CHECKPOINT_WAIVER("bounded arena scan over static obligation slots") */
-        if (!g_obligations[i].alive) continue;
-        if (g_obligations[i].state == ASX_OBLIGATION_RESERVED) return 1;
+        if (!k->obligations[i].alive) continue;
+        if (k->obligations[i].state == ASX_OBLIGATION_RESERVED) return 1;
     }
 
     return 0;
 }
 
-static int runtime_has_live_tasks(void) {
+static int runtime_has_live_tasks(const asx_kernel *k) {
     uint32_t i;
 
     for (i = 0; i < g_task_count; i++) {
         /* ASX_CHECKPOINT_WAIVER("bounded arena scan over static task slots") */
-        if (!g_tasks[i].alive) continue;
-        if (asx_task_is_terminal(g_tasks[i].state)) continue;
+        if (!k->tasks[i].alive) continue;
+        if (asx_task_is_terminal(k->tasks[i].state)) continue;
         return 1;
     }
 
     return 0;
 }
 
-static int runtime_has_pending_region_cleanup(void) {
+static int runtime_has_pending_region_cleanup(const asx_kernel *k) {
     uint32_t i;
 
     for (i = 0; i < g_region_count; i++) {
         /* ASX_CHECKPOINT_WAIVER("bounded arena scan over static region slots") */
-        if (!g_regions[i].alive) continue;
-        if (asx_cleanup_pending(&g_regions[i].cleanup) != 0u) return 1;
+        if (!k->regions[i].alive) continue;
+        if (asx_cleanup_pending(&k->regions[i].cleanup) != 0u) return 1;
     }
 
     return 0;
@@ -110,13 +110,13 @@ static int runtime_has_pending_region_cleanup(void) {
 
 /* Rust's RegionState::is_closing (record/region.rs:162-164): Closing,
  * Draining or Finalizing. An Open region is not closing. */
-static int runtime_has_closing_region(void) {
+static int runtime_has_closing_region(const asx_kernel *k) {
     uint32_t i;
 
     for (i = 0; i < g_region_count; i++) {
         /* ASX_CHECKPOINT_WAIVER("bounded arena scan over static region slots") */
-        if (!g_regions[i].alive) continue;
-        if (g_regions[i].state != ASX_REGION_OPEN && g_regions[i].state != ASX_REGION_CLOSED) {
+        if (!k->regions[i].alive) continue;
+        if (k->regions[i].state != ASX_REGION_OPEN && k->regions[i].state != ASX_REGION_CLOSED) {
             return 1;
         }
     }
@@ -419,12 +419,12 @@ uint32_t asx_runtime_obligation_count(const asx_runtime *rt) {
  * the deferred spawns and cancel commands are the lab's mailboxes. */
 int asx_runtime_is_quiescent(const asx_runtime *rt) {
     if (rt == NULL || !asx_runtime_is_initialized(rt)) return 0;
-    if (runtime_has_live_tasks()) return 0;
-    if (runtime_has_pending_obligations()) return 0;
+    if (runtime_has_live_tasks(asx_kernel_for_tag(rt->tag))) return 0;
+    if (runtime_has_pending_obligations(asx_kernel_for_tag(rt->tag))) return 0;
     /* ASX_ANALYZER_WAIVER("config-dependent: 0 without ASX_HAS_NATIVE_IO_DRIVER") */
     if (asx_runtime_io_registration_count(rt) != 0u) return 0;
-    if (runtime_has_pending_region_cleanup()) return 0;
-    if (runtime_has_closing_region()) return 0;
+    if (runtime_has_pending_region_cleanup(asx_kernel_for_tag(rt->tag))) return 0;
+    if (runtime_has_closing_region(asx_kernel_for_tag(rt->tag))) return 0;
     if (asx_lab_admissions_pending() || asx_lab_region_commands_pending() ||
         asx_lab_handle_cancels_pending()) {
         return 0;
