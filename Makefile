@@ -2722,6 +2722,20 @@ fuzz-parsers-replay: $(LIB_A)
 	done
 	@echo "[asx] fuzz-parsers-replay: $(words $(FUZZ_PARSER_TARGETS)) harnesses ran their seeds"
 
+# fuzz-parsers-soak — the harnesses for FUZZ_PARSERS_SOAK_SECONDS each from the
+# committed seeds (bd-9kll.16.3, tools/ci/run_fuzz_soak.sh). A harness is
+# started again after a crash so one finding does not end its time; the
+# findings are the files of $(FUZZ_PARSERS_DIR)/soak/<TARGET>/crashes (it
+# fails if there is one), the grown corpus is .../corpus, and the table of
+# executions and coverage is .../summary.md. nightly.yml runs it per harness
+# (FUZZ_PARSER_TARGETS=<one> selects one).
+FUZZ_PARSERS_SOAK_SECONDS ?= 600
+.PHONY: fuzz-parsers-soak
+fuzz-parsers-soak: fuzz-parsers
+	@bash tools/ci/run_fuzz_soak.sh --seconds $(FUZZ_PARSERS_SOAK_SECONDS) \
+		--out $(FUZZ_PARSERS_DIR)/soak --bin-dir $(FUZZ_PARSERS_DIR)/bin \
+		--seeds $(FUZZ_PARSERS_SEEDS) $(FUZZ_PARSER_TARGETS)
+
 # parser-differential — the same bytes to asupersync's parser and to ours
 # (bd-9kll.16.2). twin_run parse-fuzz writes a seeded corpus and the Rust
 # outcomes (tools/twin_run/src/parsediff.rs), the ASX_DIFF_HTTP_REQUEST,

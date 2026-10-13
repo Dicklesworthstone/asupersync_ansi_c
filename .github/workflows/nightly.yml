@@ -7,6 +7,7 @@
 #   fuzz-nightly             Extended C differential fuzzing (100K iterations)
 #   fuzz-rust-differential   Rust-vs-C differential fuzzing over DSL v2, 5 x 4000 scenarios (bd-ij9w)
 #   fuzz-metamorphic         M1-M4 over generated scenarios, 5 x 50000 cases (bd-9kll.12.1)
+#   fuzz-parsers-soak        The 12 libFuzzer parser harnesses, 20 min each from the committed corpus (bd-9kll.16.3)
 #   e2e-extended             Full e2e suite including vertical lanes
 #   schema-check             Strict schema validation of all fixtures
 # =============================================================================
@@ -159,6 +160,68 @@ jobs:
           name: fuzz-metamorphic-${{ matrix.shard }}-${{ env.ASX_CI_RUN_TAG }}
           path: build/metamorphic/
           if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # fuzz-parsers-soak — each parser harness of tests/fuzz/fuzz_parsers.c under
+  # libFuzzer + ASan + UBSan for 20 minutes, one runner each, from the
+  # committed corpus (tests/fuzz/parsers_seeds, bd-9kll.16.3). A push runs
+  # 60 s of each (ci.yml, fuzz-parsers-smoke); this is the longer exploration,
+  # and not a 24 h soak. A crash, a sanitizer report or a timeout fails the
+  # shard (tools/ci/run_fuzz_soak.sh restarts the harness after it so the
+  # time is spent, and keeps every finding): the crashing inputs are
+  # uploaded as `crashes`, with the log and the grown corpus (what
+  # `-merge=1` folds into the committed seeds; a new crash is minimized,
+  # committed as a regression seed and fixed).
+  # ---------------------------------------------------------------------------
+  fuzz-parsers-soak:
+    name: "fuzz: parser soak (${{ matrix.target }}, 20 min)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - HTTP_REQUEST
+          - HTTP_RESPONSE
+          - WEBSOCKET
+          - BASE64
+          - CODEC_JSON
+          - CODEC_BIN
+          - WEB_QUERY
+          - RAPTORQ_OTI
+          - RAPTORQ_DECODE
+          - FRAME_CODECS
+          - RESOLVE_HOST
+          - JSON_READER
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang
+          # libFuzzer's runtime: the generic package where the release has
+          # one, else the one matching the installed clang.
+          sudo apt-get install -y -qq libclang-rt-dev ||
+            sudo apt-get install -y -qq "libclang-rt-$(clang -dumpversion | cut -d. -f1)-dev"
+
+      - name: Soak ${{ matrix.target }} for 20 minutes
+        run: |
+          make fuzz-parsers-soak FUZZ_PARSER_TARGETS=${{ matrix.target }} \
+            FUZZ_PARSERS_SOAK_SECONDS=1200
+
+      - name: Upload findings, log and grown corpus
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-parsers-soak-${{ matrix.target }}-${{ env.ASX_CI_RUN_TAG }}
+          path: |
+            build/fuzz-parsers/soak/summary.md
+            build/fuzz-parsers/soak/${{ matrix.target }}/crashes/
+            build/fuzz-parsers/soak/${{ matrix.target }}/corpus/
+            build/fuzz-parsers/soak/${{ matrix.target }}/log.txt
+          if-no-files-found: ignore
+          retention-days: 14
 
   # ---------------------------------------------------------------------------
   # fuzz-nightly — extended differential fuzzing (100K iterations)
