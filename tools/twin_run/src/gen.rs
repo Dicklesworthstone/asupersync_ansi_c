@@ -54,6 +54,16 @@
 //! children (any policy and restart modes, up to three restarts in a 1 s
 //! or 60 s window, sometimes escalating) and later join it, or leave it to
 //! the drop at its body's end, which aborts it.
+//!
+//! Cancel storms (bd-9kll.4.10): one scenario in sixteen is not drawn from
+//! the stream above but is a storm, from a stream of its own (see
+//! [`storm_scenario`]): 20 to 40 tasks asleep in a region (some in a child
+//! of it, sometimes at three priorities) that the driver cancels at the
+//! instant 1 to 3 spinners wake. The cancel lane then holds more entries
+//! than the 16 dispatches the lab serves in a row, with the ready lane
+//! never empty, so the streak limit yields to it (LabRuntime's
+//! cancel_streak_limit) and the priority groups of the lanes are exercised.
+//! No scenario above reached more than 10 cancel dispatches in a row.
 
 use serde_json::{Value, json};
 
@@ -125,6 +135,22 @@ fn time_quantum(seed: u64, index: u64) -> u64 {
             90..=96 => 20_000_000,
             _ => 2_000_000_000,
         }
+}
+
+/// Salt of the storm stream. Whether scenario `index` is a storm, and the
+/// storm itself, come from streams that nothing else draws from, so every
+/// scenario that is not a storm stays byte-identical.
+const STORM_SALT: u64 = 0x5702_4D00_0000_0010;
+
+/// One scenario in this many is a cancel storm.
+const STORM_ONE_IN: u64 = 16;
+
+/// The task priorities a storm's sleepers draw from when it has priorities.
+const STORM_PRIORITIES: [u64; 3] = [0, 50, 200];
+
+/// Whether scenario `index` of batch `seed` is a cancel storm.
+fn is_storm(seed: u64, index: u64) -> bool {
+    Rng::new(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ index ^ STORM_SALT).below(STORM_ONE_IN) == 0
 }
 
 const CANCEL_KINDS: [&str; 4] = ["User", "Shutdown", "Timeout", "Deadline"];
@@ -738,8 +764,91 @@ fn some_budget(rng: &mut Rng) -> Value {
     b
 }
 
+/// A cancel storm: 20 to 40 sleepers in `r.storm` (a third of them in its
+/// child `r.kid` half the time), 1 to 3 spinners in `r.main` that sleep
+/// until the instant the driver cancels `r.storm`, then yield 20 to 60
+/// times. A sleep ends at the cancel and the sleeper completes, so the
+/// cancel lane holds the whole crowd at once while the spinners keep the
+/// ready lane non-empty: after 16 consecutive cancel dispatches the lab
+/// serves a spinner, then the cancel lane again. With priorities (two in
+/// five storms) the lane's highest-priority group goes first. The cancel
+/// kind is User or Shutdown, which a sleep acknowledges (Timeout and
+/// Deadline leave it sleeping), so every sleeper is dispatched on the cancel
+/// lane and completes there. A storm uses at most 43 tasks.
+fn storm_scenario(seed: u64, index: u64) -> Value {
+    let mut rng = Rng::new(seed ^ index.wrapping_mul(0xA24B_AED4_963E_E407) ^ STORM_SALT);
+    rng.quantum = time_quantum(seed, index);
+    let q = rng.quantum;
+    let sleepers = 20 + rng.below(21);
+    let spinners = 1 + rng.below(3);
+    let at = q * (1 + rng.below(4));
+    let kid = rng.chance(50);
+    let prioritised = rng.chance(40);
+    let mut regions = vec![
+        json!({"name": "r.main", "parent": "root", "budget": null}),
+        json!({"name": "r.storm", "parent": "r.main", "budget": null}),
+    ];
+    if kid {
+        regions.push(json!({"name": "r.kid", "parent": "r.storm", "budget": null}));
+    }
+    let mut tasks = Vec::new();
+    for i in 0..sleepers {
+        let region = if kid && i % 3 == 0 {
+            "r.kid"
+        } else {
+            "r.storm"
+        };
+        let mut program = vec![json!({"op": "sleep", "ns": q * 1000})];
+        if rng.chance(40) {
+            program.push(json!({"op": "checkpoint"}));
+        }
+        let budget = if prioritised {
+            json!({"priority": *rng.pick(&STORM_PRIORITIES)})
+        } else {
+            Value::Null
+        };
+        tasks.push(json!({
+            "name": format!("t.s{i}"),
+            "region": region,
+            "budget": budget,
+            "program": program,
+        }));
+    }
+    for i in 0..spinners {
+        let mut program = vec![json!({"op": "sleep_until", "at_ns": at})];
+        for _ in 0..20 + rng.below(41) {
+            program.push(json!({"op": "yield"}));
+        }
+        tasks.push(json!({
+            "name": format!("t.r{i}"),
+            "region": "r.main",
+            "budget": null,
+            "program": program,
+        }));
+    }
+    let kind = if rng.chance(50) { "User" } else { "Shutdown" };
+    json!({
+        "schema": "asx.scenario.v2",
+        "id": format!("gen-{seed}-{index}-001"),
+        "description": "generated cancel storm (twin_run generate, bd-9kll.4.10)",
+        "unit": "scheduler",
+        "rules": ["inv.determinism.replayable"],
+        "seed": rng.next_u64() % 1_000_000,
+        "lab": {"max_steps": 2000},
+        "regions": regions,
+        "channels": [],
+        "sync": [],
+        "tasks": tasks,
+        "script": [{"at_ns": at, "op": {"op": "cancel_region", "region": "r.storm", "kind": kind}}],
+        "expect": {"kind": "ok"},
+    })
+}
+
 /// Scenario `index` of the batch seeded `seed`.
 pub fn scenario(seed: u64, index: u64) -> Value {
+    if is_storm(seed, index) {
+        return storm_scenario(seed, index);
+    }
     let mut rng = Rng::new(seed ^ index.wrapping_mul(0xA24B_AED4_963E_E407));
     rng.quantum = time_quantum(seed, index);
     // A crowd: more tasks than the C runtime once let wait on one mutex or

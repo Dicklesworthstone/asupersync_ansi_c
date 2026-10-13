@@ -12,6 +12,7 @@
  */
 
 #include "../../../src/runtime/runtime_internal.h"
+#include "../../../src/sync/wait_queue.h"
 #include "test_harness.h"
 #include <asx/actor/supervisor.h>
 #include <asx/asx.h>
@@ -229,6 +230,189 @@ TEST(cancel_lane_is_served_first) {
     budget = asx_budget_from_polls(100);
     ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
     ASSERT_EQ(strcmp(g_order, "BA"), 0);
+}
+
+/* The cancel streak (LR:6324-6373, LAB_CANCEL_STREAK_LIMIT): the cancel
+ * lane is served first for up to 16 consecutive dispatches, then the ready
+ * lane gets one when it has an entry, then the cancel lane again. The
+ * Rust corpus never reached it (its longest run is 10), so this pins it.
+ * Twenty parkers wait on a wait queue nothing wakes (a timer would let an
+ * idle run's auto-advance wake them) and acknowledge a cancel; with a
+ * spinner `R` the ready lane keeps an entry. The order assertions hold for
+ * any seed: every lane here holds one priority. */
+#define STORM_LOG_MAX 200u
+#define STORM_PARKERS 20u
+static char g_storm_log[STORM_LOG_MAX];
+static uint32_t g_storm_n;
+static asx_wait_queue g_storm_q;
+
+typedef struct {
+    char name;
+    uint32_t yields; /* the spinner's remaining yields */
+} storm_task;
+
+static asx_status poll_storm(void *ud, asx_task_id self) {
+    storm_task *p = (storm_task *)ud;
+    asx_checkpoint_result cr;
+    if (g_storm_n < STORM_LOG_MAX) g_storm_log[g_storm_n++] = p->name;
+    if (p->name == 'R') {
+        if (p->yields > 0u) {
+            p->yields--;
+            return ASX_E_PENDING; /* a yield: back to the ready lane */
+        }
+        return ASX_OK;
+    }
+    if (asx_checkpoint(self, &cr) == ASX_OK && cr.cancelled) {
+        asx_wait_queue_leave_current(&g_storm_q);
+        return ASX_OK; /* acknowledged: a cancel-lane dispatch */
+    }
+    (void)asx_wait_queue_park_current(&g_storm_q);
+    return ASX_E_PENDING; /* parked until a wake: only a cancel comes */
+}
+
+/* Run in short slices until every parker has been polled once (so each is
+ * parked, with no ready entry left); returns the distinct parkers polled. */
+static uint32_t storm_settle(asx_region_id r) {
+    uint32_t guard;
+    for (guard = 0; guard < 80u; guard++) {
+        uint32_t seen = 0;
+        uint32_t k;
+        asx_budget budget = asx_budget_from_polls(5u);
+        asx_status st = asx_scheduler_run(r, &budget);
+        (void)st;
+        for (k = 0; k < STORM_PARKERS; k++) {
+            uint32_t j;
+            for (j = 0; j < g_storm_n; j++) {
+                if (g_storm_log[j] == (char)('a' + k)) {
+                    seen++;
+                    break;
+                }
+            }
+        }
+        if (seen == STORM_PARKERS) return seen;
+    }
+    return 0;
+}
+
+static void storm_setup(asx_region_id *r, asx_task_id *parkers, storm_task *tasks, int spin,
+                        uint32_t spin_yields) {
+    uint32_t k;
+    ASSERT_EQ(setup(), ASX_OK);
+    ASSERT_EQ(asx_scheduler_use_lab_dispatch(42u), ASX_OK);
+    memset(g_storm_log, 0, sizeof(g_storm_log));
+    g_storm_n = 0;
+    asx_wait_queue_init(&g_storm_q, NULL);
+    ASSERT_EQ(asx_region_open(r), ASX_OK);
+    for (k = 0; k < STORM_PARKERS; k++) {
+        tasks[k].name = (char)('a' + k);
+        tasks[k].yields = 0u;
+        ASSERT_EQ(asx_task_spawn(*r, poll_storm, &tasks[k], &parkers[k]), ASX_OK);
+    }
+    if (spin) {
+        asx_task_id spinner;
+        tasks[STORM_PARKERS].name = 'R';
+        tasks[STORM_PARKERS].yields = spin_yields;
+        ASSERT_EQ(asx_task_spawn(*r, poll_storm, &tasks[STORM_PARKERS], &spinner), ASX_OK);
+    }
+}
+
+TEST(a_cancel_storm_yields_to_the_ready_lane_after_sixteen_dispatches) {
+    asx_region_id r;
+    asx_task_id parkers[STORM_PARKERS];
+    storm_task tasks[STORM_PARKERS + 1u];
+    asx_budget budget;
+    uint32_t start;
+    uint32_t k;
+
+    storm_setup(&r, parkers, tasks, 1, 400u);
+    ASSERT_EQ(storm_settle(r), STORM_PARKERS);
+    start = g_storm_n;
+    for (k = 0; k < STORM_PARKERS; k++) {
+        ASSERT_EQ(asx_task_cancel(parkers[k], ASX_CANCEL_USER), ASX_OK);
+    }
+    budget = asx_budget_from_polls(30u);
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_E_POLL_BUDGET_EXHAUSTED);
+    ASSERT_TRUE(g_storm_n >= start + 24u);
+    /* 16 cancel-lane dispatches ... */
+    for (k = 0; k < 16u; k++) ASSERT_TRUE(g_storm_log[start + k] != 'R');
+    /* ... then the spinner, although four cancels are still waiting ... */
+    ASSERT_EQ(g_storm_log[start + 16u], 'R');
+    /* ... then the cancel lane again for the rest of the storm ... */
+    for (k = 17u; k < 21u; k++) ASSERT_TRUE(g_storm_log[start + k] != 'R');
+    /* ... and only the spinner after it. */
+    for (k = 21u; k < 24u; k++) ASSERT_EQ(g_storm_log[start + k], 'R');
+}
+
+TEST(a_cancel_storm_with_an_empty_ready_lane_runs_on_past_sixteen) {
+    asx_region_id r;
+    asx_task_id parkers[STORM_PARKERS];
+    storm_task tasks[STORM_PARKERS + 1u];
+    asx_budget budget;
+    uint32_t start;
+    uint32_t k;
+
+    storm_setup(&r, parkers, tasks, 0, 0u);
+    ASSERT_EQ(storm_settle(r), STORM_PARKERS);
+    start = g_storm_n;
+    for (k = 0; k < STORM_PARKERS; k++) {
+        ASSERT_EQ(asx_task_cancel(parkers[k], ASX_CANCEL_USER), ASX_OK);
+    }
+    budget = asx_budget_from_polls(100u);
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
+    /* All twenty acknowledge, back to back: past 16 the ready lane has
+     * nothing to yield to, so the cancel lane is served again. */
+    ASSERT_EQ(g_storm_n, start + STORM_PARKERS);
+    for (k = 0; k < STORM_PARKERS; k++) ASSERT_TRUE(g_storm_log[start + k] != 'R');
+}
+
+/* pop_cancel / pop_ready take the entries at the highest priority in
+ * generation order, at most 256 of them (LAB_GROUP_CAP, PR:759-790), and
+ * the step's value picks entry `r % n` of that group. Twenty live tasks can
+ * never form a 256-entry group (ASX_MAX_TASKS bounds the live tasks), but
+ * entries outlive their task's turn: every schedule_cancel pushes another,
+ * and a task cancelled again leaves its older ones behind. The test pushes
+ * them directly: `n` entries on the cancel lane, the last of them task B's
+ * and every other one task A's. Returns 1 when the pick for `r` is B, 0
+ * when it is A, -1 when the setup or the pick failed. Without the cap,
+ * r = n - 1 would always pick the last entry. */
+static int cap_picks_b(uint32_t n, uint64_t r) {
+    asx_region_id reg;
+    asx_task_id ta;
+    asx_task_id tb;
+    asx_task_slot *sa;
+    asx_task_slot *sb;
+    probe pa = {'A', 0u, 0};
+    probe pb = {'B', 0u, 0};
+    uint32_t slot = 0;
+    uint16_t gen = 0;
+    int cancel = 0;
+    uint32_t i;
+
+    if (setup() != ASX_OK || asx_scheduler_use_lab_dispatch(42u) != ASX_OK) return -1;
+    if (asx_region_open(&reg) != ASX_OK) return -1;
+    if (asx_task_spawn(reg, poll_probe, &pa, &ta) != ASX_OK) return -1;
+    if (asx_task_spawn(reg, poll_probe, &pb, &tb) != ASX_OK) return -1;
+    if (asx_task_slot_lookup(ta, &sa) != ASX_OK || asx_task_slot_lookup(tb, &sb) != ASX_OK) {
+        return -1;
+    }
+    for (i = 0; i + 1u < n; i++) asx_lab_schedule_cancel(sa, 0u);
+    asx_lab_schedule_cancel(sb, 0u);
+    if (asx_lab_dispatch_overflowed()) return -1;
+    if (asx_lab_pick(r, &slot, &gen, &cancel) != 1 || !cancel) return -1;
+    return asx_task_handle_for_slot(slot) == tb ? 1 : 0;
+}
+
+TEST(a_priority_group_is_capped_at_256_entries) {
+    /* A lane this class cannot hold has no such group: the cap is out of
+     * reach, as it is for tasks alone. */
+    if (8u * (uint32_t)ASX_MAX_TASKS < 300u) return;
+    ASSERT_EQ(cap_picks_b(100u, 99u), 1);  /* below the cap: the last entry */
+    ASSERT_EQ(cap_picks_b(256u, 255u), 1); /* a full group: still the last */
+    /* Over the cap the group is the oldest 256, all of them A's, so no
+     * step value reaches B while 257 or more entries wait. */
+    ASSERT_EQ(cap_picks_b(257u, 256u), 0);
+    ASSERT_EQ(cap_picks_b(257u, 5u), 0);
+    ASSERT_EQ(cap_picks_b(300u, 299u), 0);
 }
 
 /* run_with_auto_advance: with nothing scheduled the clock moves to the next
@@ -2432,6 +2616,9 @@ int main(void) {
     RUN_TEST(forced_schedule_begin_refuses_a_second_schedule_and_another_seed);
     RUN_TEST(forced_error_kinds_have_distinct_names);
     RUN_TEST(forced_schedule_refuses_a_run_that_is_not_pristine_or_has_another_seed);
+    RUN_TEST(a_cancel_storm_yields_to_the_ready_lane_after_sixteen_dispatches);
+    RUN_TEST(a_cancel_storm_with_an_empty_ready_lane_runs_on_past_sixteen);
+    RUN_TEST(a_priority_group_is_capped_at_256_entries);
 
     TEST_REPORT();
     return test_failures;

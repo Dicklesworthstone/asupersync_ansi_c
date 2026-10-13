@@ -438,7 +438,10 @@ workflow tries a new seed each day. The generator (`tools/twin_run/src/gen.rs`)
 draws lifecycle, cancellation, budget, obligation, region, task-group,
 mpsc, oneshot, broadcast, watch, mutex, rwlock, semaphore, notify, barrier
 and GenServer (spawn, cast, call, stop) steps, and about one scenario in
-twelve queues 17 to 32 tasks on one lock; it also starts supervisors of one
+twelve queues 17 to 32 tasks on one lock, and one in sixteen is a cancel
+storm (20 to 40 sleepers in a region the driver cancels as spinners wake, so
+the lab serves 16 cancel dispatches in a row and then yields to the ready
+lane); it also starts supervisors of one
 to three children and joins some of them. Race
 groups are generated: a
 same-round tie is drawn from the owner's entropy, which C keeps as Rust's
