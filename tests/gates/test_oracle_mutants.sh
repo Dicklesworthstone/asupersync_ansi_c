@@ -13,6 +13,9 @@
 #   - OK_BODY_CANCELS          an Ok body cancels its normal children -> region-body-ok-*
 #   - EXCEPTIONAL_BODY_NO_CANCEL Err/Panicked close without FailFast    -> region-body-(err|panic)-*
 #   - MASKED_SKIP_UNMASK       callback masking fails to restore       -> cancel-masked-*
+#   - SWEEP_PARKED_DEADLINE_NO_WAKE the sweep never wakes a parked task at its
+#                              deadline (sweep only, compare-sweep)    -> any fixture
+#                              the baseline sweep passes
 # A mutant the corpus does not catch means the fixtures stopped exercising
 # that rule: the gate fails.
 # The raw-ID authorization bypass is tested through actual polling tasks:
@@ -42,9 +45,13 @@ log_case() {
         "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$RUN_ID" "$1" "$2" "$3" "$4" "$5" >>"$LOG"
 }
 
-# run_mutant <macro> <failing fixture family regex>
+# run_mutant <macro> <failing fixture family regex> [compare|compare-sweep]
+# `compare-sweep` runs the corpus under the default sweep scheduler against
+# the known-divergence list (bd-9kll.4.9): the mutant must turn a fixture the
+# baseline passes into a FAIL, which lab dispatch cannot show for a sweep-only
+# line.
 run_mutant() {
-    local macro="$1" family="$2"
+    local macro="$1" family="$2" mode="${3:-compare}"
     local dir="$MUTANT_BUILD_ROOT/$macro"
     local out rc status observed fails
     mkdir -p "$dir"
@@ -56,7 +63,13 @@ run_mutant() {
         failures=$((failures + 1))
         return
     fi
-    out="$(cd "$REPO_ROOT" && "$dir/bin/asx-conformance" compare fixtures/rust_reference_v2/*.json 2>&1)"
+    if [ "$mode" = "compare-sweep" ]; then
+        out="$(cd "$REPO_ROOT" && "$dir/bin/asx-conformance" compare-sweep \
+            --known tests/conformance/sweep_known_divergences.txt \
+            fixtures/rust_reference_v2/*.json 2>&1)"
+    else
+        out="$(cd "$REPO_ROOT" && "$dir/bin/asx-conformance" compare fixtures/rust_reference_v2/*.json 2>&1)"
+    fi
     rc=$?
     printf '%s\n' "$out" >"$dir/compare.log"
     fails="$(grep -cE '^FAIL ' <<<"$out")"
@@ -82,6 +95,10 @@ run_mutant OBLIGATION_DROP_COMMITS 'obligation-'
 run_mutant OK_BODY_CANCELS 'region-body-ok-'
 run_mutant EXCEPTIONAL_BODY_NO_CANCEL 'region-body-(err|panic)-'
 run_mutant MASKED_SKIP_UNMASK 'cancel-masked-'
+# Lab dispatch never runs the sweep's parked-deadline wake, so only the sweep
+# comparison can see this one; the list's divergences keep failing as KNOWN,
+# so any FAIL line is a fixture the baseline passes.
+run_mutant SWEEP_PARKED_DEADLINE_NO_WAKE '.' compare-sweep
 
 # The scenario parser cannot reach depth 64; the actual public boundary
 # test must catch acceptance of depth 65, without a compile/empty-run pass.

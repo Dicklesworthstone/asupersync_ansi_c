@@ -1,0 +1,52 @@
+# Fixtures whose snapshot or observations differ under the default sweep scheduler
+# (asx-conformance compare-sweep, bd-9kll.4.9), one line each: <scenario_id> <reason>.
+# The fixtures are captured from Rust's lab; the sweep polls in its own order and
+# applies spawns, obligation ops and region commands from a poll at once.
+#
+# Reason prefixes:
+#   order:       the scenario's outcome is decided by the lab's seeded pick or entropy.
+#   lab-model:   it depends on a Rust-lab mailbox (spawn, obligation, region command)
+#                the sweep does not model; Rust's production behaviour is not covered
+#                by the corpus.
+#   drift bd-N:  a real divergence from Rust, tracked by bead N; the entry leaves this
+#                file when the bead lands (the runner fails a listed fixture that now
+#                matches).
+#   undiagnosed: not shown to be either; tracked by the named bead.
+#
+# A fixture that diverges and is not listed FAILs; one listed that now matches is
+# STALE and fails too.
+
+actor-cancel-after-batch-drains-call-001 drift bd-9kll.4.12: a worker spawned into a region opened this round is skipped for the round, so the parent's cancel lands first
+actor-cancel-before-start-drains-001 order: seed 2 puts the parent's two yields and the cancel before the server's first run; the sweep runs worker and server in the round they are spawned
+actor-cancel-caller-and-server-001 drift bd-9kll.4.12: a worker spawned into a region opened this round is skipped for the round, so the parent's cancel lands first
+actor-cancel-idle-server-001 drift bd-9kll.4.12: a worker spawned into a region opened this round is skipped for the round, so the parent's cancel lands first
+actor-refused-reply-before-sleep-001 lab-model: a refused server spawn keeps a handle only under lab dispatch (refused at admission); the sweep returns the error at the spawn
+actor-spawn-in-closing-region-001 lab-model: a refused server spawn keeps a handle only under lab dispatch (refused at admission); the sweep returns the error at the spawn
+budget-quota-cx-reason-at-completion-001 drift bd-9kll.4.13: poll-quota exhaustion is stamped (region, task, now), not with CancelReason::poll_quota() defaults
+budget-quota-cx-reason-reconciled-001 drift bd-9kll.4.13: poll-quota exhaustion is stamped (region, task, now), so the checkpoint's later stamp loses
+cancel-cleanup-budget-advisory-001 drift bd-9kll.4.13: poll-quota exhaustion is stamped (region, task, now), not with CancelReason::poll_quota() defaults
+cancel-region-request-lane-priority-001 drift bd-9kll.4.15: a checkpoint outside lab dispatch does not strengthen a pending cancel with the passed deadline
+cancel-request-event-reason-001 drift bd-9kll.4.13: poll-quota exhaustion is stamped (region, task, now); the task keeps User where Rust ends PollQuota
+cancel-subtree-order-after-child-close-001 lab-model: close_region from a poll is a deferred lab command and the child ends ok; the sweep applies it at once and cancels the child
+lab-dispatch-cached-abort-at-admission-001 lab-model: Rust's handle-cancel queue and next-step admission order a supervisor's abort before its child starts; the sweep admits at once
+lab-dispatch-cancel-waker-once-001 drift bd-9kll.4.13: poll-quota exhaustion is stamped (region, task, now), not with CancelReason::poll_quota() defaults
+lab-dispatch-mpsc-disconnect-order-001 order: the lab's seeded pick runs the receiver's task to completion before the sender's; the sweep polls in arena order
+lab-dispatch-region-command-advances-region-001 lab-model: Rust's lab region command requests the cancel then advances the region (Draining); the sweep cancels directly (Closing)
+lab-dispatch-region-command-deferred-wakes-001 lab-model: region commands from a poll are deferred to the next step with their wakes; the sweep applies them at once
+lab-dispatch-tie-break-001 order: which of four equal-priority tasks takes the one-permit semaphore first is the lab's seeded tie-break
+obligation-limit-permit-admitted-at-poll-end-001 lab-model: Rust's obligation mailbox applies a poll's obligation ops when the poll returns; the sweep applies them at once
+obligation-limit-permit-release-at-poll-end-001 lab-model: Rust's obligation mailbox applies a poll's obligation ops when the poll returns; the sweep applies them at once
+obligation-quota-refused-semaphore-permit-releases-001 lab-model: Rust's obligation mailbox applies a poll's obligation ops when the poll returns; the sweep applies them at once
+race-deadline-wrapper-cx-reason-001 undiagnosed bd-9kll.4.16: the race's Deadline origin is t.2 under the sweep, the wrapper t.2/g1.timeout in Rust
+race-loser-abort-preserves-fail-fast-001 lab-model: the driver's finish_region is a lab command applied after due timers' wakes have run; the sweep cancels before the race members are polled
+race-owner-cancel-cx-reason-001 lab-model: group members spawned into a cancelled region are refused at the next step's admission; the sweep refuses at the spawn and the op cannot continue
+region-finalizer-time-budget-advisory-001 drift bd-9kll.4.14: pre-poll deadline enforcement cancels a finalizer, for which Rust arms no deadline timer
+region-lifecycle-closed-child-spawn-001 drift bd-9kll.4.13: poll-quota exhaustion is stamped (region, task, now); Rust's task ends PollQuota, the sweep's completes ok
+region-limits-group-member-refused-001 lab-model: spawn mailbox: admission is at the next step; the sweep refuses at the spawn and the group op cannot continue
+region-limits-late-admission-001 lab-model: spawn mailbox: live tasks are counted at the next step's admission, the spawner done; the sweep counts at the spawn
+region-limits-refused-spawn-aborted-001 lab-model: spawn mailbox: a refusal is classified at admission by the join reason; the sweep refuses at the spawn
+task-groups-join-all-region-cancel-001 undiagnosed bd-9kll.4.16: members end Cancelled(Timeout) under the sweep and ok in Rust
+task-groups-race-deadline-tie-001 order: the same-round race tie is drawn from the lab's per-task seeded entropy; the sweep has no seed and takes the lowest index
+task-groups-race-same-round-tie-001 order: the same-round race tie is drawn from the lab's per-task seeded entropy; the sweep has no seed and takes the lowest index
+task-groups-refused-members-001 lab-model: spawn mailbox: members of a closing region are refused at the next step and joined cancelled; the sweep refuses at the spawn
+task-try-join-refused-pending-001 lab-model: Rust queues the spawn and delivers the refusal at the next step (try_join NOT_COMPLETED first); the sweep reports it at the spawn
