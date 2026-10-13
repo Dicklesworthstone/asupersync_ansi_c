@@ -66,6 +66,12 @@ ASX_API int asx_socket_addr_eq(const asx_socket_addr *a, const asx_socket_addr *
 #if (ASX_RESOLVER_CACHE_CAPACITY) < 1 || (ASX_RESOLVER_HOST_CAPACITY) < 1
 #error "ASX_RESOLVER_CACHE_CAPACITY and ASX_RESOLVER_HOST_CAPACITY must be at least 1"
 #endif
+#if (ASX_UDP_QUEUE_CAPACITY) < 1 || (ASX_UDP_PAYLOAD_CAPACITY) < 1
+#error "ASX_UDP_QUEUE_CAPACITY and ASX_UDP_PAYLOAD_CAPACITY must be at least 1"
+#endif
+#if (ASX_UDP_PAYLOAD_CAPACITY) > (ASX_BUF_CAPACITY)
+#error "ASX_UDP_PAYLOAD_CAPACITY must not exceed ASX_BUF_CAPACITY"
+#endif
 
 /* -------------------------------------------------------------------
  * TCP handle types (forward declarations for cross-references)
@@ -421,6 +427,12 @@ ASX_API int asx_unix_addr_eq(const asx_unix_addr *a, const asx_unix_addr *b);
 #endif
 #if (ASX_MAX_UNIX_DGRAM_SOCKETS) < 1
 #error "ASX_MAX_UNIX_DGRAM_SOCKETS must be at least 1"
+#endif
+#if (ASX_UNIX_DGRAM_QUEUE_CAPACITY) < 1 || (ASX_UNIX_DGRAM_PAYLOAD_CAPACITY) < 1
+#error "ASX_UNIX_DGRAM_QUEUE_CAPACITY and ASX_UNIX_DGRAM_PAYLOAD_CAPACITY must be at least 1"
+#endif
+#if (ASX_UNIX_DGRAM_PAYLOAD_CAPACITY) > (ASX_BUF_CAPACITY)
+#error "ASX_UNIX_DGRAM_PAYLOAD_CAPACITY must not exceed ASX_BUF_CAPACITY"
 #endif
 
 /* -------------------------------------------------------------------

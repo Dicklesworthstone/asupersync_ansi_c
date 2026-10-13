@@ -1377,6 +1377,48 @@ typedef struct {
 #error "ASX_MAX_RUNTIMES must be at most 15 (the handle's runtime tag)"
 #endif
 
+/* Datagram arenas of the in-memory network (bd-dkfs). A UDP or a Unix
+ * datagram socket queues up to *_QUEUE_CAPACITY datagrams of up to
+ * *_PAYLOAD_CAPACITY bytes, and after the socket counts these two tables
+ * are most of what a small network footprint holds. R1 takes two datagrams
+ * of 1536 bytes, a router's MTU class: a larger datagram is refused with
+ * ASX_E_BUFFER_TOO_SMALL and a third queued one with ASX_E_WOULD_BLOCK,
+ * the refusals of the default capacities, reached sooner. Every other
+ * class and an unclassed build keep four datagrams of ASX_BUF_CAPACITY
+ * bytes. The bounds are in net.h. */
+#define ASX_CLASS_R1_MAX_UDP_QUEUE 2u
+#define ASX_CLASS_R1_MAX_UDP_PAYLOAD 1536u
+#define ASX_CLASS_R1_MAX_UNIX_DGRAM_QUEUE 2u
+#define ASX_CLASS_R1_MAX_UNIX_DGRAM_PAYLOAD 1536u
+#ifndef ASX_UDP_QUEUE_CAPACITY
+#if defined(ASX_RESOURCE_CLASS) && ASX_RESOURCE_CLASS == 1
+#define ASX_UDP_QUEUE_CAPACITY ASX_CLASS_R1_MAX_UDP_QUEUE
+#else
+#define ASX_UDP_QUEUE_CAPACITY 4u
+#endif
+#endif
+#ifndef ASX_UDP_PAYLOAD_CAPACITY
+#if defined(ASX_RESOURCE_CLASS) && ASX_RESOURCE_CLASS == 1
+#define ASX_UDP_PAYLOAD_CAPACITY ASX_CLASS_R1_MAX_UDP_PAYLOAD
+#else
+#define ASX_UDP_PAYLOAD_CAPACITY ASX_BUF_CAPACITY
+#endif
+#endif
+#ifndef ASX_UNIX_DGRAM_QUEUE_CAPACITY
+#if defined(ASX_RESOURCE_CLASS) && ASX_RESOURCE_CLASS == 1
+#define ASX_UNIX_DGRAM_QUEUE_CAPACITY ASX_CLASS_R1_MAX_UNIX_DGRAM_QUEUE
+#else
+#define ASX_UNIX_DGRAM_QUEUE_CAPACITY 4u
+#endif
+#endif
+#ifndef ASX_UNIX_DGRAM_PAYLOAD_CAPACITY
+#if defined(ASX_RESOURCE_CLASS) && ASX_RESOURCE_CLASS == 1
+#define ASX_UNIX_DGRAM_PAYLOAD_CAPACITY ASX_CLASS_R1_MAX_UNIX_DGRAM_PAYLOAD
+#else
+#define ASX_UNIX_DGRAM_PAYLOAD_CAPACITY ASX_BUF_CAPACITY
+#endif
+#endif
+
 typedef enum {
     ASX_RUNTIME_PRESET_DEFAULT = 0,
     ASX_RUNTIME_PRESET_CURRENT_THREAD = 1,

@@ -522,6 +522,52 @@ TEST(udp_send_recv_loopback) {
     asx_udp_close(receiver);
 }
 
+/* The datagram arenas' limits are capacity macros (R1 and the x4 lane size
+ * them): a socket queues ASX_UDP_QUEUE_CAPACITY datagrams and refuses the
+ * next with ASX_E_WOULD_BLOCK; a datagram of ASX_UDP_PAYLOAD_CAPACITY bytes
+ * is carried whole and, where that is below the buffer type's capacity, one
+ * byte more is ASX_E_BUFFER_TOO_SMALL. */
+TEST(udp_queue_and_payload_follow_their_capacity_macros) {
+    static uint8_t big[ASX_BUF_CAPACITY];
+    asx_udp_socket sender, receiver;
+    asx_socket_addr sender_addr = asx_socket_addr_loopback(8030);
+    asx_socket_addr recv_addr = asx_socket_addr_loopback(8031);
+    asx_buf src;
+    asx_buf_mut dst;
+    uint32_t written, read_n, i;
+
+    asx_net_reset();
+    memset(big, 0x5a, sizeof(big));
+    ASSERT_EQ(asx_udp_bind(&sender, &sender_addr), ASX_OK);
+    ASSERT_EQ(asx_udp_bind(&receiver, &recv_addr), ASX_OK);
+
+    for (i = 0u; i < (uint32_t)ASX_UDP_QUEUE_CAPACITY; i++) {
+        src = asx_buf_from(big, 8u);
+        ASSERT_EQ(asx_udp_poll_send(sender, &src, &written, &recv_addr), ASX_OK);
+    }
+    src = asx_buf_from(big, 8u);
+    ASSERT_EQ(asx_udp_poll_send(sender, &src, &written, &recv_addr), ASX_E_WOULD_BLOCK);
+    for (i = 0u; i < (uint32_t)ASX_UDP_QUEUE_CAPACITY; i++) {
+        asx_buf_mut_init(&dst);
+        ASSERT_EQ(asx_udp_poll_recv(receiver, &dst, &read_n, NULL), ASX_OK);
+        ASSERT_EQ(read_n, 8u);
+    }
+
+    src = asx_buf_from(big, (uint32_t)ASX_UDP_PAYLOAD_CAPACITY);
+    ASSERT_EQ(asx_udp_poll_send(sender, &src, &written, &recv_addr), ASX_OK);
+    ASSERT_EQ(written, (uint32_t)ASX_UDP_PAYLOAD_CAPACITY);
+    asx_buf_mut_init(&dst);
+    ASSERT_EQ(asx_udp_poll_recv(receiver, &dst, &read_n, NULL), ASX_OK);
+    ASSERT_EQ(read_n, (uint32_t)ASX_UDP_PAYLOAD_CAPACITY);
+#if (ASX_UDP_PAYLOAD_CAPACITY) < (ASX_BUF_CAPACITY)
+    src = asx_buf_from(big, (uint32_t)ASX_UDP_PAYLOAD_CAPACITY + 1u);
+    ASSERT_EQ(asx_udp_poll_send(sender, &src, &written, &recv_addr), ASX_E_BUFFER_TOO_SMALL);
+#endif
+
+    asx_udp_close(sender);
+    asx_udp_close(receiver);
+}
+
 TEST(udp_recv_empty_returns_pending) {
     asx_udp_socket sock;
     asx_socket_addr addr = asx_socket_addr_loopback(8020);
@@ -1240,6 +1286,50 @@ TEST(unix_dgram_send_recv) {
     asx_unix_dgram_close(receiver);
 }
 
+/* As for UDP: the queue and the payload are ASX_UNIX_DGRAM_QUEUE_CAPACITY
+ * datagrams and ASX_UNIX_DGRAM_PAYLOAD_CAPACITY bytes. */
+TEST(unix_dgram_queue_and_payload_follow_their_capacity_macros) {
+    static uint8_t big[ASX_BUF_CAPACITY];
+    asx_unix_dgram sender, receiver;
+    asx_unix_addr send_addr, recv_addr;
+    asx_buf src;
+    asx_buf_mut dst;
+    uint32_t written, read_n, i;
+
+    asx_net_reset();
+    memset(big, 0x5a, sizeof(big));
+    ASSERT_EQ(asx_unix_addr_from_path(&send_addr, "/tmp/cap-send.sock"), ASX_OK);
+    ASSERT_EQ(asx_unix_addr_from_path(&recv_addr, "/tmp/cap-recv.sock"), ASX_OK);
+    ASSERT_EQ(asx_unix_dgram_bind(&sender, &send_addr), ASX_OK);
+    ASSERT_EQ(asx_unix_dgram_bind(&receiver, &recv_addr), ASX_OK);
+
+    for (i = 0u; i < (uint32_t)ASX_UNIX_DGRAM_QUEUE_CAPACITY; i++) {
+        src = asx_buf_from(big, 8u);
+        ASSERT_EQ(asx_unix_dgram_poll_send(sender, &src, &written, &recv_addr), ASX_OK);
+    }
+    src = asx_buf_from(big, 8u);
+    ASSERT_EQ(asx_unix_dgram_poll_send(sender, &src, &written, &recv_addr), ASX_E_WOULD_BLOCK);
+    for (i = 0u; i < (uint32_t)ASX_UNIX_DGRAM_QUEUE_CAPACITY; i++) {
+        asx_buf_mut_init(&dst);
+        ASSERT_EQ(asx_unix_dgram_poll_recv(receiver, &dst, &read_n, NULL), ASX_OK);
+        ASSERT_EQ(read_n, 8u);
+    }
+
+    src = asx_buf_from(big, (uint32_t)ASX_UNIX_DGRAM_PAYLOAD_CAPACITY);
+    ASSERT_EQ(asx_unix_dgram_poll_send(sender, &src, &written, &recv_addr), ASX_OK);
+    ASSERT_EQ(written, (uint32_t)ASX_UNIX_DGRAM_PAYLOAD_CAPACITY);
+    asx_buf_mut_init(&dst);
+    ASSERT_EQ(asx_unix_dgram_poll_recv(receiver, &dst, &read_n, NULL), ASX_OK);
+    ASSERT_EQ(read_n, (uint32_t)ASX_UNIX_DGRAM_PAYLOAD_CAPACITY);
+#if (ASX_UNIX_DGRAM_PAYLOAD_CAPACITY) < (ASX_BUF_CAPACITY)
+    src = asx_buf_from(big, (uint32_t)ASX_UNIX_DGRAM_PAYLOAD_CAPACITY + 1u);
+    ASSERT_EQ(asx_unix_dgram_poll_send(sender, &src, &written, &recv_addr), ASX_E_BUFFER_TOO_SMALL);
+#endif
+
+    asx_unix_dgram_close(sender);
+    asx_unix_dgram_close(receiver);
+}
+
 TEST(unix_dgram_recv_empty_pending) {
     asx_unix_dgram sock;
     asx_unix_addr addr;
@@ -1488,6 +1578,7 @@ int main(void) {
     RUN_TEST(udp_bind_and_local_addr);
     RUN_TEST(udp_connect_and_peer_addr);
     RUN_TEST(udp_send_recv_loopback);
+    RUN_TEST(udp_queue_and_payload_follow_their_capacity_macros);
     RUN_TEST(udp_recv_empty_returns_pending);
     RUN_TEST(udp_send_no_peer_no_dest_fails);
     RUN_TEST(udp_close_makes_dead);
@@ -1529,6 +1620,7 @@ int main(void) {
 
     /* Unix-domain datagram */
     RUN_TEST(unix_dgram_send_recv);
+    RUN_TEST(unix_dgram_queue_and_payload_follow_their_capacity_macros);
     RUN_TEST(unix_dgram_recv_empty_pending);
     RUN_TEST(unix_dgram_close_makes_dead);
 

@@ -68,10 +68,9 @@ static asx_native_handle native_h(uint32_t slot, uint32_t generation) {
 #endif
 
 #define ASX_NET_TCP_ACCEPT_QUEUE_DEPTH ASX_MAX_TCP_STREAMS
-#define ASX_NET_UDP_QUEUE_DEPTH 4u
 
 typedef struct {
-    uint8_t bytes[ASX_BUF_CAPACITY];
+    uint8_t bytes[ASX_UDP_PAYLOAD_CAPACITY];
     uint32_t len;
     asx_socket_addr from;
 } udp_datagram;
@@ -426,7 +425,7 @@ static void mem_wake(asx_task_id *waiter) {
 typedef struct {
     asx_socket_addr local;
     asx_socket_addr peer;
-    udp_datagram queue[ASX_NET_UDP_QUEUE_DEPTH];
+    udp_datagram queue[ASX_UDP_QUEUE_CAPACITY];
     uint32_t generation;
     uint32_t recv_head;
     uint32_t recv_count;
@@ -653,10 +652,10 @@ static asx_status udp_enqueue(udp_socket_slot *dst, const asx_socket_addr *from,
     udp_datagram *packet;
 
     if (dst == NULL || from == NULL || src == NULL) return ASX_E_INVALID_ARGUMENT;
-    if (src->len > ASX_BUF_CAPACITY) return ASX_E_BUFFER_TOO_SMALL;
-    if (dst->recv_count >= ASX_NET_UDP_QUEUE_DEPTH) return ASX_E_WOULD_BLOCK;
+    if (src->len > ASX_UDP_PAYLOAD_CAPACITY) return ASX_E_BUFFER_TOO_SMALL;
+    if (dst->recv_count >= ASX_UDP_QUEUE_CAPACITY) return ASX_E_WOULD_BLOCK;
 
-    tail = (dst->recv_head + dst->recv_count) % ASX_NET_UDP_QUEUE_DEPTH;
+    tail = (dst->recv_head + dst->recv_count) % ASX_UDP_QUEUE_CAPACITY;
     packet = &dst->queue[tail];
     memset(packet, 0, sizeof(*packet));
     packet->from = *from;
@@ -1322,7 +1321,7 @@ asx_status asx_udp_poll_recv_with_cx(asx_udp_socket socket, asx_buf_mut *dst, ui
 
     if (from != NULL) *from = packet->from;
     *bytes_read = to_copy;
-    s->recv_head = (s->recv_head + 1u) % ASX_NET_UDP_QUEUE_DEPTH;
+    s->recv_head = (s->recv_head + 1u) % ASX_UDP_QUEUE_CAPACITY;
     s->recv_count--;
     return ASX_OK;
 }
@@ -1826,17 +1825,15 @@ static uint32_t g_unix_stream_hwm; /* as g_udp_hwm */
 /* Unix-domain datagram arena                                          */
 /* ------------------------------------------------------------------ */
 
-#define ASX_UNIX_DGRAM_QUEUE_DEPTH 4u
-
 typedef struct {
-    uint8_t bytes[ASX_BUF_CAPACITY];
+    uint8_t bytes[ASX_UNIX_DGRAM_PAYLOAD_CAPACITY];
     uint32_t len;
     asx_unix_addr from;
 } unix_dgram_packet;
 
 typedef struct {
     asx_unix_addr local;
-    unix_dgram_packet queue[ASX_UNIX_DGRAM_QUEUE_DEPTH];
+    unix_dgram_packet queue[ASX_UNIX_DGRAM_QUEUE_CAPACITY];
     uint32_t generation;
     uint32_t recv_head;
     uint32_t recv_count;
@@ -2200,7 +2197,7 @@ asx_status asx_unix_dgram_poll_send(asx_unix_dgram socket, const asx_buf *src,
 
     if (src == NULL || bytes_written == NULL || to == NULL || !to->has_path)
         return ASX_E_INVALID_ARGUMENT;
-    if (src->len > ASX_BUF_CAPACITY) return ASX_E_BUFFER_TOO_SMALL;
+    if (src->len > ASX_UNIX_DGRAM_PAYLOAD_CAPACITY) return ASX_E_BUFFER_TOO_SMALL;
 
     sender = unix_dgram_lookup(socket);
     if (sender == NULL) return ASX_E_INVALID_ARGUMENT;
@@ -2216,9 +2213,9 @@ asx_status asx_unix_dgram_poll_send(asx_unix_dgram socket, const asx_buf *src,
         *bytes_written = 0u;
         return ASX_E_PENDING;
     }
-    if (dest->recv_count >= ASX_UNIX_DGRAM_QUEUE_DEPTH) return ASX_E_WOULD_BLOCK;
+    if (dest->recv_count >= ASX_UNIX_DGRAM_QUEUE_CAPACITY) return ASX_E_WOULD_BLOCK;
 
-    tail = (dest->recv_head + dest->recv_count) % ASX_UNIX_DGRAM_QUEUE_DEPTH;
+    tail = (dest->recv_head + dest->recv_count) % ASX_UNIX_DGRAM_QUEUE_CAPACITY;
     packet = &dest->queue[tail];
     memset(packet, 0, sizeof(*packet));
     packet->from = sender->local;
@@ -2255,7 +2252,7 @@ asx_status asx_unix_dgram_poll_recv(asx_unix_dgram socket, asx_buf_mut *dst, uin
 
     if (from != NULL) *from = packet->from;
     *bytes_read = to_copy;
-    s->recv_head = (s->recv_head + 1u) % ASX_UNIX_DGRAM_QUEUE_DEPTH;
+    s->recv_head = (s->recv_head + 1u) % ASX_UNIX_DGRAM_QUEUE_CAPACITY;
     s->recv_count--;
     return ASX_OK;
 }
