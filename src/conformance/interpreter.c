@@ -110,6 +110,7 @@ typedef struct {
         asx_rwlock_waiter rwlock;
         asx_semaphore_waiter sem;
         asx_barrier_waiter barrier;
+        asx_watch_wait watch;
     } wait;
     /* Held mutex guards and semaphore permits, by object name. */
     struct {
@@ -219,6 +220,9 @@ typedef enum { IT_CH_MPSC, IT_CH_ONESHOT, IT_CH_BROADCAST, IT_CH_WATCH, IT_CH_TY
 typedef struct {
     uint32_t task; /* owner, index in g_tasks */
     int open;
+    /* NULL for a declared subscriber; the `as` name of a watch_clone, which
+     * the owner's watch steps then select with `receiver`. */
+    const char *alias;
     asx_oneshot_receiver oneshot;
     asx_broadcast_receiver broadcast;
     asx_watch_receiver watch;
@@ -1285,17 +1289,26 @@ static it_channel *owned_sender(const it_task *t, const char *name, it_ch_type t
     return sender_slot(c, (uint32_t)(t - g_tasks)) >= 0 ? c : NULL;
 }
 
-/* Task `t`'s still-open receiver on channel `name` of `type`, else NULL. */
-static it_receiver *owned_receiver(const it_task *t, const char *name, it_ch_type type) {
+/* Task `t`'s still-open receiver on channel `name` of `type`: its declared
+ * one (`alias` NULL), or the watch clone it named `alias`. Else NULL. */
+static it_receiver *owned_receiver_as(const it_task *t, const char *name, it_ch_type type,
+                                      const char *alias) {
     it_channel *c = channel_by_name(name);
     uint32_t i;
     if (c == NULL || c->type != type) return NULL;
     for (i = 0; i < c->n_receivers; i++) {
-        if (c->receivers[i].task == (uint32_t)(t - g_tasks) && c->receivers[i].open) {
+        const it_receiver *r = &c->receivers[i];
+        if (r->task != (uint32_t)(t - g_tasks) || !r->open) continue;
+        if (alias == NULL ? r->alias == NULL : r->alias != NULL && strcmp(r->alias, alias) == 0) {
             return &c->receivers[i];
         }
     }
     return NULL;
+}
+
+/* Task `t`'s still-open declared receiver on channel `name` of `type`. */
+static it_receiver *owned_receiver(const it_task *t, const char *name, it_ch_type type) {
+    return owned_receiver_as(t, name, type, NULL);
 }
 
 /* Rust's SendPermit drop without send (mpsc.rs:1663): the slot is
@@ -1553,6 +1566,31 @@ static void channel_received(it_task *t, uint32_t idx, const char *op, asx_statu
     observe(t, idx, op, status_node(st), value ? asx_json_new_u64(g_out, v) : ASX_JSON_NONE);
 }
 
+/* A watch_wait_for predicate (DSL §3.6): `value <cmp> than`. */
+typedef struct {
+    const char *cmp;
+    uint64_t than;
+} it_watch_pred;
+
+static int watch_cmp_known(const char *cmp) {
+    static const char *const names[] = {"eq", "ne", "lt", "le", "gt", "ge"};
+    uint32_t i;
+    for (i = 0; cmp != NULL && i < 6u; i++) {
+        if (strcmp(cmp, names[i]) == 0) return 1;
+    }
+    return 0;
+}
+
+static int watch_pred_fn(void *ctx, uint64_t value) {
+    const it_watch_pred *p = (const it_watch_pred *)ctx;
+    if (strcmp(p->cmp, "eq") == 0) return value == p->than;
+    if (strcmp(p->cmp, "ne") == 0) return value != p->than;
+    if (strcmp(p->cmp, "lt") == 0) return value < p->than;
+    if (strcmp(p->cmp, "le") == 0) return value <= p->than;
+    if (strcmp(p->cmp, "gt") == 0) return value > p->than;
+    return strcmp(p->cmp, "ge") == 0 && value >= p->than;
+}
+
 /* Blocking channel steps (DSL §3.6). Returns 1 when `op` is one of them.
  * A call is one poll of the Rust future (the library orders the checks as
  * Rust does) and ASX_E_PENDING keeps the step waiting, the task parked on
@@ -1568,7 +1606,7 @@ static int exec_channel_wait(it_task *t, uint32_t step, uint32_t idx, const char
         it_ch_type type = op[0] == 'o'   ? IT_CH_ONESHOT
                           : op[0] == 'b' ? IT_CH_BROADCAST
                                          : IT_CH_WATCH;
-        it_receiver *r = owned_receiver(t, ch, type);
+        it_receiver *r = owned_receiver_as(t, ch, type, it_str(step, "receiver"));
         if (r == NULL) {
             it_fail_task(t, idx, "receive on a channel this task holds no receiver of");
             *out = STEP_END;
@@ -1595,6 +1633,28 @@ static int exec_channel_wait(it_task *t, uint32_t step, uint32_t idx, const char
             }
             channel_received(t, idx, op, st, st == ASX_OK, v, out);
         }
+        return 1;
+    }
+    if (strcmp(op, "watch_wait_for") == 0) {
+        /* rx.wait_for(&cx, |v| v <cmp> than).await (watch.rs:858): the
+         * predicate first, then changed() on a clone until one passes; the
+         * value is the accepted one, borrowed and marked seen. */
+        it_receiver *r = owned_receiver_as(t, ch, IT_CH_WATCH, it_str(step, "receiver"));
+        it_watch_pred pred;
+        pred.cmp = it_str(step, "cmp");
+        pred.than = 0u;
+        if (r == NULL || !watch_cmp_known(pred.cmp) ||
+            !asx_json_u64(g_in, asx_json_get(g_in, step, "value"), &pred.than)) {
+            it_fail_task(t, idx, "watch_wait_for needs a receiver, a cmp and a value");
+            *out = STEP_END;
+            return 1;
+        }
+        if (t->phase == 0u) {
+            memset(&t->wait.watch, 0, sizeof(t->wait.watch));
+            t->phase = 1u;
+        }
+        st = asx_watch_poll_wait_for(&r->watch, &t->cx, &t->wait.watch, watch_pred_fn, &pred, &v);
+        channel_received(t, idx, op, st, st == ASX_OK, v, out);
         return 1;
     }
     if (strcmp(op, "oneshot_poll_closed") == 0) {
@@ -2432,6 +2492,109 @@ static void race_refused_wrapper(it_task *t, asx_task_id self, uint32_t idx, it_
     (void)st;
 }
 
+/* watch_send_modify's closure: `*value += add`, wrapping (Rust's
+ * wrapping_add on u64). */
+static void watch_add_fn(void *ctx, uint64_t *value) { *value += *(const uint64_t *)ctx; }
+
+/* The watch steps that never suspend (DSL §3.6). Returns 1 when `op` is one
+ * of them, with the step's result in *out. Sender steps use the task's
+ * sender; receiver steps its declared receiver, or the clone `receiver`
+ * names. */
+static int exec_watch_op(it_task *t, uint32_t step, uint32_t idx, const char *label, const char *op,
+                         step_result *out) {
+    const char *ch = it_str(step, "channel");
+    const char *alias = it_str(step, "receiver");
+    asx_status st;
+    uint64_t v = 0;
+
+    *out = STEP_NEXT;
+    if (strcmp(op, "watch_send_modify") == 0 || strcmp(op, "watch_receiver_count") == 0) {
+        it_channel *c = owned_sender(t, ch, IT_CH_WATCH);
+        uint64_t add = 0;
+        int modify = strcmp(op, "watch_send_modify") == 0;
+        if (c == NULL || (modify && !asx_json_u64(g_in, asx_json_get(g_in, step, "add"), &add))) {
+            it_fail_task(t, idx, "watch sender step needs an owned sender (and an add)");
+            *out = STEP_END;
+            return 1;
+        }
+        if (modify) {
+            /* tx.send_modify(|v| *v = v.wrapping_add(add)) (watch.rs:530) */
+            observe_status(t, idx, label, asx_watch_send_modify(&c->watch, watch_add_fn, &add));
+        } else {
+            /* tx.receiver_count() (:627): the value is the count */
+            observe(t, idx, label, status_node(ASX_OK),
+                    asx_json_new_u64(g_out, asx_watch_receiver_count(&c->watch)));
+        }
+        return 1;
+    }
+    if (strcmp(op, "watch_is_closed") == 0) {
+        const char *end = it_str(step, "end");
+        int sender = end != NULL && strcmp(end, "sender") == 0;
+        it_channel *c = sender ? owned_sender(t, ch, IT_CH_WATCH) : NULL;
+        it_receiver *r = !sender && end != NULL && strcmp(end, "receiver") == 0
+                             ? owned_receiver_as(t, ch, IT_CH_WATCH, alias)
+                             : NULL;
+        if (c == NULL && r == NULL) {
+            it_fail_task(t, idx, "watch_is_closed on an end this task does not hold");
+            *out = STEP_END;
+            return 1;
+        }
+        /* tx.is_closed() (:634) / rx.is_closed() (:977), a boolean value */
+        v = c != NULL ? (uint64_t)asx_watch_sender_is_closed(&c->watch)
+                      : (uint64_t)asx_watch_receiver_is_closed(&r->watch);
+        observe(t, idx, label, status_node(ASX_OK), asx_json_new_bool(g_out, v != 0u ? 1 : 0));
+        return 1;
+    }
+    if (strcmp(op, "watch_borrow") == 0 || strcmp(op, "watch_borrow_and_update") == 0 ||
+        strcmp(op, "watch_mark_seen") == 0 || strcmp(op, "watch_has_changed") == 0 ||
+        strcmp(op, "watch_clone") == 0) {
+        it_channel *c = channel_by_name(ch);
+        it_receiver *r = owned_receiver_as(t, ch, IT_CH_WATCH, alias);
+        if (c == NULL || r == NULL) {
+            it_fail_task(t, idx, "watch receiver step on a receiver this task does not hold");
+            *out = STEP_END;
+            return 1;
+        }
+        if (strcmp(op, "watch_borrow") == 0) {
+            /* rx.borrow() (:904): marks nothing seen */
+            st = asx_watch_borrow(&r->watch, &v);
+            observe(t, idx, label, status_node(st),
+                    st == ASX_OK ? asx_json_new_u64(g_out, v) : ASX_JSON_NONE);
+        } else if (strcmp(op, "watch_borrow_and_update") == 0) {
+            /* rx.borrow_and_update() (:917) */
+            st = asx_watch_recv(&r->watch, &v);
+            observe(t, idx, label, status_node(st),
+                    st == ASX_OK ? asx_json_new_u64(g_out, v) : ASX_JSON_NONE);
+        } else if (strcmp(op, "watch_mark_seen") == 0) {
+            /* rx.mark_seen() (:961) */
+            observe_status(t, idx, label, asx_watch_mark_seen(&r->watch));
+        } else if (strcmp(op, "watch_has_changed") == 0) {
+            /* rx.has_changed() (:970), a boolean value */
+            observe(t, idx, label, status_node(ASX_OK),
+                    asx_json_new_bool(g_out, asx_watch_has_changed(&r->watch) ? 1 : 0));
+        } else {
+            /* rx.clone() (:1057), kept by the task under the name `as` */
+            const char *as = it_str(step, "as");
+            if (as == NULL || c->n_receivers >= IT_MAX_SUBSCRIBERS ||
+                owned_receiver_as(t, ch, IT_CH_WATCH, as) != NULL) {
+                it_fail_task(t, idx, "watch_clone needs a fresh name and room for a receiver");
+                *out = STEP_END;
+                return 1;
+            }
+            st = asx_watch_receiver_clone(&r->watch, &c->receivers[c->n_receivers].watch);
+            if (st == ASX_OK) {
+                it_receiver *clone = &c->receivers[c->n_receivers++];
+                clone->task = (uint32_t)(t - g_tasks);
+                clone->open = 1;
+                clone->alias = as;
+            }
+            observe_status(t, idx, label, st);
+        }
+        return 1;
+    }
+    return 0;
+}
+
 /* Steps that never suspend; the only ones allowed inside `masked`. */
 static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32_t idx,
                              const char *label);
@@ -2730,7 +2893,7 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
         it_channel *c = channel_by_name(ch);
         it_receiver *r = NULL;
         uint32_t i;
-        if (c != NULL && !sender) r = owned_receiver(t, ch, c->type);
+        if (c != NULL && !sender) r = owned_receiver_as(t, ch, c->type, it_str(step, "receiver"));
         if (c == NULL || (sender ? owned_sender(t, ch, c->type) == NULL : r == NULL)) {
             it_fail_task(t, idx, "close of an endpoint this task does not own");
             return STEP_END;
@@ -2785,6 +2948,14 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
                           : asx_oneshot_receiver_is_closed(&r->oneshot);
         observe(t, idx, label, status_node(ASX_OK), asx_json_new_bool(g_out, value ? 1 : 0));
         return STEP_NEXT;
+    }
+    /* Watch receiver and sender operations that never suspend (DSL §3.6):
+     * borrow, borrow_and_update, mark_seen, has_changed, is_closed, clone,
+     * send_modify, receiver_count (channel/watch.rs:530, :634, :904-977,
+     * :1057). A receiver step selects a clone with `receiver`. */
+    if (strncmp(op, "watch_", 6) == 0) {
+        step_result res;
+        if (exec_watch_op(t, step, idx, label, op, &res)) return res;
     }
     /* Non-blocking oneshot, broadcast and watch sends (DSL §3.6). */
     if (strcmp(op, "oneshot_send") == 0 || strcmp(op, "broadcast_send") == 0 ||

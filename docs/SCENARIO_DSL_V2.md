@@ -422,7 +422,7 @@ identity, `asx_channel_close_sender` for the declared sender); the sender side c
 | `recv_many` | `channel`, `limit` | `rx.recv_many(&cx, &mut buf, limit).await` (`:1754`) | `asx_channel_recv_many(id, cx, buf, limit, &n)` until done | while empty | Checked first, after a `limit` of 0 (which gives `[]` at once): `ASX_E_CANCELLED`, tracing `"mpsc::recv_many cancelled"` (`:1882`). The observation `value` is the array of received integers, oldest first; a channel that can get no more messages gives `ASX_OK` with `[]`. |
 | `closed` | `channel` (the sender's) | `tx.closed().await` (`channel/mpsc_closed.rs:39`) | `asx_channel_closed` until done | until the receiver is closed or dropped | ignored: no `Cx`. Queued messages and reservations are untouched. |
 | `close_sender` | `channel` | `drop(tx)` (`:1241`) | `asx_channel_close_sender` | no | ignored |
-| `close_receiver` | `channel` | `drop(rx)` (`:2122`) | `asx_channel_close_receiver` | no | ignored. Discards what the queue holds, also after a `seal`. |
+| `close_receiver` | `channel`, optional `receiver` (a watch clone) | `drop(rx)` (`:2122`) | `asx_channel_close_receiver` | no | ignored. Discards what the queue holds, also after a `seal`. |
 | `seal` | `channel` (mpsc, the receiver's) | `rx.close()` (`:1698`) | `asx_channel_seal` | no | ignored. Sends and reservations fail with `ASX_E_DISCONNECTED` and parked producers and `closed` waiters wake; the receiver stays held and the queue receivable, then receives see `ASX_E_DISCONNECTED` (`mpsc-seal-drains-001`). A second `seal` is a harness error: Rust's `close()` would return without effect, C's `asx_channel_seal` refuses it. |
 | `oneshot_send` | `channel`, `value` | `tx.send(&cx, v)` (`channel/oneshot.rs:556`): reserves a SendPermit, traces `"oneshot::reserve creating permit"`, commits | `asx_oneshot_send(&tx, &cx, v)`: reserves the SendPermit obligation, traces, commits | no | Checked first: `ASX_E_CANCELLED`. |
 | `oneshot_recv` | `channel` | `rx.recv(&cx).await` (`oneshot.rs:1250`): traces `"oneshot::recv received value"` / `"…channel closed"` | `asx_oneshot_recv(rx, cx, &v)` until done | until sent or dropped | `ASX_E_CANCELLED`, tracing `"oneshot::recv cancelled while waiting"`. |
@@ -432,7 +432,26 @@ identity, `asx_channel_close_sender` for the declared sender); the sender side c
 | `broadcast_send` | `channel`, `value` | `tx.send(&cx, v)` (`channel/broadcast.rs:494`) | `asx_broadcast_send` | no | `ASX_E_CANCELLED` (`broadcast.rs:418`). The observation `value` is the number of receivers reached; no receiver left gives `ASX_E_DISCONNECTED` (Rust `Closed`). |
 | `broadcast_recv` | `channel` | `rx.recv(&cx).await` (`:894`) | `asx_broadcast_recv(rx, cx, &v)` until done | while empty | `ASX_E_CANCELLED`. Lagged gives `ASX_E_LAGGED` with `value` = n. |
 | `watch_send` | `channel`, `value` | `tx.send(v)` (`channel/watch.rs:488`) | `asx_watch_send` | no | ignored (no `Cx`) |
-| `watch_changed` | `channel` | `rx.changed(&cx).await` (`:722`), then `borrow_and_update` (`:917`) | `asx_watch_poll_changed` / `asx_watch_recv` | until a newer version | `ASX_E_CANCELLED` (`:736`). The `value` is the new value. |
+| `watch_changed` | `channel`, optional `receiver` | `rx.changed(&cx).await` (`:722`), then `borrow_and_update` (`:917`) | `asx_watch_poll_changed` / `asx_watch_recv` | until a newer version | `ASX_E_CANCELLED` (`:736`). The `value` is the new value. A closed sender with no unseen version gives `ASX_E_DISCONNECTED`. |
+| `watch_wait_for` | `channel`, `cmp`, `value`, optional `receiver` | `rx.wait_for(&cx, \|v\| *v <cmp> value).await` (`:858`); `cmp` is `eq`, `ne`, `lt`, `le`, `gt` or `ge` | `asx_watch_poll_wait_for` | until a published value passes | The predicate runs on the current value first and under no cancellation check, so a matching value returns at once even for a cancelled task, with no trace. Otherwise each rejected value opens a `changed()` on a clone of the receiver (traces `"watch::changed starting wait"`, then `"received update"` per newer version, `"cancelled"` / `"sender dropped"` at the end). `ASX_E_CANCELLED`; closed sender and no match: `ASX_E_DISCONNECTED`. The `value` is the accepted one; only that version is marked seen, by the receiver. While the wait is open the clone counts in `watch_receiver_count`. |
+| `watch_send_modify` | `channel`, `add` | `tx.send_modify(\|v\| *v = v.wrapping_add(add))` (`:530`) | `asx_watch_send_modify` | no | ignored (no `Cx`). One new version even when `add` is 0. |
+| `watch_borrow` | `channel`, optional `receiver` | `rx.borrow()` (`:904`) | `asx_watch_borrow` | no | ignored. The `value` is the current value; nothing is marked seen. |
+| `watch_borrow_and_update` | `channel`, optional `receiver` | `rx.borrow_and_update()` (`:917`) | `asx_watch_recv` | no | ignored. The `value` is the current value, marked seen. |
+| `watch_mark_seen` | `channel`, optional `receiver` | `rx.mark_seen()` (`:961`) | `asx_watch_mark_seen` | no | ignored. Acknowledges the latest version, not an earlier borrow. No value. |
+| `watch_has_changed` | `channel`, optional `receiver` | `rx.has_changed()` (`:970`) | `asx_watch_has_changed` | no | ignored. Observes `ASX_OK` with a boolean `value`. |
+| `watch_is_closed` | `channel`, `end` (`sender` / `receiver`), optional `receiver` | `tx.is_closed()` (`:634`, no receiver left) / `rx.is_closed()` (`:977`, sender dropped) | `asx_watch_sender_is_closed` / `asx_watch_receiver_is_closed` | no | ignored. Observes `ASX_OK` with a boolean `value`. |
+| `watch_receiver_count` | `channel` (the sender's) | `tx.receiver_count()` (`:627`) | `asx_watch_receiver_count` | no | ignored. The `value` is the count, a `wait_for` clone included. |
+| `watch_clone` | `channel`, `as`, optional `receiver` | `rx.clone()` (`:1057`) | `asx_watch_receiver_clone` | no | ignored. The clone has seen what its source has seen and is held by the task under the name `as`; later watch steps select it with `receiver`. A name is used once per channel. |
+
+The `receiver` field of the watch receiver steps (`watch_changed`,
+`watch_wait_for`, `watch_borrow`, `watch_borrow_and_update`,
+`watch_mark_seen`, `watch_has_changed`, `watch_is_closed` with `end`
+`receiver`, `watch_clone`) and of `close_receiver` names a clone made by
+`watch_clone` instead of the task's declared receiver. A task's clones are
+dropped with the rest of its endpoints when its body ends. `mark_changed`
+is not in the pinned Rust (`channel/watch.rs`), and `borrow_and_clone` /
+`borrow_and_update_clone` are `watch_borrow` / `watch_borrow_and_update` for
+integer values.
 
 ### 3.7 Synchronization
 
@@ -836,6 +855,13 @@ Closed (each verified by a fixture that now matches):
   lag count), `asx_watch_changed_begin` / `asx_watch_poll_changed` with a
   Cx (the watch traces) (`oneshot-send-recv-001`, `broadcast-fanout-001`,
   `watch-changed-001`).
+- **Watch parity** (bd-9kll.5.11): `send_modify`, `wait_for` (predicate
+  first, `changed()` on a counted clone), `borrow` vs `borrow_and_update`,
+  `mark_seen`, `has_changed`, receiver clone, `is_closed`, `receiver_count`
+  (`watch-send-modify-001`, `watch-wait-for-001`, `watch-wait-for-cancel-001`,
+  `watch-wait-for-sender-dropped-001`, `watch-wait-for-clone-counts-001`,
+  `watch-borrow-vs-borrow-and-update-001`, `watch-receiver-clone-continues-001`,
+  `watch-is-closed-receiver-count-001`, `watch-receiver-is-closed-001`).
 - **Oneshot closed notifications**: `oneshot_poll_closed`,
   `oneshot_is_closed`, `oneshot_is_ready` (bd-9kll.5.8): each end's wait is
   woken only by what Rust's separate closed waker is woken by
