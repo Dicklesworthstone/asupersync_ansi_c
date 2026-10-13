@@ -1733,9 +1733,15 @@ resource-pressure-gate:
 # ERROR an op or capability the C side cannot express yet (DSL §7). Every
 # fixture matches, and CI's conformance job runs it as a blocking step (also
 # under QEMU and -m32); it is not part of check-ci.
+# A second pass (compare-sweep, bd-9kll.4.9) runs each fixture under the
+# runtime's default sweep scheduler, which is what a live user gets, and
+# compares snapshot and observations only. The fixtures listed with a reason
+# in tests/conformance/sweep_known_divergences.txt may differ; any other
+# difference fails, and a listed fixture that now matches fails as STALE.
 # ---------------------------------------------------------------------------
 CONFORMANCE_V2_FIXTURES := $(sort $(wildcard fixtures/rust_reference_v2/*.json))
 CONFORMANCE_SELF_TEST_FIXTURE := fixtures/rust_reference_v2/obligation-reserve-commit-001.json
+CONFORMANCE_SWEEP_KNOWN := tests/conformance/sweep_known_divergences.txt
 
 conformance: $(CONFORMANCE_RUNNER)
 	@echo "[asx] conformance: executing $(words $(CONFORMANCE_V2_FIXTURES)) Rust-captured v2 fixture(s) through the C runtime..."
@@ -1745,6 +1751,7 @@ conformance: $(CONFORMANCE_RUNNER)
 	fi
 	@$(TEST_EXEC) $(CONFORMANCE_RUNNER) self-test $(CONFORMANCE_SELF_TEST_FIXTURE)
 	@$(TEST_EXEC) $(CONFORMANCE_RUNNER) compare $(CONFORMANCE_V2_FIXTURES)
+	@$(TEST_EXEC) $(CONFORMANCE_RUNNER) compare-sweep --known $(CONFORMANCE_SWEEP_KNOWN) $(CONFORMANCE_V2_FIXTURES)
 
 # ---------------------------------------------------------------------------
 # fuzz-differential — Rust-vs-C differential fuzzing over DSL v2 (bd-ij9w):
