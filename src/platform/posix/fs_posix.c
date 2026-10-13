@@ -244,6 +244,9 @@ static void fs_meta_unpack(const uint8_t *b, asx_fs_metadata *m) {
 static int fs_serve(uint8_t op, uint64_t key, uint64_t arg, uint32_t len, asx_status *st,
                     uint64_t *result, uint8_t *dst, uint32_t cap, uint32_t *n) {
     int32_t status = 0;
+    *st = ASX_OK;
+    *result = 0u;
+    *n = 0u;
     if (!asx_replay_active()) return 0;
     (void)asx_replay_serve_fs(op, key, arg, len, &status, result, dst, cap, n);
     *st = (asx_status)status;
@@ -470,13 +473,24 @@ asx_status asx_native_fs_dir_open(const asx_fs_path *path, asx_fs_dir_handle *ou
     return st;
 }
 
+/* The kind of an entry whose d_type does not say, from its status. 0 when
+ * the entry was removed while iterating (the caller skips it); a status
+ * that fails otherwise leaves the kind as it was (OTHER). */
+static int fs_entry_kind_by_stat(native_dir *d, const struct dirent *ent, asx_fs_entry_kind *kind) {
+    struct stat st;
+    if (fstatat(dirfd(d->dir), ent->d_name, &st, AT_SYMLINK_NOFOLLOW) == 0) {
+        *kind = fs_kind_from_mode(st.st_mode);
+        return 1;
+    }
+    return errno != ENOENT;
+}
+
 static asx_status fs_dir_next_real(native_dir *d, asx_fs_dir_entry *out, int *out_has_entry) {
     struct dirent *ent;
 
     for (;;) {
         size_t len;
         asx_fs_entry_kind kind = ASX_FS_ENTRY_OTHER;
-        int known = 0;
 
         errno = 0;
         ent = readdir(d->dir);
@@ -486,29 +500,16 @@ static asx_status fs_dir_next_real(native_dir *d, asx_fs_dir_entry *out, int *ou
         if (len >= ASX_FS_NAME_MAX) return ASX_E_BUFFER_TOO_SMALL;
 #if defined(_DIRENT_HAVE_D_TYPE) || defined(DT_UNKNOWN)
         switch (ent->d_type) {
-        case DT_REG:
-            kind = ASX_FS_ENTRY_FILE;
-            known = 1;
+        case DT_REG: kind = ASX_FS_ENTRY_FILE; break;
+        case DT_DIR: kind = ASX_FS_ENTRY_DIR; break;
+        case DT_LNK: kind = ASX_FS_ENTRY_SYMLINK; break;
+        default:
+            if (!fs_entry_kind_by_stat(d, ent, &kind)) continue;
             break;
-        case DT_DIR:
-            kind = ASX_FS_ENTRY_DIR;
-            known = 1;
-            break;
-        case DT_LNK:
-            kind = ASX_FS_ENTRY_SYMLINK;
-            known = 1;
-            break;
-        default: break;
         }
+#else
+        if (!fs_entry_kind_by_stat(d, ent, &kind)) continue;
 #endif
-        if (!known) {
-            struct stat st;
-            if (fstatat(dirfd(d->dir), ent->d_name, &st, AT_SYMLINK_NOFOLLOW) == 0) {
-                kind = fs_kind_from_mode(st.st_mode);
-            } else if (errno == ENOENT) {
-                continue; /* removed while iterating */
-            }
-        }
         memset(out, 0, sizeof(*out));
         memcpy(out->name, ent->d_name, len);
         out->name_len = (uint32_t)len;
