@@ -35,6 +35,7 @@
 #include "../../signal/signal_native.h"
 #include <asx/runtime/io_driver.h>
 #include <asx/runtime/journal.h>
+#include <asx/runtime/journal_replay.h>
 #include <asx/runtime/runtime.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -179,6 +180,8 @@ void asx_native_signal_drain(uint32_t counts[ASX_SIGNAL_KIND_COUNT]) {
 
     for (i = 0; i < ASX_SIGNAL_KIND_COUNT; i++) counts[i] = 0u;
     if (g_pipe_rd < 0) return;
+    /* A replay answers a drain from the journal, as the recording did. */
+    if (asx_replay_serve_signal(counts, ASX_SIGNAL_KIND_COUNT)) return;
     for (;;) {
         n = read(g_pipe_rd, buf, sizeof(buf));
         if (n > 0) {

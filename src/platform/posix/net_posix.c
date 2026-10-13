@@ -29,6 +29,7 @@
 #include <arpa/inet.h>
 #include <asx/runtime/io_driver.h>
 #include <asx/runtime/journal.h>
+#include <asx/runtime/journal_replay.h>
 #include <asx/runtime/runtime.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -676,16 +677,34 @@ static asx_status native_resolve_impl(const char *host, const asx_resolve_option
 asx_status asx_native_resolve(const char *host, const asx_resolve_options *opts,
                               asx_resolve_result *out) {
     asx_journal_addr recs[ASX_RESOLVE_MAX_RESULTS];
-    asx_status st = native_resolve_impl(host, opts, out);
+    asx_status st;
     uint32_t i;
     uint32_t n = 0u;
+    if (out != NULL && host != NULL && opts != NULL && asx_replay_active()) {
+        /* A replay answers from the journal; the host must be the one
+         * that was resolved when it was recorded. */
+        int32_t recorded = 0;
+        if (asx_replay_serve_resolve(asx_journal_text_hash(host), &recorded, recs,
+                                     (uint32_t)ASX_RESOLVE_MAX_RESULTS, &n)) {
+            memset(out, 0, sizeof(*out));
+            for (i = 0; i < n; i++) {
+                ASX_CHECKPOINT_WAIVER("bounded: at most ASX_RESOLVE_MAX_RESULTS addresses");
+                out->addrs[i].family = recs[i].family == 0u ? ASX_AF_INET4 : ASX_AF_INET6;
+                memcpy(out->addrs[i].addr, recs[i].bytes, sizeof(out->addrs[i].addr));
+                out->addrs[i].port = recs[i].port;
+            }
+            out->count = n;
+            return (asx_status)recorded;
+        }
+    }
+    st = native_resolve_impl(host, opts, out);
     if (out != NULL && host != NULL && opts != NULL) {
         n = out->count < ASX_RESOLVE_MAX_RESULTS ? out->count : (uint32_t)ASX_RESOLVE_MAX_RESULTS;
         for (i = 0; i < n; i++) {
             ASX_CHECKPOINT_WAIVER("bounded: at most ASX_RESOLVE_MAX_RESULTS addresses");
             native_journal_addr(&out->addrs[i], &recs[i]);
         }
-        asx_journal_note_resolve((int32_t)st, recs, n);
+        asx_journal_note_resolve(asx_journal_text_hash(host), (int32_t)st, recs, n);
     }
     return st;
 }

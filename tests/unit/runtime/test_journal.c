@@ -206,7 +206,7 @@ TEST(every_native_boundary_kind_round_trips) {
     asx_journal_note_net_write(stream, 10u, (int32_t)ASX_OK, 7u);
     asx_journal_note_udp_recv(stream, 128u, (int32_t)ASX_OK, (const uint8_t *)"dgram", 5u, &peer);
     asx_journal_note_udp_send(stream, 5u, (int32_t)ASX_OK, 5u);
-    asx_journal_note_resolve((int32_t)ASX_OK, addrs, 2u);
+    asx_journal_note_resolve(asx_journal_text_hash("example.test"), (int32_t)ASX_OK, addrs, 2u);
     asx_journal_note_process_spawn((int32_t)ASX_OK, stream, 4242u);
     asx_journal_note_process_exit(stream, 1u, 7, 0);
     asx_journal_note_signal(counts, 4u);
@@ -259,9 +259,10 @@ TEST(every_native_boundary_kind_round_trips) {
     ASSERT_EQ(asx_journal_get_u32(rec.payload + 16), 5u);
 
     ASSERT_TRUE(find_record(g_out, g_out_len, ASX_JOURNAL_KIND_RESOLVE, 0u, &rec));
-    ASSERT_EQ(asx_journal_get_u32(rec.payload + 4), 2u);
-    ASSERT_EQ(asx_journal_get_u16(rec.payload + 8 + 17), 8080u);
-    ASSERT_EQ(asx_journal_get_u16(rec.payload + 8 + JADDR_LEN_FOR_TEST + 17), 9090u);
+    ASSERT_EQ(asx_journal_get_u64(rec.payload), asx_journal_text_hash("example.test"));
+    ASSERT_EQ(asx_journal_get_u32(rec.payload + 12), 2u);
+    ASSERT_EQ(asx_journal_get_u16(rec.payload + 16 + 17), 8080u);
+    ASSERT_EQ(asx_journal_get_u16(rec.payload + 16 + JADDR_LEN_FOR_TEST + 17), 9090u);
 
     ASSERT_TRUE(find_record(g_out, g_out_len, ASX_JOURNAL_KIND_PROCESS_SPAWN, 0u, &rec));
     ASSERT_EQ(asx_journal_get_u64(rec.payload + 4), stream);
@@ -948,7 +949,7 @@ TEST(a_small_live_run_is_recorded_and_read_back) {
     ASSERT_TRUE(count_kind(ASX_JOURNAL_KIND_NET_CONNECT) >= 1u);
     ASSERT_TRUE(count_kind(ASX_JOURNAL_KIND_NET_READ) >= 2u);
     ASSERT_TRUE(count_kind(ASX_JOURNAL_KIND_NET_WRITE) >= 2u);
-    ASSERT_EQ(count_kind(ASX_JOURNAL_KIND_SIGNAL), 1u);
+    ASSERT_TRUE(count_kind(ASX_JOURNAL_KIND_SIGNAL) >= 1u); /* every drain, empty ones too */
     ASSERT_EQ(count_kind(ASX_JOURNAL_KIND_PROCESS_SPAWN), 1u);
     ASSERT_EQ(count_kind(ASX_JOURNAL_KIND_PROCESS_EXIT), 1u);
     ASSERT_EQ(count_kind(ASX_JOURNAL_KIND_BLOCKING_DONE), 1u);

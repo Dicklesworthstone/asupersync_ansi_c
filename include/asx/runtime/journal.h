@@ -54,10 +54,13 @@
  *   NET_WRITE    u64 stream | u32 len | i32 status | u32 written
  *   UDP_RECV     u64 socket | u32 cap | i32 status | u32 n | addr from | data
  *   UDP_SEND     u64 socket | u32 len | i32 status | u32 written
- *   RESOLVE      i32 status | u32 count | count x addr
+ *   RESOLVE      u64 name_hash (asx_journal_text_hash of the host) | i32
+ *                status | u32 count | count x addr
  *   PROCESS_SPAWN i32 status | u64 handle | u32 pid
  *   PROCESS_EXIT u64 handle | u32 state | i32 code | i32 signal
- *   SIGNAL       u8 n | n x (u8 kind, u32 count)
+ *   SIGNAL       u8 n | n x (u8 kind, u32 count). One per drain, n == 0
+ *                for a drain that found nothing: a replay serves drains in
+ *                order, so the empty ones are part of the stream.
  *   BLOCKING_DONE u32 slot | u16 generation | u64 result
  *   addr         u8 family | 16 bytes | u16 port        (19 bytes)
  *   data         FULL mode: n bytes, record flag 0.
@@ -277,6 +280,15 @@ typedef struct {
     uint64_t chains;
     uint32_t since_chain; /* data records since the last chain record */
     int ended;
+    /* From the END record, once read. */
+    uint64_t end_dropped; /* records the recorder dropped */
+    int32_t end_status;   /* the recorder's sticky status */
+    /* Where a failed read stopped: the seq of the record that failed (or
+     * the first missing one), and the first data record of the chain
+     * window it belongs to. A chain break lies in [first, seq). */
+    uint64_t window_first_seq;
+    uint64_t fail_seq;
+    uint64_t fail_first_seq;
     uint8_t chain[ASX_SHA256_DIGEST_SIZE];
     asx_sha256_ctx window;
 } asx_journal_reader;
@@ -338,10 +350,10 @@ ASX_API void asx_journal_note_udp_recv(uint64_t socket, uint32_t cap, int32_t st
 ASX_API void asx_journal_note_udp_send(uint64_t socket, uint32_t len, int32_t status,
                                        uint32_t written);
 
-/* A name resolution returned `status` and `count` addresses (at most 16
- * are stored). */
-ASX_API void asx_journal_note_resolve(int32_t status, const asx_journal_addr *addrs,
-                                      uint32_t count);
+/* A resolution of the host whose asx_journal_text_hash is `name_hash`
+ * returned `status` and `count` addresses (at most 16 are stored). */
+ASX_API void asx_journal_note_resolve(uint64_t name_hash, int32_t status,
+                                      const asx_journal_addr *addrs, uint32_t count);
 
 /* A child spawn returned `status`, the process `handle` and its `pid`. */
 ASX_API void asx_journal_note_process_spawn(int32_t status, uint64_t handle, uint32_t pid);
@@ -352,8 +364,8 @@ ASX_API void asx_journal_note_process_exit(uint64_t handle, uint32_t state, int3
                                            int32_t signal);
 
 /* A signal drain found `counts[kind]` arrivals for each of `kinds` kinds
- * (at most ASX_JOURNAL_MAX_SIGNAL_KINDS); nothing is recorded when all are
- * zero. */
+ * (at most ASX_JOURNAL_MAX_SIGNAL_KINDS); a drain that found nothing is
+ * recorded too. */
 ASX_API void asx_journal_note_signal(const uint32_t *counts, uint32_t kinds);
 
 /* A blocking-pool job (`slot`, `generation`) returned `result`. Called on

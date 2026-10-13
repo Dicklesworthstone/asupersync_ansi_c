@@ -9,14 +9,14 @@
 ![C99](https://img.shields.io/badge/C-C99-00599C)
 ![No external deps](https://img.shields.io/badge/dependencies-none-brightgreen)
 ![Deterministic replay](https://img.shields.io/badge/replay-deterministic-orange)
-![Public API declarations](https://img.shields.io/badge/public%20API-2%2C157%20declarations-blue)
-![C test programs](https://img.shields.io/badge/tests-233%20programs-brightgreen)
+![Public API declarations](https://img.shields.io/badge/public%20API-2%2C167%20declarations-blue)
+![C test programs](https://img.shields.io/badge/tests-234%20programs-brightgreen)
 ![9 profiles](https://img.shields.io/badge/profiles-9%20deployment%20targets-blue)
 [![License: MIT+Rider](https://img.shields.io/badge/License-MIT%2BOpenAI%2FAnthropic%20Rider-blue.svg)](./LICENSE)
 
 </div>
 
-Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->2,157<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->233<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
+Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->2,167<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->234<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
 
 <div align="center">
 <h3>Quick Source Build</h3>
@@ -59,7 +59,7 @@ The port targets asupersync commit `5e60b1c4c` (2026-10).
 
 | Feature | What It Gives You |
 |---|---|
-| **<!-- fact:api_declarations -->2,157<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> header families** | Async runtime API: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
+| **<!-- fact:api_declarations -->2,167<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> header families** | Async runtime API: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
 | **No external dependencies** | Pure C runtime core; ships into constrained and audited environments unchanged |
 | **Deterministic replay and trace hashing** | Deterministic builds replay a scenario exactly from its seed and input; trace digests let you diff behavior across builds, profiles, and codec modes |
 | **Structured cancellation with witness protocol** | 11 cancel kinds with severity lattice, witness phase tracking, and cleanup budgets (advisory as in Rust; an opt-in hard bound) |
@@ -69,7 +69,7 @@ The port targets asupersync commit `5e60b1c4c` (2026-10).
 | **<!-- fact:status_codes -->67<!-- /fact --> typed error codes with recovery guidance** | Each error has a category, recoverability class, recovery action, and backoff hints |
 | **Resource contracts instead of silent degradation** | Explicit memory/queue/timer ceilings with deterministic failure taxonomy per resource class (R1/R2/R3) |
 | **9 deployment profiles** | CORE, POSIX, WIN32, FREESTANDING, EMBEDDED_ROUTER, HFT, AUTOMOTIVE, PARALLEL, BROWSER |
-| **<!-- fact:test_programs -->233<!-- /fact --> tracked C test programs across 7 categories** | <!-- fact:test_unit -->171<!-- /fact --> unit, <!-- fact:test_e2e -->23<!-- /fact --> e2e, <!-- fact:test_invariant -->3<!-- /fact --> invariant, <!-- fact:test_vignettes -->12<!-- /fact --> vignette, <!-- fact:test_conformance -->6<!-- /fact --> conformance, <!-- fact:test_fuzz -->5<!-- /fact --> fuzz, and <!-- fact:test_formal -->13<!-- /fact --> formal files in the current tree |
+| **<!-- fact:test_programs -->234<!-- /fact --> tracked C test programs across 7 categories** | <!-- fact:test_unit -->172<!-- /fact --> unit, <!-- fact:test_e2e -->23<!-- /fact --> e2e, <!-- fact:test_invariant -->3<!-- /fact --> invariant, <!-- fact:test_vignettes -->12<!-- /fact --> vignette, <!-- fact:test_conformance -->6<!-- /fact --> conformance, <!-- fact:test_fuzz -->5<!-- /fact --> fuzz, and <!-- fact:test_formal -->13<!-- /fact --> formal files in the current tree |
 | **Cross-profile checks** | Profiles are meant to change limits and defaults, never semantics. `make profile-parity` executes every Rust-captured fixture under CORE, POSIX, FREESTANDING, EMBEDDED_ROUTER, HFT, AUTOMOTIVE, PARALLEL and BROWSER builds, each compared with the same Rust captures; CI also runs them under EMBEDDED_ROUTER on five ISAs (QEMU) and on 32-bit x86 |
 
 The current repository is library-first: it ships the static library, public
@@ -912,13 +912,13 @@ tools/                       CI, capture, replay, fuzz, and minimization tooling
 docs/                        Port architecture, parity tracking, deployment hardening
 ```
 
-The tree holds <!-- fact:header_files -->130<!-- /fact --> public headers
+The tree holds <!-- fact:header_files -->131<!-- /fact --> public headers
 (<!-- fact:headers_core -->22<!-- /fact --> in `core/`,
-<!-- fact:headers_runtime -->30<!-- /fact --> in `runtime/`), <!-- fact:source_files -->139<!-- /fact -->
+<!-- fact:headers_runtime -->31<!-- /fact --> in `runtime/`), <!-- fact:source_files -->140<!-- /fact -->
 C sources (<!-- fact:sources_core -->19<!-- /fact --> in `core/`,
-<!-- fact:sources_runtime -->41<!-- /fact --> in `runtime/`,
+<!-- fact:sources_runtime -->42<!-- /fact --> in `runtime/`,
 <!-- fact:sources_platform -->7<!-- /fact --> in `platform/`),
-<!-- fact:test_programs -->233<!-- /fact --> C test programs and
+<!-- fact:test_programs -->234<!-- /fact --> C test programs and
 <!-- fact:examples -->14<!-- /fact --> examples (`make lint-docs` checks these numbers
 against `tools/count_inventory.sh`).
 
@@ -969,14 +969,14 @@ make profile-parity
 
 ## Testing and Quality Gates
 
-`asx` currently ships with <!-- fact:test_programs -->233<!-- /fact --> tracked C test programs across 7 categories in
+`asx` currently ships with <!-- fact:test_programs -->234<!-- /fact --> tracked C test programs across 7 categories in
 the checked-in `tests/` tree. Individual assertion counts evolve over time; see
 `tests/TEST.md` for the current indexed suite inventory and per-suite case
 totals where tracked.
 
 | Category | Files | Coverage |
 |---|---|---|
-| **Unit tests** | <!-- fact:test_unit -->171<!-- /fact --> | Broad public API and subsystem coverage across the current tree |
+| **Unit tests** | <!-- fact:test_unit -->172<!-- /fact --> | Broad public API and subsystem coverage across the current tree |
 | **End-to-end scenarios** | <!-- fact:test_e2e -->23<!-- /fact --> | Core lifecycle, automotive, HFT, codec parity, continuity, network surfaces, POSIX adapter, HTTP server on real sockets (browser and CLI lanes are shell families) |
 | **Invariant tests** | <!-- fact:test_invariant -->3<!-- /fact --> | Lifecycle transition legality, quiescence, obligation linearity |
 | **API vignettes** | <!-- fact:test_vignettes -->12<!-- /fact --> | Ergonomics and usage pattern demonstrations |
@@ -1607,7 +1607,9 @@ The hindsight ring is a diagnostic: 256 entries, one `u64` each, not persisted. 
 
 Clock, entropy and reactor results are recorded by wrapping the hook table before the runtime is initialized with it (`asx_journal_wrap_hooks`), so every consumer is covered, including ones that read the table directly; the native network, process, signal and blocking adapters call one-branch taps. Recording never fails or blocks the application: a sink error or a record that cannot fit is counted and sticks in `asx_journal_status()`, and the stream is then incomplete. `asx_journal_reader_*` walks a stream and verifies its chain, its sequence and its END totals; a truncated or edited stream is reported, not trusted.
 
-This is the recording half. Replaying a journal into a runtime (RP2) is not implemented, filesystem results are not recorded yet, and the 10% throughput budget on the HTTP keep-alive bench has not been measured: the unit tests check batching (sink calls per record) and bounded per-record work, not wall-clock overhead.
+A stream is replayed through `include/asx/runtime/journal_replay.h`. `asx_replay_open` refuses a stream before it serves anything, and says where: a `rust_rev_hash` or `build_hash` that is not the caller's is `ASX_REPLAY_E_BUILD_MISMATCH`; a truncated stream, a missing END, or a recorder that dropped records or failed is `ASX_REPLAY_E_INCOMPLETE` with the first missing seq; a broken chain, sequence or END total is `ASX_REPLAY_E_CORRUPT` with the seq of the chain that caught it and the first record of that chain's window, so an edited record is named to within `chain_every` records (1 names it exactly); a record of a kind the replay cannot serve is `ASX_REPLAY_E_UNSUPPORTED` with its seq. `asx_replay_hooks` overlays a hook table with a clock, entropy source and reactor wait/poll that answer from the stream in order; `asx_replay_serve_signal` and `asx_replay_serve_resolve` let the POSIX signal and resolver adapters do the same once `asx_replay_activate` has been called. A request whose kind or shape differs from the next record (a different wait timeout, a poll with less room, another host) stops the replay with `ASX_REPLAY_E_DIVERGED`, that record's seq, the kind it held and the kind asked for; a request after the last record is `ASX_REPLAY_E_EXHAUSTED` at the END's seq; `asx_replay_finish` reports the first record the program never asked for. Later requests fail the same way and the report keeps the first.
+
+What is not done: replaying TCP/UDP, child-process and blocking-pool results (a stream that holds one is refused at open, naming it), the `asx replay` command, and recording of filesystem results. The 10% throughput budget on the HTTP keep-alive bench has not been measured either: the unit tests check batching (sink calls per record) and bounded per-record work, not wall-clock overhead. The replay tests (`tests/unit/runtime/test_journal_replay.c`) drive the hook table directly and, on a live POSIX build, record a small program (clock, entropy, a pipe's readiness, a sleeping task) and replay it into a fresh runtime comparing its results and its trace digest.
 
 ## Per-Profile Overload Policies
 
@@ -2582,7 +2584,7 @@ It has not been benchmarked against live builds here, and the two differ in more
 
 ### Can I embed this as a library without the CLI?
 
-Yes. The C API is first-class: <!-- fact:api_declarations -->2,157<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact -->
+Yes. The C API is first-class: <!-- fact:api_declarations -->2,167<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact -->
 public header families in the current `include/asx/` tree, and one umbrella
 `#include <asx/asx.h>`. The repository is library-first: `make install`
 installs only `libasx.a` and the headers. The `asx` CLI (`version`, `info`,

@@ -394,7 +394,7 @@ asx_journal_read_result asx_journal_reader_init(asx_journal_reader *r, const uin
     return ASX_JOURNAL_READ_RECORD;
 }
 
-asx_journal_read_result asx_journal_reader_next(asx_journal_reader *r, asx_journal_record *out) {
+static asx_journal_read_result reader_next_impl(asx_journal_reader *r, asx_journal_record *out) {
     for (;;) {
         const uint8_t *head;
         uint32_t payload_len;
@@ -440,10 +440,13 @@ asx_journal_read_result asx_journal_reader_next(asx_journal_reader *r, asx_journ
             r->pos += ASX_JOURNAL_RECORD_HEAD_BYTES + payload_len;
             r->next_seq++;
             if (r->pos != r->len) return ASX_JOURNAL_READ_CORRUPT;
+            r->end_dropped = asx_journal_get_u64(e + 16);
+            r->end_status = (int32_t)asx_journal_get_u32(e + 24);
             r->ended = 1;
             return ASX_JOURNAL_READ_END;
         }
         asx_sha256_update(&r->window, head, ASX_JOURNAL_RECORD_HEAD_BYTES + payload_len);
+        if (r->since_chain == 0u) r->window_first_seq = r->next_seq;
         out->kind = kind;
         out->flags = head[5];
         out->seq = r->next_seq;
@@ -456,6 +459,15 @@ asx_journal_read_result asx_journal_reader_next(asx_journal_reader *r, asx_journ
         r->pos += ASX_JOURNAL_RECORD_HEAD_BYTES + payload_len;
         return ASX_JOURNAL_READ_RECORD;
     }
+}
+
+asx_journal_read_result asx_journal_reader_next(asx_journal_reader *r, asx_journal_record *out) {
+    asx_journal_read_result rr = reader_next_impl(r, out);
+    if (r != NULL && rr != ASX_JOURNAL_READ_RECORD && rr != ASX_JOURNAL_READ_END) {
+        r->fail_seq = r->next_seq;
+        r->fail_first_seq = r->window_first_seq;
+    }
+    return rr;
 }
 
 /* ------------------------------------------------------------------ */
@@ -579,14 +591,16 @@ void asx_journal_note_udp_send(uint64_t socket, uint32_t len, int32_t status, ui
     j_emit((uint8_t)ASX_JOURNAL_KIND_UDP_SEND, 0u, 1, b, (uint32_t)(p - b), NULL, 0u);
 }
 
-void asx_journal_note_resolve(int32_t status, const asx_journal_addr *addrs, uint32_t count) {
-    uint8_t b[4 + 4];
+void asx_journal_note_resolve(uint64_t name_hash, int32_t status, const asx_journal_addr *addrs,
+                              uint32_t count) {
+    uint8_t b[8 + 4 + 4];
     uint8_t body[16u * JADDR_BYTES];
     uint8_t *p = b;
     uint8_t *q = body;
     uint32_t i;
     if (g_active == NULL) return;
     if (count > 16u) count = 16u;
+    p = put_u64(p, name_hash);
     p = put_u32(p, (uint32_t)status);
     p = put_u32(p, count);
     for (i = 0; i < count; i++) {
@@ -632,7 +646,7 @@ void asx_journal_note_signal(const uint32_t *counts, uint32_t kinds) {
         p = put_u32(p, counts[i]);
         n++;
     }
-    if (n == 0u) return; /* a drain that found nothing is not an input */
+    /* Recorded even when empty: a replay serves drains in order. */
     (void)put_u8(b, n);
     j_emit((uint8_t)ASX_JOURNAL_KIND_SIGNAL, 0u, 1, b, (uint32_t)(p - b), NULL, 0u);
 }
