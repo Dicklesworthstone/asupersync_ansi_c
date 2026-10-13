@@ -2038,9 +2038,16 @@ fixtures-promote:
 # ---------------------------------------------------------------------------
 # test-gates — negative controls: the gates themselves must fail on bad input
 # ---------------------------------------------------------------------------
+#
+# Not run here: scripts in TEST_GATES_EXCLUDE have a CI job of their own.
+# test_fuzz_parser_mutants.sh builds 12 sanitizer libraries (the planted-bug
+# control of the parser fuzz harnesses, bd-9kll.16.7), too slow for every
+# check; `make test-fuzz-parser-mutants` runs it in the fuzz-parity job.
+TEST_GATES_EXCLUDE := tests/gates/test_fuzz_parser_mutants.sh
+
 test-gates:
 	@echo "[asx] test-gates: running gate negative controls..."
-	@for t in tests/gates/*.sh; do \
+	@for t in $(filter-out $(TEST_GATES_EXCLUDE),$(sort $(wildcard tests/gates/*.sh))); do \
 		echo "  RUN  $$t"; \
 		ASX_CONFORMANCE_RUNNER="$(abspath $(CONFORMANCE_RUNNER))" bash "$$t" || exit 1; \
 	done
@@ -2362,6 +2369,14 @@ FUZZ_PARSERS_SAN := -fsanitize=address,undefined -fno-sanitize-recover=all -fno-
 # tests/gates/test_fuzz_parser_mutants.sh passes -DASX_MUTANT_<TARGET> here to
 # build a parser with its planted bug (bd-9kll.16.7); nothing else sets it.
 FUZZ_PARSERS_EXTRA_CFLAGS ?=
+
+# test-fuzz-parser-mutants — the planted-bug control of the parser fuzz
+# harnesses (bd-9kll.16.7): a replay control that gates and a discovery
+# control that observes (tests/gates/test_fuzz_parser_mutants.sh, header). Run
+# by the fuzz-parity CI job, not by test-gates. Needs clang with libFuzzer.
+.PHONY: test-fuzz-parser-mutants
+test-fuzz-parser-mutants:
+	@bash tests/gates/test_fuzz_parser_mutants.sh
 
 .PHONY: fuzz-parsers fuzz-parsers-smoke fuzz-parsers-replay
 fuzz-parsers:

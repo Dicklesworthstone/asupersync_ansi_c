@@ -485,12 +485,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq jq clang
-          # tests/gates/test_fuzz_parser_mutants.sh builds the parser fuzz
-          # harnesses with clang and libFuzzer's runtime: the generic package
-          # where the release has one, else the one matching the clang.
-          sudo apt-get install -y -qq libclang-rt-dev ||
-            sudo apt-get install -y -qq "libclang-rt-$(clang -dumpversion | cut -d. -f1)-dev"
+          sudo apt-get install -y -qq jq
           # tests/gates/test_strict_gates.sh runs format-check over scratch
           # files with the pinned formatter.
           pipx install clang-format==18.1.8
@@ -780,6 +775,14 @@ jobs:
       - name: Parser fuzz smoke
         run: make fuzz-parsers-smoke FUZZ_PARSERS_SECONDS=60
 
+      # The planted-bug control of those harnesses (bd-9kll.16.7): the replay
+      # control gates, the discovery control prints its table and observes.
+      # Twelve sanitizer library builds, so it lives here and not in
+      # `make test-gates`.
+      - name: Parser fuzz planted-bug control
+        id: run_parser_mutants
+        run: make test-fuzz-parser-mutants JOBS=4
+
       - name: Build fuzz harness
         id: build_fuzz
         run: make fuzz-build
@@ -804,7 +807,10 @@ jobs:
           first_failure=""
           rerun=""
 
-          if [ "${{ steps.build_fuzz.outcome }}" = "failure" ]; then
+          if [ "${{ steps.run_parser_mutants.outcome }}" = "failure" ]; then
+            first_failure="parser-fuzz-planted-bug-control"
+            rerun="make test-fuzz-parser-mutants"
+          elif [ "${{ steps.build_fuzz.outcome }}" = "failure" ]; then
             first_failure="fuzz-build"
             rerun="make fuzz-build"
           elif [ "${{ steps.run_fuzz_smoke.outcome }}" = "failure" ]; then
@@ -827,6 +833,7 @@ jobs:
             --arg workflow "${{ github.workflow }}" \
             --arg sha "${{ github.sha }}" \
             --arg ref "${{ github.ref }}" \
+            --arg mutants_outcome "${{ steps.run_parser_mutants.outcome }}" \
             --arg build_outcome "${{ steps.build_fuzz.outcome }}" \
             --arg smoke_outcome "${{ steps.run_fuzz_smoke.outcome }}" \
             --arg validate_outcome "${{ steps.validate_manifest.outcome }}" \
@@ -840,6 +847,7 @@ jobs:
               sha: $sha,
               ref: $ref,
               steps: [
+                {id: "parser-fuzz-planted-bug-control", outcome: $mutants_outcome, rerun: "make test-fuzz-parser-mutants"},
                 {id: "fuzz-build", outcome: $build_outcome, rerun: "make fuzz-build"},
                 {id: "fuzz-smoke", outcome: $smoke_outcome, rerun: "make fuzz-smoke"},
                 {id: "validate-fuzz-artifacts", outcome: $validate_outcome, rerun: "ls -la build/fuzz"}
@@ -854,6 +862,9 @@ jobs:
           name: fuzz-parity-${{ env.ASX_CI_RUN_TAG }}
           path: |
             build/fuzz/
+            build/mutants/fuzz-parsers/discovery.md
+            build/mutants/fuzz-parsers/**/log.txt
+            build/mutants/fuzz-parsers/**/crash-*
             ${{ env.ASX_CI_ARTIFACT_ROOT }}/fuzz-parity.manifest.json
           retention-days: 7
 
