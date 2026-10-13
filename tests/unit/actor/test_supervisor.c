@@ -157,6 +157,7 @@ static asx_status start_child(void *user_data, const asx_supervisor_generation *
     g_bodies[g_n_bodies].number = gen->number;
     g_bodies[g_n_bodies].polls = 0;
     g_bodies[g_n_bodies].wake_at = 0;
+    g_bodies[g_n_bodies].probed = 0;
     *out_poll = body_poll;
     *out_data = &g_bodies[g_n_bodies++];
     return ASX_OK;
