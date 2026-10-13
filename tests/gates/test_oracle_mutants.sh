@@ -34,7 +34,8 @@
 #                              running task, so a run that ends with one is
 #                              not named (bd-9kll.9.6)
 #                              -> quiescence-parked-task-*,
-#                                 oneshot-closed-send-no-wake-*
+#                                 oneshot-closed-send-no-wake-*,
+#                                 deadlock-two-tasks-channels-*
 #   - INTERVAL_BURST_FROM_NOW / INTERVAL_DELAY_FROM_DEADLINE /
 #     INTERVAL_SKIP_ONE_PERIOD one missed-tick rule is swapped for another's
 #                              -> interval-missed-tick-<rule>-*,
@@ -160,10 +161,12 @@ run_mutant WATCH_BORROW_MARKS_SEEN 'watch-receiver-clone-continues-'
 
 # A run that ends with a task parked names it: the runner compares C's
 # asx_scheduler_stuck_tasks with the tasks Rust's snapshot leaves not
-# Completed, on every fixture (18 of the corpus end that way). Each of the two
-# fixtures below must fail the mutant by itself.
+# Completed, on every fixture (23 of the corpus end non-quiescent). Each of the
+# three fixtures below must fail the mutant by itself; the last is a deliberate
+# deadlock, two tasks each parked on a recv from the other (bd-9kll.9.6).
 run_mutant STUCK_TASK_OMITTED 'quiescence-parked-task-001'
 run_mutant STUCK_TASK_OMITTED 'oneshot-closed-send-no-wake-001'
+run_mutant STUCK_TASK_OMITTED 'deadlock-two-tasks-channels-001'
 
 # Each missed-tick rule of Rust's Interval (interval.rs:385-420) has a mutant
 # that swaps it for a neighbour's, and the family of captures that pins it
