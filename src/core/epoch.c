@@ -7,10 +7,10 @@
  */
 
 #include <asx/core/epoch.h>
+#include <asx/runtime/runtime.h>
 #include <string.h>
-
-/* Forward-declare clock query (defined in runtime/hooks.c).
- * Core module cannot include runtime.h without circular deps. */
+/* Forward-declare clock query (defined in runtime/hooks.c, which runtime.h
+ * does not declare); runtime.h gives the reset registry. */
 asx_status asx_runtime_now_ns(uint64_t *out_now);
 
 /* ------------------------------------------------------------------ */
@@ -97,7 +97,7 @@ asx_status asx_epoch_create(const asx_epoch_policy *policy, asx_epoch_handle *ou
         if (g_epoch_count >= ASX_MAX_EPOCHS) return ASX_E_RESOURCE_EXHAUSTED;
         idx = g_epoch_count++;
     }
-
+    asx_runtime_reset_hook_register_internal(ASX_RESET_SLOT_EPOCH, asx_epoch_reset);
     s = &g_epochs[idx];
     s->generation = next_gen(s->generation);
     s->policy = *policy;

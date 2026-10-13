@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include <asx/runtime/runtime.h>
 #include <asx/sync/contended_mutex.h>
 #include <string.h>
 
@@ -47,6 +48,10 @@ asx_status asx_contended_mutex_create(asx_contended_mutex_handle *out) {
     asx_status st;
     if (out == NULL) return ASX_E_INVALID_ARGUMENT;
 
+    /* Registers the reset with the runtime the first time a mutex is made
+     * (bd-u4o2), so a runtime reset reaches the table. */
+    asx_runtime_reset_hook_register_internal(ASX_RESET_SLOT_CONTENDED_MUTEX,
+                                             asx_contended_mutex_reset);
     for (i = 0; i < ASX_CONTENDED_MUTEX_MAX; i++) {
         if (!g_slots[i].alive) {
             st = asx_mutex_create(&g_slots[i].inner);

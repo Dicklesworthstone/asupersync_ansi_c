@@ -5,6 +5,7 @@
  */
 
 #include <asx/net/pipe.h>
+#include <asx/runtime/runtime.h>
 #include <string.h>
 
 typedef struct {
@@ -15,6 +16,12 @@ typedef struct {
 } pipe_slot;
 
 static pipe_slot g_pipes[ASX_MAX_PIPES];
+
+/* Registers asx_pipe_reset with the runtime the first time a pipe is
+ * opened, so a runtime reset reaches the table (bd-u4o2). */
+static void pipe_note_state(void) {
+    asx_runtime_reset_hook_register_internal(ASX_RESET_SLOT_PIPE, asx_pipe_reset);
+}
 
 static uint32_t pipe_next_gen(uint32_t g) {
     g++;
@@ -52,6 +59,7 @@ asx_status asx_pipe_open(asx_pipe_read *rd, asx_pipe_write *wr) {
     }
     if (i >= ASX_MAX_PIPES) return ASX_E_RESOURCE_EXHAUSTED;
 
+    pipe_note_state();
     s = &g_pipes[i];
     memset(s, 0, sizeof(*s));
     s->generation = pipe_next_gen(s->generation);

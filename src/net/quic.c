@@ -16,8 +16,8 @@
  */
 
 #include <asx/net/quic.h>
+#include <asx/runtime/runtime.h>
 #include <string.h>
-
 #define QUIC_DGRAM_QUEUE_DEPTH 4u
 
 typedef struct {
@@ -109,7 +109,7 @@ static asx_status quic_alloc(asx_quic_conn *out, const asx_quic_config *cfg) {
         if (!g_quic_conns[idx].alive) break;
     }
     if (idx >= ASX_MAX_QUIC_CONNECTIONS) return ASX_E_RESOURCE_EXHAUSTED;
-
+    asx_runtime_reset_hook_register_internal(ASX_RESET_SLOT_QUIC, asx_quic_reset);
     s = &g_quic_conns[idx];
     generation = quic_next_gen(s->generation);
     memset(s, 0, sizeof(*s));

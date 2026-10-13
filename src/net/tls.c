@@ -14,8 +14,8 @@
 
 #include <asx/net/tls.h>
 #include <asx/runtime/browser_boundary.h>
+#include <asx/runtime/runtime.h>
 #include <string.h>
-
 #if ASX_HAS_TLS_SURFACE
 typedef struct {
     asx_tls_config config;
@@ -212,7 +212,7 @@ static asx_status tls_open(asx_tls_stream *out, asx_tls_role role, asx_tcp_strea
         if (!g_tls_streams[idx].alive) break;
     }
     if (idx >= ASX_MAX_TLS_STREAMS) return ASX_E_RESOURCE_EXHAUSTED;
-
+    asx_runtime_reset_hook_register_internal(ASX_RESET_SLOT_TLS, asx_tls_reset);
     s = &g_tls_streams[idx];
     /* The generation outlives the slot's contents: a handle to a closed
      * stream must not match the stream that reuses its slot. */

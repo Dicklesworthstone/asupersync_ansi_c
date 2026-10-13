@@ -61,7 +61,16 @@ void asx_affinity_reset(void) {
     g_current_domain = ASX_AFFINITY_DOMAIN_ANY;
 }
 
-void asx_affinity_set_domain(asx_affinity_domain domain) { g_current_domain = domain; }
+/* Registers asx_affinity_reset with the runtime the first time this module
+ * can hold state: a current domain or a bound entity (bd-u4o2). */
+static void affinity_note_state(void) {
+    asx_runtime_reset_hook_register_internal(ASX_RESET_SLOT_AFFINITY, asx_affinity_reset);
+}
+
+void asx_affinity_set_domain(asx_affinity_domain domain) {
+    affinity_note_state();
+    g_current_domain = domain;
+}
 
 asx_affinity_domain asx_affinity_current_domain(void) { return g_current_domain; }
 
@@ -82,6 +91,7 @@ asx_status asx_affinity_bind(uint64_t entity_id, asx_affinity_domain domain) {
     entry = affinity_alloc();
     if (entry == NULL) { return ASX_E_AFFINITY_TABLE_FULL; }
 
+    affinity_note_state();
     entry->entity_id = entity_id;
     entry->domain = domain;
     entry->occupied = 1;

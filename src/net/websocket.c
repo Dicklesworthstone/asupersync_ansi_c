@@ -15,6 +15,7 @@
 #include <asx/asx_config.h>
 #include <asx/net/websocket.h>
 #include <asx/portable.h>
+#include <asx/runtime/runtime.h>
 #include <asx/security/crypto.h>
 #include <string.h>
 
@@ -1264,6 +1265,12 @@ typedef struct {
 
 static ws_conn_slot g_ws_conns[ASX_MAX_WS_CONNECTIONS];
 
+/* Registers asx_ws_reset with the runtime the first time a connection is
+ * opened, so a runtime reset reaches the table (bd-u4o2). */
+static void ws_note_state(void) {
+    asx_runtime_reset_hook_register_internal(ASX_RESET_SLOT_WS, asx_ws_reset);
+}
+
 static uint32_t ws_next_gen(uint32_t g) {
     g++;
     return g == 0u ? 1u : g;
@@ -1381,6 +1388,7 @@ static asx_status ws_open(asx_ws_conn *out, asx_tcp_stream tcp, const asx_ws_con
     }
     if (idx >= ASX_MAX_WS_CONNECTIONS) return ASX_E_RESOURCE_EXHAUSTED;
 
+    ws_note_state();
     s = &g_ws_conns[idx];
     gen = s->generation;
     memset(s, 0, sizeof(*s));

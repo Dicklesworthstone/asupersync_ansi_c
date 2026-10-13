@@ -479,10 +479,8 @@ typedef struct {
     int masked;               /* cancel pending but deferred by asx_task_mask() */
 } asx_checkpoint_result;
 
-/* Maximum nesting of asx_task_mask() sections (INV-MASK-BOUNDED). */
-#if (ASX_MAX_MASK_DEPTH) < 1
-#error "ASX_MAX_MASK_DEPTH must be at least 1"
-#endif
+/* Maximum nesting of asx_task_mask() sections (INV-MASK-BOUNDED):
+ * ASX_MAX_MASK_DEPTH, fixed at asupersync's 64 by asx_config.h. */
 
 /* Request cancellation of a task. Transitions Running → CancelRequested.
  * No-op if already in cancel or terminal state.
@@ -1428,14 +1426,30 @@ ASX_API ASX_MUST_USE asx_status asx_task_get_cancel_epoch(asx_task_id id, uint32
  * so the kernel names none of them: an application that never uses the
  * network, the file system, child processes or signals does not link them,
  * and a subsystem never used has no state a reset would clear.
+ *
+ * Slot order is reset order: the protocols that sit on a TCP stream (QUIC,
+ * WebSocket, TLS) go before the network they close their streams on. The
+ * symbol registry has no slot: it is the application's namespace, its
+ * names are the caller's strings, and it lives as long as the process
+ * (asx_symbol_registry_reset clears it on request, and only then).
  * ------------------------------------------------------------------- */
 
 typedef enum {
-    ASX_RESET_SLOT_NET = 0,
-    ASX_RESET_SLOT_FS = 1,
-    ASX_RESET_SLOT_PROCESS = 2,
-    ASX_RESET_SLOT_SIGNAL = 3,
-    ASX_RESET_SLOT_COUNT = 4
+    ASX_RESET_SLOT_QUIC = 0,
+    ASX_RESET_SLOT_WS = 1,
+    ASX_RESET_SLOT_TLS = 2,
+    ASX_RESET_SLOT_NET = 3,
+    ASX_RESET_SLOT_PIPE = 4,
+    ASX_RESET_SLOT_FS = 5,
+    ASX_RESET_SLOT_PROCESS = 6,
+    ASX_RESET_SLOT_SIGNAL = 7,
+    ASX_RESET_SLOT_EPOCH = 8,
+    ASX_RESET_SLOT_AFFINITY = 9,
+    ASX_RESET_SLOT_POOL = 10,
+    ASX_RESET_SLOT_CONTENDED_MUTEX = 11,
+    ASX_RESET_SLOT_GEN_SERVER = 12,
+    ASX_RESET_SLOT_DEADLINE_MONITOR = 13,
+    ASX_RESET_SLOT_COUNT = 14
 } asx_reset_slot;
 
 /* Runtime-internal: `hook` becomes the reset of `slot`. Idempotent; a slot

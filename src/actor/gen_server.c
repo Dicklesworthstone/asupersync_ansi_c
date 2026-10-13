@@ -5,6 +5,7 @@
  */
 
 #include <asx/actor/gen_server.h>
+#include <asx/runtime/runtime.h>
 #include <string.h>
 
 typedef struct {
@@ -73,6 +74,9 @@ asx_status asx_gen_server_start(asx_gen_server_ref *out, const asx_gen_server_ca
     }
     if (i >= ASX_GEN_SERVER_MAX_INSTANCES) return ASX_E_RESOURCE_EXHAUSTED;
 
+    /* Registers the reset with the runtime the first time a server starts
+     * (bd-u4o2), so a runtime reset reaches the table. */
+    asx_runtime_reset_hook_register_internal(ASX_RESET_SLOT_GEN_SERVER, asx_gen_server_reset);
     s = &g_servers[i];
     memset(s, 0, sizeof(*s));
     s->callbacks = *callbacks;
