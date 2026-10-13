@@ -71,6 +71,51 @@ else
     e2e_scenario "cli_smoke.doctor_json" "no healthy:true in JSON" "fail"
 fi
 
+# Scenario: ASX_FORMAT sets the default output format and a flag overrides it
+# (the asx_cli_* environment helpers, bd-khwe)
+output="$(ASX_FORMAT=json "$CLI_BIN" doctor 2>&1)" || true
+if echo "$output" | grep -q '"healthy":true'; then
+    e2e_scenario "cli_smoke.env_format_json" "" "pass"
+else
+    e2e_scenario "cli_smoke.env_format_json" "no healthy:true in JSON" "fail"
+fi
+output="$(ASX_FORMAT=json "$CLI_BIN" doctor --format=text 2>&1)" || true
+if echo "$output" | grep -q "PASS:" && ! echo "$output" | grep -q '"healthy"'; then
+    e2e_scenario "cli_smoke.flag_overrides_env_format" "" "pass"
+else
+    e2e_scenario "cli_smoke.flag_overrides_env_format" "ASX_FORMAT=json beat --format=text" "fail"
+fi
+
+# Scenario: an unknown ASX_FORMAT is warned about, not silently ignored, and
+# the output stays text
+ASX_FORMAT=yaml "$CLI_BIN" doctor >"${E2E_ARTIFACT_DIR}/env_yaml.out" 2>"${E2E_ARTIFACT_DIR}/env_yaml.err" || true
+if grep -q "PASS:" "${E2E_ARTIFACT_DIR}/env_yaml.out" &&
+    grep -q "^warning: ASX_FORMAT" "${E2E_ARTIFACT_DIR}/env_yaml.err"; then
+    e2e_scenario "cli_smoke.env_format_unknown_warns" "" "pass"
+else
+    e2e_scenario "cli_smoke.env_format_unknown_warns" "no text output or no warning" "fail"
+fi
+
+# Scenario: ASX_COLOR=always colors the doctor verdicts; the default adds no
+# escape byte, and JSON is never colored
+ASX_COLOR=always "$CLI_BIN" doctor >"${E2E_ARTIFACT_DIR}/doctor_color.txt" 2>&1 || true
+if grep -q $'\033\\[32mPASS\033\\[0m' "${E2E_ARTIFACT_DIR}/doctor_color.txt"; then
+    e2e_scenario "cli_smoke.env_color_always" "" "pass"
+else
+    e2e_scenario "cli_smoke.env_color_always" "no colored PASS verdict" "fail"
+fi
+if grep -q $'\033' "${E2E_ARTIFACT_DIR}/doctor.txt"; then
+    e2e_scenario "cli_smoke.default_is_uncolored" "escape byte in the default output" "fail"
+else
+    e2e_scenario "cli_smoke.default_is_uncolored" "" "pass"
+fi
+ASX_COLOR=always "$CLI_BIN" doctor --format=json >"${E2E_ARTIFACT_DIR}/doctor_color.json" 2>&1 || true
+if grep -q $'\033' "${E2E_ARTIFACT_DIR}/doctor_color.json"; then
+    e2e_scenario "cli_smoke.json_is_never_colored" "escape byte in JSON" "fail"
+else
+    e2e_scenario "cli_smoke.json_is_never_colored" "" "pass"
+fi
+
 # Scenario: help prints usage
 output="$("$CLI_BIN" help 2>&1)" || true
 if echo "$output" | grep -q "Usage:"; then
@@ -135,6 +180,12 @@ if "$CLI_BIN" replay "$JOURNAL" --format=json 2>/dev/null | grep -q '"accepted":
     e2e_scenario "cli_smoke.replay_json" "" "pass"
 else
     e2e_scenario "cli_smoke.replay_json" "no accepted:true in JSON" "fail"
+fi
+if ASX_FORMAT=json "$CLI_BIN" replay "$JOURNAL" --rust-rev=5e60b1c4c 2>/dev/null |
+    grep -q '"accepted":true'; then
+    e2e_scenario "cli_smoke.replay_env_format_json" "" "pass"
+else
+    e2e_scenario "cli_smoke.replay_env_format_json" "no accepted:true under ASX_FORMAT=json" "fail"
 fi
 
 # Scenario: a journal naming another revision is refused, exit 1, with a seq

@@ -18,10 +18,12 @@
 
 #include <asx/app/doctor.h>
 #include <asx/asx.h>
+#include <asx/cli/cli.h>
 #include <asx/migration/migration.h>
 #include <asx/runtime/journal.h>
 #include <asx/runtime/journal_replay.h>
 #include <asx/runtime/profile_compat.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -53,11 +55,52 @@ static void print_usage(FILE *out) {
                  "  --rust-rev=<s>   replay: the asupersync revision the journal must name\n"
                  "  --build=<s>      replay: the C build the journal must name\n"
                  "  -h, --help       Print help\n");
+#if ASX_HAS_NATIVE_RUNTIME_SURFACES
+    fprintf(out, "\n"
+                 "Environment (a flag overrides it):\n"
+                 "  ASX_FORMAT=json|text    Output format (default text)\n"
+                 "  ASX_COLOR=always|never  Color the doctor verdicts (default never)\n");
+#endif
 }
 
 /* ------------------------------------------------------------------ */
 /* Small helpers                                                       */
 /* ------------------------------------------------------------------ */
+
+/* The asx_cli_* helper library is compile-time hidden in the browser
+ * profile (asx/cli/cli.h), where this tool keeps the plain behaviour. */
+
+/* A failed status, reported on stderr. */
+static void report_status(const char *context, asx_status st) {
+#if ASX_HAS_NATIVE_RUNTIME_SURFACES
+    asx_cli_report_error(context, st);
+#else
+    fprintf(stderr, "error: %s: %s\n", context, asx_status_str(st));
+#endif
+}
+
+/* Print `word` on stdout in `fg`: the console styles it as ASX_COLOR asked
+ * (main sets the mode) and adds nothing in the default, so the text is
+ * byte-identical unless color was requested. */
+static void put_word(asx_ansi_color fg, const char *word) {
+    asx_report_buf buf;
+    asx_report_buf_init(&buf);
+    if (asx_console_colored(&buf, fg, word) == ASX_OK) {
+        fputs(buf.data, stdout);
+    } else {
+        fputs(word, stdout);
+    }
+}
+
+#if ASX_HAS_NATIVE_RUNTIME_SURFACES
+/* ctrl-C / SIGTERM: the first asks the running command to stop at its next
+ * cancellation point, the second stops the process at once. */
+static void on_interrupt(int sig) {
+    /* ASX_ANALYZER_WAIVER("cli.c keeps the signal state in one volatile counter") */
+    asx_cli_record_signal(sig);
+    if (asx_cli_should_force_quit()) _Exit(130);
+}
+#endif
 
 /* Print `s` as a JSON string body (quotes and backslashes escaped,
  * control bytes dropped). */
@@ -189,14 +232,32 @@ static int cmd_replay(const char *path, int json_output, const char *rust_rev, c
     /* The header and the kinds the stream holds: what is readable of it,
      * reported even when the stream is then refused. */
     memset(&rd, 0, sizeof(rd));
+#if ASX_HAS_NATIVE_RUNTIME_SURFACES
+    /* The walk is the long part of a large journal and its cancellation
+     * point: the first interrupt ends the command there. */
+    (void)signal(SIGINT, on_interrupt);
+    (void)signal(SIGTERM, on_interrupt);
+#endif
     rr = asx_journal_reader_init(&rd, bytes, len);
     if (rr == ASX_JOURNAL_READ_RECORD) {
         for (;;) {
             walk = asx_journal_reader_next(&rd, &rec);
             if (walk != ASX_JOURNAL_READ_RECORD) break;
             counts[rec.kind]++;
+#if ASX_HAS_NATIVE_RUNTIME_SURFACES
+            if (asx_cli_is_cancelled()) break;
+#endif
         }
     }
+#if ASX_HAS_NATIVE_RUNTIME_SURFACES
+    (void)signal(SIGINT, SIG_DFL);
+    (void)signal(SIGTERM, SIG_DFL);
+    if (asx_cli_is_cancelled()) {
+        free(bytes);
+        fprintf(stderr, "asx replay: %s: interrupted\n", path);
+        return 130;
+    }
+#endif
     /* A stream that did not reach a valid END (a run that was killed, a
      * damaged tail) still has a committed prefix: what verified through its
      * last chain. A recovery replay serves exactly that. */
@@ -423,7 +484,7 @@ static int cmd_doctor(int json_output, const char *journal_path) {
         if (st != ASX_OK) {
             asx_journal_uninstall();
             (void)fclose(jf);
-            fprintf(stderr, "asx doctor: journal setup failed: %s\n", asx_status_str(st));
+            report_status("asx doctor: journal setup failed", st);
             return 1;
         }
         journaling = 1;
@@ -433,7 +494,7 @@ static int cmd_doctor(int json_output, const char *journal_path) {
          * worker threads), which the probes then exercise. */
         st = asx_runtime_init_default(&rt);
         if (st != ASX_OK) {
-            fprintf(stderr, "asx doctor: runtime init failed: %s\n", asx_status_str(st));
+            report_status("asx doctor: runtime init failed", st);
             return 1;
         }
     }
@@ -450,14 +511,16 @@ static int cmd_doctor(int json_output, const char *journal_path) {
         js = asx_journal_finish(&journal);
         if (fclose(jf) != 0 && js == ASX_OK) js = ASX_E_RESOURCE_EXHAUSTED;
         if (js != ASX_OK) {
-            fprintf(stderr, "asx doctor: journal '%s' is incomplete: %s\n", journal_path,
-                    asx_status_str(js));
+            char what[512];
+            (void)snprintf(what, sizeof(what), "asx doctor: journal '%s' is incomplete",
+                           journal_path);
+            report_status(what, js);
             return 1;
         }
     }
 
     if (st != ASX_OK) {
-        fprintf(stderr, "asx doctor: diagnostic failed: %s\n", asx_status_str(st));
+        report_status("asx doctor: diagnostic failed", st);
         return 1;
     }
 
@@ -492,12 +555,24 @@ static int cmd_doctor(int json_output, const char *journal_path) {
                                : c->severity == ASX_DOCTOR_WARN ? "WARN"
                                : c->severity == ASX_DOCTOR_SKIP ? "SKIP"
                                                                 : "FAIL";
-            printf("  %s: %s", icon, c->name ? c->name : "?");
+            asx_ansi_color tint = c->severity == ASX_DOCTOR_OK     ? ASX_COLOR_GREEN
+                                  : c->severity == ASX_DOCTOR_WARN ? ASX_COLOR_YELLOW
+                                  : c->severity == ASX_DOCTOR_SKIP ? ASX_COLOR_CYAN
+                                                                   : ASX_COLOR_RED;
+            printf("  ");
+            put_word(tint, icon);
+            printf(": %s", c->name ? c->name : "?");
             if (c->message && c->message[0]) printf(" — %s", c->message);
             if (c->capacity > 0) printf(" (%u/%u)", (unsigned)c->value, (unsigned)c->capacity);
             printf("\n");
         }
-        printf("\nOverall: %s\n", asx_doctor_is_healthy(&report) ? "HEALTHY" : "UNHEALTHY");
+        printf("\nOverall: ");
+        if (asx_doctor_is_healthy(&report)) {
+            put_word(ASX_COLOR_GREEN, "HEALTHY");
+        } else {
+            put_word(ASX_COLOR_RED, "UNHEALTHY");
+        }
+        printf("\n");
     }
 
     return asx_doctor_is_healthy(&report) ? 0 : 1;
@@ -519,6 +594,20 @@ int main(int argc, char **argv) {
         print_usage(stderr);
         return 1;
     }
+
+#if ASX_HAS_NATIVE_RUNTIME_SURFACES
+    {
+        /* ASX_FORMAT and ASX_COLOR set the defaults; the flags override them. */
+        asx_cli_config cfg;
+        const char *given = getenv("ASX_FORMAT");
+        asx_cli_config_from_env(&cfg);
+        json_fmt = cfg.output_format != ASX_OUTPUT_TEXT;
+        asx_console_set_color_mode(cfg.color_mode);
+        if (given != NULL && strcmp(asx_output_format_str(cfg.output_format), given) != 0) {
+            asx_cli_report_warning("ASX_FORMAT is neither text nor json; using text");
+        }
+    }
+#endif
 
     /* Flags; anything else, an unknown --format=<x> included, is an error
      * rather than silently ignored. `replay` takes one file operand. */
