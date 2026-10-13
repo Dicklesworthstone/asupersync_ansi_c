@@ -1555,7 +1555,7 @@ static asx_status sched_run(asx_region_id region, asx_budget *budget, int advanc
         ASX_CHECKPOINT_WAIVER("kernel-scheduler: this IS the scheduler event loop; "
                               "budget exhaustion provides bounded termination");
         asx_trace_emit(ASX_TRACE_SCHED_ROUND, ASX_INVALID_ID, round);
-
+        if (asx_replay_stop_run_internal()) return ASX_E_REPLAY_MISMATCH; /* replay failed */
         /* Check budget exhaustion */
         if (asx_budget_is_exhausted(budget)) {
             sched_emit(ASX_SCHED_EVENT_BUDGET, ASX_INVALID_ID, round);

@@ -40,7 +40,31 @@
  *
  * A request whose answer carries a status returns ASX_E_REPLAY_MISMATCH
  * once the replay has failed; the clock and an entropy draw that cannot
- * report return 0. The caller checks asx_replay_failure().
+ * report return 0. The caller checks asx_replay_failure(). The scheduler
+ * also ends a run whose replay has failed, at its next round, with
+ * ASX_E_REPLAY_MISMATCH: a program that waits for answers it will no
+ * longer get does not spin.
+ *
+ * Recovery replay (asx_replay_open_prefix). A run that was killed leaves a
+ * stream with no END. A recovery replay serves the committed prefix, every
+ * record up to the last CHAIN that verifies, and ignores what follows (a
+ * torn or unverified tail; a chain that does not verify ends the prefix
+ * like a cut). It differs from the contract above in three ways:
+ *   - the stream need not be complete: integrity (step 2) is checked over
+ *     the prefix, and the report says why the prefix ended (INCOMPLETE:
+ *     the bytes ran out; CORRUPT: a record or chain failed) and where;
+ *   - a request after the prefix's last record is ASX_REPLAY_E_CUT, with
+ *     seq the first uncommitted record, not EXHAUSTED: it is the expected
+ *     end of the replay. A program that finishes inside the prefix ends
+ *     the same way, since the prefix cannot show the recorded run did;
+ *   - every committed window's trace checkpoint is verified as the run
+ *     reaches it: the run's trace position and rolling digest, when the
+ *     window's last record is consumed, must be the ones the recording
+ *     stored, or the replay stops with DIVERGED at that record ("trace
+ *     checkpoint"). That is what "the replay reproduces every committed
+ *     step" means; asx_replay_prefix reports how many were verified and
+ *     the last one.
+ * A complete stream replays as in the contract, plus the checkpoints.
  *
  * Replayed values are the raw boundary results, before the runtime's fault
  * injection: the accessors apply injected faults to them as they did when
@@ -94,7 +118,8 @@ typedef enum {
     ASX_REPLAY_E_UNSUPPORTED = 4,    /* a record the replay cannot serve */
     ASX_REPLAY_E_DIVERGED = 5,       /* a request differs from the next record */
     ASX_REPLAY_E_EXHAUSTED = 6,      /* a request after the last record */
-    ASX_REPLAY_E_RUNTIME = 7         /* asx_journal_replay could not start the run */
+    ASX_REPLAY_E_RUNTIME = 7,        /* asx_journal_replay could not start the run */
+    ASX_REPLAY_E_CUT = 8             /* recovery replay: the committed prefix is over */
 } asx_replay_error;
 
 /* The first failure of a replay. */
@@ -148,6 +173,14 @@ typedef struct {
     uint64_t last_seq;
     uint64_t last_trace_seq;
     uint8_t last_kind; /* the record most recently consumed */
+    /* Recovery replay (asx_replay_open_prefix). */
+    int prefix;           /* serving a committed prefix, checkpoints verified */
+    int prefix_cut;       /* the stream was cut: its end is a CUT, not END */
+    uint64_t cut_seq;     /* the first record that was not committed */
+    uint64_t cp_verified; /* trace checkpoints verified so far */
+    uint64_t cp_seq;      /* the last one: its chain's seq */
+    uint64_t cp_events;
+    uint64_t cp_digest;
     /* The generation each IO-driver slot had when this run last armed it.
      * A recorded readiness token names the generation of the run that
      * recorded it, which is process history rather than program
@@ -173,6 +206,39 @@ ASX_API asx_replay_error asx_replay_open(asx_replay *r, const uint8_t *bytes, si
  * Returns ASX_OK, or ASX_E_INVALID_ARGUMENT for NULLs or a replay that was
  * not opened. The replay must outlive the runtime initialized with them. */
 ASX_API ASX_MUST_USE asx_status asx_replay_hooks(asx_replay *r, asx_runtime_hooks *hooks);
+
+/* What a recovery replay found in the stream and, once the run is over,
+ * how far it got. */
+typedef struct {
+    int complete;                /* the stream has a valid END: nothing was lost */
+    uint64_t committed_bytes;    /* length of the prefix served (the stream's, when complete) */
+    uint64_t committed_records;  /* data records in it */
+    uint64_t cut_seq;            /* the first record not in it (the seq after its last chain) */
+    asx_replay_error cut_reason; /* why it ended: INCOMPLETE or CORRUPT; OK when complete */
+    uint64_t stream_bytes;       /* bytes the stream had: the tail beyond the prefix is these
+                                  * less committed_bytes */
+    /* Filled by asx_journal_replay_prefix / asx_replay_prefix_progress. */
+    uint64_t served;         /* records the program consumed */
+    uint64_t checkpoints;    /* trace checkpoints verified */
+    uint64_t checkpoint_seq; /* the last one verified: its chain's seq */
+    uint64_t checkpoint_events;
+    uint64_t checkpoint_digest;
+} asx_replay_prefix;
+
+/* As asx_replay_open, for a stream that may have been cut short: instead
+ * of refusing for a missing END or a broken tail it serves the committed
+ * prefix (see "Recovery replay" above). Identity, replayability of the
+ * records in the prefix and, when an END is present, its totals are
+ * checked as for asx_replay_open; a stream whose header is bad or cut is
+ * still refused. *prefix (required) is filled. Returns ASX_REPLAY_OK, or
+ * the error with *report filled. */
+ASX_API asx_replay_error asx_replay_open_prefix(asx_replay *r, const uint8_t *bytes, size_t len,
+                                                const asx_replay_identity *identity,
+                                                asx_replay_report *report,
+                                                asx_replay_prefix *prefix);
+
+/* Fill the progress fields of *prefix from `r` (a recovery replay). */
+ASX_API void asx_replay_prefix_progress(const asx_replay *r, asx_replay_prefix *prefix);
 
 /* Make `r` the replay the native adapters serve from, so they answer from
  * the stream instead of the OS (asx_replay_serve_*); asx_replay_deactivate
@@ -302,6 +368,19 @@ ASX_API asx_replay_error asx_journal_replay(const uint8_t *bytes, size_t len,
                                             const asx_runtime_config *config,
                                             asx_replay_program_fn program, void *user,
                                             asx_status *program_status, asx_replay_report *report);
+
+/* asx_journal_replay over the committed prefix of a stream that may have
+ * been cut short (asx_replay_open_prefix). The outcome of a crashed
+ * recording is ASX_REPLAY_E_CUT with report->seq the first uncommitted
+ * record and *prefix saying what was verified; ASX_REPLAY_OK only for a
+ * complete stream the program consumed exactly. Any other error is as for
+ * asx_journal_replay, DIVERGED naming the first committed record whose
+ * trace checkpoint or request did not match. *prefix is filled whenever the
+ * stream was opened. */
+ASX_API asx_replay_error asx_journal_replay_prefix(
+    const uint8_t *bytes, size_t len, const asx_replay_identity *identity,
+    const asx_runtime_config *config, asx_replay_program_fn program, void *user,
+    asx_status *program_status, asx_replay_report *report, asx_replay_prefix *prefix);
 
 #ifdef __cplusplus
 }

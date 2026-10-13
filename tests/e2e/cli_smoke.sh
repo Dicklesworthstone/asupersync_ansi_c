@@ -156,6 +156,17 @@ else
     e2e_scenario "cli_smoke.replay_truncated" "no INCOMPLETE verdict" "fail"
 fi
 
+# Scenario: the cut journal's report names the committed prefix a recovery
+# replay would serve (what verified through its last chain), in both forms
+if grep -q "prefix:  [0-9]* data records in the first [0-9]* bytes verify" \
+    "${E2E_ARTIFACT_DIR}/replay_cut.txt" &&
+    "$CLI_BIN" replay "${E2E_ARTIFACT_DIR}/doctor_cut.journal" --format=json 2>/dev/null |
+    grep -q '"prefix":{"bytes":[0-9]*,"data_records":[0-9]*,"cut_seq":[0-9]*,"reason":"INCOMPLETE"}'; then
+    e2e_scenario "cli_smoke.replay_names_the_prefix" "" "pass"
+else
+    e2e_scenario "cli_smoke.replay_names_the_prefix" "no prefix line or object" "fail"
+fi
+
 # Scenario: a missing journal is an error (exit 2), not a verdict
 "$CLI_BIN" replay "${E2E_ARTIFACT_DIR}/no-such.journal" >/dev/null 2>&1 && rc=0 || rc=$?
 if [ "$rc" -eq 2 ]; then

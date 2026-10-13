@@ -11,7 +11,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-#if defined(ASX_PROFILE_POSIX) && defined(ASX_DETERMINISTIC) && (ASX_DETERMINISTIC == 0)
+#if defined(ASX_PROFILE_POSIX)
 #ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L
 #endif
@@ -21,7 +21,11 @@
 
 #include "../../test_harness.h"
 #include <asx/asx.h>
+#if defined(ASX_PROFILE_POSIX)
+#include <asx/platform/posix.h>
+#endif
 #include <asx/runtime/journal.h>
+#include <asx/runtime/trace.h>
 #include <string.h>
 
 /* ------------------------------------------------------------------ */
@@ -740,6 +744,532 @@ TEST(wrapped_hooks_forward_unchanged_and_record_raw_results) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Commit points, trace checkpoints, the committed prefix (RP4)        */
+/* ------------------------------------------------------------------ */
+
+#define NOTE_REC_LEN (ASX_JOURNAL_RECORD_HEAD_BYTES + 14u) /* a BLOCKING_DONE record */
+#define CTL_REC_LEN (ASX_JOURNAL_RECORD_HEAD_BYTES + 13u)  /* a NET_CTL record */
+#define CHAIN_REC_LEN (ASX_JOURNAL_RECORD_HEAD_BYTES + ASX_JOURNAL_CHAIN_PAYLOAD_BYTES)
+#define END_REC_LEN (ASX_JOURNAL_RECORD_HEAD_BYTES + ASX_JOURNAL_END_PAYLOAD_BYTES)
+
+typedef struct {
+    uint32_t calls;
+    uint64_t chain_seq;
+    uint64_t data_records;
+    uint64_t stream_bytes;
+    uint64_t trace_events;
+    uint64_t trace_digest;
+    int trace_valid;
+    int final;
+    size_t sink_len; /* what the sink held when commit_fn ran */
+    asx_status fail_with;
+} commit_log;
+
+static commit_log g_commit;
+
+static asx_status log_commit(void *ctx, const asx_journal_commit *c) {
+    (void)ctx;
+    g_commit.calls++;
+    g_commit.chain_seq = c->chain_seq;
+    g_commit.data_records = c->data_records;
+    g_commit.stream_bytes = c->stream_bytes;
+    g_commit.trace_events = c->trace_events;
+    g_commit.trace_digest = c->trace_digest;
+    g_commit.trace_valid = c->trace_valid;
+    g_commit.final = c->final;
+    g_commit.sink_len = g_out_len;
+    return g_commit.fail_with;
+}
+
+static asx_status open_persist(asx_journal *j, uint32_t chain_every, uint32_t commit_every) {
+    asx_journal_config cfg;
+    memset(&g_commit, 0, sizeof(g_commit));
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.sink_fn = mem_sink;
+    cfg.buffer = g_stage;
+    cfg.buffer_cap = 4096u;
+    cfg.chain_every = chain_every;
+    cfg.persist = ASX_JOURNAL_PERSIST_CHAIN;
+    cfg.commit_every_chains = commit_every;
+    cfg.commit_fn = log_commit;
+    cfg.rust_rev_hash = asx_journal_text_hash("5e60b1c4c");
+    cfg.build_hash = asx_journal_text_hash("02cdd96");
+    return asx_journal_init(j, &cfg);
+}
+
+TEST(commit_points_hand_the_prefix_to_the_sink_before_commit_fn_runs) {
+    asx_journal j;
+    asx_journal_stats st;
+    uint64_t at_commit;
+
+    sink_reset();
+    ASSERT_EQ(open_persist(&j, 4u, 2u), ASX_OK);
+    ASSERT_EQ(asx_journal_install(&j), ASX_OK);
+
+    /* A chain after 4 records is not a commit point (every second one is):
+     * the sink has seen nothing. */
+    note_many(7u);
+    ASSERT_EQ(g_commit.calls, 0u);
+    ASSERT_EQ(g_out_len, (size_t)0u);
+
+    /* The 8th record closes the second chain: header, 8 records and 2
+     * chains are in the sink, then commit_fn ran with their length. */
+    note_many(1u);
+    at_commit = (uint64_t)ASX_JOURNAL_HEADER_BYTES + 8u * NOTE_REC_LEN + 2u * CHAIN_REC_LEN;
+    ASSERT_EQ(g_commit.calls, 1u);
+    ASSERT_EQ(g_commit.chain_seq, (uint64_t)9u); /* data 0-3, chain 4, data 5-8, chain 9 */
+    ASSERT_EQ(g_commit.data_records, (uint64_t)8u);
+    ASSERT_EQ(g_commit.stream_bytes, at_commit);
+    ASSERT_EQ((uint64_t)g_commit.sink_len, at_commit);
+    ASSERT_EQ((uint64_t)g_out_len, at_commit);
+    ASSERT_EQ(g_commit.final, 0);
+    ASSERT_EQ(g_commit.trace_valid, 0); /* an off-thread record closed it */
+    asx_journal_get_stats(&j, &st);
+    ASSERT_EQ(st.commits, (uint64_t)1u);
+    ASSERT_EQ(st.committed_bytes, at_commit);
+
+    /* Finish writes the last chain and END, then commits once more. */
+    note_many(3u);
+    asx_journal_uninstall();
+    ASSERT_EQ(asx_journal_finish(&j), ASX_OK);
+    ASSERT_EQ(g_commit.calls, 2u);
+    ASSERT_EQ(g_commit.final, 1);
+    ASSERT_EQ(g_commit.trace_valid, 0);
+    ASSERT_EQ(g_commit.stream_bytes, (uint64_t)g_out_len);
+    ASSERT_EQ((uint64_t)g_commit.sink_len, (uint64_t)g_out_len);
+    ASSERT_EQ(g_commit.chain_seq, (uint64_t)(8u + 2u + 3u + 1u)); /* the END seq */
+}
+
+TEST(a_buffered_journal_never_calls_commit_fn) {
+    asx_journal j;
+    asx_journal_config cfg;
+    asx_journal_stats st;
+
+    sink_reset();
+    memset(&g_commit, 0, sizeof(g_commit));
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.sink_fn = mem_sink;
+    cfg.buffer = g_stage;
+    cfg.buffer_cap = 4096u;
+    cfg.chain_every = 2u;
+    cfg.commit_fn = log_commit; /* persist stays BUFFER: not used */
+    ASSERT_EQ(asx_journal_init(&j, &cfg), ASX_OK);
+    ASSERT_EQ(asx_journal_install(&j), ASX_OK);
+    note_many(10u);
+    ASSERT_EQ(g_out_len, (size_t)0u);
+    asx_journal_uninstall();
+    ASSERT_EQ(asx_journal_finish(&j), ASX_OK);
+    ASSERT_EQ(g_commit.calls, 0u);
+    asx_journal_get_stats(&j, &st);
+    ASSERT_EQ(st.commits, (uint64_t)0u);
+}
+
+TEST(a_failing_commit_sticks_and_marks_the_stream_incomplete) {
+    asx_journal j;
+    asx_journal_reader r;
+    asx_journal_record rec;
+    asx_journal_stats st;
+    asx_journal_read_result rr;
+
+    sink_reset();
+    ASSERT_EQ(open_persist(&j, 4u, 1u), ASX_OK);
+    g_commit.fail_with = ASX_E_RESOURCE_EXHAUSTED;
+    ASSERT_EQ(asx_journal_install(&j), ASX_OK);
+    note_many(4u);
+    ASSERT_EQ(asx_journal_status(&j), ASX_E_RESOURCE_EXHAUSTED);
+    note_many(4u); /* never reach the caller; counted as dropped */
+    asx_journal_get_stats(&j, &st);
+    ASSERT_EQ(st.dropped, (uint64_t)4u);
+    ASSERT_EQ(st.commits, (uint64_t)1u);
+    asx_journal_uninstall();
+    ASSERT_EQ(asx_journal_finish(&j), ASX_E_RESOURCE_EXHAUSTED);
+
+    /* The first window is in the sink, intact: the reader bounds it. */
+    ASSERT_EQ((int)asx_journal_reader_init(&r, g_out, g_out_len), (int)ASX_JOURNAL_READ_RECORD);
+    for (;;) {
+        rr = asx_journal_reader_next(&r, &rec);
+        if (rr != ASX_JOURNAL_READ_RECORD) break;
+    }
+    ASSERT_EQ(r.chain_end_records, (uint64_t)4u);
+}
+
+TEST(a_sampled_window_carries_a_trace_checkpoint_the_chain_covers) {
+    asx_journal j;
+    asx_journal_reader r;
+    asx_journal_record rec;
+    asx_journal_read_result rr;
+    size_t chain_off = (size_t)ASX_JOURNAL_HEADER_BYTES + 4u * CTL_REC_LEN;
+    static uint8_t copy[OUT_CAP];
+    uint32_t i;
+    uint64_t digest;
+
+    sink_reset();
+    asx_trace_reset();
+    asx_trace_emit(ASX_TRACE_SCHED_POLL, 1u, 0u);
+    asx_trace_emit(ASX_TRACE_SCHED_POLL, 2u, 0u);
+    ASSERT_EQ(open_persist(&j, 4u, 1u), ASX_OK);
+    ASSERT_EQ(asx_journal_install(&j), ASX_OK);
+    for (i = 0; i < 4u; i++) asx_journal_note_net_ctl(0u, (uint64_t)i, (int32_t)ASX_OK);
+    digest = asx_trace_digest();
+
+    /* The window's last record was taken on the runtime thread: the commit
+     * carries the trace position and digest of that moment. */
+    ASSERT_EQ(g_commit.calls, 1u);
+    ASSERT_EQ(g_commit.trace_valid, 1);
+    ASSERT_EQ(g_commit.trace_events, (uint64_t)2u);
+    ASSERT_EQ(g_commit.trace_digest, digest);
+    asx_journal_uninstall();
+    ASSERT_EQ(asx_journal_finish(&j), ASX_OK);
+
+    ASSERT_EQ(g_out[chain_off + 4u], (uint8_t)ASX_JOURNAL_KIND_CHAIN);
+    ASSERT_TRUE((g_out[chain_off + 5u] & ASX_JOURNAL_REC_TRACE_CHECKPOINT) != 0u);
+    ASSERT_EQ(asx_journal_get_u64(g_out + chain_off + 16u), (uint64_t)2u); /* head trace_seq */
+    ASSERT_EQ(asx_journal_get_u64(g_out + chain_off + ASX_JOURNAL_RECORD_HEAD_BYTES +
+                                  ASX_JOURNAL_CHAIN_TRACE_OFFSET + 8u),
+              digest);
+    ASSERT_EQ((int)asx_journal_reader_init(&r, g_out, g_out_len), (int)ASX_JOURNAL_READ_RECORD);
+    for (;;) {
+        rr = asx_journal_reader_next(&r, &rec);
+        if (rr != ASX_JOURNAL_READ_RECORD) break;
+    }
+    ASSERT_EQ((int)rr, (int)ASX_JOURNAL_READ_END);
+    ASSERT_EQ(r.chain_trace_valid, 1);
+    ASSERT_EQ(r.chain_trace_events, (uint64_t)2u);
+    ASSERT_EQ(r.chain_trace_digest, digest);
+
+    /* An edited checkpoint breaks the chain like an edited record. */
+    memcpy(copy, g_out, g_out_len);
+    copy[chain_off + ASX_JOURNAL_RECORD_HEAD_BYTES + ASX_JOURNAL_CHAIN_TRACE_OFFSET + 8u] ^= 0x01u;
+    ASSERT_EQ((int)asx_journal_reader_init(&r, copy, g_out_len), (int)ASX_JOURNAL_READ_RECORD);
+    for (;;) {
+        rr = asx_journal_reader_next(&r, &rec);
+        if (rr != ASX_JOURNAL_READ_RECORD) break;
+    }
+    ASSERT_EQ((int)rr, (int)ASX_JOURNAL_READ_CORRUPT);
+    ASSERT_EQ(r.chain_end_pos, (size_t)ASX_JOURNAL_HEADER_BYTES);
+}
+
+TEST(the_reader_bounds_the_committed_prefix_of_a_cut_stream) {
+    asx_journal j;
+    asx_journal_reader r;
+    asx_journal_record rec;
+    asx_journal_read_result rr;
+    size_t whole;
+    size_t after_two = (size_t)ASX_JOURNAL_HEADER_BYTES + 16u * NOTE_REC_LEN + 2u * CHAIN_REC_LEN;
+    size_t after_one = (size_t)ASX_JOURNAL_HEADER_BYTES + 8u * NOTE_REC_LEN + 1u * CHAIN_REC_LEN;
+    static uint8_t copy[OUT_CAP];
+
+    sink_reset();
+    ASSERT_EQ(open_persist(&j, 8u, 1u), ASX_OK);
+    ASSERT_EQ(asx_journal_install(&j), ASX_OK);
+    note_many(20u);
+    asx_journal_uninstall();
+    ASSERT_EQ(asx_journal_finish(&j), ASX_OK);
+    whole = g_out_len;
+
+    /* Cut inside the third window's first record: the committed prefix is
+     * the first two windows, the cut is the third's first seq. */
+    ASSERT_EQ((int)asx_journal_reader_init(&r, g_out, after_two + 7u),
+              (int)ASX_JOURNAL_READ_RECORD);
+    for (;;) {
+        rr = asx_journal_reader_next(&r, &rec);
+        if (rr != ASX_JOURNAL_READ_RECORD) break;
+    }
+    ASSERT_EQ((int)rr, (int)ASX_JOURNAL_READ_TRUNCATED);
+    ASSERT_EQ(r.chain_end_pos, after_two);
+    ASSERT_EQ(r.chain_end_records, (uint64_t)16u);
+    ASSERT_EQ(r.chain_end_seq, (uint64_t)18u); /* 16 data records and 2 chains */
+
+    /* Cut before the first chain: nothing is committed. */
+    ASSERT_EQ((int)asx_journal_reader_init(&r, g_out,
+                                           ASX_JOURNAL_HEADER_BYTES + 3u * NOTE_REC_LEN + 5u),
+              (int)ASX_JOURNAL_READ_RECORD);
+    for (;;) {
+        rr = asx_journal_reader_next(&r, &rec);
+        if (rr != ASX_JOURNAL_READ_RECORD) break;
+    }
+    ASSERT_EQ((int)rr, (int)ASX_JOURNAL_READ_TRUNCATED);
+    ASSERT_EQ(r.chain_end_pos, (size_t)ASX_JOURNAL_HEADER_BYTES);
+    ASSERT_EQ(r.chain_end_records, (uint64_t)0u);
+    ASSERT_EQ(r.chain_end_seq, (uint64_t)0u);
+
+    /* A byte changed in the second window: the first window still stands. */
+    memcpy(copy, g_out, whole);
+    copy[after_one + 3u * NOTE_REC_LEN + ASX_JOURNAL_RECORD_HEAD_BYTES + 2u] ^= 0x40u;
+    ASSERT_EQ((int)asx_journal_reader_init(&r, copy, whole), (int)ASX_JOURNAL_READ_RECORD);
+    for (;;) {
+        rr = asx_journal_reader_next(&r, &rec);
+        if (rr != ASX_JOURNAL_READ_RECORD) break;
+    }
+    ASSERT_EQ((int)rr, (int)ASX_JOURNAL_READ_CORRUPT);
+    ASSERT_EQ(r.chain_end_pos, after_one);
+    ASSERT_EQ(r.chain_end_records, (uint64_t)8u);
+    ASSERT_EQ(r.chain_end_seq, (uint64_t)9u);
+
+    /* The whole stream: its last chain ends the committed prefix, END follows. */
+    ASSERT_EQ((int)asx_journal_reader_init(&r, g_out, whole), (int)ASX_JOURNAL_READ_RECORD);
+    for (;;) {
+        rr = asx_journal_reader_next(&r, &rec);
+        if (rr != ASX_JOURNAL_READ_RECORD) break;
+    }
+    ASSERT_EQ((int)rr, (int)ASX_JOURNAL_READ_END);
+    ASSERT_EQ(r.chain_end_pos, whole - END_REC_LEN);
+    ASSERT_EQ(r.chain_end_records, (uint64_t)20u);
+}
+
+/* --- the flash store: a RAM ring in front of a write-budgeted log --- */
+
+static uint8_t g_flash[8192];
+static uint64_t g_flash_next;
+static uint32_t g_flash_writes;
+static asx_status g_flash_fail;
+
+static asx_status flash_write(void *ctx, uint64_t offset, const uint8_t *bytes, uint32_t len) {
+    (void)ctx;
+    if (g_flash_fail != ASX_OK) return g_flash_fail;
+    /* An append-only log: every write continues the last. */
+    if (offset != g_flash_next || offset + len > sizeof(g_flash)) return ASX_E_INVALID_STATE;
+    memcpy(g_flash + offset, bytes, len);
+    g_flash_next += len;
+    g_flash_writes++;
+    return ASX_OK;
+}
+
+static asx_status open_flash_journal(asx_journal *j, asx_journal_flash *f, uint8_t *ring,
+                                     uint32_t ring_cap, uint64_t wear_budget, uint32_t min_flush,
+                                     uint32_t chain_every) {
+    asx_journal_config cfg;
+    asx_status st;
+    sink_reset();
+    g_flash_next = 0u;
+    g_flash_writes = 0u;
+    g_flash_fail = ASX_OK;
+    st = asx_journal_flash_init(f, ring, ring_cap, flash_write, NULL, (uint64_t)sizeof(g_flash),
+                                wear_budget, min_flush);
+    if (st != ASX_OK) return st;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.sink_fn = asx_journal_flash_sink;
+    cfg.sink_ctx = f;
+    cfg.buffer = g_stage;
+    cfg.buffer_cap = 4096u;
+    cfg.chain_every = chain_every;
+    cfg.persist = ASX_JOURNAL_PERSIST_CHAIN;
+    cfg.commit_every_chains = 1u;
+    cfg.commit_fn = asx_journal_flash_commit;
+    return asx_journal_init(j, &cfg);
+}
+
+/* Read what flash holds: the chains that verify and the bytes they cover. */
+static void flash_prefix(size_t *pos, uint64_t *records, uint64_t *chains) {
+    asx_journal_reader r;
+    asx_journal_record rec;
+    asx_journal_read_result rr;
+    *pos = 0u;
+    *records = 0u;
+    *chains = 0u;
+    if (asx_journal_reader_init(&r, g_flash, (size_t)g_flash_next) != ASX_JOURNAL_READ_RECORD) {
+        return;
+    }
+    for (;;) {
+        rr = asx_journal_reader_next(&r, &rec);
+        if (rr != ASX_JOURNAL_READ_RECORD) break;
+    }
+    *pos = r.chain_end_pos;
+    *records = r.chain_end_records;
+    *chains = r.chains;
+}
+
+TEST(the_flash_log_holds_only_the_committed_prefix_when_the_run_dies) {
+    asx_journal j;
+    asx_journal_flash f;
+    static uint8_t ring[2048];
+    size_t pos;
+    uint64_t records;
+    uint64_t chains;
+    uint64_t want = (uint64_t)ASX_JOURNAL_HEADER_BYTES + 28u * NOTE_REC_LEN + 7u * CHAIN_REC_LEN;
+
+    ASSERT_EQ(open_flash_journal(&j, &f, ring, (uint32_t)sizeof(ring), 0u, 0u, 4u), ASX_OK);
+    ASSERT_EQ(asx_journal_install(&j), ASX_OK);
+    note_many(30u); /* the process dies here: no finish, 2 records still staged */
+    asx_journal_uninstall();
+
+    ASSERT_EQ(g_flash_next, want);
+    ASSERT_EQ(f.flushed, want);
+    ASSERT_EQ(f.len, 0u); /* the ring holds only what flash does not */
+    ASSERT_EQ(f.wear_exhausted, 0);
+    flash_prefix(&pos, &records, &chains);
+    ASSERT_EQ(pos, (size_t)want);
+    ASSERT_EQ(records, (uint64_t)28u);
+    ASSERT_EQ(chains, (uint64_t)7u);
+}
+
+TEST(a_wrapped_ring_flushes_in_order) {
+    asx_journal j;
+    asx_journal_flash f;
+    static uint8_t ring[300]; /* a window is 224 bytes: the second one wraps */
+    size_t pos;
+    uint64_t records;
+    uint64_t chains;
+
+    ASSERT_EQ(open_flash_journal(&j, &f, ring, (uint32_t)sizeof(ring), 0u, 0u, 4u), ASX_OK);
+    ASSERT_EQ(asx_journal_install(&j), ASX_OK);
+    note_many(16u);
+    asx_journal_uninstall();
+    ASSERT_EQ(asx_journal_finish(&j), ASX_OK);
+    ASSERT_EQ(asx_journal_status(&j), ASX_OK);
+    ASSERT_TRUE(g_flash_writes >= 5u); /* a wrap makes a flush two writes */
+    ASSERT_EQ(f.flushed, g_flash_next);
+    flash_prefix(&pos, &records, &chains);
+    ASSERT_EQ(records, (uint64_t)16u);
+    ASSERT_EQ(chains, (uint64_t)4u);
+}
+
+TEST(the_wear_budget_keeps_flash_to_a_chain_aligned_prefix) {
+    asx_journal j;
+    asx_journal_flash f;
+    static uint8_t ring[600];
+    size_t pos;
+    uint64_t records;
+    uint64_t chains;
+    /* Windows: 48 + 4*38 + 72 = 272 bytes, then 224 each. A budget of 700
+     * takes two (496) and holds the third (720) back. */
+    ASSERT_EQ(open_flash_journal(&j, &f, ring, (uint32_t)sizeof(ring), 700u, 0u, 4u), ASX_OK);
+    ASSERT_EQ(asx_journal_install(&j), ASX_OK);
+    note_many(12u);
+    ASSERT_EQ(f.flushed, (uint64_t)496u);
+    ASSERT_EQ(f.wear_exhausted, 1);
+    ASSERT_EQ(asx_journal_status(&j), ASX_OK); /* recording goes on in RAM */
+    ASSERT_EQ(f.len, 224u);
+
+    /* Past the ring's room the sink fails, the journal marks the stream
+     * incomplete, and flash still holds exactly what it had. */
+    note_many(8u);
+    ASSERT_EQ(asx_journal_status(&j), ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(f.status, ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(f.flushed, (uint64_t)496u);
+    asx_journal_uninstall();
+    flash_prefix(&pos, &records, &chains);
+    ASSERT_EQ(pos, (size_t)496u);
+    ASSERT_EQ(records, (uint64_t)8u);
+    ASSERT_EQ(chains, (uint64_t)2u);
+}
+
+TEST(min_flush_coalesces_commits_and_the_final_commit_flushes_the_rest) {
+    asx_journal j;
+    asx_journal_flash f;
+    asx_journal_reader r;
+    asx_journal_record rec;
+    asx_journal_read_result rr;
+    static uint8_t ring[4096];
+
+    ASSERT_EQ(open_flash_journal(&j, &f, ring, (uint32_t)sizeof(ring), 0u, 600u, 4u), ASX_OK);
+    ASSERT_EQ(asx_journal_install(&j), ASX_OK);
+    note_many(12u); /* three windows: 272, 496, then 720 >= 600 */
+    ASSERT_EQ(g_flash_writes, 1u);
+    ASSERT_EQ(f.flushed, (uint64_t)720u);
+    asx_journal_uninstall();
+    ASSERT_EQ(asx_journal_finish(&j), ASX_OK); /* END, final: flushed whatever the size */
+    ASSERT_EQ(f.flushed, g_flash_next);
+    ASSERT_EQ((int)asx_journal_reader_init(&r, g_flash, (size_t)g_flash_next),
+              (int)ASX_JOURNAL_READ_RECORD);
+    for (;;) {
+        rr = asx_journal_reader_next(&r, &rec);
+        if (rr != ASX_JOURNAL_READ_RECORD) break;
+    }
+    ASSERT_EQ((int)rr, (int)ASX_JOURNAL_READ_END);
+}
+
+TEST(a_failed_flash_write_sticks_and_flash_keeps_the_earlier_prefix) {
+    asx_journal j;
+    asx_journal_flash f;
+    static uint8_t ring[1024];
+    size_t pos;
+    uint64_t records;
+    uint64_t chains;
+
+    ASSERT_EQ(open_flash_journal(&j, &f, ring, (uint32_t)sizeof(ring), 0u, 0u, 4u), ASX_OK);
+    ASSERT_EQ(asx_journal_install(&j), ASX_OK);
+    note_many(8u);
+    ASSERT_EQ(asx_journal_status(&j), ASX_OK);
+    g_flash_fail = ASX_E_RESOURCE_EXHAUSTED;
+    note_many(4u);
+    ASSERT_EQ(asx_journal_status(&j), ASX_E_RESOURCE_EXHAUSTED);
+    asx_journal_uninstall();
+    flash_prefix(&pos, &records, &chains);
+    ASSERT_EQ(records, (uint64_t)8u);
+    ASSERT_EQ(chains, (uint64_t)2u);
+    ASSERT_EQ(asx_journal_finish(&j), ASX_E_RESOURCE_EXHAUSTED);
+}
+
+TEST(the_flash_store_rejects_bad_arguments) {
+    asx_journal_flash f;
+    static uint8_t ring[64];
+    asx_journal_commit c;
+    ASSERT_EQ(asx_journal_flash_init(NULL, ring, 64u, flash_write, NULL, 0u, 0u, 0u),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_journal_flash_init(&f, NULL, 64u, flash_write, NULL, 0u, 0u, 0u),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_journal_flash_init(&f, ring, 0u, flash_write, NULL, 0u, 0u, 0u),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_journal_flash_init(&f, ring, 64u, NULL, NULL, 0u, 0u, 0u),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_journal_flash_init(&f, ring, 64u, flash_write, NULL, 0u, 0u, 0u), ASX_OK);
+    ASSERT_EQ(asx_journal_flash_sink(NULL, ring, 4u), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_journal_flash_sink(&f, NULL, 4u), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_journal_flash_sink(&f, NULL, 0u), ASX_OK);
+    memset(&c, 0, sizeof(c));
+    c.stream_bytes = 10u; /* more than was offered */
+    ASSERT_EQ(asx_journal_flash_commit(&f, &c), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_journal_flash_commit(NULL, &c), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_journal_flash_commit(&f, NULL), ASX_E_INVALID_ARGUMENT);
+}
+
+TEST(each_profile_names_its_persistence_store) {
+#if defined(ASX_PROFILE_POSIX)
+    ASSERT_EQ((int)asx_journal_profile_store(), (int)ASX_JOURNAL_STORE_FILE);
+#elif defined(ASX_PROFILE_EMBEDDED_ROUTER)
+    ASSERT_EQ((int)asx_journal_profile_store(), (int)ASX_JOURNAL_STORE_FLASH);
+#else
+    ASSERT_EQ((int)asx_journal_profile_store(), (int)ASX_JOURNAL_STORE_CALLER);
+#endif
+}
+
+#if defined(ASX_PROFILE_POSIX)
+TEST(the_posix_file_store_writes_every_byte_and_maps_errors) {
+    asx_posix_journal_file f;
+    asx_journal_commit c;
+    int fds[2];
+    uint8_t got[8];
+
+    memset(&f, 0, sizeof(f));
+    memset(&c, 0, sizeof(c));
+    ASSERT_EQ(asx_posix_journal_file_open(NULL, "/tmp/x"), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_posix_journal_file_open(&f, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_posix_journal_file_open(&f, ""), ASX_E_INVALID_ARGUMENT);
+    /* An existing path is never overwritten. */
+    ASSERT_EQ(asx_posix_journal_file_open(&f, "/dev/null"), ASX_E_ALREADY_EXISTS);
+    ASSERT_EQ(asx_posix_journal_file_open(&f, "/nonexistent-asx-dir/journal"), ASX_E_NOT_FOUND);
+
+    /* The sink and commit over a pipe's write end: the bytes arrive whole,
+     * and fsync(2) on a pipe is the OS's error, mapped. */
+    ASSERT_EQ(pipe(fds), 0);
+    f.fd = fds[1];
+    ASSERT_EQ(asx_posix_journal_file_sink(&f, (const uint8_t *)"hello", 5u), ASX_OK);
+    ASSERT_EQ(f.bytes, (uint64_t)5u);
+    ASSERT_EQ((int)read(fds[0], got, sizeof(got)), 5);
+    ASSERT_EQ(memcmp(got, "hello", 5u), 0);
+    c.stream_bytes = 5u;
+    ASSERT_EQ(asx_posix_journal_file_commit(&f, &c), ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(asx_posix_journal_file_sink(NULL, (const uint8_t *)"x", 1u), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_posix_journal_file_commit(&f, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_posix_journal_file_close(&f), ASX_OK);
+    ASSERT_EQ(asx_posix_journal_file_close(&f), ASX_OK); /* idempotent */
+    ASSERT_EQ(asx_posix_journal_file_sink(&f, (const uint8_t *)"x", 1u), ASX_E_INVALID_ARGUMENT);
+    (void)close(fds[0]);
+}
+#endif /* ASX_PROFILE_POSIX */
+
+/* ------------------------------------------------------------------ */
 /* A live POSIX run                                                    */
 /* ------------------------------------------------------------------ */
 
@@ -1046,6 +1576,21 @@ int main(void) {
     RUN_TEST(the_ring_sink_keeps_the_most_recent_bytes);
     RUN_TEST(wrapped_hooks_forward_unchanged_and_record_raw_results);
     RUN_TEST(a_poll_larger_than_the_buffer_is_stored_truncated_and_flagged);
+    RUN_TEST(commit_points_hand_the_prefix_to_the_sink_before_commit_fn_runs);
+    RUN_TEST(a_buffered_journal_never_calls_commit_fn);
+    RUN_TEST(a_failing_commit_sticks_and_marks_the_stream_incomplete);
+    RUN_TEST(a_sampled_window_carries_a_trace_checkpoint_the_chain_covers);
+    RUN_TEST(the_reader_bounds_the_committed_prefix_of_a_cut_stream);
+    RUN_TEST(the_flash_log_holds_only_the_committed_prefix_when_the_run_dies);
+    RUN_TEST(a_wrapped_ring_flushes_in_order);
+    RUN_TEST(the_wear_budget_keeps_flash_to_a_chain_aligned_prefix);
+    RUN_TEST(min_flush_coalesces_commits_and_the_final_commit_flushes_the_rest);
+    RUN_TEST(a_failed_flash_write_sticks_and_flash_keeps_the_earlier_prefix);
+    RUN_TEST(the_flash_store_rejects_bad_arguments);
+    RUN_TEST(each_profile_names_its_persistence_store);
+#if defined(ASX_PROFILE_POSIX)
+    RUN_TEST(the_posix_file_store_writes_every_byte_and_maps_errors);
+#endif
 #if defined(ASX_PROFILE_POSIX) && !ASX_DETERMINISTIC
     RUN_TEST(a_small_live_run_is_recorded_and_read_back);
 #endif

@@ -18,8 +18,8 @@
  *     With no journal installed each is one load and a branch.
  *   One journal is active per process, as the runtime is a singleton.
  *
- * Stream format v1 (all integers little-endian)
- *   header   48 bytes: "ASXJRNL\0", u32 version (1), u32 flags
+ * Stream format v2 (all integers little-endian)
+ *   header   48 bytes: "ASXJRNL\0", u32 version (2), u32 flags
  *            (ASX_JOURNAL_FLAG_*), u64 config fingerprint (the caller's,
  *            e.g. ASX_CONFIG_FINGERPRINT), u64 rust_rev_hash (the pinned
  *            asupersync revision the build targets), u64 build_hash (the
@@ -33,9 +33,20 @@
  *              u64 seq (0.., every record, chain and end included) |
  *              u64 trace_seq (asx_trace_emitted_total() when the result
  *                             was taken; 0 when not sampled)
- *   chain    kind CHAIN, 32-byte payload: SHA-256(previous chain || the
- *            bytes of every record since the previous chain record). The
- *            first chain starts from SHA-256 of the 48 header bytes.
+ *   chain    kind CHAIN, 48-byte payload: 32 bytes SHA-256(previous chain ||
+ *            the bytes of every record since the previous chain record ||
+ *            the next 16 payload bytes), u64 trace events, u64 trace
+ *            digest. The first chain starts from SHA-256 of the 48 header
+ *            bytes. The trace fields are the run's trace position and
+ *            rolling digest (asx_trace_emitted_total, asx_trace_digest) at
+ *            the moment the last record of the window was taken, so a
+ *            replay can check every committed window against what the
+ *            recording saw: they are set, and the record flag
+ *            ASX_JOURNAL_REC_TRACE_CHECKPOINT with them, when that last
+ *            record carried a trace position (taken on the runtime
+ *            thread); a chain closed by an off-thread record, and the
+ *            chain finish writes, carry zeros and no flag. The record's
+ *            trace_seq is the trace events field.
  *   end      kind END, 64-byte payload: u64 data records, u64 stream bytes
  *            before END, u64 dropped records, i32 sticky status, u32 0,
  *            32-byte final chain. A stream without a valid END, with a
@@ -92,6 +103,31 @@
  * first failure sticks in asx_journal_status(); the stream is then marked
  * incomplete and a replay must refuse it.
  *
+ * Crash continuity. A process that dies leaves whatever the sink had been
+ * given: a stream with no END, ending anywhere, possibly inside a record.
+ * Its committed prefix is every record up to the last CHAIN that verifies
+ * (asx_journal_reader.chain_end_pos); a replay in recovery mode
+ * (journal_replay.h, asx_replay_open_prefix) runs the program over that
+ * prefix, checks each committed window's trace checkpoint, and refuses at
+ * the cut with the seq of the first record that was not committed.
+ * ASX_JOURNAL_PERSIST_BUFFER (the default) hands bytes to the sink only
+ * when the staging buffer is full, on flush and at finish, so a crash
+ * loses up to a buffer. ASX_JOURNAL_PERSIST_CHAIN makes every Nth chain
+ * (commit_every_chains) a commit point: the staged bytes, chain included,
+ * go to the sink and then commit_fn runs, with the length of the verified
+ * prefix; what a crash can lose is bounded by chain_every * N data
+ * records. What commit_fn does is the profile's persistence policy:
+ *   POSIX             a file; commit_fn is fsync(2)  (asx_posix_journal_file)
+ *   EMBEDDED_ROUTER   a RAM ring flushed to flash at commit points under a
+ *                     write budget, so flash wear is bounded (asx_journal_flash)
+ *   FREESTANDING and  the caller's sink and commit_fn: the caller makes the
+ *   the rest          prefix durable however its target needs (a watchdog-
+ *                     aligned flush on AUTOMOTIVE, a hand-off to a flusher
+ *                     on HFT). asx_journal_profile_store() names the
+ *                     compiled profile's choice.
+ * A killed process (SIGKILL) loses only what was not yet given to the sink;
+ * the fsync or flash flush is what a kernel crash or power loss needs.
+ *
  * Thread-safety: records may come from any thread (a spin lock orders
  * them). Install before the runtime starts and uninstall after it stops.
  *
@@ -111,10 +147,14 @@
 extern "C" {
 #endif
 
-#define ASX_JOURNAL_VERSION 1u
+#define ASX_JOURNAL_VERSION 2u
 #define ASX_JOURNAL_HEADER_BYTES 48u
 #define ASX_JOURNAL_RECORD_HEAD_BYTES 24u
-#define ASX_JOURNAL_CHAIN_PAYLOAD_BYTES 32u
+/* SHA-256 chain value, trace events, trace digest. */
+#define ASX_JOURNAL_CHAIN_PAYLOAD_BYTES 48u
+/* The trace fields' offset in a chain payload and their length. */
+#define ASX_JOURNAL_CHAIN_TRACE_OFFSET 32u
+#define ASX_JOURNAL_CHAIN_TRACE_BYTES 16u
 #define ASX_JOURNAL_END_PAYLOAD_BYTES 64u
 /* Staging space the journal keeps back so a chain and an end record always
  * fit: one chain record and one end record. */
@@ -143,6 +183,12 @@ extern "C" {
 #define ASX_JOURNAL_REC_SHAPE 0x1u     /* data replaced by its FNV-1a-64 */
 #define ASX_JOURNAL_REC_OFFTHREAD 0x2u /* taken off the runtime thread: trace_seq 0 */
 #define ASX_JOURNAL_REC_TRUNC 0x4u     /* reactor poll: fewer events stored than count */
+/* CHAIN record: its trace events and digest were sampled (see the format). */
+#define ASX_JOURNAL_REC_TRACE_CHECKPOINT 0x8u
+
+/* asx_journal_config.persist */
+#define ASX_JOURNAL_PERSIST_BUFFER 0u /* hand over when the buffer is full, on flush, at finish */
+#define ASX_JOURNAL_PERSIST_CHAIN 1u  /* also at every commit point, then commit_fn */
 
 typedef enum {
     ASX_JOURNAL_KIND_CLOCK = 1,
@@ -176,24 +222,51 @@ typedef enum {
  * reactor or network adapters). */
 typedef asx_status (*asx_journal_sink_fn)(void *ctx, const uint8_t *bytes, uint32_t len);
 
+/* What a commit point tells the persistence policy: the first
+ * `stream_bytes` bytes of the stream, every one of them already given to
+ * the sink, are a complete prefix that verifies up to the record at
+ * `chain_seq`. */
+typedef struct {
+    uint64_t chain_seq;    /* seq of the CHAIN record (the END record when `final`) */
+    uint64_t data_records; /* data records in the prefix */
+    uint64_t stream_bytes; /* length of the prefix, header to that record */
+    uint64_t trace_events; /* the trace position at the chain; valid when trace_valid */
+    uint64_t trace_digest; /* the trace's rolling digest there */
+    int trace_valid;       /* the chain carries a trace checkpoint */
+    int final;             /* the stream is finished: END is the last record */
+} asx_journal_commit;
+
+/* Called at a commit point (ASX_JOURNAL_PERSIST_CHAIN), after the sink took
+ * the staged bytes, with the config's sink_ctx. Make the prefix durable
+ * (fsync, a flash flush). ASX_OK, or the status that says why it is not:
+ * it sticks like a sink failure and the stream is then incomplete. Runs
+ * under the journal's lock, like the sink, with the same restrictions; it
+ * may read the trace only when `trace_valid`. */
+typedef asx_status (*asx_journal_commit_fn)(void *ctx, const asx_journal_commit *commit);
+
 typedef struct {
     asx_journal_sink_fn sink_fn; /* required */
     void *sink_ctx;
-    uint8_t *buffer;             /* caller-owned staging storage, required */
-    uint32_t buffer_cap;         /* >= ASX_JOURNAL_MIN_BUFFER */
-    uint32_t flags;              /* ASX_JOURNAL_FLAG_* */
-    uint32_t chain_every;        /* data records per chain record; 0 = default */
-    uint64_t config_fingerprint; /* stored in the header */
-    uint64_t rust_rev_hash;      /* asx_journal_text_hash of the asupersync rev; 0 = unsaid */
-    uint64_t build_hash;         /* asx_journal_text_hash of the C build's git sha; 0 = unsaid */
+    uint8_t *buffer;              /* caller-owned staging storage, required */
+    uint32_t buffer_cap;          /* >= ASX_JOURNAL_MIN_BUFFER */
+    uint32_t flags;               /* ASX_JOURNAL_FLAG_* */
+    uint32_t chain_every;         /* data records per chain record; 0 = default */
+    uint64_t config_fingerprint;  /* stored in the header */
+    uint64_t rust_rev_hash;       /* asx_journal_text_hash of the asupersync rev; 0 = unsaid */
+    uint64_t build_hash;          /* asx_journal_text_hash of the C build's git sha; 0 = unsaid */
+    uint32_t persist;             /* ASX_JOURNAL_PERSIST_*; 0 = BUFFER */
+    uint32_t commit_every_chains; /* PERSIST_CHAIN: chains per commit point; 0 = 1 */
+    asx_journal_commit_fn commit_fn; /* PERSIST_CHAIN: optional, given sink_ctx */
 } asx_journal_config;
 
 typedef struct {
-    uint64_t records;    /* data records accepted */
-    uint64_t bytes;      /* stream bytes produced, staged ones included */
-    uint64_t dropped;    /* data records not recorded (sink failure, size) */
-    uint64_t chains;     /* chain records written */
-    uint32_t sink_calls; /* calls made to the sink */
+    uint64_t records;         /* data records accepted */
+    uint64_t bytes;           /* stream bytes produced, staged ones included */
+    uint64_t dropped;         /* data records not recorded (sink failure, size) */
+    uint64_t chains;          /* chain records written */
+    uint32_t sink_calls;      /* calls made to the sink */
+    uint64_t commits;         /* commit points reached (commit_fn calls, when set) */
+    uint64_t committed_bytes; /* stream bytes at the last commit point */
 } asx_journal_stats;
 
 typedef struct {
@@ -203,6 +276,11 @@ typedef struct {
     uint32_t staged_data; /* data records staged and not yet handed over */
     uint32_t since_chain; /* data records since the last chain record */
     uint32_t chain_every;
+    uint32_t chains_since_commit;
+    int closing_sampled;   /* the record being staged carries a trace position */
+    int chain_trace_valid; /* the last chain carries a trace checkpoint */
+    uint64_t chain_events; /* ... its trace position */
+    uint64_t chain_digest; /* ... and rolling digest */
     uint64_t seq;
     asx_journal_stats stats;
     asx_status status; /* first failure, sticky */
@@ -277,6 +355,70 @@ ASX_API asx_status asx_journal_ring_sink(void *ctx, const uint8_t *bytes, uint32
 ASX_API uint32_t asx_journal_ring_read(const asx_journal_ring *r, uint8_t *dst, uint32_t cap);
 
 /* -------------------------------------------------------------------
+ * Persistence stores
+ * ------------------------------------------------------------------- */
+
+/* Which store a profile uses for ASX_JOURNAL_PERSIST_CHAIN. */
+typedef enum {
+    ASX_JOURNAL_STORE_CALLER = 0, /* the caller's sink and commit_fn */
+    ASX_JOURNAL_STORE_FILE = 1,   /* asx_posix_journal_file: write(2), fsync(2) per commit */
+    ASX_JOURNAL_STORE_FLASH = 2   /* asx_journal_flash: RAM ring, budgeted flash flush */
+} asx_journal_store_kind;
+
+/* The store the compiled profile uses: FILE on POSIX, FLASH on
+ * EMBEDDED_ROUTER, CALLER on every other profile (CORE, FREESTANDING, HFT,
+ * AUTOMOTIVE, WIN32). */
+ASX_API asx_journal_store_kind asx_journal_profile_store(void);
+
+/* Writes `len` bytes at `offset` of the flash log area: append-only, the
+ * offsets a store offers are consecutive. ASX_OK, or the status of the
+ * failed write. */
+typedef asx_status (*asx_journal_flash_write_fn)(void *ctx, uint64_t offset, const uint8_t *bytes,
+                                                 uint32_t len);
+
+/* A RAM ring in front of a flash log with a bounded write budget, for
+ * profiles where flash wears out. As the journal's sink it stages the
+ * stream's bytes in the ring; as its commit_fn it writes the committed
+ * prefix, whole, to flash, when at least `min_flush` committed bytes wait
+ * (or the stream is final). Flash therefore only ever holds a prefix that
+ * ends on a chain, and no byte is written twice. When the budget (or the
+ * area) cannot take the next prefix the store stops writing flash, keeps
+ * the stream in RAM and reports it in `wear_exhausted`; once the ring has
+ * no room for a byte the sink fails (ASX_E_RESOURCE_EXHAUSTED), the
+ * journal marks the stream incomplete, and flash keeps the prefix it had.
+ * Size the ring for the longest stretch between commits plus a flush. */
+typedef struct {
+    asx_journal_flash_write_fn write_fn; /* required */
+    void *write_ctx;
+    uint8_t *ring; /* caller-owned RAM, `ring_cap` bytes */
+    uint32_t ring_cap;
+    uint64_t area_bytes;   /* size of the flash log area; 0 = unlimited */
+    uint64_t wear_budget;  /* most bytes written to flash over the store's life; 0 = no limit */
+    uint32_t min_flush;    /* committed bytes that make a flush worth its wear; 0 = every commit */
+    uint32_t head;         /* ring: offset of the oldest byte not in flash */
+    uint32_t len;          /* ring: bytes held */
+    uint64_t offered;      /* stream bytes offered to the sink */
+    uint64_t committed;    /* stream bytes of the last commit's prefix */
+    uint64_t flushed;      /* stream bytes written to flash */
+    uint64_t flash_writes; /* write_fn calls */
+    int wear_exhausted;    /* a prefix was held back for the budget or the area */
+    asx_status status;     /* first failure, sticky */
+} asx_journal_flash;
+
+/* Start a store. Returns ASX_OK, or ASX_E_INVALID_ARGUMENT for NULLs or a
+ * zero ring. */
+ASX_API ASX_MUST_USE asx_status asx_journal_flash_init(asx_journal_flash *f, uint8_t *ring,
+                                                       uint32_t ring_cap,
+                                                       asx_journal_flash_write_fn write_fn,
+                                                       void *write_ctx, uint64_t area_bytes,
+                                                       uint64_t wear_budget, uint32_t min_flush);
+
+/* An asx_journal_sink_fn and an asx_journal_commit_fn; `ctx` is the
+ * asx_journal_flash. */
+ASX_API asx_status asx_journal_flash_sink(void *ctx, const uint8_t *bytes, uint32_t len);
+ASX_API asx_status asx_journal_flash_commit(void *ctx, const asx_journal_commit *commit);
+
+/* -------------------------------------------------------------------
  * Reader: validates a complete stream and walks its records.
  * ------------------------------------------------------------------- */
 
@@ -319,6 +461,17 @@ typedef struct {
     uint64_t window_first_seq;
     uint64_t fail_seq;
     uint64_t fail_first_seq;
+    /* The committed prefix: bytes [0, chain_end_pos) end with the last
+     * chain that verified (the header alone until one has), chain_end_seq
+     * is the seq that follows it (the first uncommitted record) and
+     * chain_end_records the data records in it. The trace fields are that
+     * chain's checkpoint. Valid however the read ended. */
+    size_t chain_end_pos;
+    uint64_t chain_end_seq;
+    uint64_t chain_end_records;
+    uint64_t chain_trace_events;
+    uint64_t chain_trace_digest;
+    int chain_trace_valid;
     uint8_t chain[ASX_SHA256_DIGEST_SIZE];
     asx_sha256_ctx window;
 } asx_journal_reader;

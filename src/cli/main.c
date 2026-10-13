@@ -111,6 +111,7 @@ static const char *replay_error_name(asx_replay_error e) {
     case ASX_REPLAY_E_DIVERGED: return "DIVERGED";
     case ASX_REPLAY_E_EXHAUSTED: return "EXHAUSTED";
     case ASX_REPLAY_E_RUNTIME: return "RUNTIME";
+    case ASX_REPLAY_E_CUT: return "CUT";
     default: return "?";
     }
 }
@@ -167,6 +168,7 @@ static int cmd_replay(const char *path, int json_output, const char *rust_rev, c
     asx_journal_reader rd;
     asx_journal_record rec;
     asx_journal_read_result rr;
+    asx_journal_read_result walk = ASX_JOURNAL_READ_BAD_HEADER;
     asx_replay r;
     asx_replay_report rep;
     asx_replay_identity id;
@@ -174,6 +176,7 @@ static int cmd_replay(const char *path, int json_output, const char *rust_rev, c
     uint32_t counts[256];
     uint32_t k;
     int first;
+    int has_prefix;
 
     if (bytes == NULL) {
         fprintf(stderr, "asx replay: %s: %s\n", path, err);
@@ -188,10 +191,16 @@ static int cmd_replay(const char *path, int json_output, const char *rust_rev, c
     memset(&rd, 0, sizeof(rd));
     rr = asx_journal_reader_init(&rd, bytes, len);
     if (rr == ASX_JOURNAL_READ_RECORD) {
-        while (asx_journal_reader_next(&rd, &rec) == ASX_JOURNAL_READ_RECORD) {
+        for (;;) {
+            walk = asx_journal_reader_next(&rd, &rec);
+            if (walk != ASX_JOURNAL_READ_RECORD) break;
             counts[rec.kind]++;
         }
     }
+    /* A stream that did not reach a valid END (a run that was killed, a
+     * damaged tail) still has a committed prefix: what verified through its
+     * last chain. A recovery replay serves exactly that. */
+    has_prefix = rr == ASX_JOURNAL_READ_RECORD && walk != ASX_JOURNAL_READ_END;
     verdict = asx_replay_open(&r, bytes, len, &id, &rep);
 
     if (json_output) {
@@ -214,7 +223,16 @@ static int cmd_replay(const char *path, int json_output, const char *rust_rev, c
             printf("%s\"%s\":%u", first ? "" : ",", kind_name(k), (unsigned)counts[k]);
             first = 0;
         }
-        printf("},\"accepted\":%s,\"verdict\":\"%s\"", verdict == ASX_REPLAY_OK ? "true" : "false",
+        printf("},\"prefix\":");
+        if (has_prefix) {
+            printf("{\"bytes\":%lu,\"data_records\":%llu,\"cut_seq\":%llu,\"reason\":\"%s\"}",
+                   (unsigned long)rd.chain_end_pos, (unsigned long long)rd.chain_end_records,
+                   (unsigned long long)rd.chain_end_seq,
+                   walk == ASX_JOURNAL_READ_TRUNCATED ? "INCOMPLETE" : "CORRUPT");
+        } else {
+            printf("null");
+        }
+        printf(",\"accepted\":%s,\"verdict\":\"%s\"", verdict == ASX_REPLAY_OK ? "true" : "false",
                replay_error_name(verdict));
         if (verdict != ASX_REPLAY_OK) {
             printf(",\"seq\":%llu,\"first_seq\":%llu,\"kind\":\"%s\",\"what\":\"",
@@ -242,6 +260,15 @@ static int cmd_replay(const char *path, int json_output, const char *rust_rev, c
             first = 0;
         }
         if (!first) printf("\n");
+        if (has_prefix) {
+            const char *why = walk == ASX_JOURNAL_READ_TRUNCATED
+                                  ? "the stream ends there"
+                                  : "a record or chain does not verify";
+            printf("  prefix:  %llu data records in the first %lu bytes verify; the next record, "
+                   "seq %llu, was not committed (%s)\n",
+                   (unsigned long long)rd.chain_end_records, (unsigned long)rd.chain_end_pos,
+                   (unsigned long long)rd.chain_end_seq, why);
+        }
         if (verdict == ASX_REPLAY_OK) {
             printf("  verdict: ACCEPTED (identity, integrity and every record are served by "
                    "this build)\n");

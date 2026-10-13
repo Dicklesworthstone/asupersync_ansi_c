@@ -22,6 +22,7 @@
 #include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_status.h>
+#include <asx/runtime/journal.h>
 
 #define ASX_POSIX_REACTOR_READABLE 0x01u
 #define ASX_POSIX_REACTOR_WRITABLE 0x02u
@@ -75,6 +76,47 @@ ASX_API void asx_posix_reactor_deregister_fd(void *reactor_ctx, int fd);
 
 /* Reset the POSIX reactor context, closing any platform handle it owns. */
 ASX_API void asx_posix_reactor_reset(void *reactor_ctx);
+
+/* -------------------------------------------------------------------
+ * Journal file store (the POSIX profile's persistence policy,
+ * asx/runtime/journal.h ASX_JOURNAL_STORE_FILE)
+ *
+ * The journal's sink appends the stream to a file; its commit function is
+ * fsync(2), run at every commit point of ASX_JOURNAL_PERSIST_CHAIN. Wire it
+ * with the store as both contexts:
+ *
+ *   asx_posix_journal_file file;
+ *   (void)asx_posix_journal_file_open(&file, path);
+ *   cfg.sink_fn = asx_posix_journal_file_sink;
+ *   cfg.sink_ctx = &file;
+ *   cfg.persist = ASX_JOURNAL_PERSIST_CHAIN;
+ *   cfg.commit_fn = asx_posix_journal_file_commit;
+ *   ...
+ *   (void)asx_journal_finish(&journal);
+ *   (void)asx_posix_journal_file_close(&file);
+ * ------------------------------------------------------------------- */
+typedef struct {
+    int fd;                   /* -1 when closed */
+    uint64_t bytes;           /* stream bytes written */
+    uint64_t syncs;           /* fsync(2) calls that succeeded */
+    uint64_t committed_bytes; /* stream bytes at the last fsync: durable */
+} asx_posix_journal_file;
+
+/* Create `path` exclusively (mode 0600, close-on-exec): an existing file is
+ * ASX_E_ALREADY_EXISTS and is never overwritten. ASX_OK, or
+ * ASX_E_INVALID_ARGUMENT for NULLs or an empty path, or the status of the
+ * failed open (NOT_FOUND, PERMISSION_DENIED, RESOURCE_EXHAUSTED). */
+ASX_API ASX_MUST_USE asx_status asx_posix_journal_file_open(asx_posix_journal_file *f,
+                                                            const char *path);
+
+/* An asx_journal_sink_fn and an asx_journal_commit_fn; `ctx` is the
+ * asx_posix_journal_file. The sink writes all `len` bytes or fails; the
+ * commit function fsyncs. */
+ASX_API asx_status asx_posix_journal_file_sink(void *ctx, const uint8_t *bytes, uint32_t len);
+ASX_API asx_status asx_posix_journal_file_commit(void *ctx, const asx_journal_commit *commit);
+
+/* Close the file (idempotent). ASX_OK, or the status of a failed close. */
+ASX_API asx_status asx_posix_journal_file_close(asx_posix_journal_file *f);
 
 #ifdef __cplusplus
 }

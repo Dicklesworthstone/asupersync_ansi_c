@@ -1001,5 +1001,9 @@ ASX_MUST_USE asx_status asx_task_spawn_finalizer_internal(asx_region_id region,
                                                           asx_task_poll_fn poll_fn, void *user_data,
                                                           const asx_budget *budget,
                                                           asx_task_id *out_id);
+/* Nonzero while a journal replay is active and has failed (journal_replay.c):
+ * the run it drives cannot go on faithfully, and the scheduler ends it at its
+ * next round with ASX_E_REPLAY_MISMATCH. 0 with no replay active. */
+int asx_replay_stop_run_internal(void);
 
 #endif /* ASX_RUNTIME_INTERNAL_H */

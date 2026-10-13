@@ -129,24 +129,77 @@ static void j_stage(asx_journal *j, const uint8_t *src, uint32_t n) {
 
 /* A CHAIN record over the window (lock held, room guaranteed by the
  * reserve). Not part of the next window: it carries the digest that the
- * next window starts from. */
-static void j_chain_locked(asx_journal *j) {
+ * next window starts from. With `sampled` (the window's last record was
+ * taken on the runtime thread, where the trace may be read) it also
+ * carries the trace position and rolling digest as of that record; the
+ * chain value covers those 16 bytes, so a checkpoint cannot be edited. */
+static void j_chain_locked(asx_journal *j, int sampled) {
     uint8_t rec[ASX_JOURNAL_RECORD_HEAD_BYTES + ASX_JOURNAL_CHAIN_PAYLOAD_BYTES];
+    uint8_t trace[ASX_JOURNAL_CHAIN_TRACE_BYTES];
     uint8_t *p = rec;
+    uint64_t events = 0u;
+    uint64_t digest = 0u;
+    uint8_t flags = 0u;
+    if (sampled) {
+        events = asx_trace_emitted_total();
+        digest = asx_trace_digest();
+        flags = (uint8_t)ASX_JOURNAL_REC_TRACE_CHECKPOINT;
+    }
+    (void)put_u64(put_u64(trace, events), digest);
+    asx_sha256_update(&j->window, trace, ASX_JOURNAL_CHAIN_TRACE_BYTES);
     asx_sha256_final(&j->window, j->chain);
     p = put_u32(p, ASX_JOURNAL_CHAIN_PAYLOAD_BYTES);
     p = put_u8(p, (uint8_t)ASX_JOURNAL_KIND_CHAIN);
-    p = put_u8(p, 0u);
+    p = put_u8(p, flags);
     p = put_u16(p, 0u);
     p = put_u64(p, j->seq);
-    p = put_u64(p, 0u);
-    p = put_bytes(p, j->chain, ASX_JOURNAL_CHAIN_PAYLOAD_BYTES);
+    p = put_u64(p, events);
+    p = put_bytes(p, j->chain, ASX_SHA256_DIGEST_SIZE);
+    p = put_bytes(p, trace, ASX_JOURNAL_CHAIN_TRACE_BYTES);
     j_stage(j, rec, (uint32_t)(p - rec));
     j->seq++;
     j->stats.chains++;
     j->since_chain = 0u;
+    j->chain_trace_valid = sampled;
+    j->chain_events = events;
+    j->chain_digest = digest;
     asx_sha256_init(&j->window);
     asx_sha256_update(&j->window, j->chain, ASX_SHA256_DIGEST_SIZE);
+}
+
+/* A commit point (lock held), reached after a chain (or, `final`, after
+ * END) when the config persists at chains: every `commit_every_chains`th
+ * chain hands the staged bytes to the sink and tells commit_fn that the
+ * stream so far is a verified prefix. A failure of either is the
+ * journal's sticky status. */
+static void j_commit_locked(asx_journal *j, int final) {
+    asx_journal_commit info;
+    asx_status st;
+    uint32_t every;
+    if (j->cfg.persist != ASX_JOURNAL_PERSIST_CHAIN) return;
+    every = j->cfg.commit_every_chains != 0u ? j->cfg.commit_every_chains : 1u;
+    if (!final) {
+        j->chains_since_commit++;
+        if (j->chains_since_commit < every) return;
+    }
+    j->chains_since_commit = 0u;
+    j_sink_locked(j);
+    if (j->status != ASX_OK) return;
+    j->stats.commits++;
+    j->stats.committed_bytes = j->stats.bytes;
+    if (j->cfg.commit_fn == NULL) return;
+    memset(&info, 0, sizeof(info));
+    info.chain_seq = j->seq - 1u;
+    info.data_records = j->stats.records;
+    info.stream_bytes = j->stats.bytes;
+    info.final = final;
+    if (!final && j->chain_trace_valid) {
+        info.trace_valid = 1;
+        info.trace_events = j->chain_events;
+        info.trace_digest = j->chain_digest;
+    }
+    st = j->cfg.commit_fn(j->cfg.sink_ctx, &info);
+    if (st != ASX_OK) j->status = st;
 }
 
 /* The largest payload one record can have in this journal: what is left of
@@ -199,6 +252,7 @@ static uint8_t *j_begin(asx_journal *j, uint8_t kind, uint8_t flags, int sample_
     dst = j->cfg.buffer + j->used;
     j->used += payload;
     j->stats.bytes += payload;
+    j->closing_sampled = sample_trace;
     return dst;
 }
 
@@ -211,7 +265,10 @@ static void j_end(asx_journal *j, uint32_t payload) {
     j->stats.records++;
     j->staged_data++;
     j->since_chain++;
-    if (j->since_chain >= j->chain_every) j_chain_locked(j);
+    if (j->since_chain >= j->chain_every) {
+        j_chain_locked(j, j->closing_sampled);
+        j_commit_locked(j, 0);
+    }
     j_unlock(j);
 }
 
@@ -281,7 +338,8 @@ asx_status asx_journal_finish(asx_journal *j) {
     if (j == NULL) return ASX_E_INVALID_ARGUMENT;
     j_lock(j);
     if (!j->finished) {
-        if (j->since_chain > 0u) j_chain_locked(j);
+        /* Not sampled: the last record's trace position is gone by now. */
+        if (j->since_chain > 0u) j_chain_locked(j, 0);
         p = put_u32(p, ASX_JOURNAL_END_PAYLOAD_BYTES);
         p = put_u8(p, (uint8_t)ASX_JOURNAL_KIND_END);
         p = put_u8(p, 0u);
@@ -298,6 +356,7 @@ asx_status asx_journal_finish(asx_journal *j) {
         j->seq++;
         j->finished = 1;
         j_sink_locked(j);
+        j_commit_locked(j, 1);
     }
     st = j->status;
     j_unlock(j);
@@ -370,6 +429,104 @@ uint32_t asx_journal_ring_read(const asx_journal_ring *r, uint8_t *dst, uint32_t
 }
 
 /* ------------------------------------------------------------------ */
+/* Persistence stores                                                  */
+/* ------------------------------------------------------------------ */
+
+asx_journal_store_kind asx_journal_profile_store(void) {
+#if defined(ASX_PROFILE_POSIX)
+    return ASX_JOURNAL_STORE_FILE;
+#elif defined(ASX_PROFILE_EMBEDDED_ROUTER)
+    return ASX_JOURNAL_STORE_FLASH;
+#else
+    return ASX_JOURNAL_STORE_CALLER;
+#endif
+}
+
+asx_status asx_journal_flash_init(asx_journal_flash *f, uint8_t *ring, uint32_t ring_cap,
+                                  asx_journal_flash_write_fn write_fn, void *write_ctx,
+                                  uint64_t area_bytes, uint64_t wear_budget, uint32_t min_flush) {
+    if (f == NULL || ring == NULL || ring_cap == 0u || write_fn == NULL) {
+        return ASX_E_INVALID_ARGUMENT;
+    }
+    memset(f, 0, sizeof(*f));
+    f->write_fn = write_fn;
+    f->write_ctx = write_ctx;
+    f->ring = ring;
+    f->ring_cap = ring_cap;
+    f->area_bytes = area_bytes;
+    f->wear_budget = wear_budget;
+    f->min_flush = min_flush;
+    return ASX_OK;
+}
+
+asx_status asx_journal_flash_sink(void *ctx, const uint8_t *bytes, uint32_t len) {
+    asx_journal_flash *f = (asx_journal_flash *)ctx;
+    uint32_t tail;
+    uint32_t first;
+    if (f == NULL || f->ring == NULL || (bytes == NULL && len > 0u)) {
+        return ASX_E_INVALID_ARGUMENT;
+    }
+    if (f->status != ASX_OK) return f->status;
+    if (len == 0u) return ASX_OK;
+    if (len > f->ring_cap - f->len) {
+        /* Nothing already in flash is lost, but the stream cannot go on. */
+        f->status = ASX_E_RESOURCE_EXHAUSTED;
+        return f->status;
+    }
+    tail = (f->head + f->len) % f->ring_cap;
+    first = f->ring_cap - tail;
+    if (first > len) first = len;
+    memcpy(f->ring + tail, bytes, (size_t)first);
+    if (len > first) memcpy(f->ring, bytes + first, (size_t)(len - first));
+    f->len += len;
+    f->offered += (uint64_t)len;
+    return ASX_OK;
+}
+
+/* Write `n` bytes from the ring's head, in one flash write, and release
+ * them. n <= the bytes before the ring's end. */
+static asx_status flash_write_head(asx_journal_flash *f, uint32_t n) {
+    asx_status st = f->write_fn(f->write_ctx, f->flushed, f->ring + f->head, n);
+    f->flash_writes++;
+    if (st != ASX_OK) {
+        f->status = st;
+        return st;
+    }
+    f->head = (f->head + n) % f->ring_cap;
+    f->len -= n;
+    f->flushed += (uint64_t)n;
+    return ASX_OK;
+}
+
+asx_status asx_journal_flash_commit(void *ctx, const asx_journal_commit *commit) {
+    asx_journal_flash *f = (asx_journal_flash *)ctx;
+    uint64_t pending;
+    uint32_t n;
+    uint32_t first;
+    asx_status st;
+    if (f == NULL || commit == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (commit->stream_bytes < f->flushed || commit->stream_bytes > f->offered) {
+        return ASX_E_INVALID_STATE;
+    }
+    f->committed = commit->stream_bytes;
+    pending = f->committed - f->flushed;
+    if (pending == 0u) return ASX_OK;
+    if (!commit->final && pending < (uint64_t)f->min_flush) return ASX_OK;
+    /* The whole prefix or none of it: flash must end on a chain. */
+    if ((f->wear_budget != 0u && pending > f->wear_budget - f->flushed) ||
+        (f->area_bytes != 0u && pending > f->area_bytes - f->flushed)) {
+        f->wear_exhausted = 1;
+        return ASX_OK;
+    }
+    n = (uint32_t)pending;
+    first = f->ring_cap - f->head;
+    if (first > n) first = n;
+    st = flash_write_head(f, first);
+    if (st == ASX_OK && n > first) st = flash_write_head(f, n - first);
+    return st;
+}
+
+/* ------------------------------------------------------------------ */
 /* Reader                                                              */
 /* ------------------------------------------------------------------ */
 
@@ -388,6 +545,7 @@ asx_journal_read_result asx_journal_reader_init(asx_journal_reader *r, const uin
     r->bytes = bytes;
     r->len = len;
     r->pos = ASX_JOURNAL_HEADER_BYTES;
+    r->chain_end_pos = ASX_JOURNAL_HEADER_BYTES;
     r->flags = asx_journal_get_u32(bytes + 12);
     r->config_fingerprint = asx_journal_get_u64(bytes + 16);
     r->rust_rev_hash = asx_journal_get_u64(bytes + 24);
@@ -417,7 +575,12 @@ static asx_journal_read_result reader_next_impl(asx_journal_reader *r, asx_journ
         if (asx_journal_get_u64(head + 8) != r->next_seq) return ASX_JOURNAL_READ_CORRUPT;
         if (kind == (uint8_t)ASX_JOURNAL_KIND_CHAIN) {
             uint8_t digest[ASX_SHA256_DIGEST_SIZE];
+            const uint8_t *trace =
+                head + ASX_JOURNAL_RECORD_HEAD_BYTES + ASX_JOURNAL_CHAIN_TRACE_OFFSET;
             if (payload_len != ASX_JOURNAL_CHAIN_PAYLOAD_BYTES) return ASX_JOURNAL_READ_CORRUPT;
+            /* The chain value covers the trace fields: an edited checkpoint
+             * breaks the chain like an edited record. */
+            asx_sha256_update(&r->window, trace, ASX_JOURNAL_CHAIN_TRACE_BYTES);
             asx_sha256_final(&r->window, digest);
             if (memcmp(digest, head + ASX_JOURNAL_RECORD_HEAD_BYTES, sizeof(digest)) != 0) {
                 return ASX_JOURNAL_READ_CORRUPT;
@@ -429,6 +592,12 @@ static asx_journal_read_result reader_next_impl(asx_journal_reader *r, asx_journ
             r->chains++;
             r->next_seq++;
             r->pos += ASX_JOURNAL_RECORD_HEAD_BYTES + payload_len;
+            r->chain_end_pos = r->pos;
+            r->chain_end_seq = r->next_seq;
+            r->chain_end_records = r->data_records;
+            r->chain_trace_valid = (head[5] & (uint8_t)ASX_JOURNAL_REC_TRACE_CHECKPOINT) != 0u;
+            r->chain_trace_events = r->chain_trace_valid ? asx_journal_get_u64(trace) : 0u;
+            r->chain_trace_digest = r->chain_trace_valid ? asx_journal_get_u64(trace + 8) : 0u;
             continue;
         }
         if (kind == (uint8_t)ASX_JOURNAL_KIND_END) {

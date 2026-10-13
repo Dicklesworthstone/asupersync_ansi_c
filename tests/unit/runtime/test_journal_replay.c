@@ -26,6 +26,7 @@
 #include <asx/asx.h>
 #include <asx/runtime/journal.h>
 #include <asx/runtime/journal_replay.h>
+#include <asx/runtime/trace.h>
 #include <string.h>
 
 /* ------------------------------------------------------------------ */
@@ -638,6 +639,265 @@ TEST(a_replay_is_not_activated_while_a_journal_records) {
     ASSERT_EQ(asx_replay_activate(&rp), ASX_OK); /* the same replay again */
     asx_replay_deactivate();
     ASSERT_FALSE(asx_replay_active());
+}
+
+/* ------------------------------------------------------------------ */
+/* Recovery replay: the committed prefix of a cut stream (RP4)         */
+/* ------------------------------------------------------------------ */
+
+/* A clock record is 24 + 9 bytes, a chain 24 + 48. */
+#define CLOCK_REC_LEN (ASX_JOURNAL_RECORD_HEAD_BYTES + 9u)
+#define CHAIN_REC_LEN (ASX_JOURNAL_RECORD_HEAD_BYTES + ASX_JOURNAL_CHAIN_PAYLOAD_BYTES)
+
+/* `n` clock reads, a trace event after each, recorded with a chain every
+ * `chain_every` records. A checkpoint is taken when a window's last read
+ * is: after k reads the trace holds k - 1 events. Leaves the stream in
+ * g_out; times[i] are the values the run saw. */
+static int record_clocks(uint32_t n, uint32_t chain_every, uint64_t *times) {
+    asx_journal j;
+    asx_runtime_hooks hooks;
+    uint32_t i;
+    g_fake_clock = 0u;
+    fake_table(&hooks);
+    asx_trace_reset();
+    if (open_journal(&j, chain_every) != ASX_OK) return 0;
+    if (asx_journal_wrap_hooks(&j, &hooks) != ASX_OK) return 0;
+    for (i = 0; i < n; i++) {
+        times[i] = (uint64_t)hooks.clock.now_ns_fn(hooks.clock.ctx);
+        asx_trace_emit(ASX_TRACE_SCHED_POLL, (uint64_t)i, 0u);
+    }
+    asx_journal_uninstall();
+    return asx_journal_finish(&j) == ASX_OK;
+}
+
+/* The same program over replay hooks, with `bias` added to the entities of
+ * the events it emits (0: the recording's own program). */
+static void replay_clocks(const asx_runtime_hooks *hooks, uint32_t n, uint64_t *times,
+                          uint64_t bias) {
+    uint32_t i;
+    asx_trace_reset();
+    for (i = 0; i < n; i++) {
+        times[i] = (uint64_t)hooks->clock.now_ns_fn(hooks->clock.ctx);
+        asx_trace_emit(ASX_TRACE_SCHED_POLL, (uint64_t)i + bias, 0u);
+    }
+}
+
+/* Open g_out[0 .. len) as a recovery replay and fill its replay hooks. */
+static asx_replay_error open_prefix_hooks(asx_replay *rp, size_t len, asx_replay_report *rep,
+                                          asx_replay_prefix *pfx, asx_runtime_hooks *hooks) {
+    asx_replay_identity id = ours();
+    asx_replay_error err = asx_replay_open_prefix(rp, g_out, len, &id, rep, pfx);
+    memset(hooks, 0, sizeof(*hooks));
+    if (err == ASX_REPLAY_OK && asx_replay_hooks(rp, hooks) != ASX_OK) return ASX_REPLAY_E_RUNTIME;
+    return err;
+}
+
+TEST(a_cut_stream_replays_its_committed_prefix_and_ends_at_the_cut_with_its_seq) {
+    uint64_t rec_t[10];
+    uint64_t got_t[10];
+    asx_replay rp;
+    asx_replay_report rep;
+    asx_replay_prefix pfx;
+    asx_runtime_hooks hooks;
+    /* Windows of 3: data 0-2, chain 3, data 4-6, chain 7, data 8-10 ... */
+    size_t after_two = (size_t)ASX_JOURNAL_HEADER_BYTES + 6u * CLOCK_REC_LEN + 2u * CHAIN_REC_LEN;
+    uint32_t i;
+
+    ASSERT_TRUE(record_clocks(10u, 3u, rec_t));
+    /* The process died inside the third window: 11 bytes of its first record. */
+    ASSERT_EQ((int)open_prefix_hooks(&rp, after_two + 11u, &rep, &pfx, &hooks), (int)ASX_REPLAY_OK);
+    ASSERT_EQ(pfx.complete, 0);
+    ASSERT_EQ(pfx.committed_bytes, (uint64_t)after_two);
+    ASSERT_EQ(pfx.committed_records, (uint64_t)6u);
+    ASSERT_EQ(pfx.cut_seq, (uint64_t)8u); /* 6 data records and 2 chains */
+    ASSERT_EQ((int)pfx.cut_reason, (int)ASX_REPLAY_E_INCOMPLETE);
+    ASSERT_EQ(pfx.stream_bytes, (uint64_t)(after_two + 11u));
+
+    /* The program asks for 7 reads: 6 are committed. */
+    replay_clocks(&hooks, 7u, got_t, 0u);
+    for (i = 0; i < 6u; i++) { ASSERT_EQ(got_t[i], rec_t[i]); }
+    ASSERT_EQ(got_t[6], (uint64_t)0u); /* the cut answers nothing */
+    ASSERT_TRUE(asx_replay_failure(&rp) != NULL);
+    ASSERT_EQ((int)asx_replay_failure(&rp)->error, (int)ASX_REPLAY_E_CUT);
+    ASSERT_EQ(asx_replay_failure(&rp)->seq, (uint64_t)8u);
+    ASSERT_EQ(asx_replay_failure(&rp)->actual_kind, (uint8_t)ASX_JOURNAL_KIND_CLOCK);
+    asx_replay_prefix_progress(&rp, &pfx);
+    ASSERT_EQ(pfx.served, (uint64_t)6u);
+    /* Two windows closed on a sampled read: both checkpoints held. The
+     * second closed with 5 events in the trace, on its chain at seq 7. */
+    ASSERT_EQ(pfx.checkpoints, (uint64_t)2u);
+    ASSERT_EQ(pfx.checkpoint_seq, (uint64_t)7u);
+    ASSERT_EQ(pfx.checkpoint_events, (uint64_t)5u);
+    ASSERT_EQ((int)asx_replay_finish(&rp, &rep), (int)ASX_REPLAY_E_CUT);
+    ASSERT_EQ(rep.seq, (uint64_t)8u);
+}
+
+TEST(a_program_that_ends_inside_the_prefix_is_a_cut_not_a_pass) {
+    uint64_t rec_t[10];
+    uint64_t got_t[10];
+    asx_replay rp;
+    asx_replay_report rep;
+    asx_replay_prefix pfx;
+    asx_runtime_hooks hooks;
+    size_t after_two = (size_t)ASX_JOURNAL_HEADER_BYTES + 6u * CLOCK_REC_LEN + 2u * CHAIN_REC_LEN;
+
+    ASSERT_TRUE(record_clocks(10u, 3u, rec_t));
+    /* All 6 committed reads asked for, then the program ends: the prefix
+     * cannot show the recorded run did too. */
+    ASSERT_EQ((int)open_prefix_hooks(&rp, after_two, &rep, &pfx, &hooks), (int)ASX_REPLAY_OK);
+    ASSERT_EQ((int)pfx.cut_reason, (int)ASX_REPLAY_E_INCOMPLETE);
+    replay_clocks(&hooks, 6u, got_t, 0u);
+    ASSERT_TRUE(asx_replay_failure(&rp) == NULL);
+    ASSERT_EQ((int)asx_replay_finish(&rp, &rep), (int)ASX_REPLAY_E_CUT);
+    ASSERT_EQ(rep.seq, (uint64_t)8u);
+
+    /* Four of the six asked for: the fifth committed record, seq 5 (seq 3
+     * is a chain), was never requested. */
+    ASSERT_EQ((int)open_prefix_hooks(&rp, after_two, &rep, &pfx, &hooks), (int)ASX_REPLAY_OK);
+    replay_clocks(&hooks, 4u, got_t, 0u);
+    ASSERT_EQ((int)asx_replay_finish(&rp, &rep), (int)ASX_REPLAY_E_DIVERGED);
+    ASSERT_EQ(rep.seq, (uint64_t)5u);
+    ASSERT_STR_EQ(rep.what, "record never requested");
+}
+
+TEST(a_trace_checkpoint_that_differs_diverges_at_the_window_s_last_record) {
+    uint64_t rec_t[10];
+    uint64_t got_t[10];
+    asx_replay rp;
+    asx_replay_report rep;
+    asx_replay_prefix pfx;
+    asx_runtime_hooks hooks;
+    size_t after_two = (size_t)ASX_JOURNAL_HEADER_BYTES + 6u * CLOCK_REC_LEN + 2u * CHAIN_REC_LEN;
+
+    ASSERT_TRUE(record_clocks(10u, 3u, rec_t));
+    ASSERT_EQ((int)open_prefix_hooks(&rp, after_two, &rep, &pfx, &hooks), (int)ASX_REPLAY_OK);
+    /* The same boundary calls, but the run's trace differs: its first window
+     * closes at the third read, seq 2. */
+    replay_clocks(&hooks, 6u, got_t, 100u);
+    ASSERT_TRUE(asx_replay_failure(&rp) != NULL);
+    ASSERT_EQ((int)asx_replay_failure(&rp)->error, (int)ASX_REPLAY_E_DIVERGED);
+    ASSERT_EQ(asx_replay_failure(&rp)->seq, (uint64_t)2u);
+    ASSERT_STR_EQ(asx_replay_failure(&rp)->what, "trace checkpoint");
+    asx_replay_prefix_progress(&rp, &pfx);
+    ASSERT_EQ(pfx.checkpoints, (uint64_t)0u);
+}
+
+TEST(a_complete_stream_opens_as_a_prefix_and_passes) {
+    uint64_t rec_t[10];
+    uint64_t got_t[10];
+    asx_replay rp;
+    asx_replay_report rep;
+    asx_replay_prefix pfx;
+    asx_runtime_hooks hooks;
+    uint32_t i;
+
+    ASSERT_TRUE(record_clocks(10u, 3u, rec_t));
+    ASSERT_EQ((int)open_prefix_hooks(&rp, g_out_len, &rep, &pfx, &hooks), (int)ASX_REPLAY_OK);
+    ASSERT_EQ(pfx.complete, 1);
+    ASSERT_EQ(pfx.committed_records, (uint64_t)10u);
+    ASSERT_EQ((int)pfx.cut_reason, (int)ASX_REPLAY_OK);
+    replay_clocks(&hooks, 10u, got_t, 0u);
+    for (i = 0; i < 10u; i++) { ASSERT_EQ(got_t[i], rec_t[i]); }
+    asx_replay_prefix_progress(&rp, &pfx);
+    /* Three full windows closed on a read; the last one, one record, was
+     * closed by finish, which carries no checkpoint. */
+    ASSERT_EQ(pfx.checkpoints, (uint64_t)3u);
+    ASSERT_EQ((int)asx_replay_finish(&rp, &rep), (int)ASX_REPLAY_OK);
+}
+
+TEST(a_damaged_window_ends_the_prefix_before_it) {
+    uint64_t rec_t[10];
+    asx_replay rp;
+    asx_replay_report rep;
+    asx_replay_prefix pfx;
+    asx_runtime_hooks hooks;
+    asx_replay_identity id = ours();
+    /* A byte of the second window's first record. */
+    size_t off = (size_t)ASX_JOURNAL_HEADER_BYTES + 3u * CLOCK_REC_LEN + CHAIN_REC_LEN +
+                 ASX_JOURNAL_RECORD_HEAD_BYTES + 2u;
+
+    ASSERT_TRUE(record_clocks(10u, 3u, rec_t));
+    g_out[off] ^= 0x40u;
+    /* The whole-stream contract refuses it; a recovery replay serves the
+     * first window and says the rest did not verify. */
+    ASSERT_EQ((int)asx_replay_open(&rp, g_out, g_out_len, &id, &rep), (int)ASX_REPLAY_E_CORRUPT);
+    ASSERT_EQ((int)open_prefix_hooks(&rp, g_out_len, &rep, &pfx, &hooks), (int)ASX_REPLAY_OK);
+    ASSERT_EQ(pfx.complete, 0);
+    ASSERT_EQ(pfx.committed_records, (uint64_t)3u);
+    ASSERT_EQ(pfx.cut_seq, (uint64_t)4u);
+    ASSERT_EQ((int)pfx.cut_reason, (int)ASX_REPLAY_E_CORRUPT);
+}
+
+TEST(a_stream_cut_before_its_first_chain_has_an_empty_prefix) {
+    uint64_t rec_t[10];
+    uint64_t got_t[10];
+    asx_replay rp;
+    asx_replay_report rep;
+    asx_replay_prefix pfx;
+    asx_runtime_hooks hooks;
+
+    ASSERT_TRUE(record_clocks(10u, 3u, rec_t));
+    ASSERT_EQ((int)open_prefix_hooks(&rp,
+                                     (size_t)ASX_JOURNAL_HEADER_BYTES + 2u * CLOCK_REC_LEN + 5u,
+                                     &rep, &pfx, &hooks),
+              (int)ASX_REPLAY_OK);
+    ASSERT_EQ(pfx.committed_records, (uint64_t)0u);
+    ASSERT_EQ(pfx.cut_seq, (uint64_t)0u);
+    ASSERT_EQ(pfx.committed_bytes, (uint64_t)ASX_JOURNAL_HEADER_BYTES);
+    replay_clocks(&hooks, 1u, got_t, 0u);
+    ASSERT_EQ((int)asx_replay_failure(&rp)->error, (int)ASX_REPLAY_E_CUT);
+    ASSERT_EQ(asx_replay_failure(&rp)->seq, (uint64_t)0u);
+
+    /* A stream cut inside its header is not a stream at all. */
+    ASSERT_EQ((int)open_prefix_hooks(&rp, 30u, &rep, &pfx, &hooks), (int)ASX_REPLAY_E_INCOMPLETE);
+    ASSERT_EQ(rep.seq, (uint64_t)0u);
+}
+
+TEST(a_recovery_replay_checks_identity_and_only_the_prefix_s_records) {
+    asx_journal j;
+    asx_runtime_hooks hooks;
+    asx_replay rp;
+    asx_replay_report rep;
+    asx_replay_prefix pfx;
+    asx_replay_identity id = ours();
+    uint8_t data[4] = {1u, 2u, 3u, 4u};
+    size_t after_one = (size_t)ASX_JOURNAL_HEADER_BYTES + 3u * CLOCK_REC_LEN + CHAIN_REC_LEN;
+    /* The shaped read: 24-byte head, 8 + 4 + 4 + 4 bytes and its 8-byte hash. */
+    size_t read_len = (size_t)ASX_JOURNAL_RECORD_HEAD_BYTES + 28u;
+    size_t after_two = after_one + read_len + 2u * CLOCK_REC_LEN + CHAIN_REC_LEN;
+
+    /* clock x3 (seq 0-2), chain (3), a read kept as a hash (4), clock x2
+     * (5-6), chain (7). Reads kept as a hash cannot be served. */
+    g_fake_clock = 0u;
+    fake_table(&hooks);
+    asx_trace_reset();
+    ASSERT_EQ(open_journal_flags(&j, 3u, ASX_JOURNAL_FLAG_SHAPE), ASX_OK);
+    ASSERT_EQ(asx_journal_wrap_hooks(&j, &hooks), ASX_OK);
+    (void)hooks.clock.now_ns_fn(hooks.clock.ctx);
+    (void)hooks.clock.now_ns_fn(hooks.clock.ctx);
+    (void)hooks.clock.now_ns_fn(hooks.clock.ctx);
+    asx_journal_note_net_read(5u, 16u, (int32_t)ASX_OK, data, 4u);
+    (void)hooks.clock.now_ns_fn(hooks.clock.ctx);
+    (void)hooks.clock.now_ns_fn(hooks.clock.ctx);
+    asx_journal_uninstall();
+    ASSERT_EQ(asx_journal_finish(&j), ASX_OK);
+
+    /* Cut inside the second window: the unsupported read is past the cut. */
+    ASSERT_EQ((int)asx_replay_open_prefix(&rp, g_out, after_one + 30u, &id, &rep, &pfx),
+              (int)ASX_REPLAY_OK);
+    ASSERT_EQ(pfx.committed_records, (uint64_t)3u);
+    /* Cut after the second chain: the read is committed, so it is refused. */
+    ASSERT_EQ((int)asx_replay_open_prefix(&rp, g_out, after_two + 5u, &id, &rep, &pfx),
+              (int)ASX_REPLAY_E_UNSUPPORTED);
+    ASSERT_EQ(rep.seq, (uint64_t)4u);
+    ASSERT_EQ(rep.expected_kind, (uint8_t)ASX_JOURNAL_KIND_NET_READ);
+
+    /* Identity is checked as for any replay. */
+    id.build_hash ^= 1u;
+    ASSERT_EQ((int)asx_replay_open_prefix(&rp, g_out, after_one + 30u, &id, &rep, &pfx),
+              (int)ASX_REPLAY_E_BUILD_MISMATCH);
+    ASSERT_EQ((int)asx_replay_open_prefix(&rp, g_out, after_one, &id, &rep, NULL),
+              (int)ASX_REPLAY_E_CORRUPT);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1275,7 +1535,7 @@ TEST(a_spawn_of_another_command_is_a_divergence_at_the_spawn_record) {
 
 typedef asx_status (*live_program_fn)(void *obs);
 
-static int record_program(live_program_fn fn, void *obs) {
+static int record_program_chain(live_program_fn fn, void *obs, uint32_t chain_every) {
     asx_runtime_config cfg;
     asx_runtime_hooks hooks;
     asx_journal j;
@@ -1283,7 +1543,7 @@ static int record_program(live_program_fn fn, void *obs) {
 
     clean_natives();
     if (asx_posix_hooks_install(&hooks) != ASX_OK) return 0;
-    if (open_journal(&j, 0u) != ASX_OK) return 0;
+    if (open_journal(&j, chain_every) != ASX_OK) return 0;
     if (asx_journal_wrap_hooks(&j, &hooks) != ASX_OK) return 0;
     if (asx_runtime_config_init(&cfg) != ASX_OK) {
         asx_journal_uninstall();
@@ -1297,6 +1557,10 @@ static int record_program(live_program_fn fn, void *obs) {
     asx_runtime_shutdown(&g_rt);
     asx_journal_uninstall();
     return asx_journal_finish(&j) == ASX_OK && ok;
+}
+
+static int record_program(live_program_fn fn, void *obs) {
+    return record_program_chain(fn, obs, 0u);
 }
 
 /* Run `fn` into a fresh runtime under the open replay `rp`, with the
@@ -1689,6 +1953,129 @@ TEST(a_blocking_result_that_differs_from_the_recorded_one_is_reported_at_its_seq
     ASSERT_STR_EQ(asx_replay_failure(&rp)->what, "blocking job result");
 }
 
+/* --- a cut live run, and the scheduler run a failed replay drives --- */
+
+/* How many chains the stream in g_out has. */
+static uint32_t chains_in_stream(void) {
+    asx_journal_reader r;
+    asx_journal_record jr;
+    if (asx_journal_reader_init(&r, g_out, g_out_len) != ASX_JOURNAL_READ_RECORD) return 0u;
+    for (;;) {
+        if (asx_journal_reader_next(&r, &jr) != ASX_JOURNAL_READ_RECORD) break;
+    }
+    return (uint32_t)r.chains;
+}
+
+/* The end of the committed prefix of g_out once `want` chains verified, and
+ * the data records in it. */
+static int prefix_after_chains(uint32_t want, size_t *pos, uint64_t *records) {
+    asx_journal_reader r;
+    asx_journal_record jr;
+    if (asx_journal_reader_init(&r, g_out, g_out_len) != ASX_JOURNAL_READ_RECORD) return 0;
+    while (r.chains < (uint64_t)want) {
+        if (asx_journal_reader_next(&r, &jr) != ASX_JOURNAL_READ_RECORD) return 0;
+    }
+    *pos = r.chain_end_pos;
+    *records = r.chain_end_records;
+    return 1;
+}
+
+TEST(a_cut_live_run_replays_its_committed_prefix_and_ends_at_the_cut) {
+    asx_replay_report rep;
+    asx_replay_identity id = ours();
+    asx_replay_prefix pfx;
+    asx_status ps = ASX_E_INVALID_STATE;
+    tcp_obs rec;
+    tcp_obs got;
+    size_t cut = 0u;
+    uint64_t records = 0u;
+    uint32_t total;
+
+    /* A chain every 4 records, so the run has several windows. */
+    ASSERT_TRUE(record_program_chain(tcp_program, &rec, 4u));
+    ASSERT_EQ(rec.run_st, ASX_OK);
+    total = chains_in_stream();
+    ASSERT_TRUE(total >= 3u);
+
+    /* The whole stream through the recovery path: accepted as complete,
+     * the same results and digest, and the trace checkpoints held. */
+    memset(&rep, 0xA5, sizeof(rep));
+    ASSERT_EQ((int)asx_journal_replay_prefix(g_out, g_out_len, &id, NULL, tcp_program, &got, &ps,
+                                             &rep, &pfx),
+              (int)ASX_REPLAY_OK);
+    ASSERT_EQ(pfx.complete, 1);
+    ASSERT_TRUE(pfx.checkpoints > 0u);
+    ASSERT_EQ(got.reply_len, rec.reply_len);
+    ASSERT_EQ(got.digest, rec.digest);
+
+    /* Killed mid-run: the prefix is the windows that were committed, and
+     * the replay of the program ends at the first record that was not. */
+    ASSERT_TRUE(prefix_after_chains(total / 2u, &cut, &records));
+    memset(&rep, 0xA5, sizeof(rep));
+    ASSERT_EQ((int)asx_journal_replay_prefix(g_out, cut + 9u, &id, NULL, tcp_program, &got, &ps,
+                                             &rep, &pfx),
+              (int)ASX_REPLAY_E_CUT);
+    ASSERT_EQ(pfx.complete, 0);
+    ASSERT_EQ(pfx.committed_bytes, (uint64_t)cut);
+    ASSERT_EQ(pfx.committed_records, records);
+    ASSERT_EQ((int)pfx.cut_reason, (int)ASX_REPLAY_E_INCOMPLETE);
+    ASSERT_EQ(rep.seq, pfx.cut_seq);
+    ASSERT_EQ(pfx.served, records); /* every committed record was reproduced */
+    ASSERT_TRUE(pfx.checkpoints > 0u);
+}
+
+static asx_status draw_three_program(void *obs) {
+    uint64_t v = 0u;
+    uint32_t i;
+    (void)obs;
+    for (i = 0; i < 3u; i++) { (void)asx_runtime_random_u64(&v); }
+    return ASX_OK;
+}
+
+/* A task that treats every refusal as "try again": polled, it draws
+ * entropy and yields without parking, so it is runnable for ever. */
+static asx_status spin_poll(void *ud, asx_task_id self) {
+    uint64_t v = 0u;
+    (void)ud;
+    (void)self;
+    (void)asx_runtime_random_u64(&v);
+    return ASX_E_PENDING;
+}
+
+static asx_status spin_program(void *obs) {
+    asx_status *run = (asx_status *)obs;
+    asx_region_id region;
+    asx_task_id task;
+    asx_budget budget;
+    asx_status st;
+
+    st = asx_region_open(&region);
+    if (st != ASX_OK) return st;
+    st = asx_task_spawn(region, spin_poll, NULL, &task);
+    if (st != ASX_OK) return st;
+    /* A generous poll budget as a backstop: the replay's failure must end
+     * the run long before it. */
+    budget = asx_budget_from_polls(100000u);
+    *run = asx_scheduler_run(region, &budget);
+    return ASX_OK;
+}
+
+TEST(a_failed_replay_ends_the_scheduler_run_it_is_driving) {
+    asx_replay_report rep;
+    asx_replay_identity id = ours();
+    asx_status ps = ASX_E_INVALID_STATE;
+    asx_status run = ASX_OK;
+
+    ASSERT_TRUE(record_program(draw_three_program, NULL));
+    /* The spinner asks for more entropy than the stream has: the first
+     * request past it fails the replay, and the scheduler ends the run at
+     * its next round instead of polling the task for ever. */
+    ASSERT_EQ((int)asx_journal_replay(g_out, g_out_len, &id, NULL, spin_program, &run, &ps, &rep),
+              (int)ASX_REPLAY_E_EXHAUSTED);
+    ASSERT_EQ(ps, ASX_OK);
+    ASSERT_EQ(run, ASX_E_REPLAY_MISMATCH);
+}
+
 #endif /* ASX_PROFILE_POSIX && !ASX_DETERMINISTIC */
 
 /* ------------------------------------------------------------------ */
@@ -1711,6 +2098,13 @@ int main(void) {
     RUN_TEST(signal_drains_and_resolutions_are_served_in_order);
     RUN_TEST(a_resolution_of_another_host_diverges);
     RUN_TEST(a_replay_is_not_activated_while_a_journal_records);
+    RUN_TEST(a_cut_stream_replays_its_committed_prefix_and_ends_at_the_cut_with_its_seq);
+    RUN_TEST(a_program_that_ends_inside_the_prefix_is_a_cut_not_a_pass);
+    RUN_TEST(a_trace_checkpoint_that_differs_diverges_at_the_window_s_last_record);
+    RUN_TEST(a_complete_stream_opens_as_a_prefix_and_passes);
+    RUN_TEST(a_damaged_window_ends_the_prefix_before_it);
+    RUN_TEST(a_stream_cut_before_its_first_chain_has_an_empty_prefix);
+    RUN_TEST(a_recovery_replay_checks_identity_and_only_the_prefix_s_records);
 #if defined(ASX_PROFILE_POSIX) && !ASX_DETERMINISTIC
     RUN_TEST(a_live_run_replays_with_identical_results_and_digest);
     RUN_TEST(a_live_stream_refuses_a_tampered_byte_and_a_reordered_call);
@@ -1723,6 +2117,8 @@ int main(void) {
     RUN_TEST(a_blocking_job_is_run_again_where_its_completion_was_recorded);
     RUN_TEST(asx_journal_replay_runs_a_program_against_a_stream_in_one_call);
     RUN_TEST(a_blocking_result_that_differs_from_the_recorded_one_is_reported_at_its_seq);
+    RUN_TEST(a_cut_live_run_replays_its_committed_prefix_and_ends_at_the_cut);
+    RUN_TEST(a_failed_replay_ends_the_scheduler_run_it_is_driving);
 #endif
 
     TEST_REPORT();

@@ -13,9 +13,13 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "runtime_internal.h"
 #include <asx/runtime/blocking.h>
 #include <asx/runtime/journal_replay.h>
 #include <asx/runtime/rt.h>
+#define ASX_INTERNAL_TRACE_FAMILY_ACCESS 1
+#include <asx/runtime/trace.h>
+#undef ASX_INTERNAL_TRACE_FAMILY_ACCESS
 #include <string.h>
 
 /* The native adapters exist, and a live build asks them, only here. */
@@ -93,17 +97,26 @@ static int kind_served(uint8_t kind) {
     return 0;
 }
 
-asx_replay_error asx_replay_open(asx_replay *r, const uint8_t *bytes, size_t len,
-                                 const asx_replay_identity *identity, asx_replay_report *report) {
+/* Open `bytes`. With `prefix` (recovery replay) a stream without a valid
+ * END is not refused: the committed prefix, through the last chain that
+ * verified, is what the replay serves, and *prefix says what was found. */
+static asx_replay_error replay_open_impl(asx_replay *r, const uint8_t *bytes, size_t len,
+                                         const asx_replay_identity *identity,
+                                         asx_replay_report *report, asx_replay_prefix *prefix) {
     asx_journal_reader v;
     asx_journal_record rec;
     asx_journal_read_result rr;
     asx_replay_report local;
     asx_replay_report unsupported;
     int have_unsupported = 0;
+    int ended = 0;
+    size_t serve_len = len;
+    uint64_t cut_seq = 0u;
+    asx_replay_error cut_reason = ASX_REPLAY_OK;
 
     memset(&local, 0, sizeof(local));
     memset(&unsupported, 0, sizeof(unsupported));
+    if (prefix != NULL) memset(prefix, 0, sizeof(*prefix));
     if (r == NULL || bytes == NULL) {
         report_set(&local, ASX_REPLAY_E_CORRUPT, 0u, 0u, 0u, 0u, 0u, "no stream");
         goto refused;
@@ -155,7 +168,18 @@ asx_replay_error asx_replay_open(asx_replay *r, const uint8_t *bytes, size_t len
             }
             continue;
         }
-        if (rr == ASX_JOURNAL_READ_END) break;
+        if (rr == ASX_JOURNAL_READ_END) {
+            ended = 1;
+            break;
+        }
+        if (prefix != NULL) {
+            /* A cut or damaged tail: the prefix is what verified. */
+            cut_reason =
+                rr == ASX_JOURNAL_READ_TRUNCATED ? ASX_REPLAY_E_INCOMPLETE : ASX_REPLAY_E_CORRUPT;
+            serve_len = v.chain_end_pos;
+            cut_seq = v.chain_end_seq;
+            break;
+        }
         if (rr == ASX_JOURNAL_READ_TRUNCATED) {
             report_set(&local, ASX_REPLAY_E_INCOMPLETE, v.fail_seq, v.fail_seq, 0u, 0u, 0u,
                        "stream ends before its END record");
@@ -165,19 +189,32 @@ asx_replay_error asx_replay_open(asx_replay *r, const uint8_t *bytes, size_t len
         }
         goto refused;
     }
-    if (v.end_dropped != 0u || v.end_status != 0) {
+    if (ended && (v.end_dropped != 0u || v.end_status != 0)) {
         /* The END record is the last seq issued. */
         report_set(&local, ASX_REPLAY_E_INCOMPLETE, v.next_seq - 1u, v.next_seq - 1u, 0u,
                    (uint8_t)ASX_JOURNAL_KIND_END, 0u, "the recorder dropped records or failed");
         goto refused;
     }
-    if (have_unsupported) {
+    /* Only a record the replay would serve can make the stream unreplayable:
+     * in a cut stream those are the ones before the cut. */
+    if (have_unsupported && (ended || unsupported.seq < cut_seq)) {
         local = unsupported;
         goto refused;
     }
 
-    (void)asx_journal_reader_init(&r->reader, bytes, len);
+    (void)asx_journal_reader_init(&r->reader, bytes, serve_len);
     r->opened = 1;
+    if (prefix != NULL) {
+        r->prefix = 1;
+        r->prefix_cut = !ended;
+        r->cut_seq = cut_seq;
+        prefix->complete = ended;
+        prefix->committed_bytes = (uint64_t)serve_len;
+        prefix->committed_records = ended ? v.data_records : v.chain_end_records;
+        prefix->cut_seq = ended ? v.next_seq : cut_seq;
+        prefix->cut_reason = cut_reason;
+        prefix->stream_bytes = (uint64_t)len;
+    }
     if (report != NULL) memset(report, 0, sizeof(*report));
     return ASX_REPLAY_OK;
 
@@ -186,9 +223,69 @@ refused:
     return local.error;
 }
 
+asx_replay_error asx_replay_open(asx_replay *r, const uint8_t *bytes, size_t len,
+                                 const asx_replay_identity *identity, asx_replay_report *report) {
+    return replay_open_impl(r, bytes, len, identity, report, NULL);
+}
+
+asx_replay_error asx_replay_open_prefix(asx_replay *r, const uint8_t *bytes, size_t len,
+                                        const asx_replay_identity *identity,
+                                        asx_replay_report *report, asx_replay_prefix *prefix) {
+    if (prefix == NULL) {
+        asx_replay_report local;
+        memset(&local, 0, sizeof(local));
+        report_set(&local, ASX_REPLAY_E_CORRUPT, 0u, 0u, 0u, 0u, 0u, "no prefix result");
+        if (report != NULL) *report = local;
+        return local.error;
+    }
+    return replay_open_impl(r, bytes, len, identity, report, prefix);
+}
+
+void asx_replay_prefix_progress(const asx_replay *r, asx_replay_prefix *prefix) {
+    if (r == NULL || prefix == NULL) return;
+    prefix->served = r->served;
+    prefix->checkpoints = r->cp_verified;
+    prefix->checkpoint_seq = r->cp_seq;
+    prefix->checkpoint_events = r->cp_events;
+    prefix->checkpoint_digest = r->cp_digest;
+}
+
 /* ------------------------------------------------------------------ */
 /* Serving                                                             */
 /* ------------------------------------------------------------------ */
+
+/* The record just consumed closed a chain window whose last record was
+ * taken on the runtime thread: the chain stored the trace position and
+ * rolling digest the recording had at that moment, and this run, at the
+ * same moment, must have the same. Recovery replay only: the recording's
+ * run never reached an END to compare digests at. (The reader is
+ * positioned right after the record, so the chain, if any, is next.) */
+static void check_checkpoint(asx_replay *r) {
+    const uint8_t *head;
+    const uint8_t *trace;
+    uint64_t events;
+    uint64_t digest;
+    if (!r->prefix || r->failed) return;
+    if (r->reader.len - r->reader.pos <
+        ASX_JOURNAL_RECORD_HEAD_BYTES + ASX_JOURNAL_CHAIN_PAYLOAD_BYTES) {
+        return;
+    }
+    head = r->reader.bytes + r->reader.pos;
+    if (head[4] != (uint8_t)ASX_JOURNAL_KIND_CHAIN) return;
+    if ((head[5] & (uint8_t)ASX_JOURNAL_REC_TRACE_CHECKPOINT) == 0u) return;
+    trace = head + ASX_JOURNAL_RECORD_HEAD_BYTES + ASX_JOURNAL_CHAIN_TRACE_OFFSET;
+    events = asx_journal_get_u64(trace);
+    digest = asx_journal_get_u64(trace + 8);
+    if (asx_trace_emitted_total() != events || asx_trace_digest() != digest) {
+        fail(r, ASX_REPLAY_E_DIVERGED, r->cur.seq, r->cur.trace_seq, r->cur.kind, r->cur.kind,
+             "trace checkpoint");
+        return;
+    }
+    r->cp_verified++;
+    r->cp_seq = asx_journal_get_u64(head + 8);
+    r->cp_events = events;
+    r->cp_digest = digest;
+}
 
 static void consume(asx_replay *r) {
     r->last_seq = r->cur.seq;
@@ -196,6 +293,7 @@ static void consume(asx_replay *r) {
     r->last_kind = r->cur.kind;
     r->have_cur = 0;
     r->served++;
+    check_checkpoint(r);
 }
 
 /* A blocking job's completion record was reached: run the job again, here,
@@ -281,6 +379,12 @@ static int advance(asx_replay *r, uint8_t asked, int *at_end) {
                 *at_end = 1;
                 return 0;
             }
+            /* A recovery replay's stream was opened up to its last verified
+             * chain: running out of bytes there is the cut. */
+            if (rr == ASX_JOURNAL_READ_TRUNCATED && r->prefix_cut) {
+                *at_end = 1;
+                return 0;
+            }
             if (rr != ASX_JOURNAL_READ_RECORD) {
                 fail(r, ASX_REPLAY_E_CORRUPT, r->reader.fail_seq, 0u, 0u, asked,
                      "stream changed since it was opened");
@@ -298,7 +402,10 @@ static int advance(asx_replay *r, uint8_t asked, int *at_end) {
 static int peek(asx_replay *r, uint8_t asked) {
     int at_end = 0;
     if (advance(r, asked, &at_end)) return 1;
-    if (at_end) {
+    if (at_end && r->prefix_cut) {
+        fail(r, ASX_REPLAY_E_CUT, r->cut_seq, 0u, 0u, asked,
+             "the recording was cut before this record was committed");
+    } else if (at_end) {
         fail(r, ASX_REPLAY_E_EXHAUSTED, r->reader.next_seq - 1u, 0u, (uint8_t)ASX_JOURNAL_KIND_END,
              asked, "the journal has no more records");
     }
@@ -517,7 +624,8 @@ asx_replay_error asx_replay_finish(asx_replay *r, asx_replay_report *report) {
         asx_journal_read_result rr = asx_journal_reader_next(&r->reader, &r->cur);
         if (rr == ASX_JOURNAL_READ_RECORD) {
             r->have_cur = 1;
-        } else if (rr != ASX_JOURNAL_READ_END) {
+        } else if (rr != ASX_JOURNAL_READ_END &&
+                   !(rr == ASX_JOURNAL_READ_TRUNCATED && r->prefix_cut)) {
             fail(r, ASX_REPLAY_E_CORRUPT, r->reader.fail_seq, 0u, 0u, 0u,
                  "stream changed since it was opened");
         }
@@ -525,6 +633,12 @@ asx_replay_error asx_replay_finish(asx_replay *r, asx_replay_report *report) {
     if (!r->failed && r->have_cur) {
         fail(r, ASX_REPLAY_E_DIVERGED, r->cur.seq, r->cur.trace_seq, r->cur.kind, 0u,
              "record never requested");
+    }
+    if (!r->failed && r->prefix_cut) {
+        /* Every committed record was asked for and the program ended: the
+         * prefix cannot show that the recorded run did too. */
+        fail(r, ASX_REPLAY_E_CUT, r->cut_seq, 0u, 0u, 0u,
+             "the program ended inside the committed prefix");
     }
     if (r->failed) {
         if (report != NULL) *report = r->failure;
@@ -916,6 +1030,11 @@ int asx_replay_serve_process_exit(uint64_t handle, uint32_t *state, int32_t *cod
 
 int asx_replay_failed(void) { return g_replay != NULL && g_replay->failed; }
 
+/* The scheduler ends a run at its next round when this is nonzero: a
+ * failed replay answers nothing, and a task that treats the refusal as
+ * "try again" would otherwise be polled for ever. */
+int asx_replay_stop_run_internal(void) { return g_replay != NULL && g_replay->failed; }
+
 int asx_replay_serve_process_write(uint64_t handle, uint32_t len, int32_t *status,
                                    uint32_t *written) {
     return serve_write((uint8_t)ASX_JOURNAL_KIND_PROCESS_WRITE, "stdin write process handle",
@@ -966,11 +1085,11 @@ static asx_replay_error replay_run_failed(asx_replay_report *report, asx_status 
     return ASX_REPLAY_E_RUNTIME;
 }
 
-asx_replay_error asx_journal_replay(const uint8_t *bytes, size_t len,
-                                    const asx_replay_identity *identity,
-                                    const asx_runtime_config *config, asx_replay_program_fn program,
-                                    void *user, asx_status *program_status,
-                                    asx_replay_report *report) {
+static asx_replay_error replay_run(const uint8_t *bytes, size_t len,
+                                   const asx_replay_identity *identity,
+                                   const asx_runtime_config *config, asx_replay_program_fn program,
+                                   void *user, asx_status *program_status,
+                                   asx_replay_report *report, asx_replay_prefix *prefix) {
     asx_replay r;
     asx_runtime rt;
     asx_runtime_hooks hooks;
@@ -982,7 +1101,7 @@ asx_replay_error asx_journal_replay(const uint8_t *bytes, size_t len,
     if (program == NULL) {
         return replay_run_failed(report, ASX_E_INVALID_ARGUMENT, program_status, "no program");
     }
-    err = asx_replay_open(&r, bytes, len, identity, report);
+    err = replay_open_impl(&r, bytes, len, identity, report, prefix);
     if (err != ASX_REPLAY_OK) return err;
 
     st = asx_runtime_hooks_init(&hooks);
@@ -1007,5 +1126,28 @@ asx_replay_error asx_journal_replay(const uint8_t *bytes, size_t len,
     asx_runtime_shutdown(&rt);
     asx_replay_deactivate();
     if (program_status != NULL) *program_status = st;
-    return asx_replay_finish(&r, report);
+    err = asx_replay_finish(&r, report);
+    if (prefix != NULL) asx_replay_prefix_progress(&r, prefix);
+    return err;
+}
+
+asx_replay_error asx_journal_replay(const uint8_t *bytes, size_t len,
+                                    const asx_replay_identity *identity,
+                                    const asx_runtime_config *config, asx_replay_program_fn program,
+                                    void *user, asx_status *program_status,
+                                    asx_replay_report *report) {
+    return replay_run(bytes, len, identity, config, program, user, program_status, report, NULL);
+}
+
+asx_replay_error asx_journal_replay_prefix(const uint8_t *bytes, size_t len,
+                                           const asx_replay_identity *identity,
+                                           const asx_runtime_config *config,
+                                           asx_replay_program_fn program, void *user,
+                                           asx_status *program_status, asx_replay_report *report,
+                                           asx_replay_prefix *prefix) {
+    if (prefix == NULL) {
+        return replay_run_failed(report, ASX_E_INVALID_ARGUMENT, program_status,
+                                 "no prefix result");
+    }
+    return replay_run(bytes, len, identity, config, program, user, program_status, report, prefix);
 }
