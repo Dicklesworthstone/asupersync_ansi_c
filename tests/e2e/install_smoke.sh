@@ -78,7 +78,10 @@ fi
 # Scenario 6: compile ex_quickstart.c against installed headers
 # -------------------------------------------------------------------
 QS_BIN="$INSTALL_DIR/test_quickstart"
-if gcc -std=c99 -Wall -Werror \
+# The installed library is a release build (-O2 -DNDEBUG, JSON codec); the
+# headers' configuration fingerprint must match it, or the runtime refuses to
+# start with ASX_E_CONFIG_MISMATCH. These are the flags install.sh prints.
+if gcc -std=c99 -Wall -Werror -DNDEBUG -DASX_CODEC_JSON \
     -I"$INSTALL_DIR/include" \
     -L"$INSTALL_DIR/lib" \
     -o "$QS_BIN" \
