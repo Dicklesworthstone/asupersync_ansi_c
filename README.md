@@ -44,9 +44,9 @@ The port targets asupersync commit `5e60b1c4c` (2026-10).
   - `make conformance` runs <!-- fact:rust_fixtures -->195<!-- /fact --> scenarios captured from asupersync's `LabRuntime` (`fixtures/rust_reference_v2`) through the C runtime. Each must match the capture's trace class, final snapshot, step observations and lab dispatch order. Checked obligation handoff is included: same-region quota reuse, cross-region ownership changes, chained transfers, refusals and destination-body token drop.
   - CI also generates 200 scenarios on every push and compares the two runtimes live (`make fuzz-differential`, seed 9).
   - It checks that the two trace canonicalizers agree on 100,000 random traces (`make canon-differential`).
-  - It compares the kernel constants and defaults no scenario observes, such as cancel-kind tables, budgets, the timer limit, supervision defaults and lab batch sizes, with Rust's (`make check-rust-constants`). `twin_run` reads Rust's values from the pinned crate into `schemas/rust_kernel_constants.json`. Each value matches, or is a recorded difference that names its bead.
+  - It compares the kernel constants and defaults no scenario observes, such as cancel-kind tables, budgets, the timer limit, supervision defaults and lab batch sizes, with Rust's (`make check-rust-constants`). `twin_run` reads Rust's values from the pinned crate into `schemas/rust_kernel_constants.json`. Each value matches or is declared n/a with a reason; the gate keeps no list of accepted differences.
   - Covered areas: region/task/obligation lifecycle, cancellation and masking, budgets, mpsc/oneshot/broadcast/watch channels, mutex/rwlock/semaphore/notify/barrier, task groups (join_all, race with a deadline, first_ok, quorum), region admission limits, GenServers (cast, call, stop, cancellation and the mailbox drain) and managed supervisors (one_for_one, one_for_all and rest_for_one restarts, restart intensity and backoff, stop or escalate when the limit is reached). All of it runs under the lab's single-worker dispatch model.
-- **Known differences, open:** none in what the scenario language expresses ([`docs/SCENARIO_DSL_V2.md`](docs/SCENARIO_DSL_V2.md) §7 lists the closed ones); rule by rule in [`docs/C_REFINEMENT_MAP.md`](docs/C_REFINEMENT_MAP.md).
+- **Known differences, open:** none in what the scenario language expresses ([`docs/SCENARIO_DSL_V2.md`](docs/SCENARIO_DSL_V2.md) §7 lists the closed ones). That bounds the claim to the language's reach. The Variant and Partial rows of [`docs/C_REFINEMENT_MAP.md`](docs/C_REFINEMENT_MAP.md) list the rest rule by rule: rulings where C follows Rust against the formal spec (mask nesting depth, when a region enters Draining), liveness properties with finite-run evidence only, laws without combinator-level tests, and capability checks that exist only on the opt-in Cx layer. The two owner-decision drifts the 2026-10-12 audit found, the leak-response default and the cancel-kind ordinals, are closed (DEC-007, DEC-006).
 - **Not compared with Rust; tested in C only:** networking, files, processes and HTTP; live, non-lab scheduling.
 - **Not ported:**
   - actors: the plain `Actor` trait, system messages, overflow policies, names, monitors and links;
@@ -255,6 +255,16 @@ make release-artifacts RELEASE_VERSION=0.1.0 RELEASE_TARGET=source RELEASE_KIND=
 
 ### 3) Cross-Compile for Embedded Targets
 
+What CI runs: the library, the unit suite and the Rust-fixture replay, built with
+Debian glibc cross compilers and executed under QEMU for mipsel, mips, armv7,
+aarch64 and riscv64 (`make test-unit TARGET=<triplet> PROFILE=EMBEDDED_ROUTER`
+and `make conformance TARGET=<triplet> PROFILE=EMBEDDED_ROUTER`), plus
+`make ci-embedded-matrix` (mipsel, armv7 and aarch64 builds with the Debian
+compilers, since no OpenWrt SDK is on the CI runner's `PATH`). The commands
+below are the Makefile's entry points
+for OpenWrt musl and bare-metal builds. No CI job runs them, so they are
+untested here: they need the named toolchain on `PATH` and may need changes.
+
 ```bash
 # mipsel OpenWrt
 make release TARGET=mipsel-openwrt-linux-musl
@@ -308,7 +318,8 @@ The main subsystem families are below. Their public headers live under `include/
 | **stream** | Poll-based async iterators and streaming combinators |
 | **bytes** | Buffer management, codec bridges, I/O adapters |
 | **security** | Ambient-authority audit catalog, authenticated symbols and security contexts, crypto primitives (SHA-1/256/512, HMAC-SHA256, HKDF-SHA256, constant-time compare, Base64/hex, whitening of a caller-supplied entropy source) |
-| **net** | TCP/UDP over in-memory or native sockets, DNS (getaddrinfo on the blocking pool), HTTP/1.1 server/client, WebSocket (RFC 6455) |
+| **net** | TCP/UDP over in-memory or native sockets, DNS (getaddrinfo on the blocking pool), HTTP/1.1 server/client, WebSocket (RFC 6455), a TLS provider interface (no real provider ships, see Limitations) |
+| **db, quic, grpc, messaging, distributed, transport, remote** | In-memory models of a database, QUIC, gRPC, messaging, a distributed runtime, transports and remote execution: bounded and deterministic, with no wire protocol and no peer; a success status reports the model, not a real service (see Limitations) |
 | **raptorq** | RFC 6330 fountain-code encoder/decoder (its unit tests match golden vectors from the crates.io `raptorq` 2.0.1 crate) |
 | **fs** | Files and directories: in-memory model, plus native POSIX backend |
 | **process** | Child processes: spawn, stdio pipes, exit status, kill/reap (native POSIX backend) |
@@ -460,7 +471,10 @@ make test-gates         # negative controls: the gates must reject bad fixtures,
 
 Execute every Rust-captured v2 fixture through C runtimes built with the
 JSON and with the BIN codec (`make codec-equivalence-exec`, each in its own
-`build/parity/` directory); both must match the Rust captures, and every
+`build/parity/` directory). The two builds differ only in the codec flag the
+ABI reports and in the build-identity fingerprint, and both read JSON scenarios,
+so this lane shows that the build modes agree; it does not test a binary
+scenario transport. Both must match the Rust captures, and every
 run's own trace must survive the binary trace format (export, import and
 verify against itself; a copy with one byte flipped must be refused). Then compare
 the semantic digests recorded in the JSON and BIN files of each fixture in
@@ -758,11 +772,13 @@ it drifts from the headers or a new capacity macro is missing.
 | `ASX_PROFILE_POSIX` | Linux (CI-tested); other POSIX systems through the poll(2) fallback, untested | Live builds (`DETERMINISTIC=0`): epoll/poll(2) readiness reactor, pthread blocking pool, native sockets, files, processes and signals. Deterministic builds keep the in-memory backends |
 | `ASX_PROFILE_WIN32` | Windows (MSVC) | BCrypt entropy in live builds (the default init installs it); QueryPerformanceCounter clock and debugger/stderr logging through `asx_win32_hooks_install`. No native I/O yet: no sockets or IOCP (the reactor is a timed sleep that reports no readiness), no blocking pool, and net/fs run on the in-memory backends |
 | `ASX_PROFILE_FREESTANDING` | Bare-metal/embedded | User-supplied hooks, no FS/network assumptions |
-| `ASX_PROFILE_EMBEDDED_ROUTER` | OpenWrt/router-class | 4-worker cap, reject-at-75% overload policy. Arena sizes come from `RESOURCE_CLASS`, not the profile. No native OS I/O. CI runs its unit suite and the Rust fixtures under QEMU on five ISAs |
-| `ASX_PROFILE_HFT` | High-frequency trading | 16-worker cap, shed-oldest overload policy; pairs with the HFT instrumentation module (latency histograms, jitter), which the application feeds |
-| `ASX_PROFILE_AUTOMOTIVE` | Safety-critical systems | 16-worker cap, backpressure overload policy; pairs with the automotive instruments (deadline tracking, watchdog, degraded-mode audit, compliance gate), which the application feeds |
+| `ASX_PROFILE_EMBEDDED_ROUTER` | OpenWrt/router-class | 4-worker cap; the overload catalog lists reject-at-75% for it (advisory, see below). Arena sizes come from `RESOURCE_CLASS`, not the profile. No native OS I/O. CI runs its unit suite and the Rust fixtures under QEMU on five ISAs |
+| `ASX_PROFILE_HFT` | High-frequency trading | 16-worker cap; the overload catalog lists shed-oldest for it (advisory, see below); pairs with the HFT instrumentation module (latency histograms, jitter), which the application feeds |
+| `ASX_PROFILE_AUTOMOTIVE` | Safety-critical systems | 16-worker cap; the overload catalog lists backpressure for it (advisory, see below); pairs with the automotive instruments (deadline tracking, watchdog, degraded-mode audit, compliance gate), which the application feeds |
 | `ASX_PROFILE_PARALLEL` | Multi-core (planned) | Deterministic logical worker-lane scheduler (64-worker generic cap) that runs every lane on the calling thread; observe-only admission by default |
 | `ASX_PROFILE_BROWSER` | Browser/WebAssembly (no wasm32 build yet) | Native-only surfaces compiled out, browser boundary diagnostics; builds and runs natively today |
+
+The overload policies named above are entries in a catalog (`src/runtime/overload_catalog.c`, "Per-Profile Overload Policies" below), not behavior of the scheduler: spawn and the scheduler never consult it, and a policy takes effect only where the application evaluates it through the vertical adapters. The one code path that reads the catalog's forbid mask is `asx_channel_create_unbounded`.
 
 Profiles are meant to control operational envelopes (limits, defaults, instrumentation), never semantic behavior. That is checked by executing the Rust-captured fixtures under every profile build (`make profile-parity`) and by the resource-pressure gate.
 
@@ -953,10 +969,13 @@ make check-ci           # Wider local approximation of CI (see "Local vs CI" bel
 
 ## Release Artifacts and Integrity
 
-Tag-driven release automation (`.github/workflows/release.yml`) emits deterministic
-asset bundles and integrity metadata per target.
+No release has been cut: the repository has no tag and no GitHub release. The
+release workflow (`.github/workflows/release.yml`, triggered by pushing a `v*`
+tag) has never run, so the bundle, checksum and Sigstore steps below are what it
+is written to produce, not something a tagged build has demonstrated. The
+`make release-artifacts` commands do run locally.
 
-Per-target release contract:
+Per-target release contract of that workflow:
 
 - `asx-<target>.tar.xz`
 - `asx-<target>.tar.xz.sha256`
@@ -1551,7 +1570,7 @@ The overload catalog (`src/runtime/overload_catalog.c`) records an overload poli
 | AUTOMOTIVE | Backpressure | 90% | No silent drops, no nondeterminism, no deadline misses |
 | BROWSER | Reject | 80% | No silent drops, no nondeterminism, no unbounded queues |
 
-The constraints are a bitmask of forbidden behaviors (`ASX_FORBID_SILENT_DROP`, `ASX_FORBID_NONDETERMINISTIC`, `ASX_FORBID_UNBOUNDED_QUEUE`, `ASX_FORBID_LATENCY_SPIKE`, `ASX_FORBID_DEADLINE_MISS`). The mask documents the policy; no code checks a configuration against it. The catalog is applied through the vertical adapters (below); spawn and the scheduler do not consult it.
+The constraints are a bitmask of forbidden behaviors (`ASX_FORBID_SILENT_DROP`, `ASX_FORBID_NONDETERMINISTIC`, `ASX_FORBID_UNBOUNDED_QUEUE`, `ASX_FORBID_LATENCY_SPIKE`, `ASX_FORBID_DEADLINE_MISS`). Only one path reads the mask: `asx_channel_create_unbounded` refuses with `ASX_E_PERMISSION_DENIED` where `ASX_FORBID_UNBOUNDED_QUEUE` is set (DEC-008). The strategies and thresholds are applied through the vertical adapters (below); spawn and the scheduler do not consult the catalog, and no code checks a configuration against the other bits.
 
 ## ABI Stability Contract
 
@@ -2359,8 +2378,9 @@ for 100K iterations, Rust-vs-C differential fuzzing on a new seed each day,
 the full e2e suite with the conformance and parity gates, and strict fixture
 schema validation. The perf workflow (`perf.yml`, pushes to `main`) runs the
 benchmarks and the SLO and size gates. The release workflow is tag-triggered
-(`v*`) and builds `linux-x86_64` binary and source bundles with SHA-256
-checksums, provenance files and Sigstore (cosign) signatures.
+(`v*`) and is written to build `linux-x86_64` binary and source bundles with
+SHA-256 checksums, provenance files and Sigstore (cosign) signatures; it has
+not run, because no tag exists.
 
 ## Troubleshooting
 
@@ -2461,6 +2481,7 @@ Check whether `asx_deadline_monitor_check()` is being called frequently enough i
 - Native I/O ships only in live builds of the POSIX profile: an epoll reactor on Linux with a poll(2) fallback elsewhere (only Linux runs in CI), a pthread blocking pool, sockets, files, processes and signals. There is no kqueue, IOCP or io_uring backend (`ASX_IO_BACKEND_IO_URING` is refused with `ASX_E_PERMISSION_DENIED`). The other profiles, EMBEDDED_ROUTER, HFT and AUTOMOTIVE included, compile the native backends out: their net, fs, process and signal surfaces use the in-memory backends, and their reactor is the ghost reactor unless you install reactor hooks of your own.
 - WIN32 builds and passes its unit suite under MSVC in CI (deterministic builds), but has no native I/O: no sockets, no IOCP reactor (the reactor is a timed sleep), no blocking pool. See the win32 row of `docs/DEFERRED_STUBS_REGISTER.md` (`bd-v12u.3`).
 - TLS needs a provider, and none is built in. The core carries no cryptography: `asx_tls_connect` and `asx_tls_accept` refuse a configuration that names no `asx_tls_provider` (`ASX_E_HOOK_MISSING`), so nothing is sent in the clear under the name of TLS by default. The one provider in the tree, `asx_tls_null_provider()`, is a plaintext passthrough for tests and simulations: it performs no handshake, authenticates no peer and encrypts nothing, and a caller must select it with `asx_tls_config_set_provider`. A real TLS stack plugs in through the provider callbacks (handshake, read, write, shutdown, peer certificate); no such adapter ships yet (`bd-9kll.17.2`). Nothing else in the tree opens a TLS stream: the HTTP server and client speak plain TCP.
+- The database, QUIC, gRPC, messaging, distributed, transport and remote surfaces (`src/net/db.c`, `quic.c`, `grpc.c`, `messaging.c`, `distributed.c`, `src/transport/`, `src/remote/`) are deterministic in-memory models (DEC-010). They open no socket and speak no wire protocol: a query returns generated in-memory rows, and a QUIC connection or gRPC channel is a link between structures in the same process. A successful status means the model accepted the call, not that anything reached a database, broker or peer. Use them as test doubles for the API shapes, not as clients.
 - There is no WebAssembly build target. The BROWSER profile compiles natively with browser surface gating, and `tools/ci/wasm32_oracle_probe.sh`, which CI does not run, only test-compiles some sources for `wasm32-unknown-unknown` (`docs/WASM32_ORACLE_EVALUATION.md`).
 - Rust parity covers what the DSL v2 scenarios can express (see `make conformance`). Networking, files, processes, HTTP and live builds are not compared with Rust, and `docs/SCENARIO_DSL_V2.md` §7 lists the open C-side gaps.
 - Deterministic guarantees assume matching scenario, profile, seed, and compatible runtime version.
