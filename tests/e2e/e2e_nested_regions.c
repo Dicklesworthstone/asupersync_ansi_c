@@ -79,10 +79,10 @@ static void log_region_state(const char *label, asx_region_id id) {
 /* Trace index of a region's REGION_CLOSED event (UINT32_MAX if absent). */
 static uint32_t region_closed_trace_index(asx_region_id id) {
     uint32_t i;
-    uint32_t n = asx_trace_event_count();
+    uint32_t n = asx_trace_event_count(test_runtime());
     for (i = 0; i < n; i++) {
         asx_trace_event ev;
-        if (!asx_trace_event_get(i, &ev)) continue;
+        if (!asx_trace_event_get(test_runtime(), i, &ev)) continue;
         if (ev.kind == ASX_TRACE_REGION_CLOSED && ev.entity_id == id) return i;
     }
     return UINT32_MAX;
@@ -289,9 +289,9 @@ static asx_status poll_body_child(void *data, asx_task_id self) {
 
 static uint32_t body_cancel_trace_count(void) {
     uint32_t i, count = 0u;
-    for (i = 0u; i < asx_trace_event_count(); i++) {
+    for (i = 0u; i < asx_trace_event_count(test_runtime()); i++) {
         asx_trace_event event;
-        if (asx_trace_event_get(i, &event) &&
+        if (asx_trace_event_get(test_runtime(), i, &event) &&
             (event.kind == ASX_TRACE_CANCEL_REQUEST || event.kind == ASX_TRACE_REGION_CANCELLED)) {
             count++;
         }
@@ -569,7 +569,7 @@ static asx_status poll_mask_worker(void *data, asx_task_id self) {
                 return st;
             }
             calls = ctx->leaf_calls;
-            digest = asx_trace_digest();
+            digest = asx_trace_digest(test_runtime());
             st = asx_task_masked(self, poll_mask_leaf, ctx);
             if (asx_task_mask_depth(self, &refused_depth) != ASX_OK ||
                 asx_task_get_cancel_phase(self, &refused_phase) != ASX_OK) {
@@ -579,7 +579,7 @@ static asx_status poll_mask_worker(void *data, asx_task_id self) {
             emit_mask_detail(ctx, "worker", "depth65_refused", ctx->worker_polls, refused_depth,
                              (int)refused_phase, -1, -1, st, -1);
             if (st != ASX_E_INVALID_STATE || ctx->leaf_calls != calls ||
-                asx_trace_digest() != digest) {
+                asx_trace_digest(test_runtime()) != digest) {
                 ctx->error = "depth65_must_not_run_callback";
                 return ASX_E_INVALID_STATE;
             }
@@ -715,7 +715,7 @@ int main(void) {
     scenario_nested_guarded_mask(1);
     scenario_nested_guarded_mask(2);
 
-    printf("DIGEST %016llx\n", (unsigned long long)asx_trace_digest());
+    printf("DIGEST %016llx\n", (unsigned long long)asx_trace_digest(test_runtime()));
     fprintf(stderr, "[e2e] nested_regions: %d passed, %d failed\n", g_pass, g_fail);
     return g_fail > 0 ? 1 : 0;
 }

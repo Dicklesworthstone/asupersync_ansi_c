@@ -213,7 +213,7 @@ static asx_status reset_parallel(uint32_t worker_count) {
     asx_parallel_config cfg = default_parallel_config(worker_count);
 
     asx_runtime_reset(test_runtime());
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     reset_order();
     return asx_parallel_init(&cfg);
 }
@@ -314,8 +314,8 @@ static void result_mix(swarm_result *result, uint32_t value) {
 }
 
 static void result_mix_trace(swarm_result *result) {
-    result->trace_digest = asx_trace_digest();
-    result->trace_event_count = asx_trace_event_count();
+    result->trace_digest = asx_trace_digest(test_runtime());
+    result->trace_event_count = asx_trace_event_count(test_runtime());
     result->semantic_digest = digest_mix_u64(result->semantic_digest, result->trace_digest);
     result->semantic_digest = digest_mix_u32(result->semantic_digest, result->trace_event_count);
 }
@@ -1023,7 +1023,7 @@ static void scenario_admission_pressure(void) {
     cfg.admission_policy.pressure_threshold_pct = 80u;
     cfg.admission_policy.enforce = 0;
     asx_runtime_reset(test_runtime());
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     reset_order();
     st = asx_parallel_init(&cfg);
     if (st != ASX_OK) {

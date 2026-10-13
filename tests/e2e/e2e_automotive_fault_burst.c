@@ -309,7 +309,7 @@ static void scenario_fault_trace_digest(void) {
 
     /* Run 1 */
     asx_runtime_reset(test_runtime());
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
 
     asx_region_id rid;
     asx_task_id tid;
@@ -321,11 +321,11 @@ static void scenario_fault_trace_digest(void) {
     }
     asx_budget budget = asx_budget_from_polls(20);
     IGNORE_RC(asx_scheduler_run(rid, &budget));
-    uint64_t digest1 = asx_trace_digest();
+    uint64_t digest1 = asx_trace_digest(test_runtime());
 
     /* Run 2: identical scenario */
     asx_runtime_reset(test_runtime());
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
 
     SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open_2");
     for (i = 0; i < 4; i++) {
@@ -333,7 +333,7 @@ static void scenario_fault_trace_digest(void) {
     }
     budget = asx_budget_from_polls(20);
     IGNORE_RC(asx_scheduler_run(rid, &budget));
-    uint64_t digest2 = asx_trace_digest();
+    uint64_t digest2 = asx_trace_digest(test_runtime());
 
     SCENARIO_CHECK(digest1 == digest2, "fault-burst digest must be deterministic");
     SCENARIO_CHECK(digest1 != 0, "digest should not be zero");

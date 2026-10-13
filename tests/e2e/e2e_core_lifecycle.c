@@ -821,7 +821,7 @@ static void scenario_channel_close_sender(void) {
 static void scenario_trace_digest_deterministic(void) {
     SCENARIO_BEGIN("trace.digest_deterministic");
     asx_runtime_reset(test_runtime());
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
 
     asx_region_id rid;
     asx_task_id tid;
@@ -831,17 +831,17 @@ static void scenario_trace_digest_deterministic(void) {
     SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "task_spawn");
     SCENARIO_CHECK(asx_scheduler_run(rid, &budget) == ASX_OK, "scheduler_run");
 
-    uint64_t digest1 = asx_trace_digest();
+    uint64_t digest1 = asx_trace_digest(test_runtime());
 
     /* Reset and replay identical scenario */
     asx_runtime_reset(test_runtime());
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
 
     SCENARIO_CHECK(asx_region_open(test_runtime(), &rid) == ASX_OK, "region_open_2");
     SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "task_spawn_2");
     SCENARIO_CHECK(asx_scheduler_run(rid, &budget) == ASX_OK, "scheduler_run_2");
 
-    uint64_t digest2 = asx_trace_digest();
+    uint64_t digest2 = asx_trace_digest(test_runtime());
 
     SCENARIO_CHECK(digest1 == digest2, "trace digest not deterministic");
     SCENARIO_CHECK(digest1 != 0, "trace digest is zero");
@@ -1009,8 +1009,10 @@ static uint32_t obligation_events(asx_obligation_id id, asx_trace_event_kind kin
     asx_trace_event event;
     uint32_t i;
     uint32_t n = 0u;
-    for (i = 0u; i < asx_trace_event_count(); i++) {
-        if (asx_trace_event_get(i, &event) && event.entity_id == id && event.kind == kind) n++;
+    for (i = 0u; i < asx_trace_event_count(test_runtime()); i++) {
+        if (asx_trace_event_get(test_runtime(), i, &event) && event.entity_id == id &&
+            event.kind == kind)
+            n++;
     }
     return n;
 }

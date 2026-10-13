@@ -325,7 +325,7 @@ static void scenario_allocator_failure_during_run(void) {
 static void scenario_trace_digest_stable_under_faults(void) {
     SCENARIO_BEGIN("robust-fault-trace-001.digest_stable");
     asx_runtime_reset(test_runtime());
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     reset_fault_state();
     install_fault_hooks();
 
@@ -338,11 +338,11 @@ static void scenario_trace_digest_stable_under_faults(void) {
     budget = asx_budget_from_polls(10);
     IGNORE_RC(asx_scheduler_run(rid, &budget));
 
-    uint64_t digest1 = asx_trace_digest();
+    uint64_t digest1 = asx_trace_digest(test_runtime());
 
     /* Replay with same fault hooks */
     asx_runtime_reset(test_runtime());
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     reset_fault_state();
     install_fault_hooks();
 
@@ -351,7 +351,7 @@ static void scenario_trace_digest_stable_under_faults(void) {
     budget = asx_budget_from_polls(10);
     IGNORE_RC(asx_scheduler_run(rid, &budget));
 
-    uint64_t digest2 = asx_trace_digest();
+    uint64_t digest2 = asx_trace_digest(test_runtime());
 
     SCENARIO_CHECK(digest1 == digest2, "trace digest must be stable across runs");
     SCENARIO_CHECK(digest1 != 0, "trace digest should not be zero");

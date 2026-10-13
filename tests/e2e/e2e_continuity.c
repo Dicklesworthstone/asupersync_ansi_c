@@ -122,16 +122,16 @@ static void scenario_export_import_roundtrip(void) {
     SCENARIO_BEGIN("continuity.export_import_roundtrip");
 
     asx_runtime_reset(test_runtime());
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     run_canonical_scenario();
 
-    uint64_t original_digest = asx_trace_digest();
-    uint32_t original_count = asx_trace_event_count();
+    uint64_t original_digest = asx_trace_digest(test_runtime());
+    uint32_t original_count = asx_trace_event_count(test_runtime());
 
     SCENARIO_CHECK(original_count > 0, "should have trace events");
 
     /* Export */
-    asx_status rc = asx_trace_export_binary(buf, sizeof(buf), &len);
+    asx_status rc = asx_trace_export_binary(test_runtime(), buf, sizeof(buf), &len);
     SCENARIO_CHECK(rc == ASX_OK, "export should succeed");
     SCENARIO_CHECK(len > ASX_TRACE_BINARY_HEADER, "should have header + events");
 
@@ -140,7 +140,7 @@ static void scenario_export_import_roundtrip(void) {
     SCENARIO_CHECK(rc == ASX_OK, "import should succeed");
 
     /* Verify against current trace */
-    asx_replay_result rr = asx_replay_verify();
+    asx_replay_result rr = asx_replay_verify(test_runtime());
     SCENARIO_CHECK(rr.result == ASX_REPLAY_MATCH, "replay should match");
     SCENARIO_CHECK(rr.actual_digest == original_digest, "digest should match");
 
@@ -159,24 +159,24 @@ static void scenario_continuity_across_restart(void) {
 
     /* "Before crash": run scenario, export trace */
     asx_runtime_reset(test_runtime());
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     run_canonical_scenario();
-    uint64_t pre_crash_digest = asx_trace_digest();
+    uint64_t pre_crash_digest = asx_trace_digest(test_runtime());
 
-    asx_status rc = asx_trace_export_binary(buf, sizeof(buf), &len);
+    asx_status rc = asx_trace_export_binary(test_runtime(), buf, sizeof(buf), &len);
     SCENARIO_CHECK(rc == ASX_OK, "pre-crash export");
 
     /* "After restart": reset everything, replay same scenario */
     asx_runtime_reset(test_runtime());
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     run_canonical_scenario();
-    uint64_t post_restart_digest = asx_trace_digest();
+    uint64_t post_restart_digest = asx_trace_digest(test_runtime());
 
     /* Digests should match (deterministic) */
     SCENARIO_CHECK(pre_crash_digest == post_restart_digest, "digest should match across restart");
 
     /* Continuity check should pass */
-    rc = asx_trace_continuity_check(buf, len);
+    rc = asx_trace_continuity_check(test_runtime(), buf, len);
     SCENARIO_CHECK(rc == ASX_OK, "continuity check should pass");
 
     SCENARIO_END();
@@ -194,15 +194,15 @@ static void scenario_divergence_detection(void) {
 
     /* Run scenario A */
     asx_runtime_reset(test_runtime());
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     run_canonical_scenario();
 
-    asx_status rc = asx_trace_export_binary(buf, sizeof(buf), &len);
+    asx_status rc = asx_trace_export_binary(test_runtime(), buf, sizeof(buf), &len);
     SCENARIO_CHECK(rc == ASX_OK, "export scenario A");
 
     /* Run a DIFFERENT scenario */
     asx_runtime_reset(test_runtime());
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     {
         asx_region_id rid;
         asx_task_id tid;
@@ -218,7 +218,7 @@ static void scenario_divergence_detection(void) {
     }
 
     /* Continuity check should FAIL */
-    rc = asx_trace_continuity_check(buf, len);
+    rc = asx_trace_continuity_check(test_runtime(), buf, len);
     SCENARIO_CHECK(rc != ASX_OK, "divergent scenario should fail continuity");
 
     SCENARIO_END();
@@ -236,9 +236,9 @@ static void scenario_digest_stability(void) {
 
     for (i = 0; i < 4; i++) {
         asx_runtime_reset(test_runtime());
-        asx_trace_reset();
+        asx_trace_reset(test_runtime());
         run_canonical_scenario();
-        digests[i] = asx_trace_digest();
+        digests[i] = asx_trace_digest(test_runtime());
     }
 
     SCENARIO_CHECK(digests[0] != 0, "digest should be nonzero");
@@ -262,10 +262,10 @@ static void scenario_export_buffer_too_small(void) {
     SCENARIO_BEGIN("continuity.buffer_too_small");
 
     asx_runtime_reset(test_runtime());
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     run_canonical_scenario();
 
-    asx_status rc = asx_trace_export_binary(tiny, sizeof(tiny), &len);
+    asx_status rc = asx_trace_export_binary(test_runtime(), tiny, sizeof(tiny), &len);
     SCENARIO_CHECK(rc == ASX_E_BUFFER_TOO_SMALL, "tiny buffer should fail");
 
     SCENARIO_END();
@@ -282,10 +282,10 @@ static void scenario_import_bad_magic(void) {
     SCENARIO_BEGIN("continuity.bad_magic");
 
     asx_runtime_reset(test_runtime());
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     run_canonical_scenario();
 
-    asx_status rc = asx_trace_export_binary(buf, sizeof(buf), &len);
+    asx_status rc = asx_trace_export_binary(test_runtime(), buf, sizeof(buf), &len);
     SCENARIO_CHECK(rc == ASX_OK, "export");
 
     /* Corrupt magic bytes */
@@ -309,13 +309,13 @@ static void scenario_empty_trace(void) {
     SCENARIO_BEGIN("continuity.empty_trace");
 
     asx_runtime_reset(test_runtime());
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     /* No scenario — export empty trace */
 
-    uint32_t ec = asx_trace_event_count();
+    uint32_t ec = asx_trace_event_count(test_runtime());
     SCENARIO_CHECK(ec == 0, "trace should be empty");
 
-    asx_status rc = asx_trace_export_binary(buf, sizeof(buf), &len);
+    asx_status rc = asx_trace_export_binary(test_runtime(), buf, sizeof(buf), &len);
     SCENARIO_CHECK(rc == ASX_OK, "empty export should succeed");
     SCENARIO_CHECK(len == ASX_TRACE_BINARY_HEADER, "empty trace = header only");
 
@@ -323,7 +323,7 @@ static void scenario_empty_trace(void) {
     rc = asx_trace_import_binary(buf, len);
     SCENARIO_CHECK(rc == ASX_OK, "empty import should succeed");
 
-    asx_replay_result rr = asx_replay_verify();
+    asx_replay_result rr = asx_replay_verify(test_runtime());
     SCENARIO_CHECK(rr.result == ASX_REPLAY_MATCH, "empty replay should match");
 
     SCENARIO_END();
@@ -341,7 +341,7 @@ static void scenario_captured_state_replay(void) {
 
     /* Run 1: scenario with yielding tasks (uses captured state) */
     asx_runtime_reset(test_runtime());
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     {
         asx_region_id rid;
         asx_task_id tid;
@@ -359,13 +359,13 @@ static void scenario_captured_state_replay(void) {
         IGNORE_RC(asx_scheduler_run(rid, &budget));
     }
 
-    uint64_t digest1 = asx_trace_digest();
-    asx_status rc = asx_trace_export_binary(buf, sizeof(buf), &len);
+    uint64_t digest1 = asx_trace_digest(test_runtime());
+    asx_status rc = asx_trace_export_binary(test_runtime(), buf, sizeof(buf), &len);
     SCENARIO_CHECK(rc == ASX_OK, "export run 1");
 
     /* Run 2: identical */
     asx_runtime_reset(test_runtime());
-    asx_trace_reset();
+    asx_trace_reset(test_runtime());
     {
         asx_region_id rid;
         asx_task_id tid;
@@ -383,10 +383,10 @@ static void scenario_captured_state_replay(void) {
         IGNORE_RC(asx_scheduler_run(rid, &budget));
     }
 
-    uint64_t digest2 = asx_trace_digest();
+    uint64_t digest2 = asx_trace_digest(test_runtime());
     SCENARIO_CHECK(digest1 == digest2, "captured-state replay should match");
 
-    rc = asx_trace_continuity_check(buf, len);
+    rc = asx_trace_continuity_check(test_runtime(), buf, len);
     SCENARIO_CHECK(rc == ASX_OK, "continuity check should pass");
 
     SCENARIO_END();

@@ -160,8 +160,8 @@ static asx_status h_lookup(asx_http_request_context *ctx, asx_http_response *res
         return asx_http_body_set_bytes(&resp->body, "found", 5u);
     }
     if (g_race_hits++ == 0u) {
-        g_race_events = asx_trace_event_count();
-        g_race_digest = asx_trace_digest();
+        g_race_events = asx_trace_event_count(test_runtime());
+        g_race_digest = asx_trace_digest(test_runtime());
     }
     asx_http_response_init(resp, ASX_HTTP_500_INTERNAL_ERROR);
     return asx_http_body_set_bytes(&resp->body, "race", 4u);
@@ -261,7 +261,7 @@ static asx_status serve_program(void *obs) {
     budget = asx_budget_infinite();
     c->run_status = asx_scheduler_run(region, &budget);
 
-    c->digest = asx_trace_digest();
+    c->digest = asx_trace_digest(test_runtime());
     c->served = asx_http_server_requests_served(&g_hs);
     c->accepted = asx_server_total_accepted(&g_srv);
     c->timed_out = g_hs.connections_timed_out;

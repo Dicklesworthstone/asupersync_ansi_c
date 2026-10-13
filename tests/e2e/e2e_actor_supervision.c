@@ -607,7 +607,7 @@ static int run_obligation_cleanup(unsigned long long *digest) {
         scenario_line("actor.obligation_cleanup", 0, "abort_mismatch");
         return 0;
     }
-    if (asx_runtime_snapshot_capture(&snap) != ASX_OK) {
+    if (asx_runtime_snapshot_capture(test_runtime(), &snap) != ASX_OK) {
         scenario_line("actor.obligation_cleanup", 0, "snapshot_failed");
         return 0;
     }
