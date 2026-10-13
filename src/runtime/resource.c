@@ -34,6 +34,7 @@ asx_kernel g_kernel_static;
 
 asx_kernel *g_kernels[ASX_MAX_RUNTIMES] = {&g_kernel_static};
 
+/* ASX_ANALYZER_WAIVER("alignment probe: only offsetof(value) is read, never pad") */
 typedef struct {
     char pad;
     asx_kernel value;
