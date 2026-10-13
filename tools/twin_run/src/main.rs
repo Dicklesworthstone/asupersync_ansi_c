@@ -201,6 +201,44 @@ fn canon_fuzz(seed: u64, count: u64, out: &PathBuf) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// The seeds whose outputs `twin_run rng` records (bd-9kll.4.2): zero, which
+/// `DetRng::new` replaces by 1, the five patterns it corrects by the golden
+/// ratio constant, and three ordinary seeds (the lab's default 42 among them).
+const RNG_SEEDS: [u64; 9] = [
+    0,
+    1,
+    42,
+    0xDEAD_BEEF_CAFE_F00D,
+    0xFFFF_FFFF_FFFF_FFFF,
+    0x0000_0000_FFFF_FFFF,
+    0xFFFF_FFFF_0000_0000,
+    0x5555_5555_5555_5555,
+    0xAAAA_AAAA_AAAA_AAAA,
+];
+
+/// Outputs recorded per seed.
+const RNG_COUNT: usize = 1000;
+
+/// The first `RNG_COUNT` outputs of Rust's `DetRng` for each of `RNG_SEEDS`:
+/// the generator the lab scheduler picks with (`src/util/det_rng.rs`). The C
+/// replica of the pick (`asx_lab_rng_next`) must produce the same values.
+fn det_rng_document(rev: &str) -> Value {
+    let sequences: Vec<Value> = RNG_SEEDS
+        .iter()
+        .map(|&seed| {
+            let mut rng = asupersync::util::DetRng::new(seed);
+            let values: Vec<Value> = (0..RNG_COUNT).map(|_| json!(rng.next_u64())).collect();
+            json!({"seed": seed, "values": values})
+        })
+        .collect();
+    json!({
+        "schema": "asx.rust_det_rng.v1",
+        "asupersync_rev": rev,
+        "count": RNG_COUNT,
+        "sequences": sequences,
+    })
+}
+
 /// The asupersync commit this tool links, read from its own Cargo.lock so it
 /// cannot drift from the pin in Cargo.toml.
 fn linked_asupersync_commit() -> Result<String, String> {
@@ -546,6 +584,34 @@ fn main() -> ExitCode {
                 }
                 Err(err) => {
                     eprintln!("twin_run constants: {err}");
+                    ExitCode::from(1)
+                }
+            }
+        }
+        Some("rng") => {
+            let mut out = None;
+            let mut rest = args[1..].iter();
+            while let Some(arg) = rest.next() {
+                match arg.as_str() {
+                    "--out" => out = rest.next().map(PathBuf::from),
+                    _ => return usage(),
+                }
+            }
+            let Some(out) = out else {
+                return usage();
+            };
+            let result = linked_asupersync_commit()
+                .and_then(|rev| canon::canonical_json(&det_rng_document(&rev)))
+                .and_then(|text| {
+                    std::fs::write(&out, text + "\n").map_err(|e| format!("{}: {e}", out.display()))
+                });
+            match result {
+                Ok(()) => {
+                    println!("twin_run rng: wrote {}", out.display());
+                    ExitCode::SUCCESS
+                }
+                Err(err) => {
+                    eprintln!("twin_run rng: {err}");
                     ExitCode::from(1)
                 }
             }

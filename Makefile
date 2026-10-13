@@ -2253,6 +2253,28 @@ rust-constants-fresh:
 		exit 1; \
 	fi
 
+# rust-rng-fresh — schemas/rust_det_rng.json holds the first 1000 outputs of
+# Rust's DetRng for nine seeds (zero, the five degenerate patterns, three
+# ordinary ones), which `twin_run rng` computes by running the pinned
+# asupersync's own generator (bd-9kll.4.2). The C replica of the lab's pick is
+# compared with it value for value by test_lab_dispatch
+# (rng_replicates_rust_det_rng_for_every_seed_and_value_of_the_derived_document).
+# This target (needs cargo) re-derives the document and fails unless it equals
+# the checked-in one; to refresh it after moving the pin, copy
+# build/rust_det_rng.json over it unmodified.
+RUST_DET_RNG := schemas/rust_det_rng.json
+.PHONY: rust-rng-fresh
+rust-rng-fresh:
+	@echo "[asx] rust-rng-fresh: re-deriving $(RUST_DET_RNG) from the pinned asupersync"
+	@mkdir -p $(BUILD_DIR)
+	@$(TWIN_RUN) rng --out $(BUILD_DIR)/rust_det_rng.json && \
+	if cmp -s $(BUILD_DIR)/rust_det_rng.json $(RUST_DET_RNG); then \
+		echo "[asx] rust-rng-fresh: PASS ($(RUST_DET_RNG) is current)"; \
+	else \
+		echo "[asx] rust-rng-fresh: FAIL: $(RUST_DET_RNG) differs from the pinned asupersync's DetRng"; \
+		exit 1; \
+	fi
+
 # ---------------------------------------------------------------------------
 # fixture-integrity — fixture schema, provenance, digest recomputation,
 # capture_run_id format, unknown ops, and a codec round trip. It proves the

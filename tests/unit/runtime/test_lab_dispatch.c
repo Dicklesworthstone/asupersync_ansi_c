@@ -11,6 +11,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../../../src/conformance/json.h"
 #include "../../../src/runtime/runtime_internal.h"
 #include "../../../src/sync/wait_queue.h"
 #include "test_harness.h"
@@ -90,6 +91,66 @@ TEST(rng_remaps_degenerate_seeds) {
     ASSERT_EQ(asx_scheduler_use_lab_dispatch(UINT64_C(0xFFFFFFFFFFFFFFFF)), ASX_OK);
     ASSERT_EQ(asx_lab_rng_next(), UINT64_C(15860402103189073388));
     ASSERT_EQ(asx_lab_rng_next(), UINT64_C(8426428137925997623));
+}
+
+/* The first 1000 outputs of Rust's DetRng for nine seeds, value for value:
+ * schemas/rust_det_rng.json, which `twin_run rng` derives from the pinned
+ * asupersync (make rust-rng-fresh re-derives it). The seeds are zero, all
+ * five patterns DetRng corrects, and three ordinary ones. Fails closed: a
+ * missing or trimmed document is a failure, not a pass over fewer seeds. */
+static asx_json_doc g_rng_doc;
+static char g_rng_file[1u << 20];
+
+TEST(rng_replicates_rust_det_rng_for_every_seed_and_value_of_the_derived_document) {
+    FILE *f = fopen("schemas/rust_det_rng.json", "rb");
+    size_t n;
+    uint32_t root;
+    uint32_t seqs;
+    uint32_t i;
+    uint64_t count = 0;
+    unsigned compared = 0;
+    int saw_zero = 0;
+    int saw_max = 0;
+
+    ASSERT_TRUE(f != NULL);
+    n = fread(g_rng_file, 1, sizeof(g_rng_file), f);
+    fclose(f);
+    ASSERT_TRUE(n > 0u && n < sizeof(g_rng_file));
+    asx_json_doc_init(&g_rng_doc);
+    ASSERT_EQ(asx_json_parse(&g_rng_doc, g_rng_file, n, &root), ASX_OK);
+    ASSERT_STR_EQ(asx_json_get_string(&g_rng_doc, root, "schema"), "asx.rust_det_rng.v1");
+    ASSERT_TRUE(asx_json_u64(&g_rng_doc, asx_json_get(&g_rng_doc, root, "count"), &count));
+    ASSERT_EQ(count, (uint64_t)1000u);
+    seqs = asx_json_get(&g_rng_doc, root, "sequences");
+    ASSERT_TRUE(seqs != ASX_JSON_NONE);
+    ASSERT_TRUE(asx_json_count(&g_rng_doc, seqs) >= 9u);
+
+    for (i = 0; i < asx_json_count(&g_rng_doc, seqs); i++) {
+        uint32_t seq = asx_json_item(&g_rng_doc, seqs, i);
+        uint32_t values = asx_json_get(&g_rng_doc, seq, "values");
+        uint64_t seed = 0;
+        uint64_t k;
+        uint64_t bad = UINT64_MAX;
+
+        ASSERT_TRUE(asx_json_u64(&g_rng_doc, asx_json_get(&g_rng_doc, seq, "seed"), &seed));
+        ASSERT_EQ(asx_json_count(&g_rng_doc, values), (uint32_t)count);
+        ASSERT_EQ(setup(), ASX_OK);
+        ASSERT_EQ(asx_scheduler_use_lab_dispatch(seed), ASX_OK);
+        for (k = 0; k < count && bad == UINT64_MAX; k++) {
+            uint64_t want = 0;
+            ASSERT_TRUE(asx_json_u64(&g_rng_doc, asx_json_item(&g_rng_doc, values, (uint32_t)k),
+                                     &want));
+            if (asx_lab_rng_next() != want) bad = k;
+        }
+        /* The seed is in `seed`, the first mismatching output index in `bad`. */
+        ASSERT_EQ(bad, UINT64_MAX);
+        if (seed == 0u) saw_zero = 1;
+        if (seed == UINT64_MAX) saw_max = 1;
+        compared++;
+    }
+    ASSERT_TRUE(saw_zero);
+    ASSERT_TRUE(saw_max);
+    ASSERT_TRUE(compared >= 9u);
 }
 
 /* Seed 42, three host-spawned tasks at priority 0 (generations 0, 1, 2).
@@ -3304,6 +3365,7 @@ int main(void) {
     fprintf(stderr, "=== test_lab_dispatch ===\n");
     RUN_TEST(rng_replicates_rust_xorshift64);
     RUN_TEST(rng_remaps_degenerate_seeds);
+    RUN_TEST(rng_replicates_rust_det_rng_for_every_seed_and_value_of_the_derived_document);
     RUN_TEST(ties_are_broken_by_the_step_value_in_generation_order);
     RUN_TEST(host_tasks_draw_from_rust_detentropy_streams);
     RUN_TEST(completed_tasks_free_their_arena_index_for_the_next_task);

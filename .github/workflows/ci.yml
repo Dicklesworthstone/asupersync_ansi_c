@@ -1119,6 +1119,9 @@ jobs:
       - name: Rust kernel constants re-derived from the pinned asupersync
         run: make rust-constants-fresh
 
+      - name: Rust DetRng outputs re-derived from the pinned asupersync
+        run: make rust-rng-fresh
+
       - name: Every Rust fixture reproduced by the pinned asupersync and current twin_run
         run: make fixtures-fresh
 
