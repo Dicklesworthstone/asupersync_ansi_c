@@ -2529,7 +2529,7 @@ pushes and PRs:
 | `check` | format, cppcheck, API docs and README facts (`lint-docs`), checkpoint coverage, anti-butchering proof block, static analysis, strict build, browser profile build and suites, bounded state-machine model check (a native program, not a model checker) |
 | `unit-invariant` | unit, invariant and vignette suites; C conformance suites; ABI check; formal harnesses (natively compiled, see Formal Verification); the unit suite with every capacity macro raised 4x and built for each resource class; the resource-pressure gate |
 | `e2e` | every e2e family (`tests/e2e/run_all.sh`, including HTTP on real sockets, browser, CLI and examples smoke), then the vertical lanes (HFT, automotive, continuity, router/market/fault bursts) |
-| `conformance` | oracle schemas, fixture integrity, gate negative controls, recorded codec digests, and the Rust-captured fixtures executed in C and compared |
+| `conformance` | oracle schemas, fixture integrity, gate negative controls, recorded codec digests, and the Rust-captured fixtures executed in C and compared, the compare pass also running the kernel-state oracles (`CONFORMANCE_ORACLES`, `docs/LAB_ORACLE_CATALOG.md`) over each run's arenas |
 | `profile-parity` | every v2 Rust fixture executed under eight host profiles, recorded legacy digests, and parallel-worker parity scenarios executed at worker counts 1, 2, 8 and 64 |
 | `fuzz-parity` | fuzz smoke and artifact validation |
 | `fuzz-rust-differential` | 200 generated scenarios (a fixed seed, so a regression gate) executed by asupersync's LabRuntime (`tools/twin_run`) and by the C runtime, which must match each one exactly; divergences are reduced by `twin_run minimize` and uploaded. The nightly workflow explores new seeds daily |

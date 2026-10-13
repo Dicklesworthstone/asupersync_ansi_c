@@ -1855,10 +1855,21 @@ resource-pressure-gate:
 # compares snapshot and observations only. The fixtures listed with a reason
 # in tests/conformance/sweep_known_divergences.txt may differ; any other
 # difference fails, and a listed fixture that now matches fails as STALE.
+# The kernel-state oracles of docs/LAB_ORACLE_CATALOG.md run over the
+# arenas at the end of every fixture of the compare pass
+# (CONFORMANCE_ORACLES, by Rust's registry names): a state a parity compare
+# cannot see (a counter off, a closed region holding a task) fails the
+# fixture and names the oracle. tests/gates/test_conformance_monitors.sh
+# plants one. `make conformance CONFORMANCE_ORACLES=` runs without them and
+# CONFORMANCE_ORACLES=all with every oracle the runner knows.
+# CONFORMANCE_SWEEP_ORACLES is the same for the compare-sweep pass; it is
+# empty until that pass has been measured with them.
 # ---------------------------------------------------------------------------
 CONFORMANCE_V2_FIXTURES := $(sort $(wildcard fixtures/rust_reference_v2/*.json))
 CONFORMANCE_SELF_TEST_FIXTURE := fixtures/rust_reference_v2/obligation-reserve-commit-001.json
 CONFORMANCE_SWEEP_KNOWN := tests/conformance/sweep_known_divergences.txt
+CONFORMANCE_ORACLES ?= task_leak,obligation_leak,quiescence,finalizer,region_tree,deadline_monotone,cancellation_protocol,cancel_correctness,cancel_debt,task_counters,arena_counters
+CONFORMANCE_SWEEP_ORACLES ?=
 
 conformance: $(CONFORMANCE_RUNNER)
 	@echo "[asx] conformance: executing $(words $(CONFORMANCE_V2_FIXTURES)) Rust-captured v2 fixture(s) through the C runtime..."
@@ -1867,8 +1878,8 @@ conformance: $(CONFORMANCE_RUNNER)
 		exit 1; \
 	fi
 	@$(TEST_EXEC) $(CONFORMANCE_RUNNER) self-test $(CONFORMANCE_SELF_TEST_FIXTURE)
-	@$(TEST_EXEC) $(CONFORMANCE_RUNNER) compare $(CONFORMANCE_V2_FIXTURES)
-	@$(TEST_EXEC) $(CONFORMANCE_RUNNER) compare-sweep --known $(CONFORMANCE_SWEEP_KNOWN) $(CONFORMANCE_V2_FIXTURES)
+	@ASX_ORACLES="$(CONFORMANCE_ORACLES)" $(TEST_EXEC) $(CONFORMANCE_RUNNER) compare $(CONFORMANCE_V2_FIXTURES)
+	@ASX_ORACLES="$(CONFORMANCE_SWEEP_ORACLES)" $(TEST_EXEC) $(CONFORMANCE_RUNNER) compare-sweep --known $(CONFORMANCE_SWEEP_KNOWN) $(CONFORMANCE_V2_FIXTURES)
 
 # ---------------------------------------------------------------------------
 # conformance-ghost — the same corpus under the ghost monitors (bd-9kll.2.21).

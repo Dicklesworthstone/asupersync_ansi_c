@@ -30,6 +30,13 @@
 #                             static table
 #                             -> `conformance-asan` reports a
 #                             global-buffer-overflow and exits nonzero.
+#   ORACLE_LIVE_COUNT_DRIFT   logging a spawn also counts one more live task
+#                             than there is (a counter only the resource
+#                             gauge reads)
+#                             -> `make conformance`, whose compare pass runs
+#                             the kernel-state oracles (CONFORMANCE_ORACLES),
+#                             fails naming arena_counters; the same lane with
+#                             CONFORMANCE_ORACLES empty passes it.
 #
 # Builds under build/mutants/<case>-<lane>/ (the normal build is untouched)
 # and logs JSONL to build/test-logs/gates.jsonl. Nothing is deleted.
@@ -226,6 +233,42 @@ else
     failures=$((failures + 1))
 fi
 log_case "SANITIZER_OOB_READ" "asan-lane-fails" "exit$s_rc" "$s_status" "$S_ASAN/conformance-asan.log"
+
+# --- ORACLE_LIVE_COUNT_DRIFT --------------------------------------------------
+# The real lane twice, on one build directory (so the second run reuses the
+# library): with the oracles it ships with, it must FAIL naming the oracle;
+# with CONFORMANCE_ORACLES empty, the same runner must PASS the corpus, which
+# is what makes the first failure the oracles' and not parity's.
+O_DIR="$MUTANT_BUILD_ROOT/ORACLE_LIVE_COUNT_DRIFT-lane"
+mkdir -p "$O_DIR"
+o_out="$(cd "$REPO_ROOT" && make -j"$JOBS" --no-print-directory conformance \
+    BUILD_DIR="$O_DIR" CFLAGS="${CFLAGS:-} -DASX_MUTANT_ORACLE_LIVE_COUNT_DRIFT" 2>&1)"
+o_rc=$?
+printf '%s\n' "$o_out" >"$O_DIR/conformance-oracles.log"
+o_named="$(grep -cE 'oracle failed: arena_counters, [0-9]+ violation' <<<"$o_out")"
+o_status="pass"
+if [ "$o_rc" -eq 0 ] || [ "$o_named" -eq 0 ]; then o_status="fail"; fi
+if [ "$o_status" = "pass" ]; then
+    echo "  PASS: ORACLE_LIVE_COUNT_DRIFT caught by make conformance ($o_named fixture(s) fail, each naming arena_counters)"
+else
+    echo "  FAIL: ORACLE_LIVE_COUNT_DRIFT not caught as expected (exit$o_rc; named=$o_named; log $O_DIR/conformance-oracles.log)"
+    failures=$((failures + 1))
+fi
+log_case "ORACLE_LIVE_COUNT_DRIFT" "lane-fails-naming-the-oracle" "exit$o_rc named=$o_named" "$o_status" "$O_DIR/conformance-oracles.log"
+
+o2_out="$(cd "$REPO_ROOT" && make -j"$JOBS" --no-print-directory conformance \
+    BUILD_DIR="$O_DIR" CFLAGS="${CFLAGS:-} -DASX_MUTANT_ORACLE_LIVE_COUNT_DRIFT" \
+    CONFORMANCE_ORACLES= 2>&1)"
+o2_rc=$?
+printf '%s\n' "$o2_out" >"$O_DIR/conformance-no-oracles.log"
+if [ "$o2_rc" -eq 0 ] && ! grep -Eq '^(FAIL|ERROR) ' <<<"$o2_out"; then
+    echo "  PASS: ORACLE_LIVE_COUNT_DRIFT is invisible to the lane without its oracles (parity passes)"
+    log_case "ORACLE_LIVE_COUNT_DRIFT" "lane-without-oracles-passes" "exit$o2_rc" "pass" "$O_DIR/conformance-no-oracles.log"
+else
+    echo "  FAIL: ORACLE_LIVE_COUNT_DRIFT changes what parity sees; it must not (exit$o2_rc; log $O_DIR/conformance-no-oracles.log)"
+    log_case "ORACLE_LIVE_COUNT_DRIFT" "lane-without-oracles-passes" "exit$o2_rc" "fail" "$O_DIR/conformance-no-oracles.log"
+    failures=$((failures + 1))
+fi
 
 if [ "$failures" -eq 0 ]; then
     echo "test_conformance_monitors: every planted bug caught by its lane and invisible to parity"

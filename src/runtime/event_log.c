@@ -63,6 +63,16 @@ static asx_task_id g_mutant_first_task;
 static uint32_t g_mutant_spawns;
 #endif
 
+/* Planted counter drift (bd-9kll.9.2), compiled only in the gate build
+ * tests/gates/test_conformance_monitors.sh: logging a spawn also counts one
+ * more live task than there is. The counter feeds the resource gauge
+ * (asx_resource_used) and nothing a scenario's trace, snapshot or
+ * observations carry, so a parity compare passes; only the arena_counters
+ * oracle, which `make conformance` runs, sees it. */
+#ifdef ASX_MUTANT_ORACLE_LIVE_COUNT_DRIFT
+#include "runtime_internal.h"
+#endif
+
 /* ------------------------------------------------------------------ */
 /* Internal: fold events into the chain                                */
 /* ------------------------------------------------------------------ */
@@ -138,6 +148,9 @@ uint32_t asx_event_emit(asx_event_kind kind, uint64_t entity_id, uint64_t parent
             (void)cancel_st_;
         }
     }
+#endif
+#ifdef ASX_MUTANT_ORACLE_LIVE_COUNT_DRIFT
+    if (kind == ASX_EVENT_TASK_SPAWN) g_kernels[0]->task_live++;
 #endif
 #ifdef ASX_MUTANT_GHOST_UNEXPECTED_LEAK
     /* Planted ghost-monitor bug (bd-9kll.2.21): logging a reservation also
