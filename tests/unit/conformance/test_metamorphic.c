@@ -2134,12 +2134,37 @@ TEST(the_no_op_filter_hides_the_no_op_and_nothing_else) {
     ASSERT_TRUE(mm_difference(&g_a, ra, &g_var, root, MM_NOOP_TASK, MM_NOOP_REGION) != NULL);
 }
 
+/* Two regions and three tasks, so every resource class holds it (R1 has 4
+ * regions and 16 tasks): region close outcomes read after each Shutdown
+ * cancel, which M4's transform follows with a User one. t.a and t.b complete
+ * cancelled in the step of their own entry; t.c is left running. */
+static const char g_driver_inline[] =
+    "{\"schema\":\"asx.scenario.v2\",\"id\":\"mm-driver-inline-001\",\"description\":\"d\","
+    "\"unit\":\"region_lifecycle\",\"rules\":[\"inv.determinism.replayable\"],\"seed\":42,"
+    "\"lab\":{\"max_steps\":600},"
+    "\"regions\":[{\"name\":\"r.main\",\"parent\":\"root\",\"budget\":null}],"
+    "\"channels\":[],\"sync\":[],"
+    "\"tasks\":["
+    "{\"name\":\"t.a\",\"region\":\"r.main\",\"budget\":null,\"program\":["
+    "{\"op\":\"sleep\",\"ns\":1000},{\"op\":\"checkpoint\"}]},"
+    "{\"name\":\"t.b\",\"region\":\"r.main\",\"budget\":null,\"program\":["
+    "{\"op\":\"sleep\",\"ns\":1000},{\"op\":\"checkpoint\"}]},"
+    "{\"name\":\"t.c\",\"region\":\"r.main\",\"budget\":null,\"program\":["
+    "{\"op\":\"sleep\",\"ns\":1000},{\"op\":\"checkpoint\"}]}"
+    "],\"script\":["
+    "{\"at_ns\":20,\"op\":{\"op\":\"cancel_task\",\"task\":\"t.a\",\"kind\":\"Shutdown\"}},"
+    "{\"at_ns\":30,\"op\":{\"op\":\"region_close_outcome\",\"region\":\"r.main\"}},"
+    "{\"at_ns\":40,\"op\":{\"op\":\"cancel_task\",\"task\":\"t.b\",\"kind\":\"Shutdown\"}},"
+    "{\"at_ns\":50,\"op\":{\"op\":\"region_close_outcome\",\"region\":\"r.main\"}}"
+    "],\"expect\":{\"kind\":\"ok\"}}";
+
 /* M4 leaves a driver observation's script index out of the comparison, and
- * nothing else of it. The corpus scenario below reads region close outcomes
- * after cancels that M4 duplicates, so its driver indexes shift and its
- * values do not: compared whole the variant differs, with the relaxation it
- * does not, and a driver read whose op, status or value is changed, or any
- * other observation whose step is, is still reported. */
+ * nothing else of it. The scenario above reads region close outcomes after
+ * cancels that M4 duplicates, so its driver indexes shift and its values do
+ * not: compared whole the variant differs, with the relaxation it does not,
+ * and a driver read whose op, status or value is changed, or any other
+ * observation whose step is, is still reported. (The corpus scenario that
+ * first showed it needs 5 regions: the sweep covers it where it fits.) */
 TEST(m4_leaves_out_the_driver_script_index_and_nothing_else) {
     static const char *const fields[] = {"op", "status", "value"};
     uint32_t sc = 0;
@@ -2151,11 +2176,11 @@ TEST(m4_leaves_out_the_driver_script_index_and_nothing_else) {
     uint32_t f;
     mm_cmp cmp;
 
-    ASSERT_TRUE(
-        load_scenario(MM_DIR "/region-close-outcome-join-cancelled-reasons-001.json", &g_scn, &sc));
+    asx_json_doc_init(&g_scn);
+    ASSERT_EQ(asx_json_parse(&g_scn, g_driver_inline, strlen(g_driver_inline), &sc), ASX_OK);
     ASSERT_EQ(run_scn(&g_scn, sc, &g_a, &ra), ASX_OK);
     ASSERT_TRUE(build_cancel_duplicates(&g_scn, sc, 1, &vr, &added));
-    ASSERT_TRUE(added > 0u);
+    ASSERT_EQ(added, 2u);
     ASSERT_EQ(run_scn(&g_var, vr, &g_b, &rb), ASX_OK);
     obs = asx_json_get(&g_b, rb, "observations");
     ASSERT_TRUE(obs != ASX_JSON_NONE);
