@@ -602,6 +602,40 @@ static int same_node(const asx_json_doc *da, uint32_t a, const asx_json_doc *db,
     return x != NULL && y != NULL && strcmp(x, y) == 0;
 }
 
+/* 1 when the two observation lists are the same. With `skip_driver_step`
+ * a driver observation is compared without its "step": that is the 1-based
+ * index of the script entry the op ran in (SCENARIO_DSL_V2.md, driver ops),
+ * which a transform that inserts entries ahead of it renumbers. Its op,
+ * status and value, and every other observation, are still compared. */
+static int same_observations(const asx_json_doc *da, uint32_t oa, const asx_json_doc *db,
+                             uint32_t ob, int skip_driver_step) {
+    uint32_t n = asx_json_count(da, oa);
+    uint32_t i;
+    uint32_t j;
+    if (!skip_driver_step) return same_node(da, oa, db, ob);
+    if (asx_json_count(db, ob) != n) return 0;
+    for (i = 0; i < n; i++) {
+        uint32_t xa = asx_json_item(da, oa, i);
+        uint32_t xb = asx_json_item(db, ob, i);
+        const char *task = asx_json_get_string(da, xa, "task");
+        if (task == NULL || strcmp(task, "driver") != 0) {
+            if (!same_node(da, xa, db, xb)) return 0;
+            continue;
+        }
+        if (asx_json_count(da, xa) != asx_json_count(db, xb)) return 0;
+        for (j = 0; j < asx_json_count(da, xa); j++) {
+            uint32_t ma = asx_json_item(da, xa, j);
+            const char *key = asx_json_key(da, ma);
+            uint32_t mb;
+            if (key == NULL) return 0;
+            if (strcmp(key, "step") == 0) continue;
+            mb = asx_json_get(db, xb, key);
+            if (mb == ASX_JSON_NONE || !same_node(da, ma, db, mb)) return 0;
+        }
+    }
+    return 1;
+}
+
 static char g_pool_a[MM_POOL_CAP];
 static char g_pool_b[MM_POOL_CAP];
 static const char *g_ev_a[MM_MAX_EVENTS];
@@ -673,6 +707,7 @@ typedef struct {
     const char *noop_task;   /* M2: the variant holds this task more, and it completed */
     const char *noop_region; /* M2: and this region more */
     const char *skip_event;  /* M4: events whose canonical text holds this, in both traces */
+    int skip_driver_step;    /* M4: driver observations compared without their script index */
 } mm_cmp;
 
 /* How the variant's projection `rb` differs from the baseline's `ra`, or
@@ -699,7 +734,7 @@ static const char *mm_compare(const asx_json_doc *da, uint32_t ra, const asx_jso
         ta == ASX_JSON_NONE || tb == ASX_JSON_NONE) {
         return "a projection lacks its trace, snapshot or observations";
     }
-    if (!same_node(da, oa, db, ob)) return "observations";
+    if (!same_observations(da, oa, db, ob, cmp->skip_driver_step)) return "observations";
     if (asx_json_count(da, sa) != asx_json_count(db, sb)) return "snapshot: different members";
     for (i = 0; i < asx_json_count(da, sa); i++) {
         uint32_t ma = asx_json_item(da, sa, i);
@@ -1000,6 +1035,7 @@ static void m4_check(const char *label, const asx_json_doc *d, uint32_t sc, uint
     rep->m4_variants++;
     memset(&cmp, 0, sizeof(cmp));
     cmp.skip_event = MM_REGION_CANCELLED;
+    cmp.skip_driver_step = 1;
     diff = mm_compare(&g_a, ra, &g_b, rb, &cmp);
     if (diff != NULL) {
         rep->m4_violations++;
@@ -2098,6 +2134,70 @@ TEST(the_no_op_filter_hides_the_no_op_and_nothing_else) {
     ASSERT_TRUE(mm_difference(&g_a, ra, &g_var, root, MM_NOOP_TASK, MM_NOOP_REGION) != NULL);
 }
 
+/* M4 leaves a driver observation's script index out of the comparison, and
+ * nothing else of it. The corpus scenario below reads region close outcomes
+ * after cancels that M4 duplicates, so its driver indexes shift and its
+ * values do not: compared whole the variant differs, with the relaxation it
+ * does not, and a driver read whose op, status or value is changed, or any
+ * other observation whose step is, is still reported. */
+TEST(m4_leaves_out_the_driver_script_index_and_nothing_else) {
+    static const char *const fields[] = {"op", "status", "value"};
+    uint32_t sc = 0;
+    uint32_t ra = 0;
+    uint32_t vr = 0;
+    uint32_t rb = 0;
+    uint32_t added = 0;
+    uint32_t obs;
+    uint32_t f;
+    mm_cmp cmp;
+
+    ASSERT_TRUE(
+        load_scenario(MM_DIR "/region-close-outcome-join-cancelled-reasons-001.json", &g_scn, &sc));
+    ASSERT_EQ(run_scn(&g_scn, sc, &g_a, &ra), ASX_OK);
+    ASSERT_TRUE(build_cancel_duplicates(&g_scn, sc, 1, &vr, &added));
+    ASSERT_TRUE(added > 0u);
+    ASSERT_EQ(run_scn(&g_var, vr, &g_b, &rb), ASX_OK);
+    obs = asx_json_get(&g_b, rb, "observations");
+    ASSERT_TRUE(obs != ASX_JSON_NONE);
+
+    memset(&cmp, 0, sizeof(cmp));
+    cmp.skip_event = MM_REGION_CANCELLED;
+    ASSERT_TRUE(mm_compare(&g_a, ra, &g_b, rb, &cmp) != NULL);
+    cmp.skip_driver_step = 1;
+    ASSERT_TRUE(mm_compare(&g_a, ra, &g_b, rb, &cmp) == NULL);
+
+    for (f = 0; f < sizeof(fields) / sizeof(fields[0]) + 1u; f++) {
+        /* The last round changes the step of the first observation that is
+         * not a driver one. */
+        int driver = f < sizeof(fields) / sizeof(fields[0]);
+        const char *field = driver ? fields[f] : "step";
+        mm_override over[1];
+        uint32_t arr;
+        uint32_t root;
+        uint32_t i;
+        int hit = 0;
+        asx_json_doc_init(&g_var);
+        arr = asx_json_new_array(&g_var);
+        for (i = 0; i < asx_json_count(&g_b, obs); i++) {
+            uint32_t item = asx_json_copy(&g_var, &g_b, asx_json_item(&g_b, obs, i));
+            const char *task = asx_json_get_string(&g_var, item, "task");
+            int is_driver = task != NULL && strcmp(task, "driver") == 0;
+            if (!hit && is_driver == driver) {
+                asx_json_set(&g_var, item, field,
+                             driver ? asx_json_new_string(&g_var, "planted")
+                                    : asx_json_new_u64(&g_var, 987654u));
+                hit = 1;
+            }
+            asx_json_push(&g_var, arr, item);
+        }
+        ASSERT_TRUE(hit);
+        over[0].key = "observations";
+        over[0].node = arr;
+        root = copy_with(&g_var, &g_b, rb, over, 1u);
+        ASSERT_TRUE(mm_compare(&g_a, ra, &g_var, root, &cmp) != NULL);
+    }
+}
+
 TEST(m1_permuting_independent_tasks_keeps_the_projection) {
     sweep();
     ASSERT_EQ(g_rep.load_failures, 0u);
@@ -2263,6 +2363,7 @@ int main(int argc, char **argv) {
     RUN_TEST(the_analysis_keeps_tasks_that_share_a_name_in_place);
     RUN_TEST(the_comparator_reports_a_planted_difference_in_each_part);
     RUN_TEST(the_no_op_filter_hides_the_no_op_and_nothing_else);
+    RUN_TEST(m4_leaves_out_the_driver_script_index_and_nothing_else);
     RUN_TEST(the_minimizer_deletes_everything_the_predicate_does_not_need);
     RUN_TEST(the_budgets_of_an_m3_case_are_read_back_from_its_scenario);
     RUN_TEST(m1_permuting_independent_tasks_keeps_the_projection);
