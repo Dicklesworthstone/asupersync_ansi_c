@@ -979,6 +979,22 @@ cancel reason if it was cancelled and Ok otherwise (`record/region.rs:1820-1835`
 An `err` outcome has no status on the C side, so the interpreter refuses a
 scenario that reads one. The name `driver` is reserved.
 
+What the join keeps is observable here (bd-9kll.3.14, `Outcome::join`,
+`types/outcome.rs:566-581`): two Cancelled outcomes keep the left reason
+unless the right kind is strictly more severe, which replaces it
+(`CancelReason::strengthen`); on a tie in kind severity the left stays even
+when the right has the earlier timestamp that `strengthen` alone would
+prefer; two Panicked outcomes keep the left message, and a panic outranks a
+cancel with its own message. "Left" is the task that completed first.
+`region-close-outcome-join-cancelled-reasons-001` pins the first three
+(User then Shutdown becomes Shutdown at 30; Shutdown then User stays Shutdown
+at 40; Deadline at 60 then Timeout at 55 stays Deadline at 60) and
+`region-close-outcome-join-panics-first-message-wins-001` the rest. An entry's
+op is applied before the lab runs the step that follows it, so a read in the
+entry of a completion's own step sees nothing of it, and a timer that is due
+fires only in a step: the scenarios cancel an otherwise idle task as an
+anchor so that the next entry has a step to run, and read one entry later.
+
 ### Reason attribution
 
 Every cancel reason a scenario creates carries real attribution, built the

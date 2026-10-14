@@ -36,6 +36,13 @@
 #                              -> quiescence-parked-task-*,
 #                                 oneshot-closed-send-no-wake-*,
 #                                 deadlock-two-tasks-channels-*
+#   - OUTCOME_JOIN_KEEPS_FIRST_REASON / OUTCOME_JOIN_ALWAYS_STRENGTHENS /
+#     OUTCOME_JOIN_RIGHT_BIAS  the outcome join keeps the first Cancelled
+#                              reason, strengthens on a tie, or lets the right
+#                              win a tie (bd-9kll.3.14)
+#                              -> region-close-outcome-join-cancelled-reasons-*,
+#                                 region-close-outcome-join-panics-first-
+#                                 message-wins-*
 #   - INTERVAL_BURST_FROM_NOW / INTERVAL_DELAY_FROM_DEADLINE /
 #     INTERVAL_SKIP_ONE_PERIOD one missed-tick rule is swapped for another's
 #                              -> interval-missed-tick-<rule>-*,
@@ -167,6 +174,16 @@ run_mutant WATCH_BORROW_MARKS_SEEN 'watch-receiver-clone-continues-'
 run_mutant STUCK_TASK_OMITTED 'quiescence-parked-task-001'
 run_mutant STUCK_TASK_OMITTED 'oneshot-closed-send-no-wake-001'
 run_mutant STUCK_TASK_OMITTED 'deadlock-two-tasks-channels-001'
+
+# A region's close outcome is the join of its tasks' outcomes, and what the
+# join keeps is observable (bd-9kll.3.14): two Cancelled outcomes strengthen the
+# left reason only when the right kind is strictly more severe, and every other
+# tie stays left, a panic's message included. The first mutant keeps the first
+# reason, the second strengthens on a tie too (the earlier stamp wins), the
+# third lets the right outcome win a tie.
+run_mutant OUTCOME_JOIN_KEEPS_FIRST_REASON 'region-close-outcome-join-cancelled-reasons-'
+run_mutant OUTCOME_JOIN_ALWAYS_STRENGTHENS 'region-close-outcome-join-cancelled-reasons-'
+run_mutant OUTCOME_JOIN_RIGHT_BIAS 'region-close-outcome-join-panics-first-message-wins-'
 
 # Each missed-tick rule of Rust's Interval (interval.rs:385-420) has a mutant
 # that swaps it for a neighbour's, and the family of captures that pins it
