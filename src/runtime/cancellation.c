@@ -887,7 +887,11 @@ asx_status asx_task_get_cancel_phase(asx_task_id id, asx_cancel_phase *out) {
 asx_status asx_task_complete_state_internal(asx_task_slot *t, asx_task_id tid,
                                             asx_task_state *out_from) {
     asx_status st;
+#ifdef ASX_MUTANT_TASK_SKIP_FINALIZING
+    if (0) { /* planted bug: an acknowledged task goes Cancelling -> Completed */
+#else
     if (!t->panicked && t->state == ASX_TASK_CANCELLING) {
+#endif
         st = asx_task_finalize(tid);
         if (st != ASX_OK) return st;
     }

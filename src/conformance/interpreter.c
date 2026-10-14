@@ -184,6 +184,9 @@ typedef struct {
     uint32_t timer_name_off; /* name of the latest, in g_text */
     int timer_pending;       /* the latest is scheduled and not yet fired/cancelled */
     asx_time timer_deadline;
+    /* A driver op task_cancel_path reads this task: its cancel transitions
+     * are kept (g_paths). */
+    int path_watched;
 } it_task;
 
 typedef struct {
@@ -355,6 +358,23 @@ static it_supervisor g_sups[IT_MAX_SUPERVISORS];
 static uint32_t g_n_sups;
 
 static it_event g_events[IT_MAX_EVENTS];
+
+/* The cancel path of a task as its TASK_TRANSITION events show it (the
+ * driver op task_cancel_path, DSL §4): its transitions out of
+ * CancelRequested, Cancelling and Finalizing, in order. Only a task the
+ * script reads is kept (it_task.path_watched), so a storm of cancelled tasks
+ * nothing reads costs nothing. */
+#define IT_MAX_PATHS 16u
+#define IT_MAX_PATH_STEPS 8u
+typedef struct {
+    uint64_t task; /* the task's handle */
+    uint32_t n;
+    uint8_t from[IT_MAX_PATH_STEPS];
+    uint8_t to[IT_MAX_PATH_STEPS];
+} it_cancel_path;
+static it_cancel_path g_paths[IT_MAX_PATHS];
+static uint32_t g_n_paths;
+static uint32_t g_script = ASX_JSON_NONE; /* the running scenario's "script" */
 static uint32_t g_n_events;
 
 /* The lab's dispatches (asx_scheduler_record_dispatches). */
@@ -484,6 +504,22 @@ static int add_region(const char *name, const char *parent, asx_region_id id) {
     return 1;
 }
 
+/* 1 when a driver op task_cancel_path of the script reads this task. */
+static int path_is_read(const char *name) {
+    uint32_t i;
+    if (name == NULL || g_script == ASX_JSON_NONE) return 0;
+    for (i = 0; i < asx_json_count(g_in, g_script); i++) {
+        uint32_t op = asx_json_get(g_in, asx_json_item(g_in, g_script, i), "op");
+        const char *op_name = it_str(op, "op");
+        const char *task = it_str(op, "task");
+        if (op_name != NULL && task != NULL && strcmp(op_name, "task_cancel_path") == 0 &&
+            strcmp(task, name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static it_task *add_task(const char *name, const char *region_name, asx_region_id region,
                          uint32_t program) {
     it_task *t;
@@ -507,6 +543,7 @@ static it_task *add_task(const char *name, const char *region_name, asx_region_i
     t->program = program;
     t->end = ASX_OK;
     t->spawn_obs = ASX_JSON_NONE;
+    t->path_watched = path_is_read(name);
     return t;
 }
 
@@ -830,6 +867,7 @@ static it_task *generation_entry(it_supervisor *sv, const char *child, unsigned 
     t->id = task;
     t->spawned = 1;
     t->supervised = 1;
+    t->path_watched = path_is_read(name);
     (void)asx_cx_init(&t->cx, region, task, ASX_CAP_NONE);
     return t;
 }
@@ -1140,17 +1178,58 @@ static uint64_t g_futurelock_max;
 /* Trace observer: the runtime's events, captured as they are emitted   */
 /* ------------------------------------------------------------------ */
 
+/* A task state change leaving CancelRequested, Cancelling or Finalizing
+ * joins that task's cancel path (a transition from a state to itself, a
+ * strengthening, is not a step). */
+static void note_task_transition(const asx_trace_event *ev) {
+    const unsigned from = (unsigned)(ev->aux >> 32);
+    const unsigned to = (unsigned)(ev->aux & 0xffffffffu);
+    it_cancel_path *p = NULL;
+    const it_task *owner;
+    uint32_t i;
+
+    if (from != (unsigned)ASX_TASK_CANCEL_REQUESTED && from != (unsigned)ASX_TASK_CANCELLING &&
+        from != (unsigned)ASX_TASK_FINALIZING) {
+        return;
+    }
+    if (from == to) return;
+    owner = task_by_id((asx_task_id)ev->entity_id);
+    if (owner == NULL || !owner->path_watched) return;
+    for (i = 0; i < g_n_paths; i++) {
+        if (same_entity(g_paths[i].task, ev->entity_id)) {
+            p = &g_paths[i];
+            break;
+        }
+    }
+    if (p == NULL) {
+        if (g_n_paths >= IT_MAX_PATHS) {
+            it_fail("too many cancelled tasks for task_cancel_path", NULL);
+            return;
+        }
+        p = &g_paths[g_n_paths++];
+        p->task = ev->entity_id;
+        p->n = 0;
+    }
+    if (p->n >= IT_MAX_PATH_STEPS) {
+        it_fail("a cancel path longer than task_cancel_path holds", NULL);
+        return;
+    }
+    p->from[p->n] = (uint8_t)from;
+    p->to[p->n] = (uint8_t)to;
+    p->n++;
+}
+
 static void it_observe(void *ctx, const asx_trace_event *ev, const asx_trace_payload *payload) {
     it_event *e;
     (void)ctx;
     switch (ev->kind) {
     /* Not projected (vocabulary §11): their information reaches the
      * comparison through the snapshot, the observations or not at all. */
+    case ASX_TRACE_TASK_TRANSITION: note_task_transition(ev); return;
     case ASX_TRACE_SCHED_POLL:
     case ASX_TRACE_SCHED_BUDGET:
     case ASX_TRACE_SCHED_QUIESCENT:
     case ASX_TRACE_SCHED_ROUND:
-    case ASX_TRACE_TASK_TRANSITION:
     case ASX_TRACE_CHANNEL_SEND:
     case ASX_TRACE_CHANNEL_RECV: return;
     case ASX_TRACE_SCHED_COMPLETE:
@@ -4453,6 +4532,7 @@ static int exec_server(it_task *t, uint32_t step, uint32_t idx, const char *op, 
             task->id = id;
             task->spawned = 1;
             task->server = 1;
+            task->path_watched = path_is_read(name);
             srv->task = g_n_tasks++;
         }
         observe_status(t, idx, op, st);
@@ -5446,6 +5526,24 @@ static int parse_region_limit(uint32_t op, const char *field, uint32_t *out) {
     return 1;
 }
 
+/* The name of a task state in a cancel path (the Rust oracle's
+ * TaskStateKind): Completed is told apart by the outcome of `t`. */
+static const char *path_state_name(unsigned state, const it_task *t) {
+    asx_outcome outcome;
+    if (state == (unsigned)ASX_TASK_CANCEL_REQUESTED) return "CancelRequested";
+    if (state == (unsigned)ASX_TASK_CANCELLING) return "Cancelling";
+    if (state == (unsigned)ASX_TASK_FINALIZING) return "Finalizing";
+    if (state != (unsigned)ASX_TASK_COMPLETED) return "Other";
+    if (asx_task_get_outcome(t->id, &outcome) != ASX_OK) return "Completed";
+    switch (outcome.severity) {
+    case ASX_OUTCOME_OK: return "CompletedOk";
+    case ASX_OUTCOME_ERR: return "CompletedErr";
+    case ASX_OUTCOME_CANCELLED: return "CompletedCancelled";
+    case ASX_OUTCOME_PANICKED: return "CompletedPanicked";
+    }
+    return "Completed";
+}
+
 static void apply_driver_op(uint32_t op, uint32_t step) {
     const char *name = it_str(op, "op");
     asx_cancel_kind kind;
@@ -5499,6 +5597,37 @@ static void apply_driver_op(uint32_t op, uint32_t step) {
         }
         (void)observe_named("driver", step, "region_close_outcome",
                             status_node(st == ASX_OK ? ASX_OK : ASX_E_NOT_FOUND), value);
+        return;
+    }
+    if (strcmp(name, "task_cancel_path") == 0) {
+        /* The steps a task took out of CancelRequested, Cancelling and
+         * Finalizing, as the runtime's TASK_TRANSITION events show them
+         * (twin_run reads Rust's from the cancellation protocol oracle's
+         * history), observed under `driver` (DSL §4). A step into Completed
+         * is named for the outcome the task completed with. */
+        it_task *t = task_by_name(it_str(op, "task"));
+        uint32_t list = asx_json_new_array(g_out);
+        uint32_t i;
+        uint32_t k;
+        if (t == NULL || !t->spawned) {
+            it_fail("task_cancel_path needs a known task", NULL);
+            return;
+        }
+        for (i = 0; i < g_n_paths; i++) {
+            if (!same_entity(g_paths[i].task, t->id)) continue;
+            for (k = 0; k < g_paths[i].n; k++) {
+                char text[64];
+                int len =
+                    snprintf(text, sizeof(text), "%s>%s", path_state_name(g_paths[i].from[k], t),
+                             path_state_name(g_paths[i].to[k], t));
+                if (len < 0 || (size_t)len >= sizeof(text)) {
+                    it_fail("a cancel path step too long to name", NULL);
+                    return;
+                }
+                asx_json_push(g_out, list, asx_json_new_string(g_out, text));
+            }
+        }
+        (void)observe_named("driver", step, "task_cancel_path", status_node(ASX_OK), list);
         return;
     }
     if (strcmp(name, "finish_region") == 0) {
@@ -6410,6 +6539,8 @@ static asx_status conformance_run(const asx_json_doc *in, uint32_t scenario, asx
     g_n_sups = 0;
     g_n_regions = 0;
     g_n_events = 0;
+    g_n_paths = 0;
+    g_script = asx_json_get(in, scenario, "script");
     g_n_futurelocks = 0;
     g_text_used = 0;
     g_n_obl_names = 0;

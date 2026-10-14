@@ -2522,6 +2522,21 @@ fn extend(
         }
         script.sort_by_key(|entry| entry["at_ns"].as_u64());
     }
+    // The path one task took out of CancelRequested, Cancelling and
+    // Finalizing, read once the script's other entries are applied (DSL §4):
+    // Rust's from the lab's cancellation protocol oracle, C's from its
+    // transition events. A task nothing cancelled reads an empty path. The op
+    // cancels nothing, so `cancelling` is unchanged.
+    if !tasks.is_empty() && ext.chance(30) {
+        let last = script
+            .iter()
+            .filter_map(|entry| entry["at_ns"].as_u64())
+            .max()
+            .unwrap_or(0);
+        let task = ext.pick(tasks).clone();
+        script.push(json!({"at_ns": last + q * ext.below(4),
+                           "op": {"op": "task_cancel_path", "task": task}}));
+    }
     // Where nothing can cancel a task a request for a monitor or a link
     // binds its name; where the script jumps the clock (`advance`) the delay
     // queue's own clock and the tasks' disagree (gen-3-245: a poll with

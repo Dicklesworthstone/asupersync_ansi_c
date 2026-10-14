@@ -950,6 +950,7 @@ idle and virtual time is advanced to `t` (§2).
 | `advance` | `ns` | `lab.advance_time(ns)` (`lab/runtime.rs:3076`; a forward jump, the only clock fault Rust offers) | `asx_lab_advance_time(ns)` |
 | `region_limits` | `region`, optional `max_tasks`, `max_children`, `max_obligations` | `lab.state.set_region_limits(region, RegionLimits{…})` (`state.rs:4103`; `record/region.rs:208`); a region already gone has nothing to limit: no effect | `asx_region_set_limits(region, &limits)`; an omitted or null field is `ASX_REGION_UNLIMITED`; a region already gone: no effect |
 | `region_close_outcome` | `region` | `lab.state.region_close_outcome(region)` (`state.rs:3972`; folded as each task completes, `state.rs:8794`): the outcomes of the tasks that completed in the region, joined, read live or after its close | `asx_region_get_close_outcome(region, &outcome)` |
+| `task_cancel_path` | `task` (a declared task's name) | the steps the lab's cancellation protocol oracle recorded for the task out of `CancelRequested`, `Cancelling` and `Finalizing` (`lab/oracle/cancellation_protocol.rs:580`, `on_transition`), read from the oracle's `Debug` text because it has no accessor | the task's `ASX_TRACE_TASK_TRANSITION` events (`asx_task_finalize`, `asx_task_complete_state_internal`), kept for the tasks a `task_cancel_path` names |
 
 `close_region` runs idle rounds without moving the clock, so a region closes
 only when every task in it (and below it) ends from the cancel alone: a sleep
@@ -966,9 +967,10 @@ child regions to finish their own bodies. Err/Panicked use the native
 Cx-free FailFast constructor, including its testing-default timestamp;
 Cancelled uses the driver's supplied reason and virtual-time attribution.
 
-`region_close_outcome` is the one driver operation that observes: it is
-recorded under the task name `driver`, with the script entry's 1-based index
-as its step and `region_close_outcome` as its op. The status is `ASX_OK` and
+`region_close_outcome` and `task_cancel_path` are the driver operations that
+observe: each is recorded under the task name `driver`, with the script entry's
+1-based index as its step and its own name as its op. For
+`region_close_outcome` the status is `ASX_OK` and
 the value the outcome (vocabulary §4: `ok`, `cancelled` with its reason, or
 `panicked` with its message), or `ASX_E_NOT_FOUND` and no value while no
 task of the region has completed and the region is not Closed. The outcome
@@ -994,6 +996,33 @@ op is applied before the lab runs the step that follows it, so a read in the
 entry of a completion's own step sees nothing of it, and a timer that is due
 fires only in a step: the scenarios cancel an otherwise idle task as an
 anchor so that the next entry has a step to run, and read one entry later.
+
+`task_cancel_path` observes what no snapshot or trace shows (bd-9kll.3.2): the
+states a cancelled task passed through. The lab walks a task that returns
+while acknowledged through `cleanup_done` and `finalize_done` inside the one
+step that sees it return (`lab/runtime.rs:4866-4890`), so `Finalizing` has no
+step boundary and no trace event, and the cancellation protocol oracle's
+per-task transition list (private, visible only through its derived `Debug`)
+is the only place Rust keeps it. The value is the list of steps the task took
+out of `CancelRequested`, `Cancelling` and `Finalizing`, as `"From>To"`
+strings in order, where a step into `Completed` names the outcome's kind
+(`CompletedOk`, `CompletedErr`, `CompletedCancelled`, `CompletedPanicked`:
+`TaskStateKind::from_task_state`); the transitions before the request
+(`Created`, `Running`) and a strengthening (a state to itself) are not steps. A
+task nothing cancelled, or cancelled but not yet acknowledged, reads `[]`; the
+status is always `ASX_OK`, and a task that is not declared fails the run. twin_run
+fails the run, instead of reading an empty path, when the oracle's text does
+not have the expected shape, and the C interpreter keeps only the transitions
+of the tasks a `task_cancel_path` names. `cancel-path-finalizing-001` pins the
+four paths a cancel can take: acknowledged then returning (ok or err, both
+completed Cancelled, since cancellation wins) goes `CancelRequested>Cancelling`,
+`Cancelling>Finalizing`, `Finalizing>CompletedCancelled`; acknowledged then
+panicking goes `CancelRequested>Cancelling`, `Cancelling>CompletedPanicked`
+(a panic completes through `record.complete()`, which `Cancelling` allows
+directly); never acknowledged, woken and returning goes
+`CancelRequested>CompletedCancelled`; and unacknowledged reads `[]`. The planted
+`TASK_SKIP_FINALIZING` runtime (`tests/gates/test_oracle_mutants.sh`) fails
+that fixture and no other.
 
 ### Reason attribution
 

@@ -43,6 +43,11 @@
 #                              -> region-close-outcome-join-cancelled-reasons-*,
 #                                 region-close-outcome-join-panics-first-
 #                                 message-wins-*
+#   - TASK_SKIP_FINALIZING     an acknowledged task that returns goes Cancelling
+#                              -> Completed, skipping Finalizing: no state
+#                              snapshot or trace event shows it, only the
+#                              task_cancel_path read (bd-9kll.3.2)
+#                              -> cancel-path-finalizing-*
 #   - INTERVAL_BURST_FROM_NOW / INTERVAL_DELAY_FROM_DEADLINE /
 #     INTERVAL_SKIP_ONE_PERIOD one missed-tick rule is swapped for another's
 #                              -> interval-missed-tick-<rule>-*,
@@ -184,6 +189,15 @@ run_mutant STUCK_TASK_OMITTED 'deadlock-two-tasks-channels-001'
 run_mutant OUTCOME_JOIN_KEEPS_FIRST_REASON 'region-close-outcome-join-cancelled-reasons-'
 run_mutant OUTCOME_JOIN_ALWAYS_STRENGTHENS 'region-close-outcome-join-cancelled-reasons-'
 run_mutant OUTCOME_JOIN_RIGHT_BIAS 'region-close-outcome-join-panics-first-message-wins-'
+
+# Rust walks a task that returns while acknowledged through Cancelling ->
+# Finalizing -> Completed inside one step (lab/runtime.rs:4866-4890), so
+# Finalizing has no step boundary and no trace event; only the cancellation
+# protocol oracle's history shows it, and the driver op task_cancel_path reads
+# that (bd-9kll.3.2). The mutant skips the walk's Finalizing step; the
+# acknowledged-then-returning tasks of cancel-path-finalizing-001 read the
+# shortened path.
+run_mutant TASK_SKIP_FINALIZING 'cancel-path-finalizing-'
 
 # Each missed-tick rule of Rust's Interval (interval.rs:385-420) has a mutant
 # that swaps it for a neighbour's, and the family of captures that pins it

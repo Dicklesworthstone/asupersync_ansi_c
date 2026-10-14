@@ -489,6 +489,23 @@ Correction to the earlier version: Rust never force-completes a task whose clean
 | Cost quota exhausted | `Budget::consume_cost` returns `false` and leaves the quota unchanged (`src/types/budget.rs:613`) | `asx_budget_consume_cost` returns 0 without mutation (`src/core/budget.c:69-75`) |
 | Deadline exceeded | The task is cancelled with `Deadline` through its budget deadline (not a region `Timeout` as v4 §3.6 TICK says) | Same: see `C_REFINEMENT_MAP.md` supplementary row "§3.6 TICK"; parity `budget-deadline-sleep-checkpoint-001` |
 
+### 7.6 The Path Out of CancelRequested (bd-9kll.3.2)
+
+The contract, for a task that has been sent a cancel request, in terms of the states it passes through until it completes (each step is `From>To`; a step into `Completed` is named for the outcome's kind):
+
+| Task's course | Path | Why |
+|---------------|------|-----|
+| Acknowledges at an unmasked checkpoint, then returns (any value) | `CancelRequested>Cancelling`, `Cancelling>Finalizing`, `Finalizing>CompletedCancelled` | the lab calls `cleanup_done` then `finalize_done` in the step that sees the task return (`src/lab/runtime.rs:4866-4890`), and the record completes Cancelled whatever the body returned (`src/record/task.rs:1260-1285`) |
+| Acknowledges, then panics | `CancelRequested>Cancelling`, `Cancelling>CompletedPanicked` | the panic ends through `record.complete()`, which `Cancelling` allows directly; `Finalizing` is skipped by Rust itself |
+| Never acknowledges (parked in a notify wait, reaching no checkpoint), then is woken and returns | `CancelRequested>CompletedCancelled` | no `Cancelling`, so no `Finalizing`; the record still completes Cancelled |
+| Cancelled, not yet acknowledged | `[]` | the request itself (`Running>CancelRequested`) is not a step of the path |
+
+`Finalizing` is entered and left inside one lab step, so no snapshot, no trace event and no step boundary shows it; a runtime that went `Cancelling>Completed` for an acknowledged task would be indistinguishable in every other fixture. **Rust exposes the path nowhere but the lab's cancellation protocol oracle:** its per-task `TaskProtocolRecord::transitions` list (`src/lab/oracle/cancellation_protocol.rs:580`, filled by `on_transition`, `:851`) is private and has no accessor, and twin_run reads it from the oracle's derived `Debug` text (`cancel_path`, `tools/twin_run/src/run.rs`), failing the run when the text does not have the expected shape. The oracle is public and on by default in the lab's `OracleSuite`.
+
+**C status:** `asx_task_complete_state_internal` (`src/runtime/cancellation.c:887`) walks `Cancelling>Finalizing` (`asx_task_finalize`, `src/runtime/cancellation.c:806`) before `Completed` unless the task panicked, and a task that never acknowledged is not `Cancelling` and goes straight on. Every transition emits `ASX_TRACE_TASK_TRANSITION` with the pair in `aux`; the interpreter keeps those of the tasks a `task_cancel_path` names (`note_task_transition`, `src/conformance/interpreter.c:1184`) and names the terminal step from the task's outcome (`path_state_name`, `src/conformance/interpreter.c:5531`).
+
+**Witness:** the driver op `task_cancel_path` (`SCENARIO_DSL_V2.md` section 4); fixture `cancel-path-finalizing-001` pins the four rows above in Rust and C. The planted runtime `TASK_SKIP_FINALIZING` (`tests/gates/test_oracle_mutants.sh`) skips `Finalizing` for an acknowledged task and fails that fixture and no other.
+
 ---
 
 ## 8. Close Rejection and Admission Gating

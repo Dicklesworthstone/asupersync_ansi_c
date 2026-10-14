@@ -414,7 +414,9 @@
                       "max_tasks": {"type": "integer", "minimum": 0}, "max_children": {"type": "integer", "minimum": 0},
                       "max_obligations": {"type": "integer", "minimum": 0}}},
       {"type": "object", "required": ["op", "region"], "additionalProperties": false,
-       "properties": {"op": {"const": "region_close_outcome"}, "region": {"$ref": "#/$defs/name"}}}
+       "properties": {"op": {"const": "region_close_outcome"}, "region": {"$ref": "#/$defs/name"}}},
+      {"type": "object", "required": ["op", "task"], "additionalProperties": false,
+       "properties": {"op": {"const": "task_cancel_path"}, "task": {"$ref": "#/$defs/task_name"}}}
     ]}
   }
 }

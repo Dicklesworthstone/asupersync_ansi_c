@@ -4618,6 +4618,27 @@ fn apply_driver_op(
                 value,
             );
         }
+        // The steps a task took out of CancelRequested, Cancelling and
+        // Finalizing, as the lab's cancellation protocol oracle recorded them
+        // (`cancel_path`), observed under the task name `driver` (DSL §4).
+        "task_cancel_path" => {
+            let name = str_field(op, "task")?;
+            resolve_admissions(lab, shared)?;
+            let task = lock(shared)
+                .task_ids
+                .get(name)
+                .copied()
+                .ok_or_else(|| format!("unknown task {name:?}"))?;
+            let path = cancel_path(&format!("{:?}", lab.oracles.cancellation_protocol), task)?;
+            observe(
+                shared,
+                "driver",
+                step,
+                "task_cancel_path",
+                "ASX_OK",
+                json!(path),
+            );
+        }
         "finish_region" => {
             let region = region_id("region")?;
             // Execute Scope's body-return branch against the real runtime.
@@ -5701,6 +5722,54 @@ fn project_events(trace: &[TraceEvent], shared: &SharedRef) -> RunResult<Project
     })
 }
 
+/// The path `task` took out of `CancelRequested`, `Cancelling` and
+/// `Finalizing`, as `From>To` steps in order, read from the Debug text of the
+/// lab's cancellation protocol oracle (bd-9kll.3.2). That oracle is the only
+/// place Rust keeps it: the lab walks a task that returns while acknowledged
+/// through `cleanup_done` and `finalize_done` inside one step
+/// (`lab/runtime.rs:4866-4890`), so no step boundary and no trace event shows
+/// `Finalizing`, and the oracle records every transition it is told of in a
+/// private per-task list (`TaskProtocolRecord::transitions`,
+/// `lab/oracle/cancellation_protocol.rs:580`) with no accessor. The terminal
+/// step names the outcome's kind (`CompletedOk`, `CompletedErr`,
+/// `CompletedCancelled`, `CompletedPanicked`: `TaskStateKind::from_task_state`).
+/// A task the oracle never saw has an empty path; text that does not have the
+/// shape fails the run.
+fn cancel_path(oracle_debug: &str, task: TaskId) -> RunResult<Vec<String>> {
+    let key = format!("{task:?}: TaskProtocolRecord {{");
+    let Some(at) = oracle_debug.find(&key) else {
+        return Ok(Vec::new());
+    };
+    let record = &oracle_debug[at + key.len()..];
+    let list = record
+        .split_once("transitions: [")
+        .and_then(|(_, rest)| rest.split_once("], mask_depth"))
+        .map(|(list, _)| list)
+        .ok_or("the oracle's task record has no transitions list")?;
+    let mut path = Vec::new();
+    let mut rest = list.trim_start_matches([',', ' ']);
+    while !rest.is_empty() {
+        // "(From, To, Time(123ns))"
+        let entry = rest
+            .strip_prefix('(')
+            .ok_or("a transition not in parentheses")?;
+        let (from, entry) = entry
+            .split_once(", ")
+            .ok_or("a transition without its target")?;
+        let (to, entry) = entry
+            .split_once(", ")
+            .ok_or("a transition without its time")?;
+        let (_, after) = entry
+            .split_once("))")
+            .ok_or("a transition time not closed")?;
+        if matches!(from, "CancelRequested" | "Cancelling" | "Finalizing") && from != to {
+            path.push(format!("{from}>{to}"));
+        }
+        rest = after.trim_start_matches([',', ' ']);
+    }
+    Ok(path)
+}
+
 fn task_state(state: &TaskState) -> (&'static str, Option<&CancelReason>, Option<&Budget>) {
     match state {
         TaskState::Created => ("Created", None, None),
@@ -6653,6 +6722,177 @@ mod projection_tests {
                     {"k": "region.closed", "region": "t.0.r1"},
                 ],
             ])
+        );
+    }
+
+    // --- cancel_path (bd-9kll.3.2) --------------------------------------------
+
+    fn requested() -> TaskState {
+        TaskState::CancelRequested {
+            reason: reason(CancelKind::User, 5),
+            cleanup_budget: Budget::INFINITE,
+        }
+    }
+
+    fn cancelling() -> TaskState {
+        TaskState::Cancelling {
+            reason: reason(CancelKind::User, 5),
+            cleanup_budget: Budget::INFINITE,
+        }
+    }
+
+    fn finalizing() -> TaskState {
+        TaskState::Finalizing {
+            reason: reason(CancelKind::User, 5),
+            cleanup_budget: Budget::INFINITE,
+        }
+    }
+
+    fn completed() -> TaskState {
+        TaskState::Completed(asupersync::Outcome::Ok(()))
+    }
+
+    /// The Debug text of a protocol oracle told of `steps` for each task, in
+    /// order, as the lab tells it (`on_transition`).
+    fn oracle_text(steps: &[(TaskId, TaskState, TaskState)]) -> String {
+        let mut oracle = asupersync::lab::oracle::CancellationProtocolOracle::new();
+        for (i, (t, from, to)) in steps.iter().enumerate() {
+            oracle.on_transition(*t, from, to, at(i as u64 + 1));
+        }
+        format!("{oracle:?}")
+    }
+
+    fn path(text: &str, t: TaskId) -> Vec<String> {
+        cancel_path(text, t).expect("the oracle text parses")
+    }
+
+    /// The path the doc comment describes: a task that acknowledges its cancel
+    /// and returns walks Cancelling, Finalizing and a Completed kind (the
+    /// oracle names the outcome: CompletedOk, CompletedCancelled, ...), with
+    /// the transitions before the request (Created, Running) left out.
+    #[test]
+    fn an_acknowledged_cancel_walks_cancelling_finalizing_completed() {
+        let t = task(1);
+        let text = oracle_text(&[
+            (t, TaskState::Created, TaskState::Running),
+            (t, TaskState::Running, requested()),
+            (t, requested(), cancelling()),
+            (t, cancelling(), finalizing()),
+            (t, finalizing(), completed()),
+        ]);
+        assert_eq!(
+            path(&text, t),
+            [
+                "CancelRequested>Cancelling",
+                "Cancelling>Finalizing",
+                "Finalizing>CompletedOk"
+            ]
+        );
+    }
+
+    /// The terminal step names the outcome's kind, so the same walk that ends
+    /// cancelled is a different path from one that ends ok.
+    #[test]
+    fn the_terminal_step_names_the_outcome_kind() {
+        let t = task(1);
+        let ended_cancelled =
+            TaskState::Completed(asupersync::Outcome::Cancelled(reason(CancelKind::User, 5)));
+        let text = oracle_text(&[
+            (t, TaskState::Running, requested()),
+            (t, requested(), cancelling()),
+            (t, cancelling(), finalizing()),
+            (t, finalizing(), ended_cancelled),
+        ]);
+        assert_eq!(
+            path(&text, t),
+            [
+                "CancelRequested>Cancelling",
+                "Cancelling>Finalizing",
+                "Finalizing>CompletedCancelled"
+            ]
+        );
+    }
+
+    /// What the witness is for: a Finalizing that was skipped is a different
+    /// path from one that was taken, so a runtime that goes Cancelling to
+    /// Completed directly cannot pass for one that does not.
+    #[test]
+    fn a_skipped_finalizing_is_a_different_path_from_a_taken_one() {
+        let t = task(1);
+        let taken = oracle_text(&[
+            (t, TaskState::Running, requested()),
+            (t, requested(), cancelling()),
+            (t, cancelling(), finalizing()),
+            (t, finalizing(), completed()),
+        ]);
+        let skipped = oracle_text(&[
+            (t, TaskState::Running, requested()),
+            (t, requested(), cancelling()),
+            (t, cancelling(), completed()),
+        ]);
+        assert_eq!(
+            path(&skipped, t),
+            ["CancelRequested>Cancelling", "Cancelling>CompletedOk"]
+        );
+        assert_ne!(path(&taken, t), path(&skipped, t));
+    }
+
+    /// A task that returns before it acknowledges goes from CancelRequested
+    /// straight to Completed; one that was never cancelled has no path.
+    #[test]
+    fn a_cut_short_task_and_an_uncancelled_one() {
+        let (cut, free, unseen) = (task(1), task(2), task(3));
+        let text = oracle_text(&[
+            (cut, TaskState::Running, requested()),
+            (cut, requested(), completed()),
+            (free, TaskState::Created, TaskState::Running),
+            (free, TaskState::Running, completed()),
+        ]);
+        assert_eq!(path(&text, cut), ["CancelRequested>CompletedOk"]);
+        assert!(path(&text, free).is_empty());
+        assert!(path(&text, unseen).is_empty());
+    }
+
+    /// Each task reads its own list, whatever order the oracle was told in.
+    #[test]
+    fn a_task_reads_only_its_own_transitions() {
+        let (a, b) = (task(1), task(2));
+        let text = oracle_text(&[
+            (a, TaskState::Running, requested()),
+            (b, TaskState::Running, requested()),
+            (a, requested(), cancelling()),
+            (b, requested(), completed()),
+            (a, cancelling(), finalizing()),
+            (a, finalizing(), completed()),
+        ]);
+        assert_eq!(
+            path(&text, a),
+            [
+                "CancelRequested>Cancelling",
+                "Cancelling>Finalizing",
+                "Finalizing>CompletedOk"
+            ]
+        );
+        assert_eq!(path(&text, b), ["CancelRequested>CompletedOk"]);
+    }
+
+    /// Text that does not have the shape fails the run instead of reading as
+    /// an empty path, which would let a changed Debug layout pass as "no
+    /// Finalizing".
+    #[test]
+    fn text_without_the_shape_is_an_error() {
+        let t = task(1);
+        let key = format!("{t:?}: TaskProtocolRecord {{");
+        assert!(cancel_path(&format!("{key} current_state: Running }}"), t).is_err());
+        assert!(cancel_path(&format!("{key} transitions: [oops], mask_depth: 0 }}"), t).is_err());
+        assert!(
+            cancel_path(
+                &format!(
+                    "{key} transitions: [(Cancelling, Finalizing, Time(1ns)], mask_depth: 0 }}"
+                ),
+                t
+            )
+            .is_err()
         );
     }
 }
